@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>English Voice Practice</title>
+
+<!-- PWA -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#6c63ff">
+<!-- iOS Safari 用 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="英会話AI">
+<link rel="apple-touch-icon" href="/Emma.png">
+
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Serif+Display&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #F7F5F0;
+    --surface: #FFFFFF;
+    --surface2: #F0EDE8;
+    --border: rgba(0,0,0,0.1);
+    --text: #1A1814;
+    --text2: #6B6560;
+    --text3: #9E9890;
+    --accent: #2C6FED;
+    --accent-light: #EBF1FD;
+    --red: #E24B4A;
+    --green: #1D9E75;
+    --amber: #BA7517;
+  }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  .wrap { width: 100%; max-width: 520px; }
+
+  /* Header */
+  .app-header { text-align: center; margin-bottom: 2rem; }
+  .app-title { font-family: 'DM Serif Display', serif; font-size: 28px; color: var(--text); margin-bottom: 4px; }
+  .app-sub { font-size: 13px; color: var(--text3); }
+
+  /* Character selection */
+  .section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text3); text-transform: uppercase; margin-bottom: 12px; }
+  .char-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 1.5rem; }
+  .char-card { background: var(--surface); border: 1.5px solid var(--border); border-radius: 16px; padding: 1rem; cursor: pointer; transition: all 0.15s; text-align: left; }
+  .char-card:hover { border-color: rgba(44,111,237,0.4); background: var(--accent-light); }
+  .char-card.selected { border-color: var(--accent); background: var(--accent-light); }
+  .char-flag { font-size: 28px; margin-bottom: 8px; display: block; }
+  .char-name { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  .char-origin { font-size: 12px; color: var(--text2); margin-bottom: 8px; }
+  .char-avatar { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; margin-bottom: 10px; display: block; border: 2px solid var(--border); }
+  .char-flag-small { font-size: 14px; margin-left: 4px; }
+  .level-pill { display: inline-block; font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 99px; }
+  .level-easy { background: #E1F5EE; color: #085041; }
+  .level-mid { background: #EBF1FD; color: #185FA5; }
+  .level-hard { background: #FAEEDA; color: #854F0B; }
+
+  /* Level selector */
+  .level-selector { background: var(--surface); border: 1.5px solid var(--border); border-radius: 16px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .level-selector-label { font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 10px; }
+  .level-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .level-btn { flex: 1; min-width: 44px; padding: 7px 4px; border: 1.5px solid var(--border); border-radius: 10px; background: var(--bg); font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; color: var(--text2); cursor: pointer; text-align: center; transition: all 0.15s; }
+  .level-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .level-btn.selected { border-color: var(--accent); background: var(--accent-light); color: var(--accent); }
+  .level-hint { font-size: 11px; color: var(--text3); margin-top: 8px; }
+
+  /* Start button */
+  .btn-primary { width: 100%; padding: 14px; background: var(--accent); color: #fff; border: none; border-radius: 14px; font-size: 15px; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; transition: opacity 0.15s; }
+  .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-primary:not(:disabled):hover { opacity: 0.9; }
+
+  /* Chat screen */
+  .chat-header { display: flex; align-items: center; gap: 12px; margin-bottom: 1rem; background: var(--surface); border: 1.5px solid var(--border); border-radius: 16px; padding: 12px 16px; }
+  .chat-av { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; border: 2px solid var(--border); }
+  .chat-info { flex: 1; }
+  .chat-info-name { font-size: 15px; font-weight: 600; color: var(--text); }
+  .chat-info-desc { font-size: 12px; color: var(--text2); }
+  .turns-count { font-size: 12px; color: var(--text3); }
+  .voice-toggle { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; font-size: 12px; color: var(--text2); cursor: pointer; font-family: 'DM Sans', sans-serif; }
+  .voice-toggle.on { background: var(--accent-light); color: var(--accent); border-color: rgba(44,111,237,0.3); }
+
+  /* Messages */
+  .chat-area { background: var(--surface2); border-radius: 16px; padding: 1rem; min-height: 280px; max-height: 320px; overflow-y: auto; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 16px; font-size: 14px; line-height: 1.6; }
+  .msg.ai { background: var(--surface); border: 1px solid var(--border); color: var(--text); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .msg.user { background: var(--accent); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .msg.sys { background: #FFF8E1; color: var(--amber); align-self: center; font-size: 12px; padding: 6px 14px; border-radius: 99px; border: 1px solid rgba(186,117,23,0.2); }
+
+  /* Mic area */
+  .mic-area { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 1rem; }
+  .mic-btn { width: 72px; height: 72px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 28px; transition: all 0.15s; position: relative; }
+  .mic-btn.idle { background: var(--surface); border: 2px solid var(--border); color: var(--text2); }
+  .mic-btn.idle:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+  .mic-btn.recording { background: var(--red); color: #fff; animation: pulse 1s infinite; }
+  .mic-btn.busy { background: var(--surface2); color: var(--text3); cursor: not-allowed; }
+  @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(226,75,74,0.4)} 50%{box-shadow:0 0 0 14px rgba(226,75,74,0)} }
+  .mic-hint { font-size: 12px; color: var(--text3); text-align: center; }
+
+  /* Text input */
+  .text-row { display: flex; gap: 8px; }
+  .text-input { flex: 1; padding: 10px 14px; border: 1.5px solid var(--border); border-radius: 12px; font-size: 14px; font-family: 'DM Sans', sans-serif; background: var(--surface); color: var(--text); outline: none; resize: none; height: 44px; }
+  .text-input:focus { border-color: var(--accent); }
+  .btn-send { padding: 0 16px; height: 44px; background: var(--accent); color: #fff; border: none; border-radius: 12px; font-size: 14px; font-weight: 500; font-family: 'DM Sans', sans-serif; cursor: pointer; }
+  .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .divider { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+  .divider::before, .divider::after { content:''; flex:1; height:1px; background: var(--border); }
+  .divider span { font-size: 11px; color: var(--text3); }
+
+  .btn-end { width: 100%; margin-top: 10px; padding: 11px; background: none; border: 1.5px solid var(--border); border-radius: 12px; font-size: 13px; color: var(--text2); cursor: pointer; font-family: 'DM Sans', sans-serif; }
+  .btn-end:hover { background: var(--surface2); }
+
+  /* Result screen */
+  .result-wrap { background: var(--surface); border: 1.5px solid var(--border); border-radius: 20px; padding: 1.5rem; }
+  .result-center { text-align: center; margin-bottom: 1.5rem; }
+  .result-stars { font-size: 26px; letter-spacing: 3px; margin-bottom: 8px; }
+  .result-level { display: inline-block; padding: 6px 22px; border-radius: 99px; font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+  .result-partner { font-size: 12px; color: var(--text3); }
+  .score-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 10px; margin-bottom: 1rem; }
+  .score-card { background: var(--surface2); border-radius: 12px; padding: 12px; text-align: center; }
+  .score-card-label { font-size: 11px; color: var(--text3); margin-bottom: 4px; font-weight: 500; }
+  .score-card-val { font-size: 24px; font-weight: 600; color: var(--text); }
+  .feedback-box { background: var(--surface2); border-radius: 12px; padding: 14px; font-size: 13px; color: var(--text2); line-height: 1.7; margin-bottom: 1rem; }
+  .btn-restart { width: 100%; padding: 13px; background: var(--accent); color: #fff; border: none; border-radius: 14px; font-size: 15px; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; margin-bottom: 10px; }
+
+  /* Detailed feedback */
+  .btn-detail { width: 100%; padding: 13px; background: none; border: 1.5px solid var(--accent); border-radius: 14px; font-size: 15px; font-weight: 600; font-family: 'DM Sans', sans-serif; cursor: pointer; color: var(--accent); transition: background 0.15s; }
+  .btn-detail:hover { background: var(--accent-light); }
+  .btn-detail:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .detail-section { margin-top: 1.2rem; display: none; }
+  .detail-section.open { display: block; }
+  .detail-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text3); text-transform: uppercase; margin-bottom: 12px; }
+  .correction-card { background: var(--surface2); border-radius: 14px; padding: 14px; margin-bottom: 10px; border-left: 3px solid var(--accent); }
+  .correction-original { font-size: 13px; color: var(--text3); margin-bottom: 6px; }
+  .correction-original span { font-style: italic; color: var(--text2); }
+  .correction-fixed { font-size: 14px; font-weight: 600; color: var(--green); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .correction-fixed::before { content: '✅ '; }
+  .btn-listen-fixed { flex-shrink: 0; padding: 3px 8px; background: var(--green); color: #fff; border: none; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: 'DM Sans', sans-serif; }
+  .point-en { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 6px; padding: 8px 10px; background: #fff; border-radius: 8px; }
+  .point-en::before { content: '📌 EN: '; font-weight: 600; color: var(--accent); }
+  .point-ja { font-size: 12px; color: var(--text2); line-height: 1.6; padding: 8px 10px; background: #fff; border-radius: 8px; }
+  .point-ja::before { content: '📌 JP: '; font-weight: 600; color: var(--amber); }
+  .point-pronounce { font-size: 12px; color: var(--text2); line-height: 1.6; padding: 8px 10px; background: #FFF0F0; border-radius: 8px; margin-top: 6px; display: flex; align-items: flex-start; gap: 8px; }
+  .point-pronounce-text::before { content: '🗣️ 発音: '; font-weight: 600; color: var(--red); }
+  .point-pronounce-text { flex: 1; }
+  .btn-listen { flex-shrink: 0; padding: 4px 10px; background: var(--red); color: #fff; border: none; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'DM Sans', sans-serif; white-space: nowrap; }
+  .btn-listen:hover { opacity: 0.85; }
+  .btn-listen:active { opacity: 0.7; }
+
+  /* 発音練習オーバーレイ */
+  .pronounce-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; padding: 1rem; }
+  .pronounce-overlay.open { display: flex; }
+  .pronounce-box { background: var(--surface); border-radius: 24px; padding: 2rem 1.5rem; width: 100%; max-width: 480px; text-align: center; }
+  .pronounce-char { font-size: 48px; margin-bottom: 8px; }
+  .pronounce-label { font-size: 12px; color: var(--text3); margin-bottom: 12px; }
+  .pronounce-word { font-size: 36px; font-weight: 700; color: var(--text); letter-spacing: 2px; margin-bottom: 6px; line-height: 1.5; }
+  /* 単語カラーハイライト */
+  .pr-word-span { display: inline-block; padding: 1px 4px; border-radius: 5px; margin: 2px 1px; transition: background 0.3s, color 0.3s; }
+  .pr-word-span.pw-live  { background: #d4f0ff; color: #0066aa; }                /* 認識中（青） */
+  .pr-word-span.pw-good  { background: #d4edda; color: #155724; font-weight:700; }/* 正解（緑） */
+  .pr-word-span.pw-warn  { background: #fff3cd; color: #856404; font-weight:700; }/* 惜しい（黄） */
+  .pr-word-span.pw-bad   { background: #f8d7da; color: #842029; font-weight:700; }/* 要改善（赤） */
+  .pr-legend { display: flex; gap: 8px; justify-content: center; font-size: 11px; margin-bottom: 10px; flex-wrap: wrap; }
+  .pr-legend span { padding: 1px 8px; border-radius: 10px; }
+  .pronounce-kana { font-size: 14px; color: var(--text3); margin-bottom: 24px; }
+  .pronounce-status { font-size: 15px; font-weight: 600; min-height: 28px; margin-bottom: 16px; }
+  .pronounce-status.ok { color: var(--green); }
+  .pronounce-status.ng { color: var(--red); }
+  .pronounce-mic { width: 80px; height: 80px; border-radius: 50%; border: none; font-size: 32px; cursor: pointer; margin: 0 auto 16px; display: flex; align-items: center; justify-content: center; background: var(--surface2); border: 2px solid var(--border); transition: all 0.15s; }
+  .pronounce-mic.listening { background: var(--red); color: #fff; animation: pulse 1s infinite; }
+  .pronounce-mic.ok { background: var(--green); color: #fff; }
+  .pronounce-tries { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
+  .pronounce-close { font-size: 13px; color: var(--text3); background: none; border: none; cursor: pointer; text-decoration: underline; font-family: 'DM Sans', sans-serif; }
+
+  /* 添削バッジ */
+  .msg.user { position: relative; }
+  .correction-badge { display: inline-block; margin-left: 6px; font-size: 12px; cursor: pointer; opacity: 0.85; vertical-align: middle; }
+  .correction-badge:hover { opacity: 1; }
+  .correction-card.highlight { outline: 2px solid var(--amber); }
+
+  .dots { display: inline-flex; gap: 4px; }
+  .dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--text3); animation: dot 1.2s infinite; }
+  .dots span:nth-child(2){animation-delay:0.2s} .dots span:nth-child(3){animation-delay:0.4s}
+  @keyframes dot{0%,80%,100%{opacity:0.2}40%{opacity:1}}
+
+  .screen { display: none; }
+  .screen.active { display: block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="app-header">
+    <h1 class="app-title">English Voice Practice</h1>
+    <p class="app-sub">Chat with an AI partner · Get evaluated after each session</p>
+  </div>
+
+  <!-- SELECT SCREEN -->
+  <div id="screen-select" class="screen active">
+    <p class="section-label">Choose your partner</p>
+    <div class="char-grid">
+      <div class="char-card" onclick="selectChar(this,'Emma')">
+        <img class="char-avatar" src="Emma.png" alt="Emma">
+        <div class="char-name">Emma <span class="char-flag-small">🇺🇸</span></div>
+        <div class="char-origin">American · California</div>
+        <span class="level-pill level-easy">🌱 Super Beginner</span>
+      </div>
+      <div class="char-card" onclick="selectChar(this,'Airi')">
+        <img class="char-avatar" src="Airi.png" alt="Airi">
+        <div class="char-name">Airi <span class="char-flag-small">🇯🇵🇬🇧</span></div>
+        <div class="char-origin">Café Barista · London</div>
+        <span class="level-pill level-mid">☕ Intermediate</span>
+      </div>
+      <div class="char-card" onclick="selectChar(this,'Chloe')">
+        <img class="char-avatar" src="Chloe.png" alt="Chloe">
+        <div class="char-name">Chloe <span class="char-flag-small">🇦🇺</span></div>
+        <div class="char-origin">Australian · Sydney</div>
+        <span class="level-pill level-hard">🔥 Advanced</span>
+      </div>
+      <div class="char-card" onclick="selectChar(this,'James')">
+        <img class="char-avatar" src="James.png" alt="James">
+        <div class="char-name">James <span class="char-flag-small">🇬🇧</span></div>
+        <div class="char-origin">Chief Engineer · Birmingham</div>
+        <span class="level-pill level-hard">🏎️ Racing Special</span>
+      </div>
+      <div class="char-card" onclick="selectChar(this,'Mia')">
+        <img class="char-avatar" src="Mia.png" alt="Mia">
+        <div class="char-name">Mia <span class="char-flag-small">🇨🇦</span></div>
+        <div class="char-origin">Canadian · Vancouver</div>
+        <span class="level-pill level-mid">📚 Beginner</span>
+      </div>
+    </div>
+
+    <!-- レベル選択 -->
+    <div class="level-selector">
+      <div class="level-selector-label">あなたの英語レベルは？</div>
+      <div class="level-btns">
+        <button class="level-btn selected" onclick="selectLevel(this,'A1')">A1</button>
+        <button class="level-btn" onclick="selectLevel(this,'A2')">A2</button>
+        <button class="level-btn" onclick="selectLevel(this,'B1')">B1</button>
+        <button class="level-btn" onclick="selectLevel(this,'B2')">B2</button>
+        <button class="level-btn" onclick="selectLevel(this,'C1')">C1</button>
+        <button class="level-btn" onclick="selectLevel(this,'C2')">C2</button>
+      </div>
+      <div class="level-hint" id="level-hint">A1〜A2：日本語ヒントあり　／　B1以上：英語メイン</div>
+    </div>
+
+    <button class="btn-primary" onclick="startChat()" id="btn-start" disabled>Start conversation →</button>
+  </div>
+
+  <!-- CHAT SCREEN -->
+  <div id="screen-chat" class="screen">
+    <div class="chat-header">
+      <img class="chat-av" id="chat-av" src="" alt="">
+      <div class="chat-info">
+        <div class="chat-info-name" id="chat-name"></div>
+        <div class="chat-info-desc" id="chat-desc"></div>
+      </div>
+      <button class="voice-toggle on" id="voice-toggle" onclick="toggleVoice()">🔊 Voice</button>
+      <span class="turns-count" id="turns-count">0 turns</span>
+    </div>
+
+    <div class="chat-area" id="chat-area"></div>
+
+    <div class="mic-area">
+      <button class="mic-btn idle" id="mic-btn" onclick="toggleMic()">🎤</button>
+      <div class="mic-hint" id="mic-hint">Click mic to speak</div>
+    </div>
+
+    <div class="divider"><span>or type</span></div>
+
+    <div class="text-row">
+      <textarea class="text-input" id="text-input" placeholder="Type in English..." onkeydown="handleKey(event)" rows="1"></textarea>
+      <button class="btn-send" id="btn-send" onclick="sendText()">Send</button>
+    </div>
+
+    <button class="btn-end" onclick="endChat()">End & get evaluation</button>
+  </div>
+
+  <!-- RESULT SCREEN -->
+  <div id="screen-result" class="screen">
+    <div class="result-wrap">
+      <div class="result-center">
+        <div class="result-stars" id="r-stars"></div>
+        <div class="result-level" id="r-level"></div>
+        <div class="result-partner" id="r-partner"></div>
+      </div>
+      <div class="score-grid">
+        <div class="score-card"><div class="score-card-label">Grammar</div><div class="score-card-val" id="s-g">—</div></div>
+        <div class="score-card"><div class="score-card-label">Vocabulary</div><div class="score-card-val" id="s-v">—</div></div>
+        <div class="score-card"><div class="score-card-label">Fluency</div><div class="score-card-val" id="s-f">—</div></div>
+        <div class="score-card"><div class="score-card-label">Natural expression</div><div class="score-card-val" id="s-n">—</div></div>
+      </div>
+      <div class="feedback-box" id="r-feedback">Analyzing your conversation...</div>
+      <button class="btn-restart" onclick="restart()">Try again →</button>
+      <button class="btn-detail" id="btn-detail" onclick="loadDetailFeedback()" disabled>📝 詳しいフィードバックを見る</button>
+
+      <!-- 添削セクション -->
+      <div class="detail-section" id="detail-section">
+        <div class="detail-title">あなたの文章を添削</div>
+        <div id="corrections-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 発音練習オーバーレイ -->
+<div class="pronounce-overlay" id="pronounce-overlay">
+  <div class="pronounce-box">
+    <div class="pronounce-char" id="pr-char">🇨🇦</div>
+    <div class="pronounce-label">発音を真似してみよう！</div>
+    <div class="pronounce-word" id="pr-word"></div>
+    <div class="pr-legend" id="pr-legend" style="display:none">
+      <span class="pw-good">✅ OK</span>
+      <span class="pw-warn">⚠️ 惜しい</span>
+      <span class="pw-bad">❌ 要練習</span>
+    </div>
+    <div class="pronounce-kana" id="pr-kana"></div>
+    <div class="pronounce-status" id="pr-status"></div>
+    <button class="pronounce-mic" id="pr-mic" onclick="startPronounce()">🎤</button>
+    <div class="pronounce-tries" id="pr-tries"></div>
+    <button class="pronounce-close" onclick="closePronounce()">閉じる</button>
+  </div>
+</div>
+
+<script>
+// レベル別システムプロンプト追記を生成
+function levelInstruction(level) {
+  if (level === 'A1' || level === 'A2') {
+    return `
+
+The learner's English level is ${level} (beginner). Use these rules:
+- Use very simple words and short sentences (5-8 words max per sentence).
+- When you notice a clear grammar mistake, gently point it out like this: "Oh, you mean '(correct phrase)'! That's great!" — stay warm and encouraging.
+- Occasionally add a simple Japanese hint in parentheses for key words, e.g. "I went to the park (公園) yesterday."
+- Never lecture. Keep corrections brief and positive.
+- If the learner seems confused, offer a Japanese translation of your sentence.`;
+  } else if (level === 'B1' || level === 'B2') {
+    return `
+
+The learner's English level is ${level} (intermediate). Use these rules:
+- Speak naturally but avoid very complex vocabulary.
+- If they make a mistake, rephrase your reply using the correct form naturally, without explicit correction.
+- Only add Japanese if the learner seems truly stuck.`;
+  } else {
+    return `
+
+The learner's English level is ${level} (advanced). Speak completely naturally. No Japanese. You may use idioms and richer vocabulary.`;
+  }
+}
+
+const chars = {
+  Emma:  { flag:'🇺🇸', bg:'#EBF1FD', desc:'Casual & friendly · American',
+    avatar:'Emma.png',
+    voiceLang:'en-US', voiceNames:['Shelley','Sandy','Flo','Samantha','Kathy'],
+    pitch:1.1, rate:0.95,
+    baseSystem:`You are Emma, a friendly 25-year-old American woman from California. You love coffee, travel, and casual conversation. Speak naturally and casually. Use contractions. Keep replies to 2-3 sentences max. Be warm and encouraging. Stay in character as Emma always.` },
+  Airi:  { flag:'🇯🇵🇬🇧', bg:'#FFF0F5', desc:'Café Barista · Japanese-British',
+    avatar:'Airi.png',
+    voiceLang:'en-GB', voiceNames:['Google UK English Female','Shelley','Sandy','Flo','Moira'],
+    pitch:1.08, rate:0.93,
+    baseSystem:`You are Airi Tanaka, a cheerful and warm 24-year-old café barista living in London. You are half Japanese and half British, so you naturally understand both cultures. You love coffee, cozy cafés, travel, music, and everyday life topics. Speak in natural, friendly British English — conversational and relaxed. Keep replies to 2-3 sentences max. Occasionally you may use a simple Japanese word naturally (like "sugoi!" or "natsukashii~") when something reminds you of Japan, but always explain it lightly. Be encouraging and make the user feel comfortable speaking English. Stay in character as Airi always.` },
+  Chloe: { flag:'🇦🇺', bg:'#E1F5EE', desc:'Slang & humor · Australian',
+    avatar:'Chloe.png',
+    voiceLang:'en-AU', voiceNames:['Karen','Catherine'],
+    pitch:1.05, rate:1.0,
+    baseSystem:`You are Chloe, a fun 26-year-old Australian woman from Sydney. Use some Aussie slang (arvo, heaps, reckon, mate). Love surfing and BBQs. Keep replies to 2-3 sentences max. Be playful and humorous. Stay in character as Chloe always.` },
+  James: { flag:'🇬🇧', bg:'#FFF0E8', desc:'Chief Race Engineer · OMORAY Racing',
+    avatar:'James.png',
+    voiceLang:'en-GB', voiceNames:['Daniel','Reed','Rocko','Google UK English Male'],
+    pitch:0.9, rate:0.95,
+    baseSystem:`You are James, a passionate 36-year-old British chief race engineer at OMORAY Racing from Birmingham, working with a Mercedes-AMG GT3. You are hot-blooded, enthusiastic, and absolutely live for racing. You love iRacing, data analysis, lap times, tire strategy, and pushing the car to its limits. Speak in confident British English, use racing jargon naturally (sector times, undercut, balance, oversteer etc.). Keep replies to 2-3 sentences max. Be energetic and fired up about racing. You work alongside Airi Tanaka. Stay in character as James always.` },
+  Mia:   { flag:'🇨🇦', bg:'#FFF8E1', desc:'Clear & slow · Canadian',
+    avatar:'Mia.png',
+    voiceLang:'en-US', voiceNames:['Flo','Kathy','Sandy','Shelley','Samantha'],
+    pitch:1.25, rate:0.9,
+    baseSystem:`You are Mia, a warm and cheerful 22-year-old Canadian woman from Vancouver. You're like a friendly older sister — not a teacher. Love nature, cafes and chatting. Speak gently and clearly. Keep replies to 2-3 sentences max. Be very patient and encouraging. Stay in character as Mia always.` }
+};
+
+const greetings = {
+  Emma:  "Hey! I'm Emma. So nice to meet you! What's on your mind today?",
+  Airi:  "Hi! I'm Airi — I work as a barista at a little café here in London. So lovely to meet you! Do you like coffee?",
+  James: "Alright mate, I'm James — chief engineer at OMORAY Racing! Brilliant to meet you. So, are you a racing fan or do you hit the track yourself?",
+  Chloe: "G'day! I'm Chloe. Stoked to chat with ya! What's up?",
+  Mia:   "Hi there! I'm Mia. I'm really happy to meet you. How are you today?"
+};
+
+let sel = null, userLevel = 'A1', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
+let chatTimer = null;
+
+// レベルに応じた音声速度
+const levelRate = { A1: 0.75, A2: 0.82, B1: 0.9, B2: 0.95, C1: 1.0, C2: 1.05 };
+
+function selectLevel(el, level) {
+  document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('selected'));
+  el.classList.add('selected');
+  userLevel = level;
+}
+
+// ページ読み込み時：前回の判定レベルを復元
+function initLevel() {
+  const saved = localStorage.getItem('detectedLevel');
+  if (saved) {
+    userLevel = saved;
+    document.querySelectorAll('.level-btn').forEach(b => {
+      b.classList.remove('selected');
+      if (b.textContent === saved) b.classList.add('selected');
+    });
+    document.getElementById('level-hint').textContent =
+      `📊 前回の評価より自動設定：${saved}　（変更も可能です）`;
+  }
+}
+
+// 評価後にレベルを保存
+function saveDetectedLevel(level) {
+  localStorage.setItem('detectedLevel', level);
+  userLevel = level;
+  // 次回のためにボタンも更新
+  document.querySelectorAll('.level-btn').forEach(b => {
+    b.classList.remove('selected');
+    if (b.textContent === level) b.classList.add('selected');
+  });
+  document.getElementById('level-hint').textContent =
+    `📊 今回の評価より自動設定：${level}　（変更も可能です）`;
+}
+
+// ── Voice loading ────────────────────────────────────────────────────────────
+// On Mac, voices load asynchronously. We cache them once ready.
+let cachedVoices = [];
+
+function loadVoices() {
+  const v = window.speechSynthesis.getVoices();
+  if (v.length) cachedVoices = v;
+}
+
+window.speechSynthesis.onvoiceschanged = loadVoices;
+loadVoices(); // also try synchronously (some browsers return immediately)
+
+// ── 15日間トライアル管理 ──────────────────────────────────────────────────────
+const TRIAL_DAYS = 15;
+
+function checkTrial() {
+  const firstLaunch = localStorage.getItem('trialStart');
+  if (!firstLaunch) {
+    // 初回起動：今日の日付を保存
+    localStorage.setItem('trialStart', Date.now().toString());
+    return true;
+  }
+  const elapsed = Date.now() - parseInt(firstLaunch);
+  const daysLeft = TRIAL_DAYS - Math.floor(elapsed / (1000 * 60 * 60 * 24));
+  if (daysLeft <= 0) {
+    showTrialExpired();
+    return false;
+  }
+  // 残り3日以下で警告バナーを表示
+  if (daysLeft <= 3) showTrialBanner(daysLeft);
+  return true;
+}
+
+function showTrialBanner(daysLeft) {
+  const banner = document.createElement('div');
+  banner.style.cssText = `
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: #f59e0b; color: #1a1a1a; text-align: center;
+    padding: 8px 16px; font-size: 13px; font-weight: 600;
+  `;
+  banner.textContent = `⏳ トライアル残り ${daysLeft} 日です`;
+  document.body.appendChild(banner);
+}
+
+function showTrialExpired() {
+  document.addEventListener('DOMContentLoaded', () => {
+    document.body.innerHTML = `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;
+        background:#F7F5F0;font-family:'DM Sans',sans-serif;padding:2rem;text-align:center;">
+        <div style="background:#fff;border-radius:24px;padding:2.5rem 2rem;max-width:360px;width:100%;
+          box-shadow:0 4px 24px rgba(0,0,0,0.1);">
+          <div style="font-size:56px;margin-bottom:16px">🎓</div>
+          <h2 style="font-size:22px;font-weight:700;margin-bottom:12px;color:#1a1814">
+            テスト期間が終了しました
+          </h2>
+          <p style="color:#666;font-size:14px;line-height:1.7;margin-bottom:24px">
+            15日間のトライアルをご利用いただき<br>ありがとうございました！<br><br>
+            引き続きご利用の方は<br>正式版をお待ちください 🚀
+          </p>
+          <div style="background:#f0f0f0;border-radius:12px;padding:16px;font-size:13px;color:#555">
+            ご意見・ご感想はDMでお気軽に！
+          </div>
+        </div>
+      </div>`;
+  });
+}
+
+// 起動時に前回レベルを復元 ＋ トライアルチェック
+window.addEventListener('DOMContentLoaded', () => {
+  if (checkTrial()) initLevel();
+});
+
+function pickVoice(c) {
+  const voices = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
+
+  // 1. 名前で優先検索（言語フィルターなし → Danielなど確実に取得）
+  for (const name of c.voiceNames) {
+    const match = voices.find(v => v.name.includes(name));
+    if (match) return match;
+  }
+
+  // 2. 完全一致のlocale
+  const exactLang = voices.find(v => v.lang === c.voiceLang);
+  if (exactLang) return exactLang;
+
+  // 3. 言語ファミリーで検索（en-GB → en-*）
+  const langFamily = voices.find(v => v.lang.startsWith(c.voiceLang.split('-')[0]));
+  return langFamily || null;
+}
+
+// ── Screen helpers ───────────────────────────────────────────────────────────
+function show(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function selectChar(el, name) {
+  document.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  sel = name;
+  document.getElementById('btn-start').disabled = false;
+}
+
+function startChat() {
+  const c = chars[sel];
+  const avEl = document.getElementById('chat-av');
+  avEl.src = c.avatar;
+  avEl.alt = sel;
+  document.getElementById('chat-name').textContent = sel;
+  document.getElementById('chat-desc').textContent = c.desc;
+  messages = []; turns = 0;
+  document.getElementById('chat-area').innerHTML = '';
+  updateTurns();
+  show('screen-chat');
+  // 3分タイマースタート
+  if (chatTimer) clearTimeout(chatTimer);
+  chatTimer = setTimeout(() => {
+    addMsg('sys', '⏱️ 3分経過！フィードバックはここまでの会話が対象です。会話はこのまま続けられます！');
+  }, 3 * 60 * 1000);
+  const greeting = greetings[sel];
+  addMsg('ai', greeting);
+  messages.push({ role:'assistant', content: greeting });
+  if (voiceOn) speak(greeting);
+}
+
+function addMsg(type, text) {
+  const area = document.getElementById('chat-area');
+  const div = document.createElement('div');
+  div.className = `msg ${type}`;
+  div.textContent = text;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function addLoading() {
+  const area = document.getElementById('chat-area');
+  const div = document.createElement('div');
+  div.className = 'msg ai'; div.id = 'loading-msg';
+  div.innerHTML = '<div class="dots"><span></span><span></span><span></span></div>';
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function removeLoading() { const el = document.getElementById('loading-msg'); if(el) el.remove(); }
+function updateTurns() { document.getElementById('turns-count').textContent = `${turns} turns`; }
+function setHint(t) { document.getElementById('mic-hint').textContent = t; }
+
+// ── Speech synthesis ─────────────────────────────────────────────────────────
+function speak(text) {
+  if (!voiceOn) return;
+  window.speechSynthesis.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  const c = chars[sel];
+  utt.lang = c.voiceLang;
+  utt.pitch = c.pitch;
+  // レベルに応じた速度を適用（キャラ固有の速度にレベル補正をかける）
+  const baseRate = levelRate[userLevel] || 0.9;
+  utt.rate = baseRate;
+  const voice = pickVoice(c);
+  if (voice) utt.voice = voice;
+  window.speechSynthesis.speak(utt);
+}
+
+function toggleVoice() {
+  voiceOn = !voiceOn;
+  const btn = document.getElementById('voice-toggle');
+  if (voiceOn) { btn.className = 'voice-toggle on'; btn.textContent = '🔊 Voice'; }
+  else { btn.className = 'voice-toggle'; btn.textContent = '🔇 Muted'; window.speechSynthesis.cancel(); }
+}
+
+// ── Microphone ───────────────────────────────────────────────────────────────
+function toggleMic() {
+  if (isBusy) return;
+  if (isRecording) { recognition && recognition.stop(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { setHint('Not supported. Use Chrome.'); return; }
+  recognition = new SR();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.continuous = true; // 連続モードで途切れにくく
+  let silenceTimer = null;
+  let lastTranscript = '';
+
+  recognition.onstart = () => {
+    isRecording = true;
+    const btn = document.getElementById('mic-btn');
+    btn.className = 'mic-btn recording';
+    btn.textContent = '⏹';
+    setHint('Listening... (3秒の沈黙で自動送信)');
+  };
+  recognition.onresult = (e) => {
+    const t = Array.from(e.results).map(r => r[0].transcript).join('');
+    lastTranscript = t;
+    document.getElementById('text-input').value = t;
+    // 発話があるたびに3秒タイマーをリセット
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      recognition.stop();
+    }, 3000);
+  };
+  recognition.onend = () => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    isRecording = false;
+    const btn = document.getElementById('mic-btn');
+    btn.className = 'mic-btn idle'; btn.textContent = '🎤';
+    const text = document.getElementById('text-input').value.trim();
+    if (text) { sendMessage(text); document.getElementById('text-input').value = ''; }
+    else setHint('No speech detected. Try again.');
+  };
+  recognition.onerror = (e) => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    isRecording = false;
+    document.getElementById('mic-btn').className = 'mic-btn idle';
+    document.getElementById('mic-btn').textContent = '🎤';
+    if (e.error === 'not-allowed') setHint('Mic blocked. Allow mic in browser settings.');
+    else if (e.error === 'no-speech') setHint('No speech detected. Try again.');
+    else setHint('Error: ' + e.error);
+  };
+  recognition.start();
+}
+
+function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); } }
+
+function sendText() {
+  const t = document.getElementById('text-input').value.trim();
+  if (!t || isBusy) return;
+  document.getElementById('text-input').value = '';
+  sendMessage(t);
+}
+
+// ── API calls via local proxy ─────────────────────────────────────────────────
+async function callAPI(body) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function sendMessage(text) {
+  if (isBusy) return;
+  isBusy = true;
+  window.speechSynthesis.cancel();
+  addMsg('user', text);
+  messages.push({ role:'user', content: text });
+  turns++; updateTurns();
+  document.getElementById('btn-send').disabled = true;
+  document.getElementById('mic-btn').className = 'mic-btn busy';
+  setHint('Thinking...');
+  addLoading();
+  try {
+    const system = chars[sel].baseSystem + levelInstruction(userLevel);
+    // A1/A2は日本語ヒント込みで長くなるのでトークン増やす
+    const maxTok = (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
+    const data = await callAPI({ system, messages, max_tokens: maxTok });
+    const reply = data.content[0].text;
+    removeLoading();
+    addMsg('ai', reply);
+    messages.push({ role:'assistant', content: reply });
+    if (voiceOn) { setHint('Speaking...'); speak(reply); setTimeout(() => setHint('Click mic to speak'), 3000); }
+    else setHint('Click mic to speak');
+  } catch(e) {
+    removeLoading();
+    addMsg('sys', 'Error: ' + e.message);
+    setHint('Error. Check the server console.');
+  }
+  isBusy = false;
+  document.getElementById('btn-send').disabled = false;
+  document.getElementById('mic-btn').className = 'mic-btn idle';
+  document.getElementById('mic-btn').textContent = '🎤';
+
+}
+
+async function endChat() {
+  const userMsgs = messages.filter(m => m.role === 'user');
+  if (userMsgs.length < 2) { addMsg('sys', 'Chat a bit more first!'); return; }
+  window.speechSynthesis.cancel();
+  show('screen-result');
+
+  // 添削ボタンをリセット
+  document.getElementById('btn-detail').disabled = true;
+  document.getElementById('btn-detail').textContent = '📝 詳しいフィードバックを見る';
+  document.getElementById('detail-section').classList.remove('open');
+  document.getElementById('corrections-list').innerHTML = '';
+
+  const evalMsgs = userMsgs.slice(0, 10); // 最初の10ターンのみ評価
+  const convo = evalMsgs.map(m => m.content).join('\n');
+  const prompt = `Evaluate this English learner. Respond ONLY with valid JSON, no markdown:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"2-3 sentences of encouraging feedback."}\n\nLearner:\n${convo}`;
+  try {
+    const data = await callAPI({ messages:[{ role:'user', content: prompt }], max_tokens: 300 });
+    const r = JSON.parse(data.content[0].text.replace(/```json|```/g,'').trim());
+    document.getElementById('s-g').textContent = r.grammar + '/10';
+    document.getElementById('s-v').textContent = r.vocabulary + '/10';
+    document.getElementById('s-f').textContent = r.fluency + '/10';
+    document.getElementById('s-n').textContent = r.natural + '/10';
+    const lvlBg  = {A1:'#EBF1FD',A2:'#EBF1FD',B1:'#E1F5EE',B2:'#E1F5EE',C1:'#EEEDFE',C2:'#EEEDFE'};
+    const lvlTxt = {A1:'#185FA5',A2:'#185FA5',B1:'#085041',B2:'#085041',C1:'#3C3489',C2:'#3C3489'};
+    const lb = document.getElementById('r-level');
+    lb.textContent = 'Level: ' + r.level;
+    lb.style.background = lvlBg[r.level] || '#EBF1FD';
+    lb.style.color = lvlTxt[r.level] || '#185FA5';
+    document.getElementById('r-stars').textContent = '★'.repeat(r.stars) + '☆'.repeat(5 - r.stars);
+    document.getElementById('r-partner').textContent = 'Conversation with ' + sel;
+    document.getElementById('r-feedback').textContent = r.feedback;
+    // 判定レベルを保存 → 次回から自動適用
+    saveDetectedLevel(r.level);
+    // 評価完了後に添削ボタンを有効化
+    document.getElementById('btn-detail').disabled = false;
+  } catch(e) {
+    document.getElementById('r-feedback').textContent = 'Could not generate evaluation. Please try again.';
+  }
+}
+
+async function loadDetailFeedback() {
+  const btn = document.getElementById('btn-detail');
+  const section = document.getElementById('detail-section');
+  const list = document.getElementById('corrections-list');
+
+  // すでに開いていたら閉じる
+  if (section.classList.contains('open')) {
+    section.classList.remove('open');
+    btn.textContent = '📝 詳しいフィードバックを見る';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '分析中...';
+  list.innerHTML = '<div class="feedback-box"><div class="dots"><span></span><span></span><span></span></div></div>';
+  section.classList.add('open');
+
+  const userMsgs = messages.filter(m => m.role === 'user').map(m => m.content).slice(0, 10); // 最初の10ターンのみ
+
+  const prompt = `You are an English teacher for Japanese learners. Analyze each of the learner's sentences below and provide corrections.
+
+Respond ONLY with valid JSON array, no markdown:
+[
+  {
+    "original": "the original sentence",
+    "fixed": "the corrected natural English sentence",
+    "point_en": "Brief grammar/expression explanation in English (1-2 sentences)",
+    "point_ja": "同じ文法・表現の説明を日本語で（1〜2文）",
+    "pronunciation": "If a word looks like a speech recognition mishearing (e.g. 'walking' when they likely meant 'working'), give a short pronunciation tip in Japanese explaining how to say the intended word correctly. Include the likely intended word. Leave empty string if no pronunciation issue detected.",
+    "pronounce_word": "If pronunciation field is not empty, put ONLY the correct English word or short phrase to demonstrate (e.g. 'working'). Leave empty string otherwise."
+  }
+]
+
+Important rules:
+- IGNORE capitalization and punctuation errors completely — the text came from speech recognition, not typing.
+- ONLY correct grammar, vocabulary, and natural expression issues.
+- If the meaning is clear and the grammar is close enough for real conversation, skip it.
+- Focus on errors that would actually confuse a native speaker.
+- Keep explanations simple and encouraging.
+- For pronunciation tips: Japanese learners often confuse 'r/l', 'v/b', 'th/s/d', and vowel sounds like 'or/al', 'ee/i'. Look for words that seem out of context and may be mishearing.
+
+Learner's sentences:
+${userMsgs.map((s, i) => `${i + 1}. ${s}`).join('\n')}`;
+
+  try {
+    const data = await callAPI({ messages:[{ role:'user', content: prompt }], max_tokens: 1500 });
+    const corrections = JSON.parse(data.content[0].text.replace(/```json|```/g,'').trim());
+
+    if (!corrections.length) {
+      list.innerHTML = '<div class="feedback-box">🎉 Great job! No major corrections needed.</div>';
+    } else {
+      list.innerHTML = corrections.map((c, i) => `
+        <div class="correction-card" id="correction-${i}">
+          <div class="correction-original">あなたの文: <span>${escHtml(c.original)}</span></div>
+          <div class="correction-fixed">
+            <span>${escHtml(c.fixed)}</span>
+            <button class="btn-listen-fixed" data-word="${escHtml(c.fixed)}" onclick="listenWord(this.dataset.word)">🔊</button>
+            <button class="btn-listen-fixed" style="background:var(--green)" data-word="${escHtml(c.fixed)}" onclick="openPronounce(this.dataset.word,'',true)">🎤 練習</button>
+          </div>
+          <div class="point-en">${escHtml(c.point_en)}</div>
+          <div class="point-ja">${escHtml(c.point_ja)}</div>
+          ${c.pronunciation ? `
+            <div class="point-pronounce">
+              <span class="point-pronounce-text">${escHtml(c.pronunciation)}</span>
+              ${c.pronounce_word ? `
+                <button class="btn-listen" data-word="${escHtml(c.pronounce_word)}" onclick="listenWord(this.dataset.word)">🔊 聞く</button>
+                <button class="btn-listen" style="background:var(--green);margin-left:4px" data-word="${escHtml(c.pronounce_word)}" data-hint="${escHtml(c.pronunciation)}" onclick="openPronounce(this.dataset.word,this.dataset.hint)">🎤 練習</button>` : ''}
+            </div>` : ''}
+        </div>
+      `).join('');
+
+      // チャット吹き出しに⚠️バッジを追加
+      addCorrectionBadges(corrections);
+    }
+    btn.textContent = '📝 フィードバックを閉じる';
+  } catch(e) {
+    list.innerHTML = '<div class="feedback-box">フィードバックの取得に失敗しました。もう一度お試しください。</div>';
+    btn.textContent = '📝 詳しいフィードバックを見る';
+    section.classList.remove('open');
+  }
+  btn.disabled = false;
+}
+
+// ── 発音練習モード ────────────────────────────────────────────────────────────
+let prWord = '', prTries = 0, prMax = 5, prRec = null, prIsSentence = false;
+
+function openPronounce(word, hint, isSentence = false) {
+  prWord = word;
+  prTries = 0;
+  prIsSentence = isSentence;
+  const c = chars[sel] || chars['Mia'];
+  document.getElementById('pr-char').textContent = c.flag;
+  const wordEl = document.getElementById('pr-word');
+  if (isSentence) {
+    // 文章モード：単語ごとにスパンを生成してハイライト可能に
+    wordEl.style.fontSize = '19px';
+    wordEl.style.letterSpacing = '0';
+    wordEl.innerHTML = word.split(/\s+/).map((w, i) =>
+      `<span class="pr-word-span" id="prw-${i}">${w.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>`
+    ).join(' ');
+    document.getElementById('pr-legend').style.display = 'flex';
+  } else {
+    wordEl.textContent = word;
+    wordEl.style.fontSize = '36px';
+    wordEl.style.letterSpacing = '2px';
+    document.getElementById('pr-legend').style.display = 'none';
+  }
+  // ヒントからカタカナ部分を抽出して表示
+  const kanaMatch = hint.match(/「([ァ-ヶー]+)」/g);
+  document.getElementById('pr-kana').textContent = isSentence
+    ? '声に出して🎤ボタンを押そう！'
+    : (kanaMatch ? kanaMatch.join(' / ') : '');
+  document.getElementById('pr-status').textContent = '';
+  document.getElementById('pr-status').className = 'pronounce-status';
+  document.getElementById('pr-tries').textContent = '';
+  document.getElementById('pr-mic').className = 'pronounce-mic';
+  document.getElementById('pr-mic').textContent = '🎤';
+  document.getElementById('pronounce-overlay').classList.add('open');
+  // まずキャラに発音させる
+  setTimeout(() => {
+    listenWord(word);
+    setTimeout(() => {
+      document.getElementById('pr-status').textContent = 'さあ、あなたの番！🎤を押して';
+    }, isSentence ? 2500 : 1500);
+  }, 400);
+}
+
+function closePronounce() {
+  if (prRec) { try { prRec.stop(); } catch(e){} prRec = null; }
+  window.speechSynthesis.cancel();
+  document.getElementById('pronounce-overlay').classList.remove('open');
+}
+
+// ── 発音ハイライト ヘルパー ──────────────────────────────────────────────────
+function editDist(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({length: m+1}, (_, i) =>
+    Array.from({length: n+1}, (_, j) => i || j));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1]
+               : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+// リアルタイム：認識済み単語を青くする
+function liveHighlight(heardText) {
+  const heardWords = heardText.toLowerCase().replace(/[.,!?']/g,'').split(/\s+/);
+  const targetWords = prWord.split(/\s+/);
+  targetWords.forEach((w, i) => {
+    const clean = w.toLowerCase().replace(/[.,!?']/g,'');
+    const span = document.getElementById(`prw-${i}`);
+    if (!span || span.classList.contains('pw-good') ||
+        span.classList.contains('pw-warn') || span.classList.contains('pw-bad')) return;
+    if (heardWords.includes(clean)) span.className = 'pr-word-span pw-live';
+  });
+}
+
+// 終了後：緑/黄/赤で最終採点
+function finalHighlight(heardText) {
+  const heardWords = heardText.toLowerCase().replace(/[.,!?']/g,'').split(/\s+/);
+  const targetWords = prWord.split(/\s+/);
+  targetWords.forEach((w, i) => {
+    const clean = w.toLowerCase().replace(/[.,!?']/g,'');
+    const span = document.getElementById(`prw-${i}`);
+    if (!span) return;
+    if (heardWords.includes(clean)) {
+      span.className = 'pr-word-span pw-good';
+    } else {
+      // 類似単語チェック（編集距離 or 先頭3文字一致）
+      const threshold = Math.max(2, Math.floor(clean.length * 0.35));
+      const isSimilar = heardWords.some(hw => {
+        if (Math.abs(hw.length - clean.length) > threshold) return false;
+        return editDist(clean, hw) <= threshold;
+      });
+      span.className = isSimilar ? 'pr-word-span pw-warn' : 'pr-word-span pw-bad';
+    }
+  });
+}
+
+function startPronounce() {
+  if (prTries >= prMax) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  prRec = new SR();
+  prRec.lang = 'en-US';
+  prRec.interimResults = true;   // 途中経過も受け取る
+  prRec.continuous = true;        // 長文でも切れないよう継続モード
+  const mic = document.getElementById('pr-mic');
+  const status = document.getElementById('pr-status');
+  mic.className = 'pronounce-mic listening';
+  mic.textContent = '⏹';
+  status.textContent = '聞いてます...';
+  status.className = 'pronounce-status';
+
+  let silenceTimer = null;
+  let bestTranscript = '';
+
+  prRec.onresult = (e) => {
+    // 全結果を結合（interim含む）
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        bestTranscript += t + ' ';
+      } else {
+        interim = t;
+      }
+    }
+    const current = (bestTranscript + interim).trim();
+    status.textContent = `認識中: "${current}"`;
+
+    // リアルタイムで認識済み単語を青くハイライト
+    if (prIsSentence) liveHighlight(current);
+
+    // 無音2秒で確定（文章モードは3秒）
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      prRec.stop();
+    }, prIsSentence ? 3000 : 2000);
+  };
+
+  prRec.onend = () => {
+    clearTimeout(silenceTimer);
+    const heard = bestTranscript.trim().toLowerCase().replace(/[.,!?']/g, '') || '';
+    if (!heard) {
+      // 何も認識されなかった
+      mic.className = 'pronounce-mic';
+      mic.textContent = '🎤';
+      status.textContent = 'もう一度試してね';
+      status.className = 'pronounce-status ng';
+      return;
+    }
+    const target = prWord.toLowerCase().replace(/[.,!?']/g, '');
+    prTries++;
+
+    // 文章モード：最終ハイライト（緑/黄/赤）
+    if (prIsSentence) finalHighlight(heard);
+
+    let isMatch;
+    if (prIsSentence) {
+      // 文章モード：70%以上の単語が一致でOK
+      const targetWords = target.split(/\s+/);
+      const heardWords = heard.split(/\s+/);
+      const matchCount = targetWords.filter(w => heardWords.includes(w)).length;
+      const matchRate = matchCount / targetWords.length;
+      isMatch = matchRate >= 0.7;
+    } else {
+      // 単語モード：ほぼ完全一致
+      isMatch = heard === target || heard.includes(target) || target.includes(heard);
+    }
+    if (isMatch) {
+      mic.className = 'pronounce-mic ok';
+      mic.textContent = '✅';
+      status.textContent = 'Perfect! 素晴らしい！🎉';
+      status.className = 'pronounce-status ok';
+      document.getElementById('pr-tries').textContent = '';
+      // Miaが褒める
+      const praise = ['Great job!', 'Perfect pronunciation!', 'That sounded amazing!'];
+      setTimeout(() => praiseSpeak(praise[Math.floor(Math.random()*praise.length)]), 300);
+      setTimeout(() => closePronounce(), 3000);
+    } else {
+      const left = prMax - prTries;
+      if (left > 0) {
+        mic.className = 'pronounce-mic';
+        mic.textContent = '🎤';
+        status.textContent = `Hmm, もう一度！（あと${left}回）`;
+        status.className = 'pronounce-status ng';
+        // 単語モードのみ認識テキスト表示（文章モードはハイライトで分かる）
+        document.getElementById('pr-tries').textContent = prIsSentence ? '' : `認識: "${heard}"`;
+        // もう一度手本を聞かせる
+        setTimeout(() => listenWord(prWord), 600);
+      } else {
+        mic.className = 'pronounce-mic';
+        mic.textContent = '🎤';
+        status.textContent = 'Good try! 練習あるのみ！💪';
+        status.className = 'pronounce-status ok';
+        setTimeout(() => praiseSpeak("Great effort! Keep practicing!"), 300);
+        setTimeout(() => closePronounce(), 3000);
+      }
+    }
+  };
+  prRec.onerror = (e) => {
+    clearTimeout(silenceTimer);
+    if (e.error === 'no-speech') return; // 無音エラーは無視（onendで処理）
+    mic.className = 'pronounce-mic';
+    mic.textContent = '🎤';
+    status.textContent = 'もう一度試してね';
+    status.className = 'pronounce-status ng';
+  };
+  prRec.start();
+}
+
+function praiseSpeak(text) {
+  window.speechSynthesis.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  const c = chars[sel] || chars['Mia'];
+  utt.lang = c.voiceLang;
+  utt.pitch = c.pitch;
+  utt.rate = 0.9;
+  const voice = pickVoice(c);
+  if (voice) utt.voice = voice;
+  window.speechSynthesis.speak(utt);
+}
+
+function listenWord(word) {
+  window.speechSynthesis.cancel();
+  const utt = new SpeechSynthesisUtterance(word);
+  const c = chars[sel] || chars['Mia'];
+  utt.lang = c.voiceLang;
+  utt.pitch = c.pitch;
+  utt.rate = 0.75; // 発音確認用にゆっくり
+  const voice = pickVoice(c);
+  if (voice) utt.voice = voice;
+  window.speechSynthesis.speak(utt);
+}
+
+function addCorrectionBadges(corrections) {
+  // チャットエリアのユーザーメッセージを取得
+  const userBubbles = document.querySelectorAll('#chat-area .msg.user');
+  userBubbles.forEach(bubble => {
+    // すでにバッジがあれば削除（重複防止）
+    const existing = bubble.querySelector('.correction-badge');
+    if (existing) existing.remove();
+
+    const text = bubble.textContent.trim().toLowerCase();
+    corrections.forEach((c, i) => {
+      const original = c.original.toLowerCase();
+      // テキストが似ていたらバッジを付ける（部分一致でも検出）
+      if (text.includes(original.slice(0, 15)) || original.includes(text.slice(0, 15))) {
+        const badge = document.createElement('span');
+        badge.className = 'correction-badge';
+        badge.textContent = '⚠️';
+        badge.title = '添削あり（フィードバックを見る）';
+        badge.onclick = () => {
+          // 添削セクションを開く
+          const section = document.getElementById('detail-section');
+          if (!section.classList.contains('open')) {
+            document.getElementById('btn-detail').click();
+          }
+          // 該当カードにスクロール＆ハイライト
+          setTimeout(() => {
+            const card = document.getElementById(`correction-${i}`);
+            if (card) {
+              card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              card.classList.add('highlight');
+              setTimeout(() => card.classList.remove('highlight'), 2000);
+            }
+          }, 300);
+        };
+        bubble.appendChild(badge);
+      }
+    });
+  });
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function restart() {
+  if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
+  document.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
+  sel = null;
+  document.getElementById('btn-start').disabled = true;
+  show('screen-select');
+}
+</script>
+
+<!-- Service Worker 登録（PWA） -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then(() => console.log('✅ Service Worker registered'))
+      .catch(err => console.warn('SW registration failed:', err));
+  });
+}
+</script>
+</body>
+</html>

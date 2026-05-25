@@ -1,0 +1,25 @@
+{
+  "name": "English Voice Practice",
+  "short_name": "英会話AI",
+  "description": "AIキャラクターと英会話練習！発音・文法・語彙を楽しく学ぼう",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#6c63ff",
+  "orientation": "portrait-primary",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "/Emma.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/Emma.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
