@@ -552,11 +552,8 @@ function startChat() {
   document.getElementById('chat-area').innerHTML = '';
   updateTurns();
   show('screen-chat');
-  // 3分タイマースタート
-  if (chatTimer) clearTimeout(chatTimer);
-  chatTimer = setTimeout(() => {
-    addMsg('sys', '⏱️ 3分経過！フィードバックはここまでの会話が対象です。会話はこのまま続けられます！');
-  }, 3 * 60 * 1000);
+  // タイマーリセット（不要になったが念のため）
+  if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
   const greeting = greetings[sel];
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
@@ -696,6 +693,9 @@ async function sendMessage(text) {
   addMsg('user', text);
   messages.push({ role:'user', content: text });
   turns++; updateTurns();
+  if (turns === 10) {
+    addMsg('sys', '💬 10ターン達成！フィードバックはここまでの会話が対象です。会話はこのまま続けられます！');
+  }
   document.getElementById('btn-send').disabled = true;
   document.getElementById('mic-btn').className = 'mic-btn busy';
   setHint('Thinking...');
