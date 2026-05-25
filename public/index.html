@@ -389,7 +389,7 @@ let sel = null, userLevel = 'A1', messages = [], turns = 0, recognition = null, 
 let chatTimer = null;
 
 // レベルに応じた音声速度
-const levelRate = { A1: 0.75, A2: 0.82, B1: 0.9, B2: 0.95, C1: 1.0, C2: 1.05 };
+const levelRate = { A1: 0.88, A2: 0.92, B1: 0.96, B2: 1.0, C1: 1.02, C2: 1.05 };
 
 function selectLevel(el, level) {
   document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('selected'));
@@ -498,20 +498,34 @@ window.addEventListener('DOMContentLoaded', () => {
 
 function pickVoice(c) {
   const voices = cachedVoices.length ? cachedVoices : window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
 
-  // 1. 名前で優先検索（言語フィルターなし → Danielなど確実に取得）
+  // 1. 名前で完全一致（最優先）
+  for (const name of c.voiceNames) {
+    const match = voices.find(v => v.name === name);
+    if (match) return match;
+  }
+
+  // 2. 名前で部分一致
   for (const name of c.voiceNames) {
     const match = voices.find(v => v.name.includes(name));
     if (match) return match;
   }
 
-  // 2. 完全一致のlocale
+  // 3. Google音声を言語で検索（Chrome高品質）
+  const googleMatch = voices.find(v => v.name.startsWith('Google') && v.lang === c.voiceLang);
+  if (googleMatch) return googleMatch;
+
+  // 4. 同じ言語コードのGoogle音声（en-GB → en-US もOK）
+  const googleFamily = voices.find(v => v.name.startsWith('Google') && v.lang.startsWith(c.voiceLang.split('-')[0]));
+  if (googleFamily) return googleFamily;
+
+  // 5. 完全一致locale
   const exactLang = voices.find(v => v.lang === c.voiceLang);
   if (exactLang) return exactLang;
 
-  // 3. 言語ファミリーで検索（en-GB → en-*）
-  const langFamily = voices.find(v => v.lang.startsWith(c.voiceLang.split('-')[0]));
-  return langFamily || null;
+  // 6. 言語ファミリー（en-*）
+  return voices.find(v => v.lang.startsWith(c.voiceLang.split('-')[0])) || null;
 }
 
 // ── Screen helpers ───────────────────────────────────────────────────────────
