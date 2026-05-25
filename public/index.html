@@ -586,10 +586,17 @@ function updateTurns() { document.getElementById('turns-count').textContent = `$
 function setHint(t) { document.getElementById('mic-hint').textContent = t; }
 
 // ── Speech synthesis ─────────────────────────────────────────────────────────
+function stripEmoji(text) {
+  return text
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function speak(text) {
   if (!voiceOn) return;
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(text);
+  const utt = new SpeechSynthesisUtterance(stripEmoji(text));
   const c = chars[sel];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
@@ -1050,7 +1057,7 @@ function startPronounce() {
 
 function praiseSpeak(text) {
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(text);
+  const utt = new SpeechSynthesisUtterance(stripEmoji(text));
   const c = chars[sel] || chars['Mia'];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
