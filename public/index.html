@@ -352,8 +352,8 @@ The learner's English level is ${level} (advanced). Speak completely naturally. 
 const chars = {
   Emma:  { flag:'🇺🇸', bg:'#EBF1FD', desc:'Casual & friendly · American',
     avatar:'Emma.png',
-    voiceLang:'en-US', voiceNames:['Google US English','Samantha','Shelley','Sandy','Flo','Kathy'],
-    pitch:1.1, rate:0.95,
+    voiceLang:'en-US', voiceNames:['Samantha','Google US English','Victoria','Kathy','Flo'],
+    pitch:1.0, rate:0.95,
     baseSystem:`You are Emma, a friendly 25-year-old American woman from California. You love coffee, travel, and casual conversation. Speak naturally and casually. Use contractions. Keep replies to 2-3 sentences max. Be warm and encouraging. Stay in character as Emma always.` },
   Airi:  { flag:'🇯🇵🇬🇧', bg:'#FFF0F5', desc:'Café Barista · Japanese-British',
     avatar:'Airi.png',
@@ -584,6 +584,7 @@ function speak(text) {
   utt.rate = baseRate;
   const voice = pickVoice(c);
   if (voice) utt.voice = voice;
+  console.log('🔊 Voice:', voice ? voice.name : 'DEFAULT(none)', '| lang:', utt.lang, '| pitch:', utt.pitch);
   window.speechSynthesis.speak(utt);
 }
 
