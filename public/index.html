@@ -388,8 +388,8 @@ const greetings = {
 let sel = null, userLevel = 'A1', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let chatTimer = null;
 
-// レベルに応じた音声速度
-const levelRate = { A1: 0.88, A2: 0.92, B1: 0.96, B2: 1.0, C1: 1.02, C2: 1.05 };
+// レベルに応じた速度倍率（キャラ固有のrateに掛け算）
+const levelMult = { A1: 0.88, A2: 0.92, B1: 0.96, B2: 1.0, C1: 1.03, C2: 1.06 };
 
 function selectLevel(el, level) {
   document.querySelectorAll('.level-btn').forEach(b => b.classList.remove('selected'));
@@ -600,9 +600,10 @@ function speak(text) {
   const c = chars[sel];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
-  // レベルに応じた速度を適用（キャラ固有の速度にレベル補正をかける）
-  const baseRate = levelRate[userLevel] || 0.9;
-  utt.rate = baseRate;
+  // キャラ固有のrateにレベル倍率をかける（最低0.82でChromeバグ回避）
+  const charRate = c.rate || 0.95;
+  const mult = levelMult[userLevel] || 1.0;
+  utt.rate = Math.max(charRate * mult, 0.82);
   const voice = pickVoice(c);
   if (voice) utt.voice = voice;
   console.log('🔊 Voice:', voice ? voice.name : 'DEFAULT(none)', '| lang:', utt.lang, '| pitch:', utt.pitch);
