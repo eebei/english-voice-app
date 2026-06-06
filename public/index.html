@@ -590,10 +590,16 @@ function stripEmoji(text) {
     .trim();
 }
 
+function phonetify(text) {
+  return text
+    .replace(/OMORAY/gi, 'Omorei')   // オモレイ と読ませる
+    .replace(/iRacing/gi, 'eye Racing'); // アイレーシング
+}
+
 function speak(text) {
   if (!voiceOn) return;
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(stripEmoji(text));
+  const utt = new SpeechSynthesisUtterance(phonetify(stripEmoji(text)));
   const c = chars[sel];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
@@ -1058,7 +1064,7 @@ function startPronounce() {
 
 function praiseSpeak(text) {
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(stripEmoji(text));
+  const utt = new SpeechSynthesisUtterance(phonetify(stripEmoji(text)));
   const c = chars[sel] || chars['Mia'];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
