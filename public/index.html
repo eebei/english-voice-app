@@ -32,6 +32,10 @@
     --amber: #BA7517;
   }
   body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  /* 日本語ホールドボタン */
+  .ja-btn { margin-top: 6px; padding: 3px 10px; font-size: 11px; border: 1px solid #ddd; border-radius: 20px; background: #f8f8f8; cursor: pointer; display: block; color: #555; user-select: none; }
+  .ja-btn:active { background: #fff0f5; }
+  .ja-translation { margin-top: 6px; padding: 6px 10px; background: #fff8e1; border-radius: 8px; font-size: 13px; color: #555; line-height: 1.5; }
   /* ブラウザ拡張機能（DeepL等）のオーバーレイを無効化 */
   deepl-input-controller, deepl-input-controller ~ div[popover] { pointer-events: none !important; }
   div[popover][style*="2147483647"] { pointer-events: none !important; }
@@ -345,9 +349,9 @@ function levelInstruction(level) {
 The learner's English level is ${level} (beginner). Use these rules:
 - Use very simple words and short sentences (5-8 words max per sentence).
 - When you notice a clear grammar mistake, gently point it out like this: "Oh, you mean '(correct phrase)'! That's great!" — stay warm and encouraging.
-- Occasionally add a simple Japanese hint in parentheses for key words, e.g. "I went to the park (公園) yesterday."
 - Never lecture. Keep corrections brief and positive.
-- If the learner seems confused, offer a Japanese translation of your sentence.`;
+- IMPORTANT: At the very end of EVERY reply, add a Japanese translation of your entire message using this exact format on a new line: [JA: ここに日本語訳を書く]
+- The [JA:] part is hidden from the user normally, so write a natural Japanese translation.`;
   } else if (level === 'B1' || level === 'B2') {
     return `
 
@@ -708,11 +712,45 @@ function startChat() {
   if (voiceOn) speak(greeting);
 }
 
+let lastJaTranslation = '';
+
+function parseJa(text) {
+  const match = text.match(/\[JA:\s*([\s\S]*?)\]/);
+  const japanese = match ? match[1].trim() : '';
+  const english = text.replace(/\[JA:[\s\S]*?\]/g, '').trim();
+  return { english, japanese };
+}
+
 function addMsg(type, text) {
   const area = document.getElementById('chat-area');
   const div = document.createElement('div');
   div.className = `msg ${type}`;
-  div.textContent = text;
+
+  if (type === 'ai') {
+    const { english, japanese } = parseJa(text);
+    div.textContent = english;
+    // A1/A2かつ日本語訳がある場合はホールドボタンを追加
+    if (japanese && (userLevel === 'A1' || userLevel === 'A2')) {
+      lastJaTranslation = japanese;
+      const jaDiv = document.createElement('div');
+      jaDiv.className = 'ja-translation';
+      jaDiv.textContent = japanese;
+      jaDiv.style.display = 'none';
+      div.appendChild(jaDiv);
+      const btn = document.createElement('button');
+      btn.className = 'ja-btn';
+      btn.textContent = '🇯🇵 日本語';
+      btn.addEventListener('mousedown', () => jaDiv.style.display = 'block');
+      btn.addEventListener('touchstart', () => jaDiv.style.display = 'block');
+      btn.addEventListener('mouseup', () => jaDiv.style.display = 'none');
+      btn.addEventListener('touchend', () => jaDiv.style.display = 'none');
+      btn.addEventListener('mouseleave', () => jaDiv.style.display = 'none');
+      div.appendChild(btn);
+    }
+  } else {
+    div.textContent = text;
+  }
+
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
 }
@@ -738,6 +776,16 @@ function stripEmoji(text) {
     .trim();
 }
 
+function stripMarkdown(text) {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1')   // **bold** → bold
+    .replace(/\*(.*?)\*/g, '$1')        // *italic* → italic
+    .replace(/`(.*?)`/g, '$1')          // `code` → code
+    .replace(/#{1,6}\s/g, '')           // ## heading → heading
+    .replace(/\[JA:.*?\]/gs, '')        // [JA:...] を除去
+    .trim();
+}
+
 function stripParens(text) {
   // ()内の注釈・日本語を全て除去してからTTS読み上げ
   return text
@@ -756,7 +804,7 @@ function phonetify(text) {
 function speak(text) {
   if (!voiceOn) return;
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(phonetify(stripParens(stripEmoji(text))));
+  const utt = new SpeechSynthesisUtterance(phonetify(stripMarkdown(stripParens(stripEmoji(text)))));
   const c = chars[sel];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
@@ -878,10 +926,11 @@ async function sendMessage(text) {
     const maxTok = (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
     const data = await callAPI({ system, messages: trimmedMessages, max_tokens: maxTok });
     const reply = data.content[0].text;
+    const { english: replyEn } = parseJa(reply);
     removeLoading();
     addMsg('ai', reply);
-    messages.push({ role:'assistant', content: reply });
-    if (voiceOn) { setHint('Speaking...'); speak(reply); setTimeout(() => setHint('Click mic to speak'), 3000); }
+    messages.push({ role:'assistant', content: replyEn }); // 会話履歴には英語のみ保存
+    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint('Click mic to speak'), 3000); }
     else setHint('Click mic to speak');
   } catch(e) {
     removeLoading();
@@ -1230,7 +1279,7 @@ function startPronounce() {
 
 function praiseSpeak(text) {
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(phonetify(stripParens(stripEmoji(text))));
+  const utt = new SpeechSynthesisUtterance(phonetify(stripMarkdown(stripParens(stripEmoji(text)))));
   const c = chars[sel] || chars['Mia'];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
