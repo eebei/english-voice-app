@@ -382,7 +382,9 @@ Regular / friend feel:
 
 PERSONALITY: Warm, genuine, curious, naturally chatty without being overwhelming. She asks follow-up questions because she's actually interested — not just being polite. Occasionally a Japanese word slips out when she's excited ("Sugoi!", "Maji de?") but she always laughs and explains it. British English, warm and light.
 
-IMPORTANT: Keep replies to 2-3 sentences. Make the user feel like a regular even from early on. Create the feeling that coming back every day would be natural and enjoyable. Stay in character as Airi always.` },
+IMPORTANT: Keep replies to 2-3 sentences. Make the user feel like a regular even from early on. Create the feeling that coming back every day would be natural and enjoyable.
+NEVER add Japanese translations in parentheses like (日本語). Speak in English only — occasional Japanese words are fine naturally but never as written annotations.
+Stay in character as Airi always.` },
   Chloe: { flag:'🇦🇺', bg:'#E1F5EE', desc:'Slang & humor · Australian',
     avatar:'Chloe.png',
     voiceLang:'en-AU', voiceNames:['Google Australian English','Karen','Catherine'],
@@ -426,6 +428,11 @@ GT500 = purpose-built turbo engine cars, no hybrid. Toyota GR Supra GT500, Nissa
 GT300 = mix of JAF-GT300 spec cars (some with hybrid) and GT3 cars. Majority run standard engines.
 
 PERSONALITY: Direct, sharp, professional. Fellow professional to fellow professional — never talks down. Gets fired up about racing. British English: "mate", "brilliant", "sorted", "bang on", "proper job", "flat out". 2-3 sentences max but packed with substance.
+
+STRICT RULES:
+- NEVER add Japanese translations or notes in parentheses like (日本語) — English only
+- NEVER explain English words in Japanese
+- Speak only in English at all times
 
 Stay in character as James always.` },
   Mia:   { flag:'🇨🇦', bg:'#FFF8E1', desc:'Clear & slow · Canadian',
@@ -648,16 +655,25 @@ function stripEmoji(text) {
     .trim();
 }
 
+function stripParens(text) {
+  // ()内の注釈・日本語を全て除去してからTTS読み上げ
+  return text
+    .replace(/\s*\([^)]*\)/g, '')
+    .replace(/\s*（[^）]*）/g, '')  // 全角括弧も対応
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function phonetify(text) {
   return text
-    .replace(/OMORAY/gi, 'Omorei')   // オモレイ と読ませる
+    .replace(/OMORAY/gi, 'Ohmoray')   // オモレイ に近い発音
     .replace(/iRacing/gi, 'eye Racing'); // アイレーシング
 }
 
 function speak(text) {
   if (!voiceOn) return;
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(phonetify(stripEmoji(text)));
+  const utt = new SpeechSynthesisUtterance(phonetify(stripParens(stripEmoji(text))));
   const c = chars[sel];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
@@ -1122,7 +1138,7 @@ function startPronounce() {
 
 function praiseSpeak(text) {
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(phonetify(stripEmoji(text)));
+  const utt = new SpeechSynthesisUtterance(phonetify(stripParens(stripEmoji(text))));
   const c = chars[sel] || chars['Mia'];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
