@@ -21,10 +21,16 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ── Chat proxy ──────────────────────────────────────────────────────────────
 app.post('/api/chat', async (req, res) => {
   try {
-    const { system, messages, max_tokens = 300 } = req.body;
+    const { system, messages, max_tokens = 300, userName, character } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array is required' });
+    }
+
+    // ユーザーログ（Railway のログで確認可能）
+    if (userName) {
+      const now = new Date().toISOString();
+      console.log(`[${now}] 👤 ${userName} | 🎭 ${character || '?'} | 💬 turn ${messages.filter(m=>m.role==='user').length}`);
     }
 
     const response = await client.messages.create({

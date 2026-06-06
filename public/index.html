@@ -56,6 +56,10 @@
   .level-hard { background: #FAEEDA; color: #854F0B; }
 
   /* Level selector */
+  .name-input-box { background: var(--surface); border: 1.5px solid var(--border); border-radius: 16px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+  .name-input-box label { font-size: 12px; font-weight: 500; color: var(--text2); display: block; margin-bottom: 8px; }
+  .name-input-field { width: 100%; padding: 10px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-size: 15px; font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); outline: none; box-sizing: border-box; transition: border-color 0.15s; }
+  .name-input-field:focus { border-color: var(--accent); }
   .level-selector { background: var(--surface); border: 1.5px solid var(--border); border-radius: 16px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
   .level-selector-label { font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 10px; }
   .level-btns { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -229,6 +233,12 @@
         <div class="char-origin">English Instructor · Vancouver</div>
         <span class="level-pill level-mid">🌸 Beginner Friendly</span>
       </div>
+    </div>
+
+    <!-- 名前入力 -->
+    <div class="name-input-box">
+      <label>あなたの名前（ニックネームでOK）</label>
+      <input type="text" class="name-input-field" id="user-name-input" placeholder="例：Yuji / ゆうじ / Taro" maxlength="20" oninput="onNameInput()">
     </div>
 
     <!-- レベル選択 -->
@@ -511,7 +521,7 @@ const greetings = {
   Mia:   "Hi! I'm Mia — I teach English to Japanese students here in Vancouver! I also study Japanese at uni, so don't worry if you get stuck — I've got you! How are you feeling about your English today?"
 };
 
-let sel = null, userLevel = 'A1', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
+let sel = null, userLevel = 'A1', userName = '', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let chatTimer = null;
 
 // レベルに応じた速度倍率（キャラ固有のrateに掛け算）
@@ -660,11 +670,20 @@ function show(id) {
   document.getElementById(id).classList.add('active');
 }
 
+function onNameInput() {
+  userName = document.getElementById('user-name-input').value.trim();
+  updateStartBtn();
+}
+
+function updateStartBtn() {
+  document.getElementById('btn-start').disabled = !(sel && userName.length > 0);
+}
+
 function selectChar(el, name) {
   document.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
   el.classList.add('selected');
   sel = name;
-  document.getElementById('btn-start').disabled = false;
+  updateStartBtn();
 }
 
 function startChat() {
@@ -820,7 +839,7 @@ async function callAPI(body) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ ...body, userName, character: sel })
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -842,7 +861,8 @@ async function sendMessage(text) {
   setHint('Thinking...');
   addLoading();
   try {
-    const system = chars[sel].baseSystem + levelInstruction(userLevel);
+    const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.`;
+    const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote;
     // A1/A2は日本語ヒント込みで長くなるのでトークン増やす
     const maxTok = (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
     const data = await callAPI({ system, messages, max_tokens: maxTok });
