@@ -763,7 +763,6 @@ function speak(text) {
   utt.rate = Math.max(charRate * mult, 0.82);
   const voice = pickVoice(c);
   if (voice) utt.voice = voice;
-  console.log('🔊 Voice:', voice ? voice.name : 'DEFAULT(none)', '| lang:', utt.lang, '| pitch:', utt.pitch);
   window.speechSynthesis.speak(utt);
 }
 
