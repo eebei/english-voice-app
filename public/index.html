@@ -32,6 +32,9 @@
     --amber: #BA7517;
   }
   body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+  /* ブラウザ拡張機能（DeepL等）のオーバーレイを無効化 */
+  deepl-input-controller, deepl-input-controller ~ div[popover] { pointer-events: none !important; }
+  div[popover][style*="2147483647"] { pointer-events: none !important; }
   .wrap { width: 100%; max-width: 520px; }
 
   /* Header */
