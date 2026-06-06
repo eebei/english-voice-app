@@ -863,7 +863,7 @@ async function sendMessage(text) {
   setHint('Thinking...');
   addLoading();
   try {
-    const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.`;
+    const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.` : '';
     const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote;
     // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
     const MAX_HISTORY = 20;
