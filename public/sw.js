@@ -1,5 +1,5 @@
 // ── Service Worker for English Voice Practice ────────────────────────────────
-const CACHE_NAME = 'evp-v3';
+const CACHE_NAME = 'evp-v4';
 const ASSETS = [
   '/',
   '/index.html',
