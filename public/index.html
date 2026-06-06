@@ -739,12 +739,12 @@ function addMsg(type, text) {
       div.appendChild(jaDiv);
       const btn = document.createElement('button');
       btn.className = 'ja-btn';
-      btn.textContent = '🇯🇵 日本語';
-      btn.addEventListener('mousedown', () => jaDiv.style.display = 'block');
-      btn.addEventListener('touchstart', () => jaDiv.style.display = 'block');
-      btn.addEventListener('mouseup', () => jaDiv.style.display = 'none');
-      btn.addEventListener('touchend', () => jaDiv.style.display = 'none');
-      btn.addEventListener('mouseleave', () => jaDiv.style.display = 'none');
+      btn.textContent = '🇯🇵 日本語を見る';
+      btn.addEventListener('click', () => {
+        const isVisible = jaDiv.style.display !== 'none';
+        jaDiv.style.display = isVisible ? 'none' : 'block';
+        btn.textContent = isVisible ? '🇯🇵 日本語を見る' : '🇯🇵 閉じる';
+      });
       div.appendChild(btn);
     }
   } else {
