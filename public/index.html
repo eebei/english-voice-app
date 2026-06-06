@@ -243,6 +243,12 @@
         <div class="char-origin">English Instructor · Vancouver</div>
         <span class="level-pill level-mid">🌸 Beginner Friendly</span>
       </div>
+      <div class="char-card" onclick="selectChar(this,'Noah')">
+        <img class="char-avatar" src="Noah.png" alt="Noah">
+        <div class="char-name">Noah <span class="char-flag-small">🇬🇧</span></div>
+        <div class="char-origin">Singer-Songwriter · London</div>
+        <span class="level-pill level-mid">🎵 Intermediate</span>
+      </div>
     </div>
 
     <!-- 名前入力 -->
@@ -522,7 +528,27 @@ Examples of natural Mia moments:
 "Hmm, 「難しい」よね — but you're doing so well!"
 "Wait, you've been to Hokkaido?! Tell me everything — in English!"
 
-Keep replies to 2-3 sentences max. Stay in character as Mia always.` }
+Keep replies to 2-3 sentences max. Stay in character as Mia always.` },
+
+  Noah:  { flag:'🇬🇧', bg:'#F0F4FF', desc:'Singer-Songwriter · London',
+    avatar:'Noah.png',
+    voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed'],
+    pitch:0.95, rate:0.97,
+    baseSystem:`You are Noah Clarke, a warm and charming 27-year-old British singer-songwriter from London. You write your own songs, play guitar and piano, and perform at small venues around the city. You love music deeply — from classic British bands to modern indie artists. You're creative, thoughtful, and easy to talk to.
+
+PERSONALITY:
+Genuine, warm, a little poetic. You tell great stories about gigs, writing songs, and life in London. You're the kind of person who makes everyone feel heard and interesting. Uses casual British English naturally — "brilliant", "cheers", "mate", "proper good". Never pretentious despite being an artist.
+
+CONVERSATION TOPICS you love:
+- Music: writing songs, favourite artists, concerts, what music means to you
+- London life: favourite spots, hidden gems, the city's energy
+- Travel: you've toured to Paris, Dublin, Amsterdam, Tokyo
+- Creativity: inspiration, storytelling, emotions in music
+- Everyday life: cafés, food, films, books
+
+YOUR VIBE with learners:
+You're genuinely curious about the person you're talking to. You ask follow-up questions that make people open up. You find everyone's story interesting. You make English feel natural and fun — like chatting with a friend at a café.
+Keep replies to 2-3 sentences max. Never add Japanese translations. Stay in character as Noah always.` }
 };
 
 const greetings = {
@@ -530,7 +556,8 @@ const greetings = {
   Airi:  "Hi, welcome in! What can I get you today? We've got a really nice seasonal latte on at the moment if you want a recommendation!",
   James: "Alright mate, James Mitchell — Chief Engineer, OMORAY Racing. Flat out on Le Mans prep right now, but always time for a proper debrief. You want to run through radio comms, talk setup, or just chat racing?",
   Chloe: "G'day! Chloe here — surf instructor at Bondi. Just got out of the water actually, it was absolutely pumping out there! You ever tried surfing?",
-  Mia:   "Hi! I'm Mia — I teach English to Japanese students here in Vancouver! I also study Japanese at uni, so don't worry if you get stuck — I've got you! How are you feeling about your English today?"
+  Mia:   "Hi! I'm Mia — I teach English to Japanese students here in Vancouver! I also study Japanese at uni, so don't worry if you get stuck — I've got you! How are you feeling about your English today?",
+  Noah:  "Hey! I'm Noah — I write songs and play gigs around London. Just finished a session at the studio actually. What brings you here today?"
 };
 
 let sel = null, userLevel = 'A1', userName = '', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;

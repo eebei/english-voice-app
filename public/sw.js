@@ -1,5 +1,5 @@
 // ── Service Worker for English Voice Practice ────────────────────────────────
-const CACHE_NAME = 'evp-v5';
+const CACHE_NAME = 'evp-v6';
 
 // 画像とmanifestのみキャッシュ（index.htmlは常に最新を取得）
 const STATIC_ASSETS = [
@@ -9,6 +9,7 @@ const STATIC_ASSETS = [
   '/Chloe.png',
   '/Airi.png',
   '/James.png',
+  '/Noah.png',
 ];
 
 // インストール時に静的ファイルのみキャッシュ
