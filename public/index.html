@@ -857,6 +857,12 @@ async function sendMessage(text) {
   turns++; updateTurns();
   if (turns === 10) {
     addMsg('sys', '💬 10ターン達成！フィードバックはここまでの会話が対象です。会話はこのまま続けられます！');
+    // 上部バナーでも通知（流れても見えるように）
+    const b = document.createElement('div');
+    b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#6c63ff;color:#fff;text-align:center;padding:10px 16px;font-size:14px;font-weight:600;';
+    b.textContent = '💬 10ターン達成！「End & get evaluation」で評価を見てみよう！';
+    document.body.appendChild(b);
+    setTimeout(() => b.remove(), 8000); // 8秒後に消える
   }
   document.getElementById('btn-send').disabled = true;
   document.getElementById('mic-btn').className = 'mic-btn busy';
