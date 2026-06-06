@@ -862,9 +862,12 @@ async function sendMessage(text) {
   try {
     const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.`;
     const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote;
+    // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
+    const MAX_HISTORY = 20;
+    const trimmedMessages = messages.slice(-MAX_HISTORY);
     // A1/A2は日本語ヒント込みで長くなるのでトークン増やす
     const maxTok = (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
-    const data = await callAPI({ system, messages, max_tokens: maxTok });
+    const data = await callAPI({ system, messages: trimmedMessages, max_tokens: maxTok });
     const reply = data.content[0].text;
     removeLoading();
     addMsg('ai', reply);
