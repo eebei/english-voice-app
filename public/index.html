@@ -768,7 +768,7 @@ function onNameInput() {
 }
 
 function updateStartBtn() {
-  document.getElementById('btn-start').disabled = !sel;
+  document.getElementById('btn-start').disabled = !(sel && userName.length > 0);
 }
 
 function selectChar(el, name) {
