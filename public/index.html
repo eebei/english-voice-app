@@ -294,6 +294,10 @@
         📋 Debrief Mode<br>
         <span style="font-size:12px;font-weight:400;opacity:0.85;">Deep technical discussion · Session analysis · English coaching</span>
       </button>
+      <button onclick="startJamesMode('ja-engineering')" style="background:linear-gradient(135deg,#1a1a2e,#2d6a4f);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        🇯🇵 日本語エンジニアリングモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">セッティング・タイヤ・コーナリング分析 · Mercedes AMG GT3専用</span>
+      </button>
     </div>
     <div style="padding:16px 20px 0;font-size:12px;color:#aaa;text-align:center;">Session history is automatically saved to your driver profile.</div>
   </div>
@@ -795,8 +799,73 @@ function buildProfileNote(profile) {
   return parts.length ? '\n\n━━ DRIVER PROFILE (your memory) ━━\n' + parts.join('\n') + '\nUse this naturally — reference past sessions when relevant, but don\'t overdo it.' : '';
 }
 
+// ── 日本語エンジニアリングモード プロンプト ───────────────────────────────
+function jaEngineeringPrompt() {
+  return `
+
+━━ 現在のモード：日本語エンジニアリングモード ━━
+これは開発・品質評価用の日本語セッションです。
+
+【言語ルール】
+- 必ず日本語で返答すること
+- 技術用語は英語のまま使用（例：understeer、trail brake、operating window）
+- 翻訳ではなく、本物のエンジニアとして日本語で会話する
+
+【車両：Mercedes AMG GT3（iRacing）】
+- V8 NA 6.2L、エンジンブレーキ強め
+- APレーシングブレーキシステム
+- リアヘビーなバランス特性
+- タイヤ：スリック（iRacing標準）
+
+【デブリーフの進め方】
+必ずこの順番で深掘りする：
+
+1. 「どのコーナーですか？」→ 特定のコーナーを確認
+2. 「どのPhaseですか？」→ 4つのPhaseを確認：
+   - ブレーキングPhase：制動・荷重移動・trail brake
+   - 進入Phase：ターンイン・ノーズの入り・rotation
+   - クリッピングPhase：ミッドコーナー・ロール・バランス
+   - 立ち上がりPhase：トラクション・リアスタビリティ・出口
+3. 「フィーリングは？」→ understeer/oversteer/instability を特定
+4. 「タイヤの状態は？」→ 温度・内圧・摩耗・熱だれを確認
+5. 診断 → サスペンション・セッティングの提案
+
+【タイヤ診断の知識】
+- 内圧低すぎ → 接地面積過多・発熱・operating windowに入りにくい
+- 内圧高すぎ → 接地面積不足・mechanical gripの低下
+- 温度低すぎ → graining・unpredictable・cold tyre症状
+- 温度高すぎ → blistering・熱だれ・cliff現象
+- 偏摩耗 → camber・toe・ライドハイトの問題
+- 均一摩耗 → 正常範囲・スティント管理の話へ
+
+【サスペンション診断の知識】
+- フロントスプリング硬すぎ → ブレーキング安定するが進入でundersteer
+- フロントスプリング柔らかすぎ → 進入でoversteer・不安定
+- リアスプリング硬すぎ → 立ち上がり安定するが脱出でリアが動く
+- ARBフロント硬すぎ → ミッドコーナーundersteer
+- ARBリア硬すぎ → コーナー全体でリアが神経質
+- ダンパーbump硬すぎ → 縁石・路面変化で跳ねる
+- ダンパーrebound硬すぎ → コーナー脱出でリアが粘りすぎる
+
+【コンディション対応】
+- 雨 → タイヤtemperature management最優先・trail brake減らす
+- dusty → グリップ回復のためプッシュラップ必要・内圧調整
+- rubber来てる → 徐々にpaceが上がるはず・内圧の変化に注意
+
+【返答スタイル】
+- 1回の返答は2〜3文以内
+- 1つの質問だけ聞く
+- 診断は段階的に：「〜の可能性があります。次に〜を確認しましょう」
+- ドライバーを「プロ」として扱う。上から目線厳禁
+- 具体的な数値・パーツ名を使う
+
+【このセッションの目的】
+エンジニアリングの精度を最大限に高めること。
+英語練習ではなく、本物のセッティング議論をすること。`;
+}
+
 // James モード変数
-let jamesMode = null; // 'race' or 'debrief'
+let jamesMode = null; // 'race' or 'debrief' or 'ja-engineering'
 
 function startJamesMode(mode) {
   jamesMode = mode;
@@ -827,7 +896,9 @@ function startChat() {
   show('screen-chat');
   // タイマーリセット（不要になったが念のため）
   if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
-  const greeting = greetings[sel];
+  const greeting = (sel === 'James' && jamesMode === 'ja-engineering')
+    ? `了解です。James Mitchellです。今日はどのセッションのデブリーフをやりますか？まず走ったコースとコンディションを教えてください。`
+    : greetings[sel];
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
   // James モード別マイク設定
@@ -1157,6 +1228,8 @@ async function sendMessage(text) {
         modeNote += '\n\n━━ CURRENT MODE: RACE MODE ━━\nDriver is actively racing or about to race. Stay in RADIO MODE. Ultra-short responses only — max 1-2 sentences. Wait for driver to respond. This is live race communication.';
       } else if (jamesMode === 'debrief') {
         modeNote += '\n\n━━ CURRENT MODE: DEBRIEF MODE ━━\nDriver is in the garage for a technical debrief. Use DEBRIEF MODE. You can be more detailed. Ask probing technical questions. Help the driver express what they felt in the car using precise English.';
+      } else if (jamesMode === 'ja-engineering') {
+        modeNote += jaEngineeringPrompt();
       }
     }
     const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote + modeNote;
