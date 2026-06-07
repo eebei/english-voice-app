@@ -749,14 +749,15 @@ function startChat() {
   jamesAutoMicEnabled = (sel === 'James');
   jamesMuted = false;
   if (sel === 'James') {
-    document.getElementById('mic-btn').onclick = toggleJamesMute;
-    document.getElementById('mic-btn').title = 'Click to mute/unmute';
+    document.getElementById('mic-btn').onclick = activateJamesAlwaysOnMic;
+    document.getElementById('mic-btn').title = 'Tap to go LIVE';
+    setHint('Tap 🎤 to go LIVE with James');
   } else {
     document.getElementById('mic-btn').onclick = toggleMic;
     document.getElementById('mic-btn').title = '';
   }
   if (voiceOn) speak(greeting);
-  else if (sel === 'James') setTimeout(startJamesAutoMic, 400);
+  else if (sel !== 'James') setHint('Click mic to speak');
 }
 
 let lastJaTranslation = '';
@@ -869,6 +870,14 @@ function speak(text) {
 }
 
 // ── James Always-On Mic ───────────────────────────────────────────────────
+function activateJamesAlwaysOnMic() {
+  // 最初の1クリックでLIVEモード開始（Chrome user gesture 対応）
+  jamesMuted = false;
+  document.getElementById('mic-btn').onclick = toggleJamesMute;
+  document.getElementById('mic-btn').title = 'Click to mute';
+  startJamesAutoMic();
+}
+
 function startJamesAutoMic() {
   if (!jamesAutoMicEnabled || jamesMuted || isRecording || isBusy) return;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1061,8 +1070,7 @@ async function sendMessage(text) {
   isBusy = false;
   document.getElementById('btn-send').disabled = false;
   if (sel === 'James') {
-    document.getElementById('mic-btn').onclick = toggleJamesMute;
-    document.getElementById('mic-btn').title = 'Click to mute/unmute';
+    // always-on継続（ボタンはmute toggleのまま）
   } else {
     document.getElementById('mic-btn').className = 'mic-btn idle';
     document.getElementById('mic-btn').textContent = '🎤';
