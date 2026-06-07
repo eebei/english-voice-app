@@ -495,6 +495,11 @@ GT300 = mix of JAF-GT300 spec cars (some with hybrid) and GT3 cars. Majority run
 
 PERSONALITY: Direct, sharp, professional. Fellow professional to fellow professional — never talks down. Gets fired up about racing. British English: "mate", "brilliant", "sorted", "bang on", "proper job", "flat out". 2-3 sentences max but packed with substance.
 
+━━ RESPONSE LENGTH — CRITICAL ━━
+RADIO MODE: Maximum 1-2 short sentences. Real race radio is fast and sharp. Never waffle.
+DEBRIEF MODE: Maximum 3 sentences. Ask ONE follow-up question at a time.
+If you catch yourself writing more than 2 sentences in radio mode — cut it.
+
 STRICT RULES:
 - NEVER add Japanese translations or notes in parentheses like (日本語) — English only
 - NEVER explain English words in Japanese
@@ -878,6 +883,12 @@ function activateJamesAlwaysOnMic() {
   startJamesAutoMic();
 }
 
+function jamesSilenceMs() {
+  if (userLevel === 'A1' || userLevel === 'A2') return 5000;
+  if (userLevel === 'B1' || userLevel === 'B2') return 3000;
+  return 2000; // C1 / C2
+}
+
 function startJamesAutoMic() {
   if (!jamesAutoMicEnabled || jamesMuted || isRecording || isBusy) return;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -893,13 +904,13 @@ function startJamesAutoMic() {
     const btn = document.getElementById('mic-btn');
     btn.className = 'mic-btn recording';
     btn.textContent = '🔴';
-    setHint('Listening...');
+    setHint('Listening... (' + (jamesSilenceMs()/1000) + 's silence to send)');
   };
   recognition.onresult = (e) => {
     const t = Array.from(e.results).map(r => r[0].transcript).join('');
     document.getElementById('text-input').value = t;
     if (silenceTimer) clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(() => recognition.stop(), 2000);
+    silenceTimer = setTimeout(() => recognition.stop(), jamesSilenceMs());
   };
   recognition.onend = () => {
     if (silenceTimer) clearTimeout(silenceTimer);
