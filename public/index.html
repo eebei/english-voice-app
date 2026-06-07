@@ -276,6 +276,28 @@
     <button class="btn-primary" onclick="startChat()" id="btn-start" disabled>Start conversation →</button>
   </div>
 
+  <!-- JAMES MODE SELECT SCREEN -->
+  <div id="screen-james-mode" class="screen">
+    <button class="btn-back" onclick="show('screen-select')">← Back</button>
+    <div style="text-align:center;padding:24px 20px 0;">
+      <img src="James.png" alt="James" style="width:90px;height:90px;border-radius:50%;object-fit:cover;border:3px solid #e0e0e0;margin-bottom:12px;">
+      <div style="font-size:22px;font-weight:700;color:#1a1a2e;">James Mitchell</div>
+      <div style="font-size:13px;color:#888;margin-bottom:8px;">Chief Race Engineer · OMORAY Racing</div>
+      <div id="james-profile-banner" style="display:none;background:#f0f4ff;border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13px;color:#444;text-align:left;"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;padding:20px 20px 0;">
+      <button onclick="startJamesMode('race')" style="background:linear-gradient(135deg,#1a1a2e,#e63946);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        🏎️ Race Mode<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">Always-on mic · iRacing live data · Short radio calls</span>
+      </button>
+      <button onclick="startJamesMode('debrief')" style="background:linear-gradient(135deg,#1a1a2e,#457b9d);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        📋 Debrief Mode<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">Deep technical discussion · Session analysis · English coaching</span>
+      </button>
+    </div>
+    <div style="padding:16px 20px 0;font-size:12px;color:#aaa;text-align:center;">Session history is automatically saved to your driver profile.</div>
+  </div>
+
   <!-- CHAT SCREEN -->
   <div id="screen-chat" class="screen">
     <button class="btn-back" onclick="restart()">← キャラクター選択に戻る</button>
@@ -734,7 +756,47 @@ function selectChar(el, name) {
   updateStartBtn();
 }
 
+// ── Driver Profile Memory ─────────────────────────────────────────────────
+function loadDriverProfile() {
+  try { return JSON.parse(localStorage.getItem('james_driver_profile') || 'null'); } catch { return null; }
+}
+
+function saveDriverProfile(updates) {
+  const existing = loadDriverProfile() || {};
+  const merged = Object.assign({}, existing, updates);
+  localStorage.setItem('james_driver_profile', JSON.stringify(merged));
+}
+
+function buildProfileNote(profile) {
+  if (!profile) return '';
+  const parts = [];
+  if (profile.sessions) parts.push(`${profile.sessions} sessions together`);
+  if (profile.lastDate) parts.push(`last session ${profile.lastDate}`);
+  if (profile.notes && profile.notes.length) parts.push('Driver notes: ' + profile.notes.slice(-3).join('; '));
+  if (profile.improvements && profile.improvements.length) parts.push('Areas to improve: ' + profile.improvements.slice(-3).join(', '));
+  return parts.length ? '\n\n━━ DRIVER PROFILE (your memory) ━━\n' + parts.join('\n') + '\nUse this naturally — reference past sessions when relevant, but don\'t overdo it.' : '';
+}
+
+// James モード変数
+let jamesMode = null; // 'race' or 'debrief'
+
+function startJamesMode(mode) {
+  jamesMode = mode;
+  startChat();
+}
+
 function startChat() {
+  // James の場合はモード選択を挟む
+  if (sel === 'James' && !jamesMode) {
+    const profile = loadDriverProfile();
+    const banner = document.getElementById('james-profile-banner');
+    if (profile && profile.sessions) {
+      banner.style.display = 'block';
+      banner.innerHTML = `<b>Welcome back, ${profile.name || userName}!</b><br>Sessions: ${profile.sessions} &nbsp;|&nbsp; Last: ${profile.lastDate || '—'}<br>${profile.notes && profile.notes.length ? '<span style="color:#666;">📝 ' + profile.notes[profile.notes.length-1] + '</span>' : ''}`;
+    }
+    show('screen-james-mode');
+    return;
+  }
   const c = chars[sel];
   const avEl = document.getElementById('chat-av');
   avEl.src = c.avatar;
@@ -750,19 +812,33 @@ function startChat() {
   const greeting = greetings[sel];
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
-  // James: always-on mic モードを有効化
-  jamesAutoMicEnabled = (sel === 'James');
+  // James モード別マイク設定
+  jamesAutoMicEnabled = (sel === 'James' && jamesMode === 'race');
   jamesMuted = false;
-  if (sel === 'James') {
+  if (sel === 'James' && jamesMode === 'race') {
     document.getElementById('mic-btn').onclick = activateJamesAlwaysOnMic;
     document.getElementById('mic-btn').title = 'Tap to go LIVE';
-    setHint('Tap 🎤 to go LIVE with James');
+    setHint('Tap 🎤 to go LIVE');
+    if (sel === 'James') connectIRBridge();
   } else {
     document.getElementById('mic-btn').onclick = toggleMic;
     document.getElementById('mic-btn').title = '';
+    if (sel === 'James') connectIRBridge(); // Debriefでもブリッジ接続（参照用）
+  }
+  // セッション開始時にプロファイル更新
+  if (sel === 'James') {
+    const profile = loadDriverProfile() || {};
+    saveDriverProfile({
+      name: userName || profile.name,
+      level: userLevel,
+      sessions: (profile.sessions || 0) + 1,
+      lastDate: new Date().toISOString().slice(0, 10),
+      notes: profile.notes || [],
+      improvements: profile.improvements || []
+    });
   }
   if (voiceOn) speak(greeting);
-  else if (sel !== 'James') setHint('Click mic to speak');
+  else if (!jamesAutoMicEnabled) setHint('Click mic to speak');
 }
 
 let lastJaTranslation = '';
@@ -1055,7 +1131,17 @@ async function sendMessage(text) {
   addLoading();
   try {
     const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.` : '';
-    const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote;
+    let modeNote = '';
+    if (sel === 'James') {
+      const profile = loadDriverProfile();
+      modeNote = buildProfileNote(profile);
+      if (jamesMode === 'race') {
+        modeNote += '\n\n━━ CURRENT MODE: RACE MODE ━━\nDriver is actively racing or about to race. Stay in RADIO MODE. Ultra-short responses only — max 1-2 sentences. Wait for driver to respond. This is live race communication.';
+      } else if (jamesMode === 'debrief') {
+        modeNote += '\n\n━━ CURRENT MODE: DEBRIEF MODE ━━\nDriver is in the garage for a technical debrief. Use DEBRIEF MODE. You can be more detailed. Ask probing technical questions. Help the driver express what they felt in the car using precise English.';
+      }
+    }
+    const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote + modeNote;
     // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
     const MAX_HISTORY = 20;
     const trimmedMessages = messages.slice(-MAX_HISTORY);
@@ -1491,6 +1577,10 @@ function escHtml(str) {
 
 function restart() {
   if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
+  jamesAutoMicEnabled = false;
+  jamesMode = null;
+  if (recognition) { try { recognition.stop(); } catch(e){} recognition = null; }
+  disconnectIRBridge();
   document.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
   sel = null;
   document.getElementById('btn-start').disabled = true;
@@ -1571,14 +1661,7 @@ function injectJamesRadio(radioText) {
   if (voiceOn) speak(radioText);
 }
 
-// startChat() をラップしてJames選択時にブリッジ接続
-const _origStartChat = startChat;
-startChat = function() {
-  _origStartChat();
-  if (sel === 'James') {
-    connectIRBridge();
-  }
-};
+// (iRacing bridge connection is now handled inside startChat per mode)
 
 // 戻るボタンでJamesを離れたらブリッジ切断・マイク停止
 document.addEventListener('DOMContentLoaded', () => {
