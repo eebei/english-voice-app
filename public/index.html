@@ -564,6 +564,7 @@ const greetings = {
 };
 
 let sel = null, userLevel = 'A1', userName = '', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
+let jamesAutoMicEnabled = false, jamesMuted = false;
 let chatTimer = null;
 
 // レベルに応じた速度倍率（キャラ固有のrateに掛け算）
@@ -744,7 +745,18 @@ function startChat() {
   const greeting = greetings[sel];
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
+  // James: always-on mic モードを有効化
+  jamesAutoMicEnabled = (sel === 'James');
+  jamesMuted = false;
+  if (sel === 'James') {
+    document.getElementById('mic-btn').onclick = toggleJamesMute;
+    document.getElementById('mic-btn').title = 'Click to mute/unmute';
+  } else {
+    document.getElementById('mic-btn').onclick = toggleMic;
+    document.getElementById('mic-btn').title = '';
+  }
   if (voiceOn) speak(greeting);
+  else if (sel === 'James') setTimeout(startJamesAutoMic, 400);
 }
 
 let lastJaTranslation = '';
@@ -843,13 +855,83 @@ function speak(text) {
   const c = chars[sel];
   utt.lang = c.voiceLang;
   utt.pitch = c.pitch;
-  // キャラ固有のrateにレベル倍率をかける（最低0.82でChromeバグ回避）
   const charRate = c.rate || 0.95;
   const mult = levelMult[userLevel] || 1.0;
   utt.rate = Math.max(charRate * mult, 0.82);
   const voice = pickVoice(c);
   if (voice) utt.voice = voice;
+  utt.onend = () => {
+    if (sel === 'James' && jamesAutoMicEnabled && !jamesMuted) {
+      setTimeout(startJamesAutoMic, 400);
+    }
+  };
   window.speechSynthesis.speak(utt);
+}
+
+// ── James Always-On Mic ───────────────────────────────────────────────────
+function startJamesAutoMic() {
+  if (!jamesAutoMicEnabled || jamesMuted || isRecording || isBusy) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  recognition = new SR();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+  let silenceTimer = null;
+
+  recognition.onstart = () => {
+    isRecording = true;
+    const btn = document.getElementById('mic-btn');
+    btn.className = 'mic-btn recording';
+    btn.textContent = '🔴';
+    setHint('Listening...');
+  };
+  recognition.onresult = (e) => {
+    const t = Array.from(e.results).map(r => r[0].transcript).join('');
+    document.getElementById('text-input').value = t;
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => recognition.stop(), 2000);
+  };
+  recognition.onend = () => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    isRecording = false;
+    const btn = document.getElementById('mic-btn');
+    btn.className = 'mic-btn idle';
+    btn.textContent = '🎤';
+    const text = document.getElementById('text-input').value.trim();
+    if (text) {
+      sendMessage(text);
+      document.getElementById('text-input').value = '';
+    } else if (jamesAutoMicEnabled && !jamesMuted && !isBusy) {
+      setTimeout(startJamesAutoMic, 600);
+    }
+  };
+  recognition.onerror = (e) => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    isRecording = false;
+    document.getElementById('mic-btn').className = 'mic-btn idle';
+    document.getElementById('mic-btn').textContent = '🎤';
+    if (jamesAutoMicEnabled && !jamesMuted && !isBusy && e.error !== 'aborted') {
+      setTimeout(startJamesAutoMic, 1000);
+    }
+  };
+  recognition.start();
+}
+
+function toggleJamesMute() {
+  jamesMuted = !jamesMuted;
+  const btn = document.getElementById('mic-btn');
+  if (jamesMuted) {
+    if (recognition) recognition.stop();
+    btn.textContent = '🔇';
+    btn.className = 'mic-btn busy';
+    setHint('Mic muted. Click to unmute.');
+  } else {
+    btn.textContent = '🎤';
+    btn.className = 'mic-btn idle';
+    setHint('Mic unmuted.');
+    setTimeout(startJamesAutoMic, 300);
+  }
 }
 
 function toggleVoice() {
@@ -965,17 +1047,26 @@ async function sendMessage(text) {
     removeLoading();
     addMsg('ai', reply);
     messages.push({ role:'assistant', content: replyEn }); // 会話履歴には英語のみ保存
-    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint('Click mic to speak'), 3000); }
-    else setHint('Click mic to speak');
+    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint(sel === 'James' ? 'Listening...' : 'Click mic to speak'), 3000); }
+    else {
+      setHint(sel === 'James' ? 'Listening...' : 'Click mic to speak');
+      if (sel === 'James' && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 400);
+    }
   } catch(e) {
     removeLoading();
     addMsg('sys', 'Error: ' + e.message);
     setHint('Error. Check the server console.');
+    if (sel === 'James' && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 1000);
   }
   isBusy = false;
   document.getElementById('btn-send').disabled = false;
-  document.getElementById('mic-btn').className = 'mic-btn idle';
-  document.getElementById('mic-btn').textContent = '🎤';
+  if (sel === 'James') {
+    document.getElementById('mic-btn').onclick = toggleJamesMute;
+    document.getElementById('mic-btn').title = 'Click to mute/unmute';
+  } else {
+    document.getElementById('mic-btn').className = 'mic-btn idle';
+    document.getElementById('mic-btn').textContent = '🎤';
+  }
 
 }
 
@@ -1470,12 +1561,14 @@ startChat = function() {
   }
 };
 
-// 戻るボタンでJamesを離れたらブリッジ切断
+// 戻るボタンでJamesを離れたらブリッジ切断・マイク停止
 document.addEventListener('DOMContentLoaded', () => {
   const backBtn = document.querySelector('[onclick*="screen-select"], .back-btn, #back-btn');
   if (backBtn) {
     const orig = backBtn.onclick;
     backBtn.onclick = function(e) {
+      jamesAutoMicEnabled = false;
+      if (recognition) { recognition.stop(); recognition = null; }
       disconnectIRBridge();
       if (orig) orig.call(this, e);
     };
