@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>English Voice Practice</title>
+<title>RaceVoice</title>
 
 <!-- PWA -->
 <link rel="manifest" href="/manifest.json">
@@ -11,7 +11,7 @@
 <!-- iOS Safari 用 -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="英会話AI">
+<meta name="apple-mobile-web-app-title" content="RaceVoice">
 <link rel="apple-touch-icon" href="/Emma.png">
 
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Serif+Display&display=swap" rel="stylesheet">
@@ -207,7 +207,7 @@
 <body>
 <div class="wrap">
   <div class="app-header">
-    <h1 class="app-title">English Voice Practice</h1>
+    <h1 class="app-title">RaceVoice</h1>
     <p class="app-sub">Chat with an AI partner · Get evaluated after each session</p>
   </div>
 
@@ -1236,8 +1236,10 @@ async function sendMessage(text) {
     // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
     const MAX_HISTORY = 20;
     const trimmedMessages = messages.slice(-MAX_HISTORY);
-    // A1/A2は日本語ヒント込みで長くなるのでトークン増やす
-    const maxTok = (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
+    // James Race Mode=超短縮80、日本語エンジニアリング=200、他は通常
+    const maxTok = (sel === 'James' && jamesMode === 'race') ? 80
+      : (sel === 'James' && jamesMode === 'ja-engineering') ? 200
+      : (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
     const data = await callAPI({ system, messages: trimmedMessages, max_tokens: maxTok });
     const reply = data.content[0].text;
     const { english: replyEn } = parseJa(reply);
