@@ -1,7 +1,7 @@
 {
-  "name": "English Voice Practice",
-  "short_name": "英会話AI",
-  "description": "AIキャラクターと英会話練習！発音・文法・語彙を楽しく学ぼう",
+  "name": "RaceVoice",
+  "short_name": "RaceVoice",
+  "description": "Race engineers & AI characters — practice English for the track and beyond.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
