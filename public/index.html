@@ -688,11 +688,11 @@ function checkTrial() {
 function showTrialBanner(daysLeft) {
   const banner = document.createElement('div');
   banner.style.cssText = `
-    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-    background: #f59e0b; color: #1a1a1a; text-align: center;
-    padding: 8px 16px; font-size: 13px; font-weight: 600;
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 9999;
+    background: rgba(0,0,0,0.6); color: #ccc; text-align: center;
+    padding: 4px 16px; font-size: 11px;
   `;
-  banner.textContent = `⏳ トライアル残り ${daysLeft} 日です`;
+  banner.textContent = `Trial: ${daysLeft} days remaining`;
   document.body.appendChild(banner);
 }
 
@@ -768,7 +768,7 @@ function onNameInput() {
 }
 
 function updateStartBtn() {
-  document.getElementById('btn-start').disabled = !(sel && userName.length > 0);
+  document.getElementById('btn-start').disabled = !sel;
 }
 
 function selectChar(el, name) {
