@@ -1748,6 +1748,9 @@ function connectIRBridge() {
       if (data.type === 'radio' && sel === 'James') {
         injectJamesRadio(data.message);
       }
+      if (data.type === 'session_info' && sel === 'James') {
+        injectSessionBriefing(data.data);
+      }
     };
 
     irBridge.onclose = () => {
@@ -1772,6 +1775,35 @@ function disconnectIRBridge() {
 }
 
 // Jamesの無線をアシスタントメッセージとして注入する
+function injectSessionBriefing(info) {
+  if (!info) return;
+  const irating = info.player_irating || 0;
+  const sof = info.sof || 0;
+  const sr = info.safety_rating || '?';
+  const track = info.track_display || info.track || 'this track';
+  const num = info.num_drivers || 0;
+  const diff = irating - sof;
+
+  let strategy = '';
+  if (diff > 500) {
+    strategy = "You are the favourite today. Podium minimum. No excuses.";
+  } else if (diff > 0) {
+    strategy = "Competitive field. Top half is the target. Every clean lap counts.";
+  } else if (diff > -500) {
+    strategy = "Tough field today. Clean race. Beat 3 cars ahead of your grid slot.";
+  } else {
+    strategy = "Strong field. This is a learning race. Finish clean. Zero incidents.";
+  }
+
+  // SR warning
+  const srNum = parseFloat((sr.split(' ')[1]) || '0');
+  const srWarning = srNum < 3.0 ? " Your Safety Rating is low — incidents are not an option today." : "";
+
+  const briefing = `${track}. ${num} drivers. SOF ${sof}, your iRating ${irating}, SR ${sr}.${srWarning} ${strategy}`;
+
+  injectJamesRadio(briefing);
+}
+
 function injectJamesRadio(radioText) {
   if (isBusy) return; // ユーザーが返答中は待機
   const fullText = `📻 ${radioText}`;
