@@ -1,6 +1,7 @@
 """
-OMORAY PITWALL - iRacing Bridge v2
-Reads iRacing shared memory directly using ctypes
+OMORAY PITWALL - iRacing Bridge v3
+Reads iRacing shared memory directly
+Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
 Usage: python bridge.py
 """
@@ -123,6 +124,112 @@ class IRacingReader:
         except Exception:
             return None
 
+    def read_session_info(self):
+        try:
+            self.mm.seek(0)
+            header = self.mm.read(112)
+            si_offset = struct.unpack_from('i', header, 96)[0]
+            si_len = struct.unpack_from('i', header, 100)[0]
+            if si_len <= 0 or si_offset <= 0:
+                return None
+            self.mm.seek(si_offset)
+            raw = self.mm.read(min(si_len, 65536))
+            return raw.decode('utf-8', errors='ignore')
+        except Exception:
+            return None
+
+
+def parse_session_info(yaml_str):
+    result = {}
+    if not yaml_str:
+        return result
+    try:
+        # Track name
+        for line in yaml_str.split('\n'):
+            line = line.strip()
+            if line.startswith('TrackName:'):
+                result['track'] = line.split(':', 1)[1].strip()
+            elif line.startswith('TrackDisplayName:'):
+                result['track_display'] = line.split(':', 1)[1].strip()
+            elif line.startswith('EventType:'):
+                result['event_type'] = line.split(':', 1)[1].strip()
+
+        # Parse drivers for iRating and SOF
+        drivers = []
+        in_drivers = False
+        current_driver = {}
+        player_car_idx = -1
+
+        for line in yaml_str.split('\n'):
+            stripped = line.strip()
+            if 'Drivers:' in line and stripped.startswith('Drivers:'):
+                in_drivers = True
+                continue
+            if in_drivers:
+                if stripped.startswith('- CarIdx:'):
+                    if current_driver:
+                        drivers.append(current_driver)
+                    current_driver = {'car_idx': int(stripped.split(':')[1].strip())}
+                elif stripped.startswith('IRating:'):
+                    try:
+                        current_driver['irating'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
+                elif stripped.startswith('LicLevel:'):
+                    try:
+                        current_driver['lic_level'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
+                elif stripped.startswith('LicSubLevel:'):
+                    try:
+                        current_driver['lic_sublevel'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
+                elif stripped.startswith('UserName:'):
+                    current_driver['name'] = stripped.split(':', 1)[1].strip()
+                elif stripped.startswith('IsSpectator:'):
+                    try:
+                        current_driver['spectator'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
+
+        if current_driver:
+            drivers.append(current_driver)
+
+        # Get player car idx
+        for line in yaml_str.split('\n'):
+            if 'PlayerCarIdx:' in line:
+                try:
+                    player_car_idx = int(line.split(':')[1].strip())
+                except:
+                    pass
+                break
+
+        # Calculate SOF (exclude spectators)
+        real_drivers = [d for d in drivers if d.get('spectator', 0) == 0 and d.get('irating', 0) > 0]
+        if real_drivers:
+            sof = int(sum(d['irating'] for d in real_drivers) / len(real_drivers))
+            result['sof'] = sof
+            result['num_drivers'] = len(real_drivers)
+
+        # Get player info
+        player = next((d for d in drivers if d.get('car_idx') == player_car_idx), None)
+        if player:
+            result['player_irating'] = player.get('irating', 0)
+            lic_level = player.get('lic_level', 0)
+            lic_sublevel = player.get('lic_sublevel', 0)
+            # Convert to SR display (e.g., B 4.50)
+            lic_names = {1: 'R', 2: 'D', 3: 'C', 4: 'B', 5: 'A'}
+            lic_name = lic_names.get(lic_level, '?')
+            sr_value = round(lic_sublevel / 100, 2)
+            result['safety_rating'] = lic_name + ' ' + str(sr_value)
+            result['safety_rating_raw'] = sr_value
+
+    except Exception as e:
+        print('Session info parse error:', e)
+
+    return result
+
 
 def fmt_time(seconds):
     if seconds is None or seconds <= 0:
@@ -133,16 +240,16 @@ def fmt_time(seconds):
 
 
 reader = IRacingReader()
+session_info_sent = False
 
 def poll_iracing():
+    global session_info_sent
     ir_was_connected = False
     last_lap = None
     personal_best = None
-    lap_times = []
-
     prev = {
         'pos': None, 'fuel': None, 'lap': None,
-        'lapsTot': None, 'onPit': None
+        'lapsTot': None, 'onPit': None, 'tempLap': None
     }
 
     while True:
@@ -157,14 +264,16 @@ def poll_iracing():
 
         if active and not ir_was_connected:
             print("iRacing connected!")
+            session_info_sent = False
+            reader.var_cache.clear()
             broadcast({'type': 'iracing_connected'})
             ir_was_connected = True
-            reader.var_cache.clear()
 
         if not active and ir_was_connected:
             print("iRacing disconnected")
             broadcast({'type': 'iracing_disconnected'})
             ir_was_connected = False
+            session_info_sent = False
             time.sleep(2)
             continue
 
@@ -172,91 +281,90 @@ def poll_iracing():
             time.sleep(1)
             continue
 
-        # Read all telemetry
+        # Send session info once per connection
+        if not session_info_sent:
+            yaml_str = reader.read_session_info()
+            if yaml_str:
+                info = parse_session_info(yaml_str)
+                if info.get('player_irating') and info.get('sof'):
+                    broadcast({'type': 'session_info', 'data': info})
+                    print("Session info sent:", info)
+                    session_info_sent = True
+
         pos      = reader.read_int('PlayerCarPosition')
         lapTime  = reader.read_float('LapLastLapTime')
-        bestLap  = reader.read_float('LapBestLapTime')
-        delta    = reader.read_float('LapDeltaToBestLap')
         fuel     = reader.read_float('FuelLevel')
         lap      = reader.read_int('Lap')
         lapsTot  = reader.read_int('SessionLapsTotal')
         onPit    = reader.read_bool('OnPitRoad')
         onTrack  = reader.read_bool('IsOnTrack')
-
-        # Tire temps (average front/rear)
         lfTemp   = reader.read_float('LFtempCM')
         rfTemp   = reader.read_float('RFtempCM')
         lrTemp   = reader.read_float('LRtempCM')
         rrTemp   = reader.read_float('RRtempCM')
 
-        # ── Lap completion ──────────────────────────────────────────────
+        # Lap completion
         if lapTime and lapTime > 0 and lapTime != last_lap and lap is not None:
             t = fmt_time(lapTime)
             if t:
-                # Personal best check
                 if personal_best is None or lapTime < personal_best:
                     if personal_best is not None:
                         diff = personal_best - lapTime
                         broadcast({'type': 'radio', 'trigger': 'personal_best',
-                            'message': "Personal best! " + t + ". That's " + str(round(diff, 3)) + " seconds up. Can you back that up?"})
+                            'message': 'Personal best. ' + t + '. ' + str(round(diff, 3)) + ' seconds up. Do it again.'})
                     personal_best = lapTime
                 else:
-                    # Compare to best
                     diff = lapTime - personal_best
-                    best_t = fmt_time(personal_best)
                     if diff < 0.3:
                         broadcast({'type': 'radio', 'trigger': 'lap_time',
-                            'message': "That's a " + t + ". Only " + str(round(diff, 3)) + " off your best. Very consistent."})
+                            'message': t + '. Consistent. Keep it.'})
                     elif diff < 1.0:
                         broadcast({'type': 'radio', 'trigger': 'lap_time',
-                            'message': "That's a " + t + ". " + str(round(diff, 1)) + " off the best. Where are you losing it?"})
+                            'message': t + '. ' + str(round(diff, 1)) + ' off the best. Where are you losing it?'})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'lap_time_slow',
-                            'message': "That's a " + t + ". Pace is down. Talk to me, what's happening?"})
-
-                lap_times.append(lapTime)
+                            'message': t + '. Pace is down. Talk to me.'})
                 last_lap = lapTime
 
-        # ── Position change ─────────────────────────────────────────────
+        # Position change
         if pos is not None and prev['pos'] is not None and pos != prev['pos']:
             gained = prev['pos'] - pos
             if gained > 0:
                 broadcast({'type': 'radio', 'trigger': 'position_up',
-                    'message': "P" + str(pos) + " now. You gained " + str(gained) + ". Keep it clean."})
+                    'message': 'P' + str(pos) + '. Keep it clean.'})
             else:
                 broadcast({'type': 'radio', 'trigger': 'position_down',
-                    'message': "P" + str(pos) + ". We lost a position. Talk to me."})
+                    'message': 'P' + str(pos) + '. We lost one. Talk to me.'})
 
-        # ── Fuel warning ────────────────────────────────────────────────
+        # Fuel warning
         if fuel is not None and fuel < 5 and (prev['fuel'] is None or prev['fuel'] >= 5):
             broadcast({'type': 'radio', 'trigger': 'fuel_warning',
-                'message': "Fuel warning. " + str(round(fuel, 1)) + " litres. Fuel save from now. Confirm."})
+                'message': 'Fuel warning. ' + str(round(fuel, 1)) + ' litres. Fuel save from now. Confirm.'})
 
-        # ── Tire temp info (every 5 laps approx, when all temps available) ──
+        # Tyre temps (every 5 laps)
         if lfTemp and rfTemp and lrTemp and rrTemp and lap and lap % 5 == 0 and lap != prev.get('tempLap'):
             avg_front = (lfTemp + rfTemp) / 2
-            avg_rear  = (lrTemp + rrTemp) / 2
             if avg_front < 75:
                 broadcast({'type': 'radio', 'trigger': 'tyre_cold',
-                    'message': "Front tyres are cold. " + str(round(avg_front)) + " degrees. Get some heat in them."})
+                    'message': 'Front tyres cold. ' + str(round(avg_front)) + ' degrees. Get some heat in.'})
             elif avg_front > 105:
                 broadcast({'type': 'radio', 'trigger': 'tyre_hot',
-                    'message': "Front tyres are overheating. " + str(round(avg_front)) + " degrees. Back off the kerbs."})
+                    'message': 'Fronts overheating. Back off the kerbs.'})
             prev['tempLap'] = lap
 
-        # ── Final lap ───────────────────────────────────────────────────
+        # Final lap
         if lapsTot and lap and lapsTot > 0 and lap == lapsTot and lap != prev['lapsTot']:
             broadcast({'type': 'radio', 'trigger': 'final_lap',
-                'message': "Final lap. P" + str(pos) + ". Bring it home. No mistakes."})
+                'message': 'Final lap. P' + str(pos) + '. Bring it home. No mistakes.'})
 
-        # ── Pit in/out ──────────────────────────────────────────────────
+        # Pit in/out
         if onPit and not prev['onPit']:
             broadcast({'type': 'radio', 'trigger': 'pit_entry',
-                'message': "Box confirmed. Speed limiter on. Focus."})
+                'message': 'Box confirmed. Speed limiter on. Focus.'})
 
         if prev['onPit'] and not onPit and onTrack:
             broadcast({'type': 'radio', 'trigger': 'pit_exit',
-                'message': "Out of the pits. P" + str(pos) + ". Build the tyres up, one lap."})
+                'message': 'Out of the pits. P' + str(pos) + '. Build the tyres, one lap.'})
 
         prev.update({'pos': pos, 'fuel': fuel, 'lap': lap, 'lapsTot': lapsTot, 'onPit': onPit})
         time.sleep(1)
@@ -276,7 +384,7 @@ async def main():
     loop = asyncio.get_running_loop()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge v2 started")
+    print("OMORAY PITWALL Bridge v3 started")
     print("WebSocket: ws://localhost:" + str(PORT))
     print("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
