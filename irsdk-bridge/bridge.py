@@ -245,8 +245,10 @@ session_info_sent = False
 def poll_iracing():
     global session_info_sent
     ir_was_connected = False
-    last_lap = None
-    personal_best = None
+    last_lap_time = None        # 前回検知したLapLastLapTime
+    session_best = None         # このセッションのベスト
+    personal_best = None        # 全時間の自己ベスト（将来的にファイル保存可）
+    prev_current_lap = None     # コントロールライン検知用
     prev = {
         'pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None
@@ -291,40 +293,65 @@ def poll_iracing():
                     print("Session info sent:", info)
                     session_info_sent = True
 
-        pos      = reader.read_int('PlayerCarPosition')
-        lapTime  = reader.read_float('LapLastLapTime')
-        fuel     = reader.read_float('FuelLevel')
-        lap      = reader.read_int('Lap')
-        lapsTot  = reader.read_int('SessionLapsTotal')
-        onPit    = reader.read_bool('OnPitRoad')
-        onTrack  = reader.read_bool('IsOnTrack')
-        lfTemp   = reader.read_float('LFtempCM')
-        rfTemp   = reader.read_float('RFtempCM')
-        lrTemp   = reader.read_float('LRtempCM')
-        rrTemp   = reader.read_float('RRtempCM')
+        pos         = reader.read_int('PlayerCarPosition')
+        lapTime     = reader.read_float('LapLastLapTime')
+        currentLap  = reader.read_float('LapCurrentLapTime')
+        fuel        = reader.read_float('FuelLevel')
+        lap         = reader.read_int('Lap')
+        lapsTot     = reader.read_int('SessionLapsTotal')
+        onPit       = reader.read_bool('OnPitRoad')
+        onTrack     = reader.read_bool('IsOnTrack')
+        lfTemp      = reader.read_float('LFtempCM')
+        rfTemp      = reader.read_float('RFtempCM')
+        lrTemp      = reader.read_float('LRtempCM')
+        rrTemp      = reader.read_float('RRtempCM')
 
-        # Lap completion
-        if lapTime and lapTime > 0 and lapTime != last_lap and lap is not None:
+        # ── コントロールライン通過検知（超高速）──────────────────────────
+        # LapCurrentLapTimeが大きい値から突然0近くにリセット = ライン通過！
+        line_crossed = False
+        if (prev_current_lap is not None and currentLap is not None and
+                prev_current_lap > 5.0 and currentLap < 2.0):
+            line_crossed = True
+
+        prev_current_lap = currentLap
+
+        # ── ラップタイム処理（ライン通過直後に即発火）────────────────────
+        if line_crossed and lapTime and lapTime > 0 and lapTime != last_lap_time:
             t = fmt_time(lapTime)
             if t:
-                if personal_best is None or lapTime < personal_best:
+                is_session_best = (session_best is None or lapTime < session_best)
+                is_personal_best = (personal_best is None or lapTime < personal_best)
+
+                if is_personal_best:
                     if personal_best is not None:
                         diff = personal_best - lapTime
                         broadcast({'type': 'radio', 'trigger': 'personal_best',
-                            'message': 'Personal best. ' + t + '. ' + str(round(diff, 3)) + ' seconds up. Do it again.'})
+                            'message': 'Personal best! ' + t + '. ' + str(round(diff, 3)) + ' up. Do it again.'})
+                    else:
+                        broadcast({'type': 'radio', 'trigger': 'first_lap',
+                            'message': t + '. First lap in the books. Build from there.'})
                     personal_best = lapTime
+                    session_best = lapTime
+
+                elif is_session_best:
+                    diff = lapTime - (personal_best or lapTime)
+                    broadcast({'type': 'radio', 'trigger': 'session_best',
+                        'message': 'Session best. ' + t + '. ' + str(round(diff, 3)) + ' off your all-time best. Keep pushing.'})
+                    session_best = lapTime
+
                 else:
-                    diff = lapTime - personal_best
+                    diff = lapTime - session_best
                     if diff < 0.3:
-                        broadcast({'type': 'radio', 'trigger': 'lap_time',
+                        broadcast({'type': 'radio', 'trigger': 'lap_consistent',
                             'message': t + '. Consistent. Keep it.'})
                     elif diff < 1.0:
                         broadcast({'type': 'radio', 'trigger': 'lap_time',
-                            'message': t + '. ' + str(round(diff, 1)) + ' off the best. Where are you losing it?'})
+                            'message': t + '. ' + str(round(diff, 1)) + ' off session best. Where are you losing it?'})
                     else:
-                        broadcast({'type': 'radio', 'trigger': 'lap_time_slow',
+                        broadcast({'type': 'radio', 'trigger': 'lap_slow',
                             'message': t + '. Pace is down. Talk to me.'})
-                last_lap = lapTime
+
+                last_lap_time = lapTime
 
         # Position change
         if pos is not None and prev['pos'] is not None and pos != prev['pos']:
@@ -367,7 +394,7 @@ def poll_iracing():
                 'message': 'Out of the pits. P' + str(pos) + '. Build the tyres, one lap.'})
 
         prev.update({'pos': pos, 'fuel': fuel, 'lap': lap, 'lapsTot': lapsTot, 'onPit': onPit})
-        time.sleep(1)
+        time.sleep(0.1)  # 0.1秒ポーリング = コントロールライン通過を0.1秒以内に検知
 
 
 async def handler(websocket):
