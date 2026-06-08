@@ -544,6 +544,15 @@ Closing: "We will talk in the box." / "Save it for the debrief." / "Understood. 
 - If driver pushes back: "Understood. Your call." — back off professionally
 - React naturally to telemetry data when mentioned (lap times, positions, fuel)
 
+━━ BRITISH HUMOUR & PERSONALITY ━━
+- Dry wit when appropriate: "That's not ideal, mate." / "Well, that happened."
+- Personal best: "Now THAT'S more like it!" / "Finally. Do it again."
+- Bad lap: "We'll pretend that one didn't happen."
+- Driver says "Leave me alone": "Fair enough. You have the radio." — then go quiet
+- Driver does something brilliant: "Lovely. Absolutely lovely."
+- Understated encouragement: "Not bad. Not bad at all."
+- Never over-celebrate. Never over-criticise. Very British.
+
 STRICT RULES:
 - NEVER add Japanese translations or notes in parentheses like (日本語) — English only
 - NEVER explain English words in Japanese
@@ -1049,9 +1058,14 @@ function activateJamesAlwaysOnMic() {
 }
 
 function jamesSilenceMs() {
+  if (jamesMode === 'race') {
+    if (userLevel === 'A1' || userLevel === 'A2') return 4000;
+    if (userLevel === 'B1' || userLevel === 'B2') return 2000;
+    return 1000; // C1/C2 Race Mode = 1秒
+  }
   if (userLevel === 'A1' || userLevel === 'A2') return 5000;
   if (userLevel === 'B1' || userLevel === 'B2') return 3000;
-  return 2000; // C1 / C2
+  return 2000;
 }
 
 function startJamesAutoMic() {
@@ -1059,7 +1073,7 @@ function startJamesAutoMic() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;
   recognition = new SR();
-  recognition.lang = 'en-US';
+  recognition.lang = (jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
   recognition.interimResults = true;
   recognition.continuous = true;
   let silenceTimer = null;
@@ -1133,9 +1147,9 @@ function toggleMic() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { setHint('Not supported. Use Chrome.'); return; }
   recognition = new SR();
-  recognition.lang = 'en-US';
+  recognition.lang = (sel === 'James' && jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
   recognition.interimResults = true;
-  recognition.continuous = true; // 連続モードで途切れにくく
+  recognition.continuous = true;
   let silenceTimer = null;
   let lastTranscript = '';
 
@@ -1270,8 +1284,12 @@ async function sendMessage(text) {
 
 async function endChat() {
   const userMsgs = messages.filter(m => m.role === 'user');
-  if (userMsgs.length < 2) { addMsg('sys', 'Chat a bit more first!'); return; }
+  const minTurns = (sel === 'James' && jamesMode === 'race') ? 1 : 2;
+  if (userMsgs.length < minTurns) { addMsg('sys', 'Chat a bit more first!'); return; }
   window.speechSynthesis.cancel();
+  // James auto-mic停止
+  jamesAutoMicEnabled = false;
+  if (recognition) { try { recognition.stop(); } catch(e){} }
   show('screen-result');
 
   // 添削ボタンをリセット
@@ -1280,9 +1298,12 @@ async function endChat() {
   document.getElementById('detail-section').classList.remove('open');
   document.getElementById('corrections-list').innerHTML = '';
 
-  const evalMsgs = userMsgs.slice(0, 10); // 最初の10ターンのみ評価
+  const evalMsgs = userMsgs.slice(0, 10);
   const convo = evalMsgs.map(m => m.content).join('\n');
-  const prompt = `Evaluate this English learner. Respond ONLY with valid JSON, no markdown:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"2-3 sentences of encouraging feedback."}\n\nLearner:\n${convo}`;
+  const isRaceMode = (sel === 'James' && jamesMode === 'race');
+  const prompt = isRaceMode
+    ? `Evaluate this racing driver's radio English communication. Short responses like "Copy that", "Boxing now", "Push push" are CORRECT and natural. Respond ONLY with valid JSON, no markdown:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"2-3 sentences about their radio communication quality."}\n\nDriver radio:\n${convo}`
+    : `Evaluate this English learner. Respond ONLY with valid JSON, no markdown:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"2-3 sentences of encouraging feedback."}\n\nLearner:\n${convo}`;
   try {
     const data = await callAPI({ messages:[{ role:'user', content: prompt }], max_tokens: 300 });
     const r = JSON.parse(data.content[0].text.replace(/```json|```/g,'').trim());
