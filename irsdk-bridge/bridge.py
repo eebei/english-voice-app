@@ -124,6 +124,32 @@ class IRacingReader:
         except Exception:
             return None
 
+    def read_float_array(self, name, count=64):
+        """CarIdxEstTime などの配列を読む"""
+        try:
+            info = self.find_var(name)
+            if not info:
+                return None
+            buf = self.get_buf_offset()
+            self.mm.seek(buf + info[1])
+            data = self.mm.read(4 * count)
+            return list(struct.unpack('f' * count, data))
+        except Exception:
+            return None
+
+    def read_int_array(self, name, count=64):
+        """CarIdxClassPosition などの配列を読む"""
+        try:
+            info = self.find_var(name)
+            if not info:
+                return None
+            buf = self.get_buf_offset()
+            self.mm.seek(buf + info[1])
+            data = self.mm.read(4 * count)
+            return list(struct.unpack('i' * count, data))
+        except Exception:
+            return None
+
     def read_session_info(self):
         try:
             self.mm.seek(0)
@@ -192,6 +218,18 @@ def parse_session_info(yaml_str):
                         current_driver['spectator'] = int(stripped.split(':')[1].strip())
                     except:
                         pass
+                elif stripped.startswith('CarClassID:'):
+                    try:
+                        current_driver['class_id'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
+                elif stripped.startswith('CarClassShortName:'):
+                    current_driver['class_name'] = stripped.split(':', 1)[1].strip()
+                elif stripped.startswith('CarClassRelSpeed:'):
+                    try:
+                        current_driver['class_rel_speed'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
 
         if current_driver:
             drivers.append(current_driver)
@@ -211,6 +249,10 @@ def parse_session_info(yaml_str):
             sof = int(sum(d['irating'] for d in real_drivers) / len(real_drivers))
             result['sof'] = sof
             result['num_drivers'] = len(real_drivers)
+
+        # Store drivers and player_car_idx for class map
+        result['drivers'] = drivers
+        result['player_car_idx'] = player_car_idx
 
         # Get player info
         player = next((d for d in drivers if d.get('car_idx') == player_car_idx), None)
@@ -245,10 +287,16 @@ session_info_sent = False
 def poll_iracing():
     global session_info_sent
     ir_was_connected = False
-    last_lap_time = None        # 前回検知したLapLastLapTime
-    session_best = None         # このセッションのベスト
-    personal_best = None        # 全時間の自己ベスト（将来的にファイル保存可）
-    prev_current_lap = None     # コントロールライン検知用
+    last_lap_time = None
+    session_best = None
+    personal_best = None
+    prev_current_lap = None
+    player_car_idx = -1
+    player_class_id = -1
+    car_class_map = {}          # car_idx -> class_id
+    multiclass_warned = {}      # car_idx -> last warned time
+    battle_warned = {}          # car_idx -> last warned time
+    fuel_strategy_warned = False
     prev = {
         'pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None
@@ -292,6 +340,13 @@ def poll_iracing():
                     broadcast({'type': 'session_info', 'data': info})
                     print("Session info sent:", info)
                     session_info_sent = True
+                # カークラスマップを構築
+                if 'drivers' in info:
+                    for d in info.get('drivers', []):
+                        if 'car_idx' in d and 'class_id' in d:
+                            car_class_map[d['car_idx']] = d['class_id']
+                player_car_idx = info.get('player_car_idx', -1)
+                player_class_id = car_class_map.get(player_car_idx, -1)
 
         pos         = reader.read_int('PlayerCarPosition')
         lapTime     = reader.read_float('LapLastLapTime')
@@ -392,6 +447,48 @@ def poll_iracing():
         if prev['onPit'] and not onPit and onTrack:
             broadcast({'type': 'radio', 'trigger': 'pit_exit',
                 'message': 'Out of the pits. P' + str(pos) + '. Build the tyres, one lap.'})
+
+        # ── マルチクラス・バトル検知 ────────────────────────────────────
+        if player_car_idx >= 0 and not onPit:
+            car_est_times = reader.read_float_array('CarIdxEstTime', 64)
+            car_class_pos = reader.read_int_array('CarIdxClassPosition', 64)
+
+            if car_est_times and player_car_idx < len(car_est_times):
+                player_time = car_est_times[player_car_idx]
+                now = time.time()
+
+                for idx, est_time in enumerate(car_est_times):
+                    if idx == player_car_idx or est_time <= 0:
+                        continue
+
+                    # タイム差（プラスなら後方、マイナスなら前方）
+                    delta = player_time - est_time
+
+                    # ── マルチクラス接近警告（後方から速いクラスが来る）──
+                    other_class = car_class_map.get(idx, -1)
+                    if (other_class != -1 and other_class != player_class_id and
+                            other_class > player_class_id):  # 速いクラス = 大きいclass_id
+                        if 0 < delta < 8.0:  # 後方8秒以内
+                            last_warn = multiclass_warned.get(idx, 0)
+                            if now - last_warn > 30:  # 30秒に1回
+                                broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
+                                    'message': 'Faster class behind. ' + str(round(delta, 1)) + ' seconds. Give him room. Blue flag situation.'})
+                                multiclass_warned[idx] = now
+
+                    # ── バトル検知（同クラスが近い）──────────────────────
+                    if other_class == player_class_id:
+                        if 0 < delta < 1.5:  # 後方1.5秒以内 = バトル中
+                            last_warn = battle_warned.get(idx, 0)
+                            if now - last_warn > 20:  # 20秒に1回
+                                broadcast({'type': 'radio', 'trigger': 'battle_behind',
+                                    'message': 'He is right with you. ' + str(round(delta, 1)) + ' behind. Defend your line.'})
+                                battle_warned[idx] = now
+                        elif -1.5 < delta < 0:  # 前方1.5秒以内 = 前を攻める
+                            last_warn = battle_warned.get(idx, 0)
+                            if now - last_warn > 20:
+                                broadcast({'type': 'radio', 'trigger': 'battle_ahead',
+                                    'message': str(round(abs(delta), 1)) + ' to the car ahead. You are close. Make it count.'})
+                                battle_warned[idx] = now
 
         prev.update({'pos': pos, 'fuel': fuel, 'lap': lap, 'lapsTot': lapsTot, 'onPit': onPit})
         time.sleep(0.1)  # 0.1秒ポーリング = コントロールライン通過を0.1秒以内に検知
