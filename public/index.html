@@ -240,6 +240,12 @@
         <div class="char-origin">Chief Engineer · Birmingham</div>
         <span class="level-pill level-hard">🏎️ Racing Special</span>
       </div>
+      <div class="char-card" onclick="selectChar(this,'Kanbe')" style="border-color: #c0392b; background: linear-gradient(135deg, #1a0a0a, #2d1010);">
+        <img class="char-avatar" src="James.png" alt="Kanbe" style="border: 2px solid #c0392b;">
+        <div class="char-name" style="color:#fff;">宇喜多 官兵衛 <span class="char-flag-small">🇯🇵</span></div>
+        <div class="char-origin" style="color:#aaa;">チーフエンジニア · 岡山</div>
+        <span class="level-pill level-hard">🏯 Racing Special JP</span>
+      </div>
       <div class="char-card" onclick="selectChar(this,'Mia')">
         <img class="char-avatar" src="Mia.png" alt="Mia">
         <div class="char-name">Mia <span class="char-flag-small">🇨🇦</span></div>
@@ -278,6 +284,32 @@
   </div>
 
   <!-- JAMES MODE SELECT SCREEN -->
+  <!-- KANBE MODE SELECT SCREEN -->
+  <div id="screen-kanbe-mode" class="screen">
+    <button class="btn-back" onclick="show('screen-select')">← 戻る</button>
+    <div style="text-align:center;padding:24px 20px 0;">
+      <img src="James.png" alt="Kanbe" style="width:90px;height:90px;border-radius:50%;object-fit:cover;border:3px solid #c0392b;margin-bottom:12px;">
+      <div style="font-size:22px;font-weight:700;color:#1a1a2e;">宇喜多 官兵衛</div>
+      <div style="font-size:13px;color:#888;margin-bottom:8px;">チーフエンジニア · OMORAY Racing · 岡山</div>
+      <div id="kanbe-profile-banner" style="display:none;background:#fff0f0;border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13px;color:#444;text-align:left;"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;padding:20px 20px 0;">
+      <button onclick="startJamesMode('race')" style="background:linear-gradient(135deg,#1a0a0a,#c0392b);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        🏎️ レースモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">常時オンマイク · iRacing連携 · 岡山弁無線</span>
+      </button>
+      <button onclick="startJamesMode('debrief')" style="background:linear-gradient(135deg,#1a0a0a,#8e44ad);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        📋 デブリーフモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">セッション分析 · セッティング議論 · 日本語</span>
+      </button>
+      <button onclick="startJamesMode('ja-engineering')" style="background:linear-gradient(135deg,#1a0a0a,#27ae60);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        🏯 エンジニアリング深掘りモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">タイヤ・サスペンション・コーナリング精密分析</span>
+      </button>
+    </div>
+    <div style="padding:16px 20px 0;font-size:12px;color:#aaa;text-align:center;">セッション履歴は自動保存されます。</div>
+  </div>
+
   <div id="screen-james-mode" class="screen">
     <button class="btn-back" onclick="show('screen-select')">← Back</button>
     <div style="text-align:center;padding:24px 20px 0;">
@@ -610,7 +642,49 @@ CONVERSATION TOPICS you love:
 
 YOUR VIBE with learners:
 You're genuinely curious about the person you're talking to. You ask follow-up questions that make people open up. You find everyone's story interesting. You make English feel natural and fun — like chatting with a friend at a café.
-Keep replies to 2-3 sentences max. Never add Japanese translations. Stay in character as Noah always.` }
+Keep replies to 2-3 sentences max. Never add Japanese translations. Stay in character as Noah always.` },
+
+  Kanbe: { flag:'🇯🇵', bg:'#1a0a0a', desc:'チーフエンジニア · OMORAY Racing',
+    avatar:'James.png',
+    voiceLang:'ja-JP', voiceNames:['Google 日本語','Kyoko','O-ren'],
+    pitch:0.9, rate:0.95,
+    baseSystem:`あなたは宇喜多官兵衛（うきた かんべえ）、45歳。岡山県岡山市出身のレースエンジニアです。宇喜多氏（岡山の戦国大名）と黒田官兵衛（最高の軍師）から名をとった、戦略家としてのDNAを持つエンジニアです。
+
+経歴：スーパーフォーミュラ→スーパーGT GT500クラス→現在OMORAY Racingチーフエンジニア。GT500で3度チャンピオンチームを率いた実績あり。現在はiRacingでのシミュレーショントレーニングにも精通。
+
+【言語・口調】
+- 岡山弁を自然に混ぜて話す（「〜じゃ」「〜けぇ」「〜しい」「〜しとる」「〜んじゃ」「おえん（ダメ）」「えーけん（いいから）」「なんしょん（何してる）」）
+- 渋くて頼もしい。熱血だが冷静。データ命。
+- ドライバーを「お前」または名前で呼ぶ
+- 感情は抑えめ。でも自己ベスト更新時は少し嬉しそうにする
+
+【無線フレーズ（岡山弁）】
+- 「ラップタイム〇〇じゃ。ええ走りしとるで。」
+- 「燃料やばいけぇ、今すぐセーブしてや。確認取れたか？」
+- 「前との差〇〇秒じゃ。仕掛けるんは次のコーナーじゃ。」
+- 「ピットインじゃ。速度制限、絶対守れよ。」
+- 「ナイスラップじゃ！もう一丁頼むわ！」
+- 「落ち着いて走りい。焦ってもおえん。」
+- 「作戦通りに行くで。辛抱しい。」
+- 「セクター2で遅なっとる。どこで詰まっとんじゃ？」
+
+【技術知識】
+- Mercedes AMG GT3、スーパーGT GT500/GT300、iRacingの挙動
+- タイヤ内圧・温度・摩耗・コーナリング4フェーズ（ブレーキング・進入・クリッピング・立ち上がり）
+- サスペンション・空力・燃料戦略・ピット戦略
+
+【返答スタイル】
+- Race Mode：1〜2文の短い無線。岡山弁で締める。
+- Debrief Mode：3文以内。鋭い質問を1つだけ。
+- 会話は全て日本語（技術用語は英語のまま使う：understeer、trail brake、operating window等）
+
+【性格】
+- 「作戦は儂が立てる。お前は走ることだけ考えい。」
+- ドライバーを信頼しているが、甘やかさない
+- データに基づいた判断を絶対に曲げない
+- 「おもれえ走りしとったで。」が最高の褒め言葉
+
+Stay in character as 宇喜多官兵衛 always.` }
 };
 
 const greetings = {
@@ -619,7 +693,8 @@ const greetings = {
   James: "Alright mate, James Mitchell — Chief Engineer, OMORAY Racing. Flat out on Le Mans prep right now, but always time for a proper debrief. You want to run through radio comms, talk setup, or just chat racing?",
   Chloe: "G'day! Chloe here — surf instructor at Bondi. Just got out of the water actually, it was absolutely pumping out there! You ever tried surfing?",
   Mia:   "Hi! I'm Mia — I teach English to Japanese students here in Vancouver! I also study Japanese at uni, so don't worry if you get stuck — I've got you! How are you feeling about your English today?",
-  Noah:  "Hey! I'm Noah — I write songs and play gigs around London. Just finished a session at the studio actually. What brings you here today?"
+  Noah:  "Hey! I'm Noah — I write songs and play gigs around London. Just finished a session at the studio actually. What brings you here today?",
+  Kanbe: "宇喜多官兵衛じゃ。OMORAY Racingのチーフエンジニアをしとる。今日は何をやるんじゃ？レースの無線練習か、セッティングのデブリーフか、言うてみい。"
 };
 
 let sel = null, userLevel = 'A1', userName = '', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
@@ -884,6 +959,16 @@ function startJamesMode(mode) {
 
 function startChat() {
   // James の場合はモード選択を挟む
+  if (sel === 'Kanbe' && !jamesMode) {
+    const profile = loadDriverProfile();
+    const banner = document.getElementById('kanbe-profile-banner');
+    if (profile && profile.sessions) {
+      banner.style.display = 'block';
+      banner.innerHTML = `<b>また来たか、${profile.name || userName}。</b><br>セッション数: ${profile.sessions} &nbsp;|&nbsp; 最終: ${profile.lastDate || '—'}`;
+    }
+    show('screen-kanbe-mode');
+    return;
+  }
   if (sel === 'James' && !jamesMode) {
     const profile = loadDriverProfile();
     const banner = document.getElementById('james-profile-banner');
@@ -906,7 +991,13 @@ function startChat() {
   show('screen-chat');
   // タイマーリセット（不要になったが念のため）
   if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
-  const greeting = (sel === 'James' && jamesMode === 'ja-engineering')
+  const greeting = (sel === 'Kanbe' && jamesMode === 'race')
+    ? `${userName || 'ドライバー'}、官兵衛じゃ。始める前にiRatingとSOFとSafety Ratingを言うてみい。作戦を立てるけぇ。`
+    : (sel === 'Kanbe' && jamesMode === 'debrief')
+    ? `${userName || 'ドライバー'}、官兵衛じゃ。今日はどのコースを走ったんじゃ？まずコースとコンディションを話してみい。`
+    : (sel === 'Kanbe' && jamesMode === 'ja-engineering')
+    ? `官兵衛じゃ。どのコーナーから始めるんじゃ？気になっとるところを言うてみい。`
+    : (sel === 'James' && jamesMode === 'ja-engineering')
     ? `了解です。James Mitchellです。今日はどのセッションのデブリーフをやりますか？まず走ったコースとコンディションを教えてください。`
     : (sel === 'James' && jamesMode === 'race')
     ? `${userName || 'Driver'}, James here. Before we go — give me your iRating, today's SOF, and your Safety Rating. Quick.`
@@ -916,17 +1007,18 @@ function startChat() {
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
   // James モード別マイク設定
-  jamesAutoMicEnabled = (sel === 'James' && jamesMode === 'race');
+  const isRacingChar = (sel === 'James' || sel === 'Kanbe');
+  jamesAutoMicEnabled = (isRacingChar && jamesMode === 'race');
   jamesMuted = false;
-  if (sel === 'James' && jamesMode === 'race') {
+  if (isRacingChar && jamesMode === 'race') {
     document.getElementById('mic-btn').onclick = activateJamesAlwaysOnMic;
-    document.getElementById('mic-btn').title = 'Tap to go LIVE';
-    setHint('Tap 🎤 to go LIVE');
-    if (sel === 'James') connectIRBridge();
+    document.getElementById('mic-btn').title = sel === 'Kanbe' ? 'タップでLIVE開始' : 'Tap to go LIVE';
+    setHint(sel === 'Kanbe' ? '🎤 タップしてLIVE開始' : 'Tap 🎤 to go LIVE');
+    connectIRBridge();
   } else {
     document.getElementById('mic-btn').onclick = toggleMic;
     document.getElementById('mic-btn').title = '';
-    if (sel === 'James') connectIRBridge(); // Debriefでもブリッジ接続（参照用）
+    if (isRacingChar) connectIRBridge();
   }
   // セッション開始時にプロファイル更新
   if (sel === 'James') {
@@ -1240,7 +1332,7 @@ async function sendMessage(text) {
   try {
     const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.` : '';
     let modeNote = '';
-    if (sel === 'James') {
+    if (sel === 'James' || sel === 'Kanbe') {
       const profile = loadDriverProfile();
       modeNote = buildProfileNote(profile);
       if (jamesMode === 'race') {
