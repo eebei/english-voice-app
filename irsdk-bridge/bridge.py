@@ -299,6 +299,7 @@ def poll_iracing():
     fuel_strategy_warned = False
     session_check_counter = 0
     last_session_sig = None
+    consecutive_slow = 0
     prev = {
         'pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None
@@ -404,14 +405,22 @@ def poll_iracing():
                 else:
                     diff = lapTime - session_best
                     if diff < 0.3:
+                        consecutive_slow = 0
                         broadcast({'type': 'radio', 'trigger': 'lap_consistent', 'time': t,
                             'message': t + '. Consistent.'})
                     elif diff < 1.0:
                         broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t, 'diff': round(diff, 1),
                             'message': t + '. ' + str(round(diff, 1)) + ' off.'})
                     else:
-                        broadcast({'type': 'radio', 'trigger': 'lap_slow', 'time': t,
-                            'message': t + '. Pace down. Status?'})
+                        consecutive_slow += 1
+                        if consecutive_slow >= 2:
+                            # 2周連続スロー＝ドライバーが乱れている可能性。落ち着かせる
+                            broadcast({'type': 'radio', 'trigger': 'pace_unstable', 'time': t, 'pos': pos,
+                                'message': 'Two laps off. Breathe. Reset. We are still in this. Clean laps to the flag.'})
+                            consecutive_slow = 0
+                        else:
+                            broadcast({'type': 'radio', 'trigger': 'lap_slow', 'time': t,
+                                'message': t + '. Pace down. Status?'})
 
                 last_lap_time = lapTime
 
