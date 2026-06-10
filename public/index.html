@@ -992,7 +992,7 @@ function startChat() {
   // タイマーリセット（不要になったが念のため）
   if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
   const greeting = (sel === 'Kanbe' && jamesMode === 'race')
-    ? `${userName || 'ドライバー'}、官兵衛じゃ。始める前にiRatingとSOFとSafety Ratingを言うてみい。作戦を立てるけぇ。`
+    ? `${userName || 'ドライバー'}、官兵衛じゃ。ラジオチェック。iRacingに繋がったらお前のデータを読み上げて作戦を立てるけぇ、そのまま待っときい。`
     : (sel === 'Kanbe' && jamesMode === 'debrief')
     ? `${userName || 'ドライバー'}、官兵衛じゃ。今日はどのコースを走ったんじゃ？まずコースとコンディションを話してみい。`
     : (sel === 'Kanbe' && jamesMode === 'ja-engineering')
@@ -1000,7 +1000,7 @@ function startChat() {
     : (sel === 'James' && jamesMode === 'ja-engineering')
     ? `了解です。James Mitchellです。今日はどのセッションのデブリーフをやりますか？まず走ったコースとコンディションを教えてください。`
     : (sel === 'James' && jamesMode === 'race')
-    ? `${userName || 'Driver'}, James here. Before we go — give me your iRating, today's SOF, and your Safety Rating. Quick.`
+    ? `${userName || 'Driver'}, James here. Radio check. Once iRacing connects I'll pull your numbers and set the strategy. Stand by.`
     : (sel === 'James' && jamesMode === 'debrief')
     ? `${userName || 'Driver'}, James Mitchell. Good session? Before we dig in — iRating, SOF, Safety Rating. Give me the numbers and we'll set your targets.`
     : greetings[sel];
@@ -1170,7 +1170,7 @@ function startJamesAutoMic() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;
   recognition = new SR();
-  recognition.lang = (jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
+  recognition.lang = (sel === 'Kanbe' || jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
   recognition.interimResults = true;
   recognition.continuous = true;
   let silenceTimer = null;
@@ -1244,7 +1244,7 @@ function toggleMic() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { setHint('Not supported. Use Chrome.'); return; }
   recognition = new SR();
-  recognition.lang = (sel === 'James' && jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
+  recognition.lang = (sel === 'Kanbe' || (sel === 'James' && jamesMode === 'ja-engineering')) ? 'ja-JP' : 'en-US';
   recognition.interimResults = true;
   recognition.continuous = true;
   let silenceTimer = null;
@@ -1336,20 +1336,24 @@ async function sendMessage(text) {
       const profile = loadDriverProfile();
       modeNote = buildProfileNote(profile);
       if (jamesMode === 'race') {
-        modeNote += '\n\n━━ CURRENT MODE: RACE MODE ━━\nDriver is actively racing or about to race. Stay in RADIO MODE. Ultra-short responses only — max 1-2 sentences. Wait for driver to respond. This is live race communication.\n\n━━ iRATING / SOF / SAFETY RATING STRATEGY ━━\nAt session start, ask for iRating, SOF, and Safety Rating. Then set ONE clear target:\n- iRating >> SOF (500+ above): "You are the favourite. Podium minimum."\n- iRating ≈ SOF (within 200): "Tight field. Clean race, top half."\n- iRating << SOF (500+ below): "Learning race. Finish clean. Beat 3 cars."\n- Safety Rating below 3.0: "Zero incidents today. SR is priority over position."\nDuring race, reference the target when relevant. Celebrate when target is achieved. Keep it brief — one sentence max.';
+        modeNote += '\n\n━━ CURRENT MODE: RACE MODE ━━\nDriver is actively racing or about to race. Stay in RADIO MODE. Ultra-short responses only — max 1-2 sentences. Wait for driver to respond. This is live race communication.\n\n━━ iRATING / SOF / SAFETY RATING STRATEGY ━━\nThe driver's iRating, SOF, and Safety Rating arrive automatically via telemetry briefing — do NOT ask for them. If no briefing has arrived and the driver asks for strategy, then ask. Set ONE clear target based on the numbers:\n- iRating >> SOF (500+ above): "You are the favourite. Podium minimum."\n- iRating ≈ SOF (within 200): "Tight field. Clean race, top half."\n- iRating << SOF (500+ below): "Learning race. Finish clean. Beat 3 cars."\n- Safety Rating below 3.0: "Zero incidents today. SR is priority over position."\nDuring race, reference the target when relevant. Celebrate when target is achieved. Keep it brief — one sentence max.';
 
       } else if (jamesMode === 'debrief') {
-        modeNote += '\n\n━━ CURRENT MODE: DEBRIEF MODE ━━\nDriver is in the garage for a technical debrief. Use DEBRIEF MODE. You can be more detailed. Ask probing technical questions. Help the driver express what they felt in the car using precise English.\n\n━━ iRATING / SOF CONTEXT ━━\nAsk for iRating, SOF, Safety Rating at the start. Use this to frame the debrief:\n- Good result vs SOF: "You outperformed today. What worked?"\n- Poor result vs SOF: "Pace was there or strategy issue? Walk me through it."\n- Safety incident: Address it directly but professionally.';
+        modeNote += '\n\n━━ CURRENT MODE: DEBRIEF MODE ━━\nDriver is in the garage for a technical debrief. Use DEBRIEF MODE. You can be more detailed. Ask probing technical questions. Help the driver express what they felt in the car using precise English.\n\n━━ iRATING / SOF CONTEXT ━━\nThe driver's numbers (iRating, SOF, SR) arrive via telemetry when connected — only ask if missing. Use them to frame the debrief:\n- Good result vs SOF: "You outperformed today. What worked?"\n- Poor result vs SOF: "Pace was there or strategy issue? Walk me through it."\n- Safety incident: Address it directly but professionally.';
       } else if (jamesMode === 'ja-engineering') {
         modeNote += jaEngineeringPrompt();
       }
     }
-    const system = chars[sel].baseSystem + levelInstruction(userLevel) + nameNote + modeNote;
+    // 官兵衛＝日本語ネイティブ、James Race/日本語モード＝英語学習指示不要
+    const skipLevel = (sel === 'Kanbe') || (sel === 'James' && (jamesMode === 'race' || jamesMode === 'ja-engineering'));
+    const system = chars[sel].baseSystem + (skipLevel ? '' : levelInstruction(userLevel)) + nameNote + modeNote;
     // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
     const MAX_HISTORY = 20;
     const trimmedMessages = messages.slice(-MAX_HISTORY);
     // James Race Mode=超短縮80、日本語エンジニアリング=200、他は通常
-    const maxTok = (sel === 'James' && jamesMode === 'race') ? 80
+    const maxTok = (sel === 'Kanbe' && jamesMode === 'race') ? 120
+      : (sel === 'Kanbe') ? 250
+      : (sel === 'James' && jamesMode === 'race') ? 80
       : (sel === 'James' && jamesMode === 'ja-engineering') ? 200
       : (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
     const data = await callAPI({ system, messages: trimmedMessages, max_tokens: maxTok });
@@ -1382,7 +1386,7 @@ async function sendMessage(text) {
 
 async function endChat() {
   const userMsgs = messages.filter(m => m.role === 'user');
-  const minTurns = (sel === 'James' && jamesMode === 'race') ? 1 : 2;
+  const minTurns = ((sel === 'James' || sel === 'Kanbe') && jamesMode === 'race') ? 1 : 2;
   if (userMsgs.length < minTurns) { addMsg('sys', 'Chat a bit more first!'); return; }
   window.speechSynthesis.cancel();
   // James auto-mic停止
@@ -1399,7 +1403,10 @@ async function endChat() {
   const evalMsgs = userMsgs.slice(0, 10);
   const convo = evalMsgs.map(m => m.content).join('\n');
   const isRaceMode = (sel === 'James' && jamesMode === 'race');
-  const prompt = isRaceMode
+  const isKanbe = (sel === 'Kanbe');
+  const prompt = isKanbe
+    ? `あなたはレースエンジニアリング・コミュニケーションの評価者です。以下は日本人ドライバーがエンジニアに伝えた内容です。「フィーリングを具体的に伝える力」「専門用語の的確さ」「簡潔さ」「状況説明の明瞭さ」を評価してください。JSONのみで返答（マークダウン不要）:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"日本語で2〜3文の励ましフィードバック。grammarは状況説明の明瞭さ、vocabularyは専門用語の的確さ、fluencyは簡潔さ、naturalはフィーリング伝達力として評価。"}\n\nドライバーの発言:\n${convo}`
+    : isRaceMode
     ? `Evaluate this racing driver's radio English communication. Short responses like "Copy that", "Boxing now", "Push push" are CORRECT and natural. Respond ONLY with valid JSON, no markdown:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"2-3 sentences about their radio communication quality."}\n\nDriver radio:\n${convo}`
     : `Evaluate this English learner. Respond ONLY with valid JSON, no markdown:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"2-3 sentences of encouraging feedback."}\n\nLearner:\n${convo}`;
   try {
@@ -1838,10 +1845,11 @@ function connectIRBridge() {
         addMsg('sys', '🔴 iRacing disconnected.');
         return;
       }
-      if (data.type === 'radio' && sel === 'James') {
-        injectJamesRadio(data.message);
+      if (data.type === 'radio' && (sel === 'James' || sel === 'Kanbe')) {
+        const text = (sel === 'Kanbe') ? (kanbeRadio(data) || data.message) : data.message;
+        injectJamesRadio(text);
       }
-      if (data.type === 'session_info' && sel === 'James') {
+      if (data.type === 'session_info' && (sel === 'James' || sel === 'Kanbe')) {
         injectSessionBriefing(data.data);
       }
     };
@@ -1875,26 +1883,70 @@ function injectSessionBriefing(info) {
   const sr = info.safety_rating || '?';
   const track = info.track_display || info.track || 'this track';
   const num = info.num_drivers || 0;
+  const eventType = (info.event_type || '').toLowerCase();
+  const isRace = eventType.includes('race');
+  const driver = userName || 'Driver';
+  const srNum = parseFloat((sr.split(' ')[1]) || '0');
   const diff = irating - sof;
 
-  let strategy = '';
-  if (diff > 500) {
-    strategy = "You are the favourite today. Podium minimum. No excuses.";
-  } else if (diff > 0) {
-    strategy = "Competitive field. Top half is the target. Every clean lap counts.";
-  } else if (diff > -500) {
-    strategy = "Tough field today. Clean race. Beat 3 cars ahead of your grid slot.";
+  let briefing = '';
+
+  if (sel === 'Kanbe') {
+    // 官兵衛：岡山弁ブリーフィング
+    const srWarn = srNum < 3.0 ? ' SRが低いけぇ、今日はインシデントゼロが最優先じゃ。' : '';
+    if (!isRace || num <= 1) {
+      briefing = `${driver}、${track}じゃね。iRating ${irating}、SR ${sr}。${srWarn || '今日もデータ取りながらしっかり走り込むで。'} 準備できたら出ていきい。`;
+    } else {
+      let strategy = '';
+      if (diff > 500)       strategy = 'お前が一番速いけぇ。表彰台が最低ラインじゃ。';
+      else if (diff > 0)    strategy = '接戦じゃ。クリーンに走って上位半分を狙うで。';
+      else if (diff > -500) strategy = '格上が多いのう。クリーンレースで前の3台を食うんじゃ。';
+      else                  strategy = '今日は勉強のレースじゃ。完走第一、インシデントゼロでいくで。';
+      briefing = `${driver}、${track}。${num}台のレースじゃ。SOF ${sof}、お前のiRating ${irating}、SR ${sr}。${srWarn} ${strategy}`;
+    }
   } else {
-    strategy = "Strong field. This is a learning race. Finish clean. Zero incidents.";
+    // James：英語ブリーフィング
+    const srWarning = srNum < 3.0 ? ' Your Safety Rating is low — incidents are not an option today.' : '';
+    if (!isRace || num <= 1) {
+      briefing = `${driver}, ${track}. iRating ${irating}, SR ${sr}.${srWarning} Practice session — let's build pace and gather data. Out you go.`;
+    } else {
+      let strategy = '';
+      if (diff > 500)       strategy = 'You are the favourite today. Podium minimum. No excuses.';
+      else if (diff > 0)    strategy = 'Competitive field. Top half is the target. Every clean lap counts.';
+      else if (diff > -500) strategy = 'Tough field today. Clean race. Beat 3 cars ahead of your grid slot.';
+      else                  strategy = 'Strong field. This is a learning race. Finish clean. Zero incidents.';
+      briefing = `${driver}, ${track}. ${num} drivers. SOF ${sof}, your iRating ${irating}, SR ${sr}.${srWarning} ${strategy}`;
+    }
   }
 
-  // SR warning
-  const srNum = parseFloat((sr.split(' ')[1]) || '0');
-  const srWarning = srNum < 3.0 ? " Your Safety Rating is low — incidents are not an option today." : "";
-
-  const briefing = `${track}. ${num} drivers. SOF ${sof}, your iRating ${irating}, SR ${sr}.${srWarning} ${strategy}`;
-
   injectJamesRadio(briefing);
+}
+
+// ── 官兵衛用：ブリッジ無線の岡山弁テンプレート ──
+function kanbeRadio(d) {
+  const t = d.time || '';
+  const diff = (d.diff !== undefined) ? d.diff : '';
+  const pos = (d.pos !== undefined) ? d.pos : '';
+  switch (d.trigger) {
+    case 'personal_best':  return `自己ベストじゃ！${t}！${diff}秒詰めたで。もう一丁頼むわ！`;
+    case 'first_lap':      return `${t}。まず1本目じゃ。ここから組み立てるで。`;
+    case 'session_best':   return `セッションベストじゃ。${t}。自己ベストまであと${diff}秒。ええ感じじゃ。`;
+    case 'lap_consistent': return `${t}。揃っとるで。この調子じゃ。`;
+    case 'lap_time':       return `${t}。ベストから${diff}秒落ちじゃ。どこで失っとんじゃ？`;
+    case 'lap_slow':       return `${t}。ペース落ちとるで。どうしたんじゃ？`;
+    case 'position_up':    return `P${pos}じゃ。ええぞ。クリーンにいけ。`;
+    case 'position_down':  return `P${pos}。1つ落としたのう。何があったんじゃ？`;
+    case 'fuel_warning':   return `燃料やばいけぇ。残り${d.fuel}リッターじゃ。今すぐセーブしてや。`;
+    case 'tyre_cold':      return `フロントタイヤが冷えとる。${d.temp}度じゃ。熱を入れえ。`;
+    case 'tyre_hot':       return `フロントが熱だれしとる。縁石は控ええ。`;
+    case 'final_lap':      return `ファイナルラップじゃ。P${pos}。ミスなしで持って帰れ。`;
+    case 'pit_entry':      return `ピット了解じゃ。速度制限、絶対守れよ。`;
+    case 'pit_exit':       return `コースインじゃ。P${pos}。タイヤが温まるまで1周は辛抱しい。`;
+    case 'multiclass_approaching': return `速いクラスが後ろから来とるで。${d.delta}秒差じゃ。道を譲っちゃれ。`;
+    case 'battle_behind':  return `後ろにピッタリおるで。${d.delta}秒差じゃ。ラインを守りい。`;
+    case 'battle_ahead':   return `前と${d.delta}秒差じゃ。射程圏内じゃで。仕留めにいけ。`;
+    default: return null;
+  }
 }
 
 function injectJamesRadio(radioText) {
