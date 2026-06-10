@@ -388,30 +388,30 @@ def poll_iracing():
                     if personal_best is not None:
                         diff = personal_best - lapTime
                         broadcast({'type': 'radio', 'trigger': 'personal_best', 'time': t, 'diff': round(diff, 3),
-                            'message': 'Personal best! ' + t + '. ' + str(round(diff, 3)) + ' up. Do it again.'})
+                            'message': 'Personal best. ' + t + '. Plus ' + str(round(diff, 3)) + '.'})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
-                            'message': t + '. First lap in the books. Build from there.'})
+                            'message': t + '. Baseline lap.'})
                     personal_best = lapTime
                     session_best = lapTime
 
                 elif is_session_best:
                     diff = lapTime - (personal_best or lapTime)
                     broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t, 'diff': round(diff, 3),
-                        'message': 'Session best. ' + t + '. ' + str(round(diff, 3)) + ' off your all-time best. Keep pushing.'})
+                        'message': 'Session best. ' + t + '.'})
                     session_best = lapTime
 
                 else:
                     diff = lapTime - session_best
                     if diff < 0.3:
                         broadcast({'type': 'radio', 'trigger': 'lap_consistent', 'time': t,
-                            'message': t + '. Consistent. Keep it.'})
+                            'message': t + '. Consistent.'})
                     elif diff < 1.0:
                         broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t, 'diff': round(diff, 1),
-                            'message': t + '. ' + str(round(diff, 1)) + ' off session best. Where are you losing it?'})
+                            'message': t + '. ' + str(round(diff, 1)) + ' off.'})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'lap_slow', 'time': t,
-                            'message': t + '. Pace is down. Talk to me.'})
+                            'message': t + '. Pace down. Status?'})
 
                 last_lap_time = lapTime
 
@@ -420,40 +420,40 @@ def poll_iracing():
             gained = prev['pos'] - pos
             if gained > 0:
                 broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': pos,
-                    'message': 'P' + str(pos) + '. Keep it clean.'})
+                    'message': 'P' + str(pos) + '.'})
             else:
                 broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': pos,
-                    'message': 'P' + str(pos) + '. We lost one. Talk to me.'})
+                    'message': 'P' + str(pos) + '. Lost one.'})
 
         # Fuel warning
         if fuel is not None and fuel < 5 and (prev['fuel'] is None or prev['fuel'] >= 5):
             broadcast({'type': 'radio', 'trigger': 'fuel_warning', 'fuel': round(fuel, 1),
-                'message': 'Fuel warning. ' + str(round(fuel, 1)) + ' litres. Fuel save from now. Confirm.'})
+                'message': 'Fuel ' + str(round(fuel, 1)) + '. Save mode now.'})
 
         # Tyre temps (every 5 laps)
         if lfTemp and rfTemp and lrTemp and rrTemp and lap and lap % 5 == 0 and lap != prev.get('tempLap'):
             avg_front = (lfTemp + rfTemp) / 2
             if avg_front < 75:
                 broadcast({'type': 'radio', 'trigger': 'tyre_cold', 'temp': round(avg_front),
-                    'message': 'Front tyres cold. ' + str(round(avg_front)) + ' degrees. Get some heat in.'})
+                    'message': 'Fronts cold. ' + str(round(avg_front)) + ' degrees.'})
             elif avg_front > 105:
                 broadcast({'type': 'radio', 'trigger': 'tyre_hot', 'temp': round(avg_front),
-                    'message': 'Fronts overheating. Back off the kerbs.'})
+                    'message': 'Fronts hot. Off the kerbs.'})
             prev['tempLap'] = lap
 
         # Final lap
         if lapsTot and lap and lapsTot > 0 and lap == lapsTot and lap != prev['lapsTot']:
             broadcast({'type': 'radio', 'trigger': 'final_lap', 'pos': pos,
-                'message': 'Final lap. P' + str(pos) + '. Bring it home. No mistakes.'})
+                'message': 'Final lap. P' + str(pos) + '.'})
 
         # Pit in/out
         if onPit and not prev['onPit']:
             broadcast({'type': 'radio', 'trigger': 'pit_entry',
-                'message': 'Box confirmed. Speed limiter on. Focus.'})
+                'message': 'Box confirmed. Limiter.'})
 
         if prev['onPit'] and not onPit and onTrack:
             broadcast({'type': 'radio', 'trigger': 'pit_exit', 'pos': pos,
-                'message': 'Out of the pits. P' + str(pos) + '. Build the tyres, one lap.'})
+                'message': 'Out. P' + str(pos) + '. Tyres one lap.'})
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         if player_car_idx >= 0 and not onPit:
@@ -479,7 +479,7 @@ def poll_iracing():
                             last_warn = multiclass_warned.get(idx, 0)
                             if now - last_warn > 30:  # 30秒に1回
                                 broadcast({'type': 'radio', 'trigger': 'multiclass_approaching', 'delta': round(delta, 1),
-                                    'message': 'Faster class behind. ' + str(round(delta, 1)) + ' seconds. Give him room. Blue flag situation.'})
+                                    'message': 'Faster class behind. ' + str(round(delta, 1)) + '. Give room.'})
                                 multiclass_warned[idx] = now
 
                     # ── バトル検知（同クラスが近い）──────────────────────
@@ -488,13 +488,13 @@ def poll_iracing():
                             last_warn = battle_warned.get(idx, 0)
                             if now - last_warn > 20:  # 20秒に1回
                                 broadcast({'type': 'radio', 'trigger': 'battle_behind', 'delta': round(delta, 1),
-                                    'message': 'He is right with you. ' + str(round(delta, 1)) + ' behind. Defend your line.'})
+                                    'message': 'Behind ' + str(round(delta, 1)) + '. Defend.'})
                                 battle_warned[idx] = now
                         elif -1.5 < delta < 0:  # 前方1.5秒以内 = 前を攻める
                             last_warn = battle_warned.get(idx, 0)
                             if now - last_warn > 20:
                                 broadcast({'type': 'radio', 'trigger': 'battle_ahead', 'delta': round(abs(delta), 1),
-                                    'message': str(round(abs(delta), 1)) + ' to the car ahead. You are close. Make it count.'})
+                                    'message': 'Ahead ' + str(round(abs(delta), 1)) + '. In range.'})
                                 battle_warned[idx] = now
 
         prev.update({'pos': pos, 'fuel': fuel, 'lap': lap, 'lapsTot': lapsTot, 'onPit': onPit})
