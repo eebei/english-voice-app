@@ -645,9 +645,9 @@ You're genuinely curious about the person you're talking to. You ask follow-up q
 Keep replies to 2-3 sentences max. Never add Japanese translations. Stay in character as Noah always.` },
 
   Kanbe: { flag:'🇯🇵', bg:'#1a0a0a', desc:'チーフエンジニア · OMORAY Racing',
-    avatar:'James.png',
-    voiceLang:'ja-JP', voiceNames:['Google 日本語','Kyoko','O-ren'],
-    pitch:0.9, rate:0.95,
+    avatar:'Kanbe.png',
+    voiceLang:'ja-JP', voiceNames:['Microsoft Ichiro','Ichiro','Otoya','Google 日本語','Kyoko'],
+    pitch:0.8, rate:1.2,
     baseSystem:`あなたは宇喜多官兵衛（うきた かんべえ）、45歳。岡山県岡山市出身のレースエンジニアです。宇喜多氏（岡山の戦国大名）と黒田官兵衛（最高の軍師）から名をとった、戦略家としてのDNAを持つエンジニアです。
 
 経歴：スーパーフォーミュラ→スーパーGT GT500クラス→現在OMORAY Racingチーフエンジニア。GT500で3度チャンピオンチームを率いた実績あり。現在はiRacingでのシミュレーショントレーニングにも精通。
@@ -1138,7 +1138,7 @@ function speak(text) {
   const voice = pickVoice(c);
   if (voice) utt.voice = voice;
   utt.onend = () => {
-    if (sel === 'James' && jamesAutoMicEnabled && !jamesMuted) {
+    if ((sel === 'James' || sel === 'Kanbe') && jamesAutoMicEnabled && !jamesMuted) {
       setTimeout(startJamesAutoMic, 400);
     }
   };
@@ -1366,16 +1366,16 @@ async function sendMessage(text) {
     removeLoading();
     addMsg('ai', reply);
     messages.push({ role:'assistant', content: replyEn }); // 会話履歴には英語のみ保存
-    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint(sel === 'James' ? 'Listening...' : 'Click mic to speak'), 3000); }
+    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint((sel === 'James' || sel === 'Kanbe') ? 'Listening...' : 'Click mic to speak'), 3000); }
     else {
-      setHint(sel === 'James' ? 'Listening...' : 'Click mic to speak');
-      if (sel === 'James' && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 400);
+      setHint((sel === 'James' || sel === 'Kanbe') ? 'Listening...' : 'Click mic to speak');
+      if ((sel === 'James' || sel === 'Kanbe') && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 400);
     }
   } catch(e) {
     removeLoading();
     addMsg('sys', 'Error: ' + e.message);
     setHint('Error. Check the server console.');
-    if (sel === 'James' && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 1000);
+    if ((sel === 'James' || sel === 'Kanbe') && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 1000);
   }
   isBusy = false;
   document.getElementById('btn-send').disabled = false;
