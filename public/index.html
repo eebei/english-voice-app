@@ -1336,7 +1336,7 @@ async function sendMessage(text) {
       const profile = loadDriverProfile();
       modeNote = buildProfileNote(profile);
       if (sel === 'Kanbe' && jamesMode === 'race') {
-        modeNote += '\n\n━━ 現在のモード：レースモード ━━\nドライバーは走行中または走行直前。岡山弁の短い無線で返答せよ。最大1〜2文。これはライブのレース無線じゃ。\n\n━━ iRating・SOF・SR戦略 ━━\nドライバーの数字はテレメトリから自動で届く——自分から聞くな。届いた数字で作戦を一つだけ設定：\n- iRating >> SOF（500以上上）：「お前が本命じゃ。表彰台が最低ラインじゃ。」\n- iRating ≈ SOF（200以内）：「接戦じゃ。クリーンに上位半分を狙うで。」\n- iRating << SOF（500以上下）：「勉強のレースじゃ。完走第一、前の3台を食え。」\n- SR 3.0未満：「今日はインシデントゼロが順位より大事じゃ。」\nレース中は目標に触れること。達成したら短く褒めい。一文で十分じゃ。';
+        modeNote += '\n\n━━ 現在のモード：レースモード ━━\nドライバーは走行中または走行直前。無線は情報のみ——激励・世間話・装飾は一切不要。最短の言葉で伝えろ（例：「ベスト更新。1:42.3。」「後ろ0.6。守れ。」）。最大1〜2文。岡山弁の味は語尾に少しだけでええ。\n\n━━ iRating・SOF・SR戦略 ━━\nドライバーの数字はテレメトリから自動で届く——自分から聞くな。届いた数字で作戦を一つだけ設定：\n- iRating >> SOF（500以上上）：「お前が本命じゃ。表彰台が最低ラインじゃ。」\n- iRating ≈ SOF（200以内）：「接戦じゃ。クリーンに上位半分を狙うで。」\n- iRating << SOF（500以上下）：「勉強のレースじゃ。完走第一、前の3台を食え。」\n- SR 3.0未満：「今日はインシデントゼロが順位より大事じゃ。」\nレース中は目標に触れること。達成したら短く褒めい。一文で十分じゃ。';
       } else if (sel === 'Kanbe' && jamesMode === 'debrief') {
         modeNote += '\n\n━━ 現在のモード：デブリーフモード ━━\nガレージでのセッション分析じゃ。岡山弁で話せ。少し詳しく話してええが、鋭い質問は一度に一つだけ。コーナリング4フェーズ（ブレーキング・進入・クリッピング・立ち上がり）で深掘りし、ドライバーがフィーリングを正確な言葉にできるよう導け。';
       } else if (jamesMode === 'race') {
@@ -1928,27 +1928,28 @@ function injectSessionBriefing(info) {
 
 // ── 官兵衛用：ブリッジ無線の岡山弁テンプレート ──
 function kanbeRadio(d) {
+  // 走行中の無線は情報のみ・最小音節。装飾や激励は入れない（実無線準拠）
   const t = d.time || '';
   const diff = (d.diff !== undefined) ? d.diff : '';
   const pos = (d.pos !== undefined) ? d.pos : '';
   switch (d.trigger) {
-    case 'personal_best':  return `自己ベストじゃ！${t}！${diff}秒詰めたで。もう一丁頼むわ！`;
-    case 'first_lap':      return `${t}。まず1本目じゃ。ここから組み立てるで。`;
-    case 'session_best':   return `セッションベストじゃ。${t}。自己ベストまであと${diff}秒。ええ感じじゃ。`;
-    case 'lap_consistent': return `${t}。揃っとるで。この調子じゃ。`;
-    case 'lap_time':       return `${t}。ベストから${diff}秒落ちじゃ。どこで失っとんじゃ？`;
-    case 'lap_slow':       return `${t}。ペース落ちとるで。どうしたんじゃ？`;
-    case 'position_up':    return `P${pos}じゃ。ええぞ。クリーンにいけ。`;
-    case 'position_down':  return `P${pos}。1つ落としたのう。何があったんじゃ？`;
-    case 'fuel_warning':   return `燃料やばいけぇ。残り${d.fuel}リッターじゃ。今すぐセーブしてや。`;
-    case 'tyre_cold':      return `フロントタイヤが冷えとる。${d.temp}度じゃ。熱を入れえ。`;
-    case 'tyre_hot':       return `フロントが熱だれしとる。縁石は控ええ。`;
-    case 'final_lap':      return `ファイナルラップじゃ。P${pos}。ミスなしで持って帰れ。`;
-    case 'pit_entry':      return `ピット了解じゃ。速度制限、絶対守れよ。`;
-    case 'pit_exit':       return `コースインじゃ。P${pos}。タイヤが温まるまで1周は辛抱しい。`;
-    case 'multiclass_approaching': return `速いクラスが後ろから来とるで。${d.delta}秒差じゃ。道を譲っちゃれ。`;
-    case 'battle_behind':  return `後ろにピッタリおるで。${d.delta}秒差じゃ。ラインを守りい。`;
-    case 'battle_ahead':   return `前と${d.delta}秒差じゃ。射程圏内じゃで。仕留めにいけ。`;
+    case 'personal_best':  return `ベスト更新。${t}。${diff}アップ。`;
+    case 'first_lap':      return `${t}。基準ラップじゃ。`;
+    case 'session_best':   return `セッションベスト。${t}。`;
+    case 'lap_consistent': return `${t}。揃っとる。`;
+    case 'lap_time':       return `${t}。${diff}落ち。`;
+    case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
+    case 'position_up':    return `P${pos}。`;
+    case 'position_down':  return `P${pos}。1つダウン。`;
+    case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
+    case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
+    case 'final_lap':      return `ファイナルラップ。P${pos}。`;
+    case 'pit_entry':      return `ピット了解。リミッター。`;
+    case 'pit_exit':       return `コースイン。P${pos}。タイヤ1周辛抱。`;
+    case 'multiclass_approaching': return `後方速いクラス。${d.delta}秒。譲れ。`;
+    case 'battle_behind':  return `後ろ${d.delta}。守れ。`;
+    case 'battle_ahead':   return `前${d.delta}。いけるで。`;
     default: return null;
   }
 }
