@@ -646,7 +646,7 @@ Keep replies to 2-3 sentences max. Never add Japanese translations. Stay in char
 
   Kanbe: { flag:'🇯🇵', bg:'#1a0a0a', desc:'チーフエンジニア · OMORAY Racing',
     avatar:'Kanbe.png',
-    voiceLang:'ja-JP', voiceNames:['Microsoft Ichiro','Ichiro','Otoya','Google 日本語','Kyoko'],
+    voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語','Kyoko'],
     pitch:0.8, rate:1.2,
     baseSystem:`あなたは宇喜多官兵衛（うきた かんべえ）、45歳。岡山県岡山市出身のレースエンジニアです。宇喜多氏（岡山の戦国大名）と黒田官兵衛（最高の軍師）から名をとった、戦略家としてのDNAを持つエンジニアです。
 
@@ -1006,6 +1006,16 @@ function startChat() {
     : greetings[sel];
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
+  // 官兵衛：男性日本語音声の診断
+  if (sel === 'Kanbe') {
+    setTimeout(() => {
+      const jaVoices = (window.speechSynthesis.getVoices() || []).filter(v => v.lang && v.lang.startsWith('ja'));
+      console.log('JA voices:', jaVoices.map(v => v.name).join(', '));
+      if (jaVoices.length && !jaVoices.some(v => /ichiro|keita|otoya/i.test(v.name))) {
+        addMsg('sys', '🔊 男性の日本語音声が見つかりません。Microsoft Edgeで開くと自然な男性声（Keita）が使えます。');
+      }
+    }, 500);
+  }
   // James モード別マイク設定
   const isRacingChar = (sel === 'James' || sel === 'Kanbe');
   jamesAutoMicEnabled = (isRacingChar && jamesMode === 'race');
