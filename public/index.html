@@ -1364,7 +1364,24 @@ async function sendMessage(text) {
     }
     // 官兵衛＝日本語ネイティブ、James Race/日本語モード＝英語学習指示不要
     const skipLevel = (sel === 'Kanbe') || (sel === 'James' && (jamesMode === 'race' || jamesMode === 'ja-engineering'));
-    const system = chars[sel].baseSystem + (skipLevel ? '' : levelInstruction(userLevel)) + nameNote + modeNote;
+    // テレメトリ接続状態をリアルタイムで注入（James/Kanbe）
+    let teleNote = '';
+    if (sel === 'James' || sel === 'Kanbe') {
+      if (!bridgeConnected) {
+        teleNote = (sel === 'Kanbe')
+          ? '\n\n【テレメトリ状態：未接続】ブリッジが起動しとらん。走行データは一切見えん。データの話になったら正直に「ブリッジが繋がっとらんけぇ見えんのじゃ。SIM PCでbridge.pyを起動してくれ」と案内せえ。見えんデータを語るな。'
+          : '\n\n[TELEMETRY: DISCONNECTED] The bridge is not running. You can see NO live data. If data comes up, say honestly: "Bridge is not connected — start bridge.py on the SIM PC." Never describe data you cannot see.';
+      } else if (!iracingLive) {
+        teleNote = (sel === 'Kanbe')
+          ? '\n\n【テレメトリ状態：ブリッジ接続済み・iRacing待機中】iRacingがまだ起動しとらん。起動したら自動でデータが届く。'
+          : '\n\n[TELEMETRY: BRIDGE OK, WAITING FOR IRACING] iRacing not detected yet. Data will flow once it starts.';
+      } else {
+        teleNote = (sel === 'Kanbe')
+          ? '\n\n【テレメトリ状態：接続中・データ受信中】iRacingのライブデータが届いとる。無線で読み上げた数字は本物じゃ。'
+          : '\n\n[TELEMETRY: LIVE] iRacing data is flowing. Numbers in radio calls are real.';
+      }
+    }
+    const system = chars[sel].baseSystem + (skipLevel ? '' : levelInstruction(userLevel)) + nameNote + modeNote + teleNote;
     // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
     const MAX_HISTORY = 20;
     const trimmedMessages = messages.slice(-MAX_HISTORY);
@@ -1840,6 +1857,7 @@ if ('serviceWorker' in navigator) {
 
 let irBridge = null;
 let irBridgeReconnectTimer = null;
+let bridgeConnected = false, iracingLive = false;
 
 function connectIRBridge() {
   if (irBridge && irBridge.readyState < 2) return; // 既に接続中
@@ -1847,6 +1865,7 @@ function connectIRBridge() {
     irBridge = new WebSocket('ws://localhost:8765');
 
     irBridge.onopen = () => {
+      bridgeConnected = true;
       console.log('🏎️ iRacing Bridge connected');
       addMsg('sys', '🏎️ iRacing Bridge connected — James is watching your telemetry.');
     };
@@ -1856,10 +1875,12 @@ function connectIRBridge() {
       try { data = JSON.parse(event.data); } catch { return; }
 
       if (data.type === 'iracing_connected') {
+        iracingLive = true;
         addMsg('sys', '🟢 iRacing detected. James is live.');
         return;
       }
       if (data.type === 'iracing_disconnected') {
+        iracingLive = false;
         addMsg('sys', '🔴 iRacing disconnected.');
         return;
       }
@@ -1873,6 +1894,7 @@ function connectIRBridge() {
     };
 
     irBridge.onclose = () => {
+      bridgeConnected = false; iracingLive = false;
       // Jamesが選択中なら再接続を試みる
       if (sel === 'James') {
         irBridgeReconnectTimer = setTimeout(connectIRBridge, 5000);
