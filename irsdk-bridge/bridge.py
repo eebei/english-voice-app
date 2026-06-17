@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge v7
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-19-001
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -537,7 +537,7 @@ async def main():
     loop = asyncio.get_running_loop()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge v7 started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-19-001  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
