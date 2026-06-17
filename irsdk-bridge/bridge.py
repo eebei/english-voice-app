@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge v6
+OMORAY PITWALL - iRacing Bridge v7
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -327,6 +327,15 @@ def poll_iracing():
             broadcast({'type': 'iracing_disconnected'})
             ir_was_connected = False
             session_info_sent = False
+            last_session_sig = None
+            # メモリマップを閉じて再接続に備える（古いマップを掴んだままだと再検知できないバグ修正）
+            try:
+                if reader.mm:
+                    reader.mm.close()
+            except Exception:
+                pass
+            reader.mm = None
+            reader.var_cache.clear()
             time.sleep(2)
             continue
 
