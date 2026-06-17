@@ -11,6 +11,7 @@ import json
 import mmap
 import struct
 import time
+from datetime import datetime
 import threading
 import websockets
 
@@ -18,6 +19,9 @@ IRSDK_MEMMAPFILE = "Local\\IRSDKMemMapFileName"
 PORT = 8765
 connected_clients = set()
 loop = None
+
+def log(msg):
+    print("[" + datetime.now().strftime("%H:%M:%S") + "] " + msg, flush=True)
 
 def broadcast(event):
     if not connected_clients or loop is None:
@@ -308,7 +312,7 @@ def poll_iracing():
     while True:
         if not reader.mm:
             if reader.open():
-                print("iRacing memory map opened")
+                log("iRacing memory map opened")
             else:
                 time.sleep(2)
                 continue
@@ -316,14 +320,14 @@ def poll_iracing():
         active = reader.is_active()
 
         if active and not ir_was_connected:
-            print("iRacing connected!")
+            log(">>> iRacing CONNECTED - telemetry flowing")
             session_info_sent = False
             reader.var_cache.clear()
             broadcast({'type': 'iracing_connected'})
             ir_was_connected = True
 
         if not active and ir_was_connected:
-            print("iRacing disconnected")
+            log("<<< iRacing DISCONNECTED")
             broadcast({'type': 'iracing_disconnected'})
             ir_was_connected = False
             session_info_sent = False
@@ -355,7 +359,7 @@ def poll_iracing():
                     sig = str(info.get('event_type', '')) + '|' + str(info.get('sof', '')) + '|' + str(info.get('num_drivers', ''))
                     if sig != last_session_sig:
                         broadcast({'type': 'session_info', 'data': info})
-                        print("Session info sent:", info.get('event_type'), 'SOF:', info.get('sof'))
+                        log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof')))
                         last_session_sig = sig
                     session_info_sent = True
                 if 'drivers' in info:
@@ -521,7 +525,7 @@ def poll_iracing():
 
 async def handler(websocket):
     connected_clients.add(websocket)
-    print("Browser connected (" + str(len(connected_clients)) + " client)")
+    log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
         await websocket.send(json.dumps({'type': 'connected'}))
         await websocket.wait_closed()
@@ -533,9 +537,9 @@ async def main():
     loop = asyncio.get_running_loop()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge v3 started")
+    print("OMORAY PITWALL Bridge v7 started")
     print("WebSocket: ws://localhost:" + str(PORT))
-    print("Waiting for iRacing...")
+    log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
         await asyncio.Future()
 
