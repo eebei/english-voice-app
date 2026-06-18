@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-005
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-006
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -342,14 +342,14 @@ def fmt_radio(seconds):
     if seconds is None or seconds <= 0:
         return None
     if seconds < 60:
-        return "%.1f" % seconds
+        return "%.2f" % seconds
     s_in_min = seconds % 60
     if seconds < 120:
-        # 1分台：秒だけ（41.6）
-        return "%.1f" % s_in_min
-    # 2分以上は分も付ける（誤解防止）：2分5.3秒 → 「2分5.3」
+        # 1分台：秒だけ・百分台（41.54）
+        return "%.2f" % s_in_min
+    # 2分以上は分も付ける：2分5.34秒 → 「2分5.34」
     m = int(seconds / 60)
-    return "%d分%.1f" % (m, s_in_min)
+    return "%d分%.2f" % (m, s_in_min)
 
 
 reader = IRacingReader()
@@ -473,7 +473,7 @@ def poll_iracing():
                 if is_personal_best:
                     if personal_best is not None:
                         diff = personal_best - lapTime
-                        broadcast({'type': 'radio', 'trigger': 'personal_best', 'time': t, 'diff': round(diff, 1),
+                        broadcast({'type': 'radio', 'trigger': 'personal_best', 'time': t, 'diff': round(diff, 2),
                             'message': 'Personal best. ' + t + '. Plus ' + str(round(diff, 3)) + '.'})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
@@ -483,7 +483,7 @@ def poll_iracing():
 
                 elif is_session_best:
                     diff = lapTime - (personal_best or lapTime)
-                    broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t, 'diff': round(diff, 1),
+                    broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t, 'diff': round(diff, 2),
                         'message': 'Session best. ' + t + '.'})
                     session_best = lapTime
 
@@ -494,7 +494,7 @@ def poll_iracing():
                         broadcast({'type': 'radio', 'trigger': 'lap_consistent', 'time': t,
                             'message': t + '. Consistent.'})
                     elif diff < 1.0:
-                        broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t, 'diff': round(diff, 1),
+                        broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t, 'diff': round(diff, 2),
                             'message': t + '. ' + str(round(diff, 1)) + ' off.'})
                     else:
                         consecutive_slow += 1
@@ -602,12 +602,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-005 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-006 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-005  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-006  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
