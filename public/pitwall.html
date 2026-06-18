@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OMORAY PITWALL — Every driver deserves a pit wall.</title>
+<meta name="description" content="An AI race engineer that talks to you over the radio while you race in iRacing. Lap times, traffic, strategy, and a voice in your ear when it matters.">
+<link rel="icon" type="image/png" href="/OP-icon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0a0a0c;--panel:#121217;--red:#e10600;--green:#19d36b;--silver:#c8ccd2;--text:#eef0f4;--muted:#8b9099}
+  body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  h1,h2,h3,.brand{font-family:'Oxanium',sans-serif;letter-spacing:.5px}
+  a{color:inherit;text-decoration:none}
+  .btn{display:inline-block;background:var(--red);color:#fff;font-weight:700;padding:15px 34px;border-radius:10px;font-family:'Oxanium';letter-spacing:.5px;transition:transform .15s,box-shadow .15s;box-shadow:0 6px 24px rgba(225,6,0,.35)}
+  .btn:hover{transform:translateY(-2px);box-shadow:0 10px 32px rgba(225,6,0,.5)}
+  .btn.ghost{background:transparent;border:1.5px solid #33363d;box-shadow:none;color:var(--text)}
+  .btn.ghost:hover{border-color:var(--green);color:var(--green)}
+
+  /* NAV */
+  nav{position:sticky;top:0;z-index:50;background:rgba(10,10,12,.85);backdrop-filter:blur(10px);border-bottom:1px solid #1c1d22}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px}
+  .logo img{width:30px;height:30px;border-radius:7px}
+  .logo .red{color:var(--red)}
+  .nav-links{display:flex;gap:26px;font-size:14px;color:var(--muted)}
+  .nav-links a:hover{color:var(--text)}
+  @media(max-width:640px){.nav-links{display:none}}
+
+  /* HERO */
+  .hero{position:relative;padding:90px 0 70px;text-align:center;background:radial-gradient(900px 400px at 50% -10%,rgba(225,6,0,.18),transparent 70%)}
+  .hero .tag{display:inline-block;font-family:'Oxanium';font-size:12px;letter-spacing:2px;color:var(--green);border:1px solid rgba(25,211,107,.3);padding:5px 14px;border-radius:99px;margin-bottom:24px;text-transform:uppercase}
+  .hero h1{font-size:clamp(34px,6vw,62px);font-weight:800;line-height:1.05;margin-bottom:20px}
+  .hero h1 .red{color:var(--red)}
+  .hero p.sub{font-size:clamp(16px,2.3vw,21px);color:var(--silver);max-width:620px;margin:0 auto 36px}
+  .hero .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .hero .micro{margin-top:18px;font-size:13px;color:var(--muted)}
+
+  /* RADIO DEMO */
+  .radio{margin:56px auto 0;max-width:560px;background:linear-gradient(180deg,#15161c,#0e0f13);border:1px solid #23252c;border-radius:16px;padding:22px 22px;text-align:left;box-shadow:0 30px 60px rgba(0,0,0,.5)}
+  .radio .hd{display:flex;align-items:center;gap:10px;font-family:'Oxanium';font-size:12px;letter-spacing:1.5px;color:var(--red);margin-bottom:16px;text-transform:uppercase}
+  .radio .dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:pulse 1.4s infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  .line{display:flex;gap:10px;margin:10px 0;font-size:15px}
+  .line .who{font-family:'Oxanium';font-weight:700;min-width:78px;font-size:12px;letter-spacing:.5px;padding-top:2px}
+  .line.eng .who{color:var(--green)}
+  .line.drv .who{color:var(--silver)}
+  .line .msg{color:#dfe2e7}
+
+  /* SECTIONS */
+  section.blk{padding:72px 0;border-top:1px solid #16171c}
+  .eyebrow{font-family:'Oxanium';font-size:12px;letter-spacing:2px;color:var(--red);text-transform:uppercase;margin-bottom:12px}
+  h2.title{font-size:clamp(26px,4vw,40px);font-weight:800;margin-bottom:14px;line-height:1.1}
+  .lead{color:var(--silver);max-width:680px;font-size:17px}
+
+  .cols{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid #1f2127;border-radius:14px;padding:26px}
+  .card .n{font-family:'Oxanium';font-size:13px;color:var(--red);font-weight:700;margin-bottom:10px}
+  .card h3{font-size:19px;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+
+  /* VS TABLE */
+  .vs{margin-top:40px;background:var(--panel);border:1px solid #1f2127;border-radius:14px;overflow:hidden}
+  .vs .row{display:grid;grid-template-columns:1.4fr 1fr 1fr;border-bottom:1px solid #1c1e24}
+  .vs .row:last-child{border-bottom:none}
+  .vs .cell{padding:16px 18px;font-size:15px}
+  .vs .row.head .cell{font-family:'Oxanium';font-weight:700;font-size:13px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+  .vs .row.head .cell.us{color:var(--green)}
+  .vs .cell.us{color:var(--text);font-weight:600}
+  .vs .cell.them{color:var(--muted)}
+
+  /* ENGINEERS */
+  .eng-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:40px}
+  @media(max-width:640px){.eng-grid{grid-template-columns:1fr}}
+  .eng-card{display:flex;gap:18px;align-items:center;background:var(--panel);border:1px solid #1f2127;border-radius:14px;padding:18px}
+  .eng-card img{width:74px;height:74px;border-radius:12px;object-fit:cover;border:2px solid #2a2d35}
+  .eng-card .nm{font-family:'Oxanium';font-weight:700;font-size:18px}
+  .eng-card .rl{color:var(--muted);font-size:13px}
+  .eng-card .fl{font-size:13px;color:var(--green);margin-top:4px}
+
+  /* PRICING teaser */
+  .price{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
+  @media(max-width:760px){.price{grid-template-columns:1fr}}
+  .tier{background:var(--panel);border:1px solid #1f2127;border-radius:14px;padding:26px;text-align:center}
+  .tier.feat{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset,0 20px 50px rgba(225,6,0,.15)}
+  .tier .nm{font-family:'Oxanium';font-weight:700;font-size:16px;letter-spacing:.5px}
+  .tier .pr{font-size:34px;font-weight:900;font-family:'Oxanium';margin:10px 0 2px}
+  .tier .pr small{font-size:14px;color:var(--muted);font-weight:400}
+  .tier .badge{display:inline-block;background:var(--red);color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;margin-bottom:8px;font-family:'Oxanium';letter-spacing:.5px}
+  .tier ul{list-style:none;text-align:left;margin-top:16px;font-size:14px;color:var(--silver)}
+  .tier li{padding:6px 0;padding-left:22px;position:relative}
+  .tier li::before{content:'›';position:absolute;left:6px;color:var(--green);font-weight:700}
+
+  /* FINAL */
+  .final{text-align:center;padding:90px 0;background:radial-gradient(700px 300px at 50% 120%,rgba(225,6,0,.18),transparent 70%)}
+  .final h2{font-size:clamp(28px,5vw,46px);margin-bottom:16px}
+  .final p{color:var(--silver);margin-bottom:30px}
+  footer{border-top:1px solid #16171c;padding:34px 0;color:var(--muted);font-size:13px;text-align:center}
+  footer .story{max-width:560px;margin:0 auto 16px;font-style:italic;color:#6c7077}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav-in">
+  <div class="logo"><img src="/OP-icon.png" alt="OMORAY"><span>OMORAY <span class="red">PITWALL</span></span></div>
+  <div class="nav-links">
+    <a href="#how">How it works</a>
+    <a href="#why">Why it's different</a>
+    <a href="#crew">The crew</a>
+    <a href="#pricing">Pricing</a>
+    <a href="/setup.html">Setup</a>
+  </div>
+  <a href="/setup.html" class="btn" style="padding:9px 20px;font-size:14px">Get started</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <span class="tag">AI Race Engineer · for iRacing</span>
+  <h1>Every driver deserves<br>a <span class="red">pit wall.</span></h1>
+  <p class="sub">An AI race engineer that talks to you over the radio while you race — lap times, traffic, strategy, and a calm voice in your ear when it all goes loud.</p>
+  <div class="cta">
+    <a href="/setup.html" class="btn">Start free beta</a>
+    <a href="#how" class="btn ghost">See how it works</a>
+  </div>
+  <div class="micro">Works with iRacing · No coding · Download &amp; double-click</div>
+
+  <div class="radio">
+    <div class="hd"><span class="dot"></span> Pitwall Comms · Live</div>
+    <div class="line eng"><span class="who">ENGINEER</span><span class="msg">Personal best. 41.5. Plus 0.3. Do it again.</span></div>
+    <div class="line eng"><span class="who">ENGINEER</span><span class="msg">Faster class behind. 3 seconds. Give him room.</span></div>
+    <div class="line drv"><span class="who">YOU</span><span class="msg">Copy. I'll let him by at turn 1.</span></div>
+    <div class="line eng"><span class="who">ENGINEER</span><span class="msg">Good. Two laps off your pace — breathe. We're still in this.</span></div>
+  </div>
+</div></header>
+
+<section class="blk" id="how"><div class="wrap">
+  <div class="eyebrow">How it works</div>
+  <h2 class="title">Three steps to your own crew.</h2>
+  <p class="lead">No setup files to edit. No telemetry dashboards to read. Just download, drive, and talk.</p>
+  <div class="cols">
+    <div class="card"><div class="n">01</div><h3>Download &amp; run</h3><p>One small app. No Python, no config. Double-click and it quietly connects to iRacing.</p></div>
+    <div class="card"><div class="n">02</div><h3>Pick your engineer</h3><p>Choose your race engineer, open the web app, and tap the mic to go live.</p></div>
+    <div class="card"><div class="n">03</div><h3>Drive &amp; talk</h3><p>Eyes on the track. Your engineer calls the data and you answer — by voice, hands-free.</p></div>
+  </div>
+</div></section>
+
+<section class="blk" id="why"><div class="wrap">
+  <div class="eyebrow">Why it's different</div>
+  <h2 class="title">A coach trains you. An engineer races with you.</h2>
+  <p class="lead">Other sim tools show you data after the session. OMORAY PITWALL is in the car with you — relaying numbers, watching traffic, and waiting for your call. Two-way. Real time. In your language.</p>
+  <div class="vs">
+    <div class="row head"><div class="cell">&nbsp;</div><div class="cell them">Coaching tools</div><div class="cell us">OMORAY PITWALL</div></div>
+    <div class="row"><div class="cell">When it works</div><div class="cell them">After / during practice</div><div class="cell us">During the race</div></div>
+    <div class="row"><div class="cell">Communication</div><div class="cell them">One-way readout</div><div class="cell us">Two-way voice</div></div>
+    <div class="row"><div class="cell">Mid-race coaching</div><div class="cell them">Tells you how to drive</div><div class="cell us">Relays info, never lectures</div></div>
+    <div class="row"><div class="cell">Languages</div><div class="cell them">English only</div><div class="cell us">Native engineers, your language</div></div>
+    <div class="row"><div class="cell">Memory</div><div class="cell them">Session data</div><div class="cell us">Remembers you, race after race</div></div>
+  </div>
+</div></section>
+
+<section class="blk" id="crew"><div class="wrap">
+  <div class="eyebrow">The crew</div>
+  <h2 class="title">Engineers who speak your language.</h2>
+  <p class="lead">Each engineer has a real personality and racing brain. More joining the wall — including legendary names from the pit lane.</p>
+  <div class="eng-grid">
+    <div class="eng-card"><img src="/James.png" alt="James"><div><div class="nm">James Mitchell</div><div class="rl">Chief Engineer · OMORAY Racing</div><div class="fl">🇬🇧 English · radio &amp; debrief</div></div></div>
+    <div class="eng-card"><img src="/Kanbe.png" alt="Kanbe"><div><div class="nm">宇喜多 官兵衛</div><div class="rl">チーフエンジニア · 岡山</div><div class="fl">🇯🇵 Japanese · native engineer</div></div></div>
+  </div>
+</div></section>
+
+<section class="blk" id="pricing"><div class="wrap">
+  <div class="eyebrow">Pricing</div>
+  <h2 class="title">Cheaper than a single track day.</h2>
+  <p class="lead">You can't hire a real race engineer. Now you don't have to. Founding members lock their price forever.</p>
+  <div class="price">
+    <div class="tier"><div class="nm">STANDARD</div><div class="pr">$9.99<small>/mo</small></div><ul><li>All conversation partners</li><li>Unlimited talk</li><li>English practice</li></ul></div>
+    <div class="tier feat"><div class="badge">FOUNDING MEMBER</div><div class="nm">RACE PRO</div><div class="pr">$29.99<small>/mo · locked forever</small></div><ul><li>Live iRacing telemetry</li><li>Race radio &amp; debrief</li><li>Driver memory that compounds</li><li>Famous engineer roster</li></ul></div>
+    <div class="tier"><div class="nm">DRIVER ELITE</div><div class="pr">$199<small>/mo</small></div><ul><li>Everything in Race Pro</li><li>Studio-grade voice</li><li>Full telemetry history</li></ul></div>
+  </div>
+  <p style="text-align:center;margin-top:22px;color:var(--muted);font-size:13px">Currently in free beta. Founding Member pricing opens at launch.</p>
+</div></section>
+
+<section class="final"><div class="wrap">
+  <h2>The car's loud. Your engineer is calm.</h2>
+  <p>Stop racing alone. Put a voice on the wall.</p>
+  <a href="/setup.html" class="btn">Start free beta</a>
+</div></section>
+
+<footer><div class="wrap">
+  <p class="story">From a small garage in Okayama, Japan — built by a racer, for the next generation who'll stand on the world's grids.</p>
+  <div class="logo" style="justify-content:center;margin-bottom:10px"><img src="/OP-icon.png" alt="" style="width:24px;height:24px"><span style="font-size:15px">OMORAY <span class="red">PITWALL</span></span></div>
+  <div><a href="/setup.html">Setup</a> · <a href="/help.html">Help</a> · <a href="/privacy.html">Privacy &amp; Security</a></div>
+  <div style="margin-top:12px">© 2026 OMORAY</div>
+</div></footer>
+
+</body>
+</html>
