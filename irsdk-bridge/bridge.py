@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-008
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-009
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -397,6 +397,7 @@ def poll_iracing():
     car_class_map = {}          # car_idx -> class_id
     car_relspeed_map = {}       # car_idx -> rel speed
     player_rel_speed = 0
+    is_race_session = False
     multiclass_warned = {}      # car_idx -> last warned time
     battle_warned = {}          # car_idx -> last warned time
     fuel_strategy_warned = False
@@ -461,6 +462,8 @@ def poll_iracing():
                         log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof')))
                         last_session_sig = sig
                     session_info_sent = True
+                    et = str(info.get('event_type', '')).lower()
+                    is_race_session = ('race' in et)
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
@@ -594,8 +597,8 @@ def poll_iracing():
 
                 last_lap_time = lapTime
 
-        # Position change
-        if pos is not None and prev['pos'] is not None and pos != prev['pos']:
+        # Position change（レースセッションのみ。練習に順位は無い）
+        if is_race_session and pos is not None and prev['pos'] is not None and pos != prev['pos']:
             gained = prev['pos'] - pos
             if gained > 0:
                 broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': pos,
@@ -612,8 +615,8 @@ def poll_iracing():
         # Tyre temps: 自動警告は無効化（読んでる変数がカーカス温度で不正確。較正後に復活予定）
         # データ自体は将来デブリーフで参照可能にする
 
-        # Final lap
-        if lapsTot and lap and lapsTot > 0 and lap == lapsTot and lap != prev['lapsTot']:
+        # Final lap（レースのみ）
+        if is_race_session and lapsTot and lap and lapsTot > 0 and lap == lapsTot and lap != prev['lapsTot']:
             broadcast({'type': 'radio', 'trigger': 'final_lap', 'pos': pos,
                 'message': 'Final lap. P' + str(pos) + '.'})
 
@@ -654,8 +657,8 @@ def poll_iracing():
                                     'message': 'Faster class behind. ' + str(round(delta, 1)) + '. Give room.'})
                                 multiclass_warned[idx] = now
 
-                    # ── バトル検知（同クラスが近い）──────────────────────
-                    if other_class == player_class_id:
+                    # ── バトル検知（同クラスが近い・レースのみ）──────────
+                    if is_race_session and other_class == player_class_id:
                         if 0 < delta < 1.5:  # 後方1.5秒以内 = バトル中
                             last_warn = battle_warned.get(idx, 0)
                             if now - last_warn > 20:  # 20秒に1回
@@ -688,12 +691,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-008 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-009 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-008  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-009  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
