@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-009
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-010
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -7,6 +7,8 @@ Usage: python bridge.py
 """
 
 import asyncio
+import os
+import sys
 import json
 import mmap
 import ctypes
@@ -35,7 +37,12 @@ PORT = 8765
 connected_clients = set()
 loop = None
 
-LOG_PATH = "C:\\omoray-bridge\\bridge_log.txt"
+# ログは実行ファイル（exe/py）と同じ場所に書く（どこに置いても動く）
+try:
+    _base = os.path.dirname(os.path.abspath(sys.argv[0])) or os.getcwd()
+except Exception:
+    _base = "."
+LOG_PATH = os.path.join(_base, "bridge_log.txt")
 def log(msg):
     line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg
     print(line, flush=True)
@@ -691,12 +698,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-009 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-010 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-009  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-010  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
