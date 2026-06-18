@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-010
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-011
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -306,14 +306,23 @@ def parse_session_info(yaml_str):
         if current_driver:
             drivers.append(current_driver)
 
-        # Get player car idx
+        # Get player car idx（iRacingの正式名は DriverCarIdx。PlayerCarIdxもフォールバック）
         for line in yaml_str.split('\n'):
-            if 'PlayerCarIdx:' in line:
+            s = line.strip()
+            if s.startswith('DriverCarIdx:'):
                 try:
-                    player_car_idx = int(line.split(':')[1].strip())
+                    player_car_idx = int(s.split(':')[1].strip())
+                    break
                 except:
                     pass
-                break
+        if player_car_idx < 0:
+            for line in yaml_str.split('\n'):
+                if 'PlayerCarIdx:' in line:
+                    try:
+                        player_car_idx = int(line.split(':')[1].strip())
+                    except:
+                        pass
+                    break
 
         # Calculate SOF (exclude spectators)
         real_drivers = [d for d in drivers if d.get('spectator', 0) == 0 and d.get('irating', 0) > 0]
@@ -698,12 +707,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-010 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-011 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-010  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-011  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
