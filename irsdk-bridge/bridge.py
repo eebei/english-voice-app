@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-002
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-003
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -9,6 +9,8 @@ Usage: python bridge.py
 import asyncio
 import json
 import mmap
+import ctypes
+from ctypes import wintypes
 import struct
 import time
 from datetime import datetime
@@ -16,12 +18,32 @@ import threading
 import websockets
 
 IRSDK_MEMMAPFILE = "Local\\IRSDKMemMapFileName"
+MEM_SIZE = 1164 * 1024
+FILE_MAP_READ = 0x0004
+
+try:
+    _k32 = ctypes.windll.kernel32
+    _k32.OpenFileMappingW.restype = wintypes.HANDLE
+    _k32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    _k32.MapViewOfFile.restype = ctypes.c_void_p
+    _k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
+    _k32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
+    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
+except Exception:
+    _k32 = None
 PORT = 8765
 connected_clients = set()
 loop = None
 
+LOG_PATH = "C:\\omoray-bridge\\bridge_log.txt"
 def log(msg):
-    print("[" + datetime.now().strftime("%H:%M:%S") + "] " + msg, flush=True)
+    line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg
+    print(line, flush=True)
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 def broadcast(event):
     if not connected_clients or loop is None:
@@ -39,35 +61,60 @@ async def _broadcast_async(msg):
     connected_clients.difference_update(dead)
 
 class IRacingReader:
-    # iRacing SDK header offsets (correct layout)
     H_STATUS = 4
     H_SESSION_INFO_LEN = 16
     H_SESSION_INFO_OFFSET = 20
     H_NUM_VARS = 24
     H_VAR_HEADER_OFFSET = 28
     H_NUM_BUF = 32
-    VARBUF_BASE = 48      # varBuf array start
-    VARBUF_STRIDE = 16    # each: tickCount(4) bufOffset(4) pad(8)
-    VAR_HEADER_SIZE = 144 # each var header
-    VAR_NAME_OFF = 16     # name char[32] within var header
+    VARBUF_BASE = 48
+    VARBUF_STRIDE = 16
+    VAR_HEADER_SIZE = 144
+    VAR_NAME_OFF = 16
 
     def __init__(self):
-        self.mm = None
+        self._handle = None
+        self._ptr = None
         self.var_cache = {}
 
+    def is_open(self):
+        return self._ptr is not None
+
     def open(self):
-        try:
-            self.mm = mmap.mmap(-1, 1164 * 1024, IRSDK_MEMMAPFILE, access=mmap.ACCESS_READ)
-            return True
-        except Exception:
+        # iRacingが作った既存メモリに接続する（自分で作らない＝空マップ誤作成を防ぐ）
+        if _k32 is None:
             return False
+        h = _k32.OpenFileMappingW(FILE_MAP_READ, False, IRSDK_MEMMAPFILE)
+        if not h:
+            return False  # iRacing未起動
+        ptr = _k32.MapViewOfFile(h, FILE_MAP_READ, 0, 0, 0)
+        if not ptr:
+            _k32.CloseHandle(h)
+            return False
+        self._handle = h
+        self._ptr = ptr
+        return True
+
+    def close(self):
+        try:
+            if self._ptr:
+                _k32.UnmapViewOfFile(ctypes.c_void_p(self._ptr))
+            if self._handle:
+                _k32.CloseHandle(self._handle)
+        except Exception:
+            pass
+        self._ptr = None
+        self._handle = None
+        self.var_cache = {}
+
+    def _bytes(self, offset, size):
+        return ctypes.string_at(self._ptr + offset, size)
 
     def _read_int(self, off):
-        self.mm.seek(off)
-        return struct.unpack('i', self.mm.read(4))[0]
+        return struct.unpack('i', self._bytes(off, 4))[0]
 
     def is_active(self):
-        if not self.mm:
+        if not self._ptr:
             return False
         try:
             return self._read_int(self.H_STATUS) == 1
@@ -75,7 +122,6 @@ class IRacingReader:
             return False
 
     def get_buf_offset(self):
-        # 複数バッファのうち tickCount 最大（最新）の bufOffset を返す
         try:
             num_buf = self._read_int(self.H_NUM_BUF)
             best_tick = -1
@@ -94,14 +140,14 @@ class IRacingReader:
     def find_var(self, name):
         if name in self.var_cache:
             return self.var_cache[name]
-        if not self.mm:
+        if not self._ptr:
             return None
         try:
             num_vars = self._read_int(self.H_NUM_VARS)
             var_hdr_off = self._read_int(self.H_VAR_HEADER_OFFSET)
-            self.mm.seek(var_hdr_off)
             for i in range(min(num_vars, 600)):
-                vh = self.mm.read(self.VAR_HEADER_SIZE)
+                base = var_hdr_off + i * self.VAR_HEADER_SIZE
+                vh = self._bytes(base, self.VAR_HEADER_SIZE)
                 if len(vh) < self.VAR_HEADER_SIZE:
                     break
                 vtype = struct.unpack_from('i', vh, 0)[0]
@@ -121,8 +167,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            self.mm.seek(self.get_buf_offset() + info[1])
-            return struct.unpack('f', self.mm.read(4))[0]
+            return struct.unpack('f', self._bytes(self.get_buf_offset() + info[1], 4))[0]
         except Exception:
             return None
 
@@ -131,8 +176,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            self.mm.seek(self.get_buf_offset() + info[1])
-            return struct.unpack('i', self.mm.read(4))[0]
+            return struct.unpack('i', self._bytes(self.get_buf_offset() + info[1], 4))[0]
         except Exception:
             return None
 
@@ -141,8 +185,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            self.mm.seek(self.get_buf_offset() + info[1])
-            return self.mm.read(1)[0] != 0
+            return self._bytes(self.get_buf_offset() + info[1], 1)[0] != 0
         except Exception:
             return None
 
@@ -151,8 +194,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            self.mm.seek(self.get_buf_offset() + info[1])
-            data = self.mm.read(4 * count)
+            data = self._bytes(self.get_buf_offset() + info[1], 4 * count)
             return list(struct.unpack('f' * count, data))
         except Exception:
             return None
@@ -162,8 +204,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            self.mm.seek(self.get_buf_offset() + info[1])
-            data = self.mm.read(4 * count)
+            data = self._bytes(self.get_buf_offset() + info[1], 4 * count)
             return list(struct.unpack('i' * count, data))
         except Exception:
             return None
@@ -174,8 +215,7 @@ class IRacingReader:
             si_offset = self._read_int(self.H_SESSION_INFO_OFFSET)
             if si_len <= 0 or si_offset <= 0:
                 return None
-            self.mm.seek(si_offset)
-            raw = self.mm.read(min(si_len, 200000))
+            raw = self._bytes(si_offset, min(si_len, 200000))
             return raw.decode('utf-8', errors='ignore')
         except Exception:
             return None
@@ -323,9 +363,9 @@ def poll_iracing():
     }
 
     while True:
-        if not reader.mm:
+        if not reader.is_open():
             if reader.open():
-                log("iRacing memory map opened")
+                log("iRacing memory map opened (attached to iRacing)")
             else:
                 time.sleep(2)
                 continue
@@ -346,13 +386,7 @@ def poll_iracing():
             session_info_sent = False
             last_session_sig = None
             # メモリマップを閉じて再接続に備える（古いマップを掴んだままだと再検知できないバグ修正）
-            try:
-                if reader.mm:
-                    reader.mm.close()
-            except Exception:
-                pass
-            reader.mm = None
-            reader.var_cache.clear()
+            reader.close()
             time.sleep(2)
             continue
 
@@ -558,9 +592,15 @@ async def handler(websocket):
 async def main():
     global loop
     loop = asyncio.get_running_loop()
+    # ログファイルをリセット（今回のセッションだけ記録）
+    try:
+        with open(LOG_PATH, "w", encoding="utf-8") as f:
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-003 ===\n")
+    except Exception:
+        pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-002  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-003  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
