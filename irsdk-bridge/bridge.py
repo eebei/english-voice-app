@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-004
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-005
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -337,14 +337,19 @@ def fmt_time(seconds):
     return "%d:%06.3f" % (m, s)
 
 def fmt_radio(seconds):
-    # 無線用の短い読み：2分未満は分を省いて「47.4」、超なら「1分47.4」
+    # 本物のF1無線方式：分は省いて秒だけ言う（1:41.587 → 「41.6」）
+    # ドライバーは分を分かっているので秒だけで通じる。コロンを消すとTTS誤読も防げる
     if seconds is None or seconds <= 0:
         return None
-    if seconds < 120:
+    if seconds < 60:
         return "%.1f" % seconds
+    s_in_min = seconds % 60
+    if seconds < 120:
+        # 1分台：秒だけ（41.6）
+        return "%.1f" % s_in_min
+    # 2分以上は分も付ける（誤解防止）：2分5.3秒 → 「2分5.3」
     m = int(seconds / 60)
-    s = seconds % 60
-    return "%d:%04.1f" % (m, s)
+    return "%d分%.1f" % (m, s_in_min)
 
 
 reader = IRacingReader()
@@ -597,12 +602,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-004 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-005 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-004  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-005  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
