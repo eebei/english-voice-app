@@ -1,0 +1,42 @@
+name: Build OMORAY PITWALL Bridge (Windows EXE)
+
+on:
+  workflow_dispatch:        # 手動ボタンで実行できる
+  push:
+    paths:
+      - 'irsdk-bridge/bridge.py'   # bridge.py更新で自動ビルド
+
+permissions:
+  contents: write           # Releaseに書き込むため
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets pyinstaller
+
+      - name: Build EXE
+        run: |
+          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console irsdk-bridge/bridge.py
+
+      - name: Publish to Release (latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: bridge-latest
+          name: OMORAY PITWALL Bridge (latest)
+          body: |
+            最新のOMORAY PITWALLブリッジ（Windows用）。
+            Pythonのインストール不要。ダウンロードしてダブルクリックで起動。
+          files: dist/OMORAY-PITWALL-Bridge.exe
+          prerelease: false
