@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-19-001
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-002
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -39,6 +39,18 @@ async def _broadcast_async(msg):
     connected_clients.difference_update(dead)
 
 class IRacingReader:
+    # iRacing SDK header offsets (correct layout)
+    H_STATUS = 4
+    H_SESSION_INFO_LEN = 16
+    H_SESSION_INFO_OFFSET = 20
+    H_NUM_VARS = 24
+    H_VAR_HEADER_OFFSET = 28
+    H_NUM_BUF = 32
+    VARBUF_BASE = 48      # varBuf array start
+    VARBUF_STRIDE = 16    # each: tickCount(4) bufOffset(4) pad(8)
+    VAR_HEADER_SIZE = 144 # each var header
+    VAR_NAME_OFF = 16     # name char[32] within var header
+
     def __init__(self):
         self.mm = None
         self.var_cache = {}
@@ -50,22 +62,32 @@ class IRacingReader:
         except Exception:
             return False
 
+    def _read_int(self, off):
+        self.mm.seek(off)
+        return struct.unpack('i', self.mm.read(4))[0]
+
     def is_active(self):
         if not self.mm:
             return False
         try:
-            self.mm.seek(0)
-            data = self.mm.read(8)
-            _, status = struct.unpack_from('ii', data, 0)
-            return status == 1
+            return self._read_int(self.H_STATUS) == 1
         except Exception:
             return False
 
     def get_buf_offset(self):
+        # 複数バッファのうち tickCount 最大（最新）の bufOffset を返す
         try:
-            self.mm.seek(0)
-            header = self.mm.read(112)
-            return struct.unpack_from('i', header, 84)[0]
+            num_buf = self._read_int(self.H_NUM_BUF)
+            best_tick = -1
+            best_off = 0
+            for i in range(min(num_buf, 4)):
+                base = self.VARBUF_BASE + i * self.VARBUF_STRIDE
+                tick = self._read_int(base)
+                off = self._read_int(base + 4)
+                if tick > best_tick:
+                    best_tick = tick
+                    best_off = off
+            return best_off
         except Exception:
             return 0
 
@@ -75,20 +97,19 @@ class IRacingReader:
         if not self.mm:
             return None
         try:
-            self.mm.seek(144)
-            header_data = self.mm.read(112)
-            num_vars = struct.unpack_from('i', header_data, 0)[0]
-            var_offset_start = struct.unpack_from('i', header_data, 4)[0]
-            self.mm.seek(var_offset_start)
-            for i in range(min(num_vars, 400)):
-                var_data = self.mm.read(144)
-                if len(var_data) < 144:
+            num_vars = self._read_int(self.H_NUM_VARS)
+            var_hdr_off = self._read_int(self.H_VAR_HEADER_OFFSET)
+            self.mm.seek(var_hdr_off)
+            for i in range(min(num_vars, 600)):
+                vh = self.mm.read(self.VAR_HEADER_SIZE)
+                if len(vh) < self.VAR_HEADER_SIZE:
                     break
-                var_type = struct.unpack_from('i', var_data, 0)[0]
-                offset = struct.unpack_from('i', var_data, 4)[0]
-                var_name = var_data[16:48].decode('utf-8', errors='ignore').rstrip('\x00')
-                if var_name == name:
-                    result = (var_type, offset)
+                vtype = struct.unpack_from('i', vh, 0)[0]
+                voffset = struct.unpack_from('i', vh, 4)[0]
+                raw_name = vh[self.VAR_NAME_OFF:self.VAR_NAME_OFF + 32]
+                vname = raw_name.split(b'\x00')[0].decode('utf-8', errors='ignore')
+                if vname == name:
+                    result = (vtype, voffset)
                     self.var_cache[name] = result
                     return result
         except Exception:
@@ -100,8 +121,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            buf = self.get_buf_offset()
-            self.mm.seek(buf + info[1])
+            self.mm.seek(self.get_buf_offset() + info[1])
             return struct.unpack('f', self.mm.read(4))[0]
         except Exception:
             return None
@@ -111,8 +131,7 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            buf = self.get_buf_offset()
-            self.mm.seek(buf + info[1])
+            self.mm.seek(self.get_buf_offset() + info[1])
             return struct.unpack('i', self.mm.read(4))[0]
         except Exception:
             return None
@@ -122,33 +141,28 @@ class IRacingReader:
             info = self.find_var(name)
             if not info:
                 return None
-            buf = self.get_buf_offset()
-            self.mm.seek(buf + info[1])
+            self.mm.seek(self.get_buf_offset() + info[1])
             return self.mm.read(1)[0] != 0
         except Exception:
             return None
 
     def read_float_array(self, name, count=64):
-        """CarIdxEstTime などの配列を読む"""
         try:
             info = self.find_var(name)
             if not info:
                 return None
-            buf = self.get_buf_offset()
-            self.mm.seek(buf + info[1])
+            self.mm.seek(self.get_buf_offset() + info[1])
             data = self.mm.read(4 * count)
             return list(struct.unpack('f' * count, data))
         except Exception:
             return None
 
     def read_int_array(self, name, count=64):
-        """CarIdxClassPosition などの配列を読む"""
         try:
             info = self.find_var(name)
             if not info:
                 return None
-            buf = self.get_buf_offset()
-            self.mm.seek(buf + info[1])
+            self.mm.seek(self.get_buf_offset() + info[1])
             data = self.mm.read(4 * count)
             return list(struct.unpack('i' * count, data))
         except Exception:
@@ -156,14 +170,12 @@ class IRacingReader:
 
     def read_session_info(self):
         try:
-            self.mm.seek(0)
-            header = self.mm.read(112)
-            si_offset = struct.unpack_from('i', header, 96)[0]
-            si_len = struct.unpack_from('i', header, 100)[0]
+            si_len = self._read_int(self.H_SESSION_INFO_LEN)
+            si_offset = self._read_int(self.H_SESSION_INFO_OFFSET)
             if si_len <= 0 or si_offset <= 0:
                 return None
             self.mm.seek(si_offset)
-            raw = self.mm.read(min(si_len, 65536))
+            raw = self.mm.read(min(si_len, 200000))
             return raw.decode('utf-8', errors='ignore')
         except Exception:
             return None
@@ -304,6 +316,7 @@ def poll_iracing():
     session_check_counter = 0
     last_session_sig = None
     consecutive_slow = 0
+    debug_counter = 0
     prev = {
         'pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None
@@ -381,6 +394,16 @@ def poll_iracing():
         rfTemp      = reader.read_float('RFtempCM')
         lrTemp      = reader.read_float('LRtempCM')
         rrTemp      = reader.read_float('RRtempCM')
+
+        # ── 診断ログ：データが実際に読めているか5秒ごとに表示 ──
+        debug_counter += 1
+        if debug_counter >= 50:
+            debug_counter = 0
+            spd = reader.read_float('Speed')
+            log("DATA CHECK -> Lap:" + str(lap) + " Pos:" + str(pos) +
+                " LastLap:" + str(lapTime) + " Speed:" + str(round(spd,1) if spd else None) +
+                " OnTrack:" + str(onTrack))
+
 
         # ── コントロールライン通過検知（超高速）──────────────────────────
         # LapCurrentLapTimeが大きい値から突然0近くにリセット = ライン通過！
@@ -537,7 +560,7 @@ async def main():
     loop = asyncio.get_running_loop()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-19-001  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-002  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
