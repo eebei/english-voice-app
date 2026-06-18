@@ -880,12 +880,57 @@ function saveDriverProfile(updates) {
 
 function buildProfileNote(profile) {
   if (!profile) return '';
+  const jp = (sel === 'Kanbe');
   const parts = [];
-  if (profile.sessions) parts.push(`${profile.sessions} sessions together`);
-  if (profile.lastDate) parts.push(`last session ${profile.lastDate}`);
-  if (profile.notes && profile.notes.length) parts.push('Driver notes: ' + profile.notes.slice(-3).join('; '));
-  if (profile.improvements && profile.improvements.length) parts.push('Areas to improve: ' + profile.improvements.slice(-3).join(', '));
-  return parts.length ? '\n\n━━ DRIVER PROFILE (your memory) ━━\n' + parts.join('\n') + '\nUse this naturally — reference past sessions when relevant, but don\'t overdo it.' : '';
+  if (profile.sessions) parts.push(jp ? `これまで${profile.sessions}回一緒に走った` : `${profile.sessions} sessions together`);
+  if (profile.lastDate) parts.push(jp ? `前回: ${profile.lastDate}` : `last session ${profile.lastDate}`);
+  // コース別記憶
+  if (profile.trackMemory && currentTrackName && profile.trackMemory[currentTrackName]) {
+    const tm = profile.trackMemory[currentTrackName];
+    if (jp) parts.push(`このコース(${currentTrackName})の前回ベスト: ${tm.best || '-'}${tm.note ? ' / メモ: ' + tm.note : ''}`);
+    else parts.push(`This track (${currentTrackName}) previous best: ${tm.best || '-'}${tm.note ? ' / note: ' + tm.note : ''}`);
+  }
+  if (profile.notes && profile.notes.length) parts.push((jp ? '最近のメモ: ' : 'Recent notes: ') + profile.notes.slice(-3).join(' / '));
+  if (!parts.length) return '';
+  const head = jp ? '\n\n━━ ドライバーの記憶（お前が覚えていること）━━\n'
+                  : '\n\n━━ DRIVER MEMORY (what you remember) ━━\n';
+  const tail = jp ? '\n会話で自然に触れろ。前回の続きとして接しろ。ただし毎回しつこく言うな。'
+                  : '\nReference naturally as a continuation. Do not overdo it.';
+  return head + parts.join('\n') + tail;
+}
+
+// ── セッションの記憶を生成して保存（#1 localStorage積算）──
+async function saveSessionMemory() {
+  if (memorySavedThisSession) return;
+  if (sel !== 'James' && sel !== 'Kanbe') return;
+  const userMsgs = messages.filter(m => m.role === 'user');
+  if (userMsgs.length < 2) return;  // 短すぎるセッションは記憶しない
+  memorySavedThisSession = true;
+  try {
+    const convo = messages.slice(-24).map(m => (m.role === 'user' ? 'Driver: ' : 'Engineer: ') + m.content).join('\n');
+    const jp = (sel === 'Kanbe');
+    const prompt = jp
+      ? `次はレースエンジニアとドライバーの会話じゃ。今後のために覚えておくべき要点を、1〜2文の短いメモにまとめろ（コース・ベストタイム・ドライバーの癖や課題・次回試すこと）。日本語で、メモだけ返せ。マークダウン禁止。\n\n${convo}`
+      : `Summarize this race engineer–driver session into ONE short memory note (1-2 sentences) for future reference: track, best lap, driver tendencies/issues, what to try next. Return ONLY the note, plain text.\n\n${convo}`;
+    const data = await callAPI({ messages: [{ role: 'user', content: prompt }], max_tokens: 120 });
+    const note = (data.content && data.content[0] && data.content[0].text || '').trim();
+    if (!note) return;
+    const profile = loadDriverProfile() || {};
+    const notes = (profile.notes || []).concat([note]).slice(-5);  // 直近5件保持
+    const trackMemory = profile.trackMemory || {};
+    if (currentTrackName) {
+      const prevBest = (trackMemory[currentTrackName] || {}).best;
+      trackMemory[currentTrackName] = {
+        best: sessionBestLapStr || prevBest || '',
+        note: note,
+        date: new Date().toISOString().slice(0, 10)
+      };
+    }
+    saveDriverProfile({ notes, trackMemory });
+    console.log('Session memory saved:', note);
+  } catch (e) {
+    console.warn('memory save failed', e);
+  }
 }
 
 // ── 日本語エンジニアリングモード プロンプト ───────────────────────────────
@@ -1034,8 +1079,10 @@ function startChat() {
     document.getElementById('mic-btn').title = '';
     if (isRacingChar) connectIRBridge();
   }
-  // セッション開始時にプロファイル更新
-  if (sel === 'James') {
+  // セッション開始時にプロファイル更新（James / Kanbe 両対応）
+  if (sel === 'James' || sel === 'Kanbe') {
+    memorySavedThisSession = false;
+    sessionBestLapStr = '';
     const profile = loadDriverProfile() || {};
     saveDriverProfile({
       name: userName || profile.name,
@@ -1043,7 +1090,7 @@ function startChat() {
       sessions: (profile.sessions || 0) + 1,
       lastDate: new Date().toISOString().slice(0, 10),
       notes: profile.notes || [],
-      improvements: profile.improvements || []
+      trackMemory: profile.trackMemory || {}
     });
   }
   if (voiceOn) speak(greeting);
@@ -1051,6 +1098,10 @@ function startChat() {
 }
 
 let lastJaTranslation = '';
+// 記憶積算用：現在のコース名と本セッションのベストラップを捕捉
+let currentTrackName = '';
+let sessionBestLapStr = '';
+let memorySavedThisSession = false;
 
 function parseJa(text) {
   const match = text.match(/\[JA:\s*([\s\S]*?)\]/);
@@ -1438,6 +1489,7 @@ async function endChat() {
   // James auto-mic停止
   jamesAutoMicEnabled = false;
   if (recognition) { try { recognition.stop(); } catch(e){} }
+  saveSessionMemory();  // セッション記憶を保存（#1積算）
   show('screen-result');
 
   // 添削ボタンをリセット
@@ -1841,6 +1893,7 @@ function escHtml(str) {
 }
 
 function restart() {
+  saveSessionMemory();  // 離脱時も記憶を保存（#1積算）
   if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
   jamesAutoMicEnabled = false;
   jamesMode = null;
@@ -1921,6 +1974,9 @@ function connectIRBridge() {
         return;
       }
       if (data.type === 'radio' && (sel === 'James' || sel === 'Kanbe')) {
+        if ((data.trigger === 'personal_best' || data.trigger === 'session_best' || data.trigger === 'first_lap') && data.time) {
+          sessionBestLapStr = data.time;  // 最新ベストを記憶
+        }
         const text = (sel === 'Kanbe') ? (kanbeRadio(data) || data.message) : data.message;
         injectJamesRadio(text);
       }
