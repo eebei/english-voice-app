@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setup — OMORAY PITWALL</title>
+<link rel="icon" type="image/png" href="/OP-icon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{--bg:#0a0a0c;--panel:#121217;--red:#e10600;--green:#19d36b;--text:#eef0f4;--muted:#8b9099}
+  body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;line-height:1.7}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  h1,h2,h3,.brand{font-family:'Oxanium',sans-serif}
+  a{color:var(--green);text-decoration:none}a:hover{text-decoration:underline}
+  nav{border-bottom:1px solid #1c1d22;position:sticky;top:0;background:rgba(10,10,12,.9);backdrop-filter:blur(10px)}
+  .nav-in{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .logo{display:flex;align-items:center;gap:9px;font-family:'Oxanium';font-weight:800}
+  .logo img{width:26px;height:26px;border-radius:6px}.red{color:var(--red)}
+  header.h{padding:54px 0 10px;text-align:center}
+  header.h .eyebrow{font-family:'Oxanium';font-size:12px;letter-spacing:2px;color:var(--red);text-transform:uppercase}
+  header.h h1{font-size:38px;margin:10px 0}
+  header.h p{color:var(--muted)}
+  .step{background:var(--panel);border:1px solid #1f2127;border-radius:14px;padding:26px;margin:18px 0;position:relative}
+  .step .num{font-family:'Oxanium';font-weight:800;font-size:13px;color:#fff;background:var(--red);width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+  .step h3{font-size:21px;margin-bottom:8px}
+  .step p{color:#cfd3da;margin-bottom:10px}
+  code{display:block;background:#06060a;border:1px solid #23252c;border-radius:9px;padding:13px 15px;font-family:ui-monospace,Menlo,monospace;font-size:13.5px;color:var(--green);overflow-x:auto;white-space:nowrap;margin:10px 0}
+  .dl{display:inline-block;background:var(--red);color:#fff;font-family:'Oxanium';font-weight:700;padding:14px 30px;border-radius:10px;margin:8px 0}
+  .note{font-size:13.5px;color:var(--muted);border-left:2px solid #2a2d35;padding-left:14px;margin:12px 0}
+  .ok{color:var(--green);font-weight:600}
+  footer{border-top:1px solid #16171c;padding:30px 0;color:var(--muted);font-size:13px;text-align:center;margin-top:40px}
+</style>
+</head>
+<body>
+<nav><div class="wrap nav-in">
+  <a href="/pitwall.html" class="logo"><img src="/OP-icon.png" alt=""><span>OMORAY <span class="red">PITWALL</span></span></a>
+  <div><a href="/help.html">Help</a></div>
+</div></nav>
+
+<header class="h"><div class="wrap">
+  <div class="eyebrow">Setup Guide</div>
+  <h1>Up and running in 5 minutes</h1>
+  <p>Windows + iRacing. No coding required.</p>
+</div></header>
+
+<div class="wrap">
+  <div class="step">
+    <div class="num">1</div>
+    <h3>Download the Bridge</h3>
+    <p>The Bridge is a tiny app that reads iRacing's telemetry and passes it to your engineer. Python is bundled in — nothing else to install.</p>
+    <a class="dl" href="https://github.com/eebei/english-voice-app/releases/download/bridge-latest/OMORAY-PITWALL-Bridge.exe">⬇ Download OMORAY-PITWALL-Bridge.exe</a>
+    <div class="note">Windows may show "unknown publisher." That's normal for an indie app — click <b>More info → Run anyway</b>.</div>
+  </div>
+
+  <div class="step">
+    <div class="num">2</div>
+    <h3>Run the Bridge</h3>
+    <p>Double-click the file. A small black window opens and shows:</p>
+    <code>OMORAY PITWALL Bridge  BUILD ...  started</code>
+    <code>Waiting for iRacing...</code>
+    <p>Leave this window open while you drive. <span class="ok">That's it — the Bridge is live.</span></p>
+  </div>
+
+  <div class="step">
+    <div class="num">3</div>
+    <h3>Start iRacing</h3>
+    <p>Launch iRacing and get into a session as usual. The Bridge connects automatically the moment you're on track.</p>
+  </div>
+
+  <div class="step">
+    <div class="num">4</div>
+    <h3>Open the app &amp; pick your engineer</h3>
+    <p>In Chrome, open the app, enter your name, and choose your race engineer. Pick a mode, tap the mic to go <b>LIVE</b>, and you're racing with a crew.</p>
+    <a class="dl" style="background:#1b6;box-shadow:none" href="https://english-voice-app-production.up.railway.app">▶ Open the app</a>
+    <div class="note">Use a normal Chrome window (not Incognito) so your engineer remembers you between sessions.</div>
+  </div>
+
+  <div class="step" style="border-color:#2a3b2f">
+    <div class="num" style="background:var(--green)">✓</div>
+    <h3>You're on the wall</h3>
+    <p>A status bar at the top shows <span class="ok">🟢 LIVE</span> when telemetry is flowing. Now just drive — your engineer will call the data and wait for your reply.</p>
+    <p>Something not working? → <a href="/help.html">Troubleshooting</a></p>
+  </div>
+</div>
+
+<footer><div class="wrap">OMORAY <span class="red">PITWALL</span> · <a href="/pitwall.html">Home</a> · <a href="/help.html">Help</a> · <a href="/privacy.html">Privacy</a></div></footer>
+</body>
+</html>
