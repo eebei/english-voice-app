@@ -1381,7 +1381,18 @@ async function sendMessage(text) {
           : '\n\n[TELEMETRY: LIVE] iRacing data is flowing. Numbers in radio calls are real.';
       }
     }
-    const system = chars[sel].baseSystem + (skipLevel ? '' : levelInstruction(userLevel)) + nameNote + modeNote + teleNote;
+    // 直近ラップのセクターデータを注入（官兵衛が聞かれたら答えられるように）
+    let sectorNote = '';
+    if ((sel === 'James' || sel === 'Kanbe') && lastSectors && lastSectors.length) {
+      const parts = lastSectors.map(s => {
+        const mark = s.best ? '(自己ベスト)' : (s.delta > 0 ? '(+' + s.delta + ')' : '(' + s.delta + ')');
+        return 'S' + s.sector + ' ' + s.time + mark;
+      });
+      sectorNote = (sel === 'Kanbe')
+        ? '\n\n【直近ラップのセクタータイム】' + parts.join(' / ') + '\nドライバーがセクターについて聞いたら、この数字で答えろ。走行中は自分から言うな。どこで落としたか聞かれたら +が大きいセクターを指摘せえ。'
+        : '\n\n[LATEST LAP SECTORS] ' + parts.join(' / ') + '\nAnswer with these if the driver asks about sectors. Do not volunteer during driving.';
+    }
+    const system = chars[sel].baseSystem + (skipLevel ? '' : levelInstruction(userLevel)) + nameNote + modeNote + teleNote + sectorNote;
     // コスト制御：直近20ターンのみ送信（長時間セッションのトークン爆発を防ぐ）
     const MAX_HISTORY = 20;
     const trimmedMessages = messages.slice(-MAX_HISTORY);
@@ -1858,6 +1869,7 @@ if ('serviceWorker' in navigator) {
 let irBridge = null;
 let irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
+let lastSectors = null;
 
 function updateBridgeStatus() {
   let bar = document.getElementById('bridge-status-bar');
@@ -1914,6 +1926,9 @@ function connectIRBridge() {
       }
       if (data.type === 'session_info' && (sel === 'James' || sel === 'Kanbe')) {
         injectSessionBriefing(data.data);
+      }
+      if (data.type === 'lap_sectors') {
+        lastSectors = data.sectors;  // 走行中は喋らない。聞かれた時/デブリーフ用に保持
       }
     };
 
