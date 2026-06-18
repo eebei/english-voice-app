@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-011
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-012
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -414,6 +414,7 @@ def poll_iracing():
     car_relspeed_map = {}       # car_idx -> rel speed
     player_rel_speed = 0
     is_race_session = False
+    inactive_since = None
     multiclass_warned = {}      # car_idx -> last warned time
     battle_warned = {}          # car_idx -> last warned time
     fuel_strategy_warned = False
@@ -447,17 +448,28 @@ def poll_iracing():
             reader.var_cache.clear()
             broadcast({'type': 'iracing_connected'})
             ir_was_connected = True
+            inactive_since = None
 
+        # 切断は5秒間ずっと非アクティブな時だけ（ピット・メニュー一瞬のブリップで初期化しない）
         if not active and ir_was_connected:
-            log("<<< iRacing DISCONNECTED")
-            broadcast({'type': 'iracing_disconnected'})
-            ir_was_connected = False
-            session_info_sent = False
-            last_session_sig = None
-            # メモリマップを閉じて再接続に備える（古いマップを掴んだままだと再検知できないバグ修正）
-            reader.close()
-            time.sleep(2)
+            if inactive_since is None:
+                inactive_since = time.time()
+            elif time.time() - inactive_since >= 5.0:
+                log("<<< iRacing DISCONNECTED (sustained 5s)")
+                broadcast({'type': 'iracing_disconnected'})
+                ir_was_connected = False
+                session_info_sent = False
+                last_session_sig = None
+                inactive_since = None
+                # ベストタイム/セクターは保持する（週末を通して継続＝エンジニアの記憶）
+                reader.close()
+                time.sleep(2)
+                continue
+            # 5秒未満の中断：何もせず維持（記憶も接続も保つ）
+            time.sleep(0.3)
             continue
+        else:
+            inactive_since = None
 
         if not active:
             time.sleep(1)
@@ -707,12 +719,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-011 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-012 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-011  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-012  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
