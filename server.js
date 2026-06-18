@@ -1,6 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 
 const app = express();
@@ -15,17 +18,62 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-app.use(express.json());
+// ── Abuse / cost guards (server-side, never trust the client) ─────────────────
+const MAX_TOKENS_CAP = 2000;   // legit usage tops out at 1500
+const MAX_MESSAGES   = 100;    // cap conversation length per request
+const MAX_SYSTEM_LEN = 20000;  // cap system prompt size (chars)
+
+// ── Security middleware ───────────────────────────────────────────────────────
+app.set('trust proxy', 1); // Railway sits behind a proxy → needed for real client IP
+
+app.use(helmet({
+  // index.html uses inline scripts/styles; don't break it with a strict CSP here.
+  contentSecurityPolicy: false,
+}));
+
+// Only allow the app's own front-end (and local dev) to call the API from a browser.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
+  'https://english-voice-app-production.up.railway.app,http://localhost:3000')
+  .split(',').map(s => s.trim());
+app.use(cors({
+  origin(origin, cb) {
+    // same-origin / curl / mobile webview have no Origin header → allow
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error('Not allowed by CORS'));
+  },
+}));
+
+// Cap request body size → bounds the cost of any single call.
+app.use(express.json({ limit: '128kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Per-IP rate limit on the expensive endpoint.
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,               // 30 requests / minute / IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+});
+
 // ── Chat proxy ──────────────────────────────────────────────────────────────
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
     const { system, messages, max_tokens = 300, userName, character } = req.body;
 
-    if (!messages || !Array.isArray(messages)) {
+    // ── Input validation (reject abusive / malformed payloads) ──
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages array is required' });
     }
+    if (messages.length > MAX_MESSAGES) {
+      return res.status(400).json({ error: 'conversation too long' });
+    }
+    if (typeof system === 'string' && system.length > MAX_SYSTEM_LEN) {
+      return res.status(400).json({ error: 'system prompt too long' });
+    }
+
+    // Never trust the client's token count — clamp it server-side.
+    const safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
 
     // ユーザーログ（Railway のログで確認可能）
     if (userName) {
@@ -35,7 +83,7 @@ app.post('/api/chat', async (req, res) => {
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-5',
-      max_tokens,
+      max_tokens: safeMaxTokens,
       system,
       messages,
     });
