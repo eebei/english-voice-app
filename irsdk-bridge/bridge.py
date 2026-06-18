@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-007
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-008
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -395,6 +395,8 @@ def poll_iracing():
     player_car_idx = -1
     player_class_id = -1
     car_class_map = {}          # car_idx -> class_id
+    car_relspeed_map = {}       # car_idx -> rel speed
+    player_rel_speed = 0
     multiclass_warned = {}      # car_idx -> last warned time
     battle_warned = {}          # car_idx -> last warned time
     fuel_strategy_warned = False
@@ -463,8 +465,11 @@ def poll_iracing():
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
                             car_class_map[d['car_idx']] = d['class_id']
+                        if 'car_idx' in d and 'class_rel_speed' in d:
+                            car_relspeed_map[d['car_idx']] = d['class_rel_speed']
                 player_car_idx = info.get('player_car_idx', -1)
                 player_class_id = car_class_map.get(player_car_idx, -1)
+                player_rel_speed = car_relspeed_map.get(player_car_idx, 0)
                 if info.get('sectors'):
                     sector_bounds = info['sectors']
                     best_sectors = [None] * len(sector_bounds)
@@ -637,13 +642,14 @@ def poll_iracing():
                     # タイム差（プラスなら後方、マイナスなら前方）
                     delta = player_time - est_time
 
-                    # ── マルチクラス接近警告（後方から速いクラスが来る）──
+                    # ── マルチクラス接近警告（自分より速いクラスが後方接近）──
                     other_class = car_class_map.get(idx, -1)
+                    other_rel = car_relspeed_map.get(idx, 0)
                     if (other_class != -1 and other_class != player_class_id and
-                            other_class > player_class_id):  # 速いクラス = 大きいclass_id
-                        if 0 < delta < 8.0:  # 後方8秒以内
+                            other_rel > player_rel_speed):  # CarClassRelSpeedで速いクラス判定
+                        if 0 < delta < 5.0:  # 後方5秒以内（IMSA急接近対応）
                             last_warn = multiclass_warned.get(idx, 0)
-                            if now - last_warn > 30:  # 30秒に1回
+                            if now - last_warn > 20:
                                 broadcast({'type': 'radio', 'trigger': 'multiclass_approaching', 'delta': round(delta, 1),
                                     'message': 'Faster class behind. ' + str(round(delta, 1)) + '. Give room.'})
                                 multiclass_warned[idx] = now
@@ -682,12 +688,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-007 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-008 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-007  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-008  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
