@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-006
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-007
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -171,6 +171,15 @@ class IRacingReader:
         except Exception:
             return None
 
+    def read_double(self, name):
+        try:
+            info = self.find_var(name)
+            if not info:
+                return None
+            return struct.unpack('d', self._bytes(self.get_buf_offset() + info[1], 8))[0]
+        except Exception:
+            return None
+
     def read_int(self, name):
         try:
             info = self.find_var(name)
@@ -323,6 +332,27 @@ def parse_session_info(yaml_str):
             result['safety_rating'] = lic_name + ' ' + str(sr_value)
             result['safety_rating_raw'] = sr_value
 
+        # セクター構成（SplitTimeInfo > Sectors > SectorStartPct）
+        sectors = []
+        in_split = False
+        for line in yaml_str.split('\n'):
+            s = line.strip()
+            if s.startswith('SplitTimeInfo:'):
+                in_split = True
+                continue
+            if in_split:
+                if s.startswith('SectorStartPct:'):
+                    try:
+                        sectors.append(float(s.split(':', 1)[1].strip()))
+                    except:
+                        pass
+                # SplitTimeInfoブロックの終わり（次のトップレベルキー）で抜ける
+                elif s and not s.startswith('-') and not s.startswith('Sector') and ':' in s and not line.startswith(' '):
+                    in_split = False
+        if sectors:
+            result['sectors'] = sorted(sectors)
+            result['num_sectors'] = len(sectors)
+
     except Exception as e:
         print('Session info parse error:', e)
 
@@ -372,6 +402,11 @@ def poll_iracing():
     last_session_sig = None
     consecutive_slow = 0
     debug_counter = 0
+    sector_bounds = []          # 例 [0.0, 0.333, 0.667]
+    cur_sector = None
+    sector_entry_time = None
+    lap_sector_times = []
+    best_sectors = []
     prev = {
         'pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None
@@ -430,6 +465,10 @@ def poll_iracing():
                             car_class_map[d['car_idx']] = d['class_id']
                 player_car_idx = info.get('player_car_idx', -1)
                 player_class_id = car_class_map.get(player_car_idx, -1)
+                if info.get('sectors'):
+                    sector_bounds = info['sectors']
+                    best_sectors = [None] * len(sector_bounds)
+                    log("Track sectors detected: " + str(len(sector_bounds)))
 
         pos         = reader.read_int('PlayerCarPosition')
         lapTime     = reader.read_float('LapLastLapTime')
@@ -462,6 +501,47 @@ def poll_iracing():
             line_crossed = True
 
         prev_current_lap = currentLap
+
+        # ── セクター計測（走行中は黙る・ラップ完了時にデータのみ送信）──
+        if sector_bounds and onTrack:
+            try:
+                dist = reader.read_float('LapDistPct')
+                stime = reader.read_double('SessionTime')
+                if dist is not None and stime is not None and dist >= 0:
+                    # 現在のセクター番号（dist以下で最大の境界のindex）
+                    idx = 0
+                    for i, b in enumerate(sector_bounds):
+                        if dist >= b:
+                            idx = i
+                    if cur_sector is None:
+                        cur_sector = idx
+                        sector_entry_time = stime
+                    elif idx != cur_sector:
+                        st = stime - sector_entry_time if sector_entry_time is not None else 0
+                        if 0 < st < 600:
+                            while len(lap_sector_times) <= cur_sector:
+                                lap_sector_times.append(None)
+                            lap_sector_times[cur_sector] = st
+                        sector_entry_time = stime
+                        # スタート地点に戻った（idx < cur_sector）= ラップ完了 → データ送信
+                        if idx < cur_sector and lap_sector_times:
+                            secs = []
+                            for i, t_ in enumerate(lap_sector_times):
+                                if t_ is None:
+                                    continue
+                                pb = best_sectors[i] if i < len(best_sectors) else None
+                                delta = round(t_ - pb, 2) if pb else 0.0
+                                is_best = (pb is None or t_ < pb)
+                                if is_best and i < len(best_sectors):
+                                    best_sectors[i] = t_
+                                secs.append({'sector': i + 1, 'time': round(t_, 2),
+                                             'delta': delta, 'best': is_best})
+                            if secs:
+                                broadcast({'type': 'lap_sectors', 'sectors': secs})
+                            lap_sector_times = []
+                        cur_sector = idx
+            except Exception:
+                pass
 
         # ── ラップタイム処理（ライン通過直後に即発火）────────────────────
         if line_crossed and lapTime and lapTime > 0 and lapTime != last_lap_time:
@@ -602,12 +682,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-006 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-007 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-006  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-007  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
