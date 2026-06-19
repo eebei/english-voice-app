@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-18-012
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-19-013
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -15,6 +15,7 @@ import ctypes
 from ctypes import wintypes
 import struct
 import time
+import random
 from datetime import datetime
 import threading
 import websockets
@@ -422,6 +423,8 @@ def poll_iracing():
     last_session_sig = None
     consecutive_slow = 0
     debug_counter = 0
+    prev_incidents = None
+    incident_times = []
     sector_bounds = []          # 例 [0.0, 0.333, 0.667]
     cur_sector = None
     sector_entry_time = None
@@ -514,6 +517,7 @@ def poll_iracing():
         lapsTot     = reader.read_int('SessionLapsTotal')
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
+        incidents   = reader.read_int('PlayerCarMyIncidentCount')
         lfTemp      = reader.read_float('LFtempCM')
         rfTemp      = reader.read_float('RFtempCM')
         lrTemp      = reader.read_float('LRtempCM')
@@ -624,6 +628,38 @@ def poll_iracing():
                                 'message': t + '. Pace down. Status?'})
 
                 last_lap_time = lapTime
+
+        # ── インシデント検知（コースオフ/接触/クラッシュ） ──────────────
+        if incidents is not None:
+            if prev_incidents is not None and incidents > prev_incidents:
+                delta = incidents - prev_incidents
+                now = time.time()
+                incident_times = [t for t in incident_times if now - t < 90]
+                incident_times.append(now)
+                recent = len(incident_times)
+                if recent >= 3:
+                    msg = random.choice([
+                        'Too many incidents. Calm down. Forget position — just finish.',
+                        'That is enough. Reset your head. Clean laps to the flag.',
+                        'Stop the risks now. Bring this car home in one piece.'])
+                    broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
+                        'message': msg})
+                elif delta >= 4:
+                    msg = random.choice([
+                        'Contact. Breathe. No more risks now.',
+                        'That is contact. Stay calm. Protect what we have.',
+                        'Big one. Reset. Clean laps from here.'])
+                    broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
+                        'message': msg})
+                elif delta >= 2:
+                    msg = random.choice([
+                        'Watch it. Bring it back.',
+                        'Spin. Collect yourself. We are okay.',
+                        'Easy. Settle it down.'])
+                    broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
+                        'message': msg})
+                # delta==1（コースオフ）は基本黙る。連発時のみ上のrecent>=3で拾う
+            prev_incidents = incidents
 
         # Position change（レースセッションのみ。練習に順位は無い）
         if is_race_session and pos is not None and prev['pos'] is not None and pos != prev['pos']:
