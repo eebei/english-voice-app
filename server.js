@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const { buildSystem } = require('./prompts');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -59,7 +60,13 @@ const chatLimiter = rateLimit({
 // ── Chat proxy ──────────────────────────────────────────────────────────────
 app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
-    const { system, messages, max_tokens = 300, userName, character } = req.body;
+    let { system, messages, max_tokens = 300, userName, character } = req.body;
+
+    // ── Build the system prompt SERVER-SIDE (crown jewels never leave the server) ──
+    if (req.body.useServerPrompt && character) {
+      const built = buildSystem(req.body);
+      if (built) system = built;
+    }
 
     // ── Input validation (reject abusive / malformed payloads) ──
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
