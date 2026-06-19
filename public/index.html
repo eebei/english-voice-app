@@ -2180,6 +2180,12 @@ function oishiRadio(d) {
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
     case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しろ。焦るな、まだ戦える。確実に持ち帰ろう。`;
+    case 'incident': {
+      const d4 = (d.delta||0) >= 4, r3 = (d.recent||0) >= 3;
+      if (r3) return ['インシデントが多い。落ち着け。順位より完走だ。','もう十分だ。頭を冷やせ。確実に持ち帰ろう。','これ以上リスクを取るな。まず一台、無事に戻す。'][Math.floor(Math.random()*3)];
+      if (d4) return ['接触だ。落ち着け。これ以上リスクを取るな。','大きいのを受けたな。冷静に。今あるものを守ろう。','一度リセットしろ。ここからクリーンにいく。'][Math.floor(Math.random()*3)];
+      return ['気をつけろ。立て直せ。','スピンか。落ち着け、まだ大丈夫だ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
+    }
     case 'position_up':    return `P${pos}。`;
     case 'position_down':  return `P${pos}。1つ後退。`;
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
@@ -2208,6 +2214,12 @@ function kanbeRadio(d) {
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
     case 'pace_unstable':  return `2周続けて落ちとる。一回深呼吸せえ。慌てんでええ、まだ戦えとる。確実に持って帰るで。`;
+    case 'incident': {
+      const d4 = (d.delta||0) >= 4, r3 = (d.recent||0) >= 3;
+      if (r3) return ['インシデント多すぎる。落ち着け、順位より完走じゃ。','もうええ。頭冷やせ。確実に持って帰るで。','これ以上リスク取るな。一台持って帰るんが先じゃ。'][Math.floor(Math.random()*3)];
+      if (d4) return ['接触じゃ。落ち着け。これ以上リスク取るな。','でかいの食らったな。冷静になれ。今あるもん守るで。','一回リセットせえ。ここからクリーンに行くで。'][Math.floor(Math.random()*3)];
+      return ['気をつけえ。立て直せ。','スピンか。落ち着け、まだ大丈夫じゃ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
+    }
     case 'position_up':    return `P${pos}。`;
     case 'position_down':  return `P${pos}。1つダウン。`;
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
