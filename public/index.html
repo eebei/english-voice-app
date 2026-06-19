@@ -246,6 +246,12 @@
         <div class="char-origin" style="color:#aaa;">チーフエンジニア · 岡山</div>
         <span class="level-pill level-hard">🏯 Racing Special JP</span>
       </div>
+      <div class="char-card" onclick="selectChar(this,'Oishi')" style="border-color: #2e4a3a; background: linear-gradient(135deg, #0a0f0c, #10201a);">
+        <img class="char-avatar" src="Oishi.png" alt="Oishi" style="border: 2px solid #2e8b57;">
+        <div class="char-name" style="color:#fff;">大石 蔵之助 <span class="char-flag-small">🇯🇵</span></div>
+        <div class="char-origin" style="color:#aaa;">チーフストラテジスト · 標準語</div>
+        <span class="level-pill level-hard">🎌 Strategist JP</span>
+      </div>
       <div class="char-card" onclick="selectChar(this,'Mia')">
         <img class="char-avatar" src="Mia.png" alt="Mia">
         <div class="char-name">Mia <span class="char-flag-small">🇨🇦</span></div>
@@ -304,6 +310,31 @@
       </button>
       <button onclick="startJamesMode('ja-engineering')" style="background:linear-gradient(135deg,#1a0a0a,#27ae60);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
         🏯 エンジニアリング深掘りモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">タイヤ・サスペンション・コーナリング精密分析</span>
+      </button>
+    </div>
+    <div style="padding:16px 20px 0;font-size:12px;color:#aaa;text-align:center;">セッション履歴は自動保存されます。</div>
+  </div>
+
+  <div id="screen-oishi-mode" class="screen">
+    <button class="btn-back" onclick="show('screen-select')">← 戻る</button>
+    <div style="text-align:center;padding:24px 20px 0;">
+      <img src="Oishi.png" alt="Oishi" style="width:90px;height:90px;border-radius:50%;object-fit:cover;border:3px solid #2e8b57;margin-bottom:12px;">
+      <div style="font-size:22px;font-weight:700;color:#1a1a2e;">大石 蔵之助</div>
+      <div style="font-size:13px;color:#888;margin-bottom:8px;">チーフストラテジスト · OMORAY Racing</div>
+      <div id="oishi-profile-banner" style="display:none;background:#f0fff5;border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13px;color:#444;text-align:left;"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;padding:20px 20px 0;">
+      <button onclick="startJamesMode('race')" style="background:linear-gradient(135deg,#0a0f0c,#2e8b57);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        🏎️ レースモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">常時オンマイク · iRacing連携 · 標準語の無線</span>
+      </button>
+      <button onclick="startJamesMode('debrief')" style="background:linear-gradient(135deg,#0a0f0c,#1f6f8b);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        📋 デブリーフモード<br>
+        <span style="font-size:12px;font-weight:400;opacity:0.85;">セッション分析 · 戦略議論 · 標準語</span>
+      </button>
+      <button onclick="startJamesMode('ja-engineering')" style="background:linear-gradient(135deg,#0a0f0c,#3a7d44);color:#fff;border:none;border-radius:18px;padding:22px 20px;font-size:16px;font-weight:700;cursor:pointer;text-align:left;line-height:1.5;">
+        🎌 エンジニアリング深掘りモード<br>
         <span style="font-size:12px;font-weight:400;opacity:0.85;">タイヤ・サスペンション・コーナリング精密分析</span>
       </button>
     </div>
@@ -688,7 +719,51 @@ Keep replies to 2-3 sentences max. Never add Japanese translations. Stay in char
 - マークダウン記法（**太字**や箇条書き記号）は使うな。プレーンな文章のみ
 - 知らない数字を捏造するな。テレメトリやドライバーから聞いた数字だけ使え
 
-Stay in character as 宇喜多官兵衛 always.` }
+Stay in character as 宇喜多官兵衛 always.` },
+
+  Oishi: { flag:'🇯🇵', bg:'#0d0d12', desc:'チーフストラテジスト · OMORAY Racing',
+    avatar:'Oishi.png',
+    voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語','Kyoko'],
+    pitch:0.82, rate:1.15,
+    baseSystem:`あなたは大石蔵之助（おおいし くらのすけ）、55歳。OMORAY Racingのチーフストラテジスト（参謀）です。忠臣蔵の大石内蔵助を思わせる、忍耐と緻密さを備えた知将。慌てず機を読み、ここぞで仕掛ける策士です。
+
+経歴：長年トップカテゴリーで戦略を統括してきたベテラン。データ分析と忍耐の戦略で数々のレースを勝利に導いた。iRacingのシミュレーション戦略にも精通。
+
+【言語・口調】
+- 標準語。丁寧だが芯が強い。落ち着いた気品（里見浩太朗が演じる大石内蔵助のような、静かな迫力）
+- ドライバーを名前、または「君」と呼ぶ
+- 無駄を言わない。冷静沈着。感情を煽らず、理で導く
+- 慌てるドライバーを静める言葉が巧い
+
+【無線フレーズ（標準語・簡潔）】
+- 「ペースは悪くない。今は耐えどころだ。」
+- 「P3まで4秒。焦るな、相手のミスを待つ。」
+- 「ベスト更新。この一本を刻み続けろ。」
+- 「仕掛けるのは残り5周。それまで燃料を守れ。」
+- 「落ち着け。まだ十分に戦える。」
+
+【技術知識】
+- Mercedes AMG GT3、GT500/GT300、iRacingの挙動
+- タイヤ内圧・温度・摩耗・コーナリング4フェーズ（ブレーキング・進入・クリッピング・立ち上がり）
+- サスペンション・空力・燃料戦略・ピット戦略・忍耐のスティント管理
+
+【返答スタイル】
+- Race Mode：1〜2文の短い無線。標準語。落ち着いて簡潔に。
+- Debrief Mode：3文以内。鋭い質問を一つだけ。
+- 会話は全て標準語の日本語（技術用語は英語のまま：understeer、trail brake、operating window等）
+
+【性格】
+- 「戦略は私が立てる。君は走ることに集中しろ。」
+- 忍耐の人。機が来るまで待ち、来たら逃さない
+- データに基づく判断を曲げない。だが人の動揺は見逃さず静める
+- 「見事な走りだった。」が最高の褒め言葉
+
+【全モード共通の禁止事項】
+- マークダウン記法（**太字**や箇条書き）は使うな。プレーンな文章のみ
+- 知らない数字を捏造するな。テレメトリやドライバーから聞いた数字だけ使え
+- 岡山弁や方言は使わず、常に標準語
+
+Stay in character as 大石蔵之助 always.` }
 };
 
 const greetings = {
@@ -698,7 +773,8 @@ const greetings = {
   Chloe: "G'day! Chloe here — surf instructor at Bondi. Just got out of the water actually, it was absolutely pumping out there! You ever tried surfing?",
   Mia:   "Hi! I'm Mia — I teach English to Japanese students here in Vancouver! I also study Japanese at uni, so don't worry if you get stuck — I've got you! How are you feeling about your English today?",
   Noah:  "Hey! I'm Noah — I write songs and play gigs around London. Just finished a session at the studio actually. What brings you here today?",
-  Kanbe: "宇喜多官兵衛じゃ。OMORAY Racingのチーフエンジニアをしとる。今日は何をやるんじゃ？レースの無線練習か、セッティングのデブリーフか、言うてみい。"
+  Kanbe: "宇喜多官兵衛じゃ。OMORAY Racingのチーフエンジニアをしとる。今日は何をやるんじゃ？レースの無線練習か、セッティングのデブリーフか、言うてみい。",
+  Oishi: "大石蔵之助だ。OMORAY Racingでチーフストラテジストを務めている。今日は何をやる？レースの無線か、セッションのデブリーフか、言ってくれ。"
 };
 
 let sel = null, userLevel = 'A1', userName = '', messages = [], turns = 0, recognition = null, isRecording = false, voiceOn = true, isBusy = false;
@@ -880,7 +956,7 @@ function saveDriverProfile(updates) {
 
 function buildProfileNote(profile) {
   if (!profile) return '';
-  const jp = (sel === 'Kanbe');
+  const jp = (sel === 'Kanbe' || sel === 'Oishi');
   const parts = [];
   if (profile.sessions) parts.push(jp ? `これまで${profile.sessions}回一緒に走った` : `${profile.sessions} sessions together`);
   if (profile.lastDate) parts.push(jp ? `前回: ${profile.lastDate}` : `last session ${profile.lastDate}`);
@@ -908,7 +984,7 @@ async function saveSessionMemory() {
   memorySavedThisSession = true;
   try {
     const convo = messages.slice(-24).map(m => (m.role === 'user' ? 'Driver: ' : 'Engineer: ') + m.content).join('\n');
-    const jp = (sel === 'Kanbe');
+    const jp = (sel === 'Kanbe' || sel === 'Oishi');
     const prompt = jp
       ? `次はレースエンジニアとドライバーの会話じゃ。今後のために覚えておくべき要点を、1〜2文の短いメモにまとめろ（コース・ベストタイム・ドライバーの癖や課題・次回試すこと）。日本語で、メモだけ返せ。マークダウン禁止。\n\n${convo}`
       : `Summarize this race engineer–driver session into ONE short memory note (1-2 sentences) for future reference: track, best lap, driver tendencies/issues, what to try next. Return ONLY the note, plain text.\n\n${convo}`;
@@ -1018,6 +1094,16 @@ function startChat() {
     show('screen-kanbe-mode');
     return;
   }
+  if (sel === 'Oishi' && !jamesMode) {
+    const profile = loadDriverProfile();
+    const banner = document.getElementById('oishi-profile-banner');
+    if (profile && profile.sessions) {
+      banner.style.display = 'block';
+      banner.innerHTML = `<b>また会ったな、${profile.name || userName}。</b><br>セッション数: ${profile.sessions} &nbsp;|&nbsp; 最終: ${profile.lastDate || '—'}`;
+    }
+    show('screen-oishi-mode');
+    return;
+  }
   if (sel === 'James' && !jamesMode) {
     const profile = loadDriverProfile();
     const banner = document.getElementById('james-profile-banner');
@@ -1040,7 +1126,13 @@ function startChat() {
   show('screen-chat');
   // タイマーリセット（不要になったが念のため）
   if (chatTimer) { clearTimeout(chatTimer); chatTimer = null; }
-  const greeting = (sel === 'Kanbe' && jamesMode === 'race')
+  const greeting = (sel === 'Oishi' && jamesMode === 'race')
+    ? `${userName || 'ドライバー'}、大石だ。無線チェック。iRacingに繋がれば君のデータを読み上げ、作戦を立てる。落ち着いて待っていてくれ。`
+    : (sel === 'Oishi' && jamesMode === 'debrief')
+    ? `${userName || 'ドライバー'}、大石だ。今日はどのコースを走った？まずコースとコンディションを聞かせてくれ。`
+    : (sel === 'Oishi' && jamesMode === 'ja-engineering')
+    ? `大石だ。どのコーナーから始める？気になっているところを言ってくれ。`
+    : (sel === 'Kanbe' && jamesMode === 'race')
     ? `${userName || 'ドライバー'}、官兵衛じゃ。ラジオチェック。iRacingに繋がったらお前のデータを読み上げて作戦を立てるけぇ、そのまま待っときい。`
     : (sel === 'Kanbe' && jamesMode === 'debrief')
     ? `${userName || 'ドライバー'}、官兵衛じゃ。今日はどのコースを走ったんじゃ？まずコースとコンディションを話してみい。`
@@ -1055,8 +1147,8 @@ function startChat() {
     : greetings[sel];
   addMsg('ai', greeting);
   messages.push({ role:'assistant', content: greeting });
-  // 官兵衛：男性日本語音声の診断
-  if (sel === 'Kanbe') {
+  // 日本語エンジニア：男性日本語音声の診断
+  if (sel === 'Kanbe' || sel === 'Oishi') {
     setTimeout(() => {
       const jaVoices = (window.speechSynthesis.getVoices() || []).filter(v => v.lang && v.lang.startsWith('ja'));
       console.log('JA voices:', jaVoices.map(v => v.name).join(', '));
@@ -1066,7 +1158,7 @@ function startChat() {
     }, 500);
   }
   // James モード別マイク設定
-  const isRacingChar = (sel === 'James' || sel === 'Kanbe');
+  const isRacingChar = (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi');
   jamesAutoMicEnabled = (isRacingChar && jamesMode === 'race');
   jamesMuted = false;
   if (isRacingChar && jamesMode === 'race') {
@@ -1080,7 +1172,7 @@ function startChat() {
     if (isRacingChar) connectIRBridge();
   }
   // セッション開始時にプロファイル更新（James / Kanbe 両対応）
-  if (sel === 'James' || sel === 'Kanbe') {
+  if (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') {
     memorySavedThisSession = false;
     sessionBestLapStr = '';
     const profile = loadDriverProfile() || {};
@@ -1203,7 +1295,7 @@ function speak(text) {
   const voice = pickVoice(c);
   if (voice) utt.voice = voice;
   utt.onend = () => {
-    if ((sel === 'James' || sel === 'Kanbe') && jamesAutoMicEnabled && !jamesMuted) {
+    if ((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') && jamesAutoMicEnabled && !jamesMuted) {
       setTimeout(startJamesAutoMic, 400);
     }
   };
@@ -1235,7 +1327,7 @@ function startJamesAutoMic() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;
   recognition = new SR();
-  recognition.lang = (sel === 'Kanbe' || jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
+  recognition.lang = (sel === 'Kanbe' || sel === 'Oishi' || jamesMode === 'ja-engineering') ? 'ja-JP' : 'en-US';
   recognition.interimResults = true;
   recognition.continuous = true;
   let silenceTimer = null;
@@ -1309,7 +1401,7 @@ function toggleMic() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { setHint('Not supported. Use Chrome.'); return; }
   recognition = new SR();
-  recognition.lang = (sel === 'Kanbe' || (sel === 'James' && jamesMode === 'ja-engineering')) ? 'ja-JP' : 'en-US';
+  recognition.lang = (sel === 'Kanbe' || sel === 'Oishi' || (sel === 'James' && jamesMode === 'ja-engineering')) ? 'ja-JP' : 'en-US';
   recognition.interimResults = true;
   recognition.continuous = true;
   let silenceTimer = null;
@@ -1397,10 +1489,14 @@ async function sendMessage(text) {
   try {
     const nameNote = userName ? `\n\nThe user's name is "${userName}". Use their name naturally in conversation — not every reply, but occasionally to make it feel personal.` : '';
     let modeNote = '';
-    if (sel === 'James' || sel === 'Kanbe') {
+    if (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') {
       const profile = loadDriverProfile();
       modeNote = buildProfileNote(profile);
-      if (sel === 'Kanbe' && jamesMode === 'race') {
+      if (sel === 'Oishi' && jamesMode === 'race') {
+        modeNote += '\n\n━━ 現在のモード：レースモード ━━\nドライバーは走行中または走行直前。無線は情報のみ——激励・世間話・装飾は一切不要。最短の言葉で標準語で伝えろ（例：「ベスト更新。1:42.3。」「後ろ0.6。守れ。」）。最大1〜2文。冷静沈着に。\n\n【鉄則】レース中に運転技術の指導は絶対するな。数字を伝え、懸念は質問で投げろ：「セクター2で0.5落ち。タイヤか？」。診断はドライバーがする。技術の話はデブリーフで。\n\n━━ iRating・SOF・SR戦略 ━━\nドライバーの数字はテレメトリから自動で届く。未接続で不明な時だけ聞け。【絶対禁止】知らない数字を捏造するな。届いた数字で作戦を一つだけ設定：\n- iRating >> SOF（500以上上）：「君が本命だ。表彰台が最低ラインだ。」\n- iRating ≈ SOF（200以内）：「接戦だ。クリーンに上位半分を狙う。」\n- iRating << SOF（500以上下）：「学びのレースだ。完走第一、前の3台を狙え。」\n- SR 3.0未満：「今日はインシデントゼロが順位より大事だ。」\nレース中は目標に触れろ。達成したら短く認めろ。標準語のみ。';
+      } else if (sel === 'Oishi' && jamesMode === 'debrief') {
+        modeNote += '\n\n━━ 現在のモード：デブリーフモード ━━\nガレージでのセッション分析。標準語で話せ。少し詳しく話してよいが、鋭い質問は一度に一つだけ。コーナリング4フェーズ（ブレーキング・進入・クリッピング・立ち上がり）で深掘りし、ドライバーがフィーリングを正確な言葉にできるよう導け。冷静沈着に。';
+      } else if (sel === 'Kanbe' && jamesMode === 'race') {
         modeNote += '\n\n━━ 現在のモード：レースモード ━━\nドライバーは走行中または走行直前。無線は情報のみ——激励・世間話・装飾は一切不要。最短の言葉で伝えろ（例：「ベスト更新。1:42.3。」「後ろ0.6。守れ。」）。最大1〜2文。岡山弁の味は語尾に少しだけでええ。\n\n【鉄則】レース中に運転技術の指導は絶対するな（「ブレーキを奥に」等は禁止）。数字を伝え、懸念は質問で投げろ：「セクター2で0.5落ち。タイヤか？」。診断はドライバーがする。技術の話はデブリーフでやれ。\n\n━━ iRating・SOF・SR戦略 ━━\nドライバーの数字はテレメトリから自動で届く。テレメトリ未接続で数字が不明な時だけ聞いてええ。【絶対禁止】知らない数字（iRating・SOF・SR・タイム等）を捏造するな。不明なら「数字を確認させてくれ」と言え。届いた数字で作戦を一つだけ設定：\n- iRating >> SOF（500以上上）：「お前が本命じゃ。表彰台が最低ラインじゃ。」\n- iRating ≈ SOF（200以内）：「接戦じゃ。クリーンに上位半分を狙うで。」\n- iRating << SOF（500以上下）：「勉強のレースじゃ。完走第一、前の3台を食え。」\n- SR 3.0未満：「今日はインシデントゼロが順位より大事じゃ。」\nレース中は目標に触れること。達成したら短く褒めい。一文で十分じゃ。';
       } else if (sel === 'Kanbe' && jamesMode === 'debrief') {
         modeNote += '\n\n━━ 現在のモード：デブリーフモード ━━\nガレージでのセッション分析じゃ。岡山弁で話せ。少し詳しく話してええが、鋭い質問は一度に一つだけ。コーナリング4フェーズ（ブレーキング・進入・クリッピング・立ち上がり）で深掘りし、ドライバーがフィーリングを正確な言葉にできるよう導け。';
@@ -1414,32 +1510,32 @@ async function sendMessage(text) {
       }
     }
     // 官兵衛＝日本語ネイティブ、James Race/日本語モード＝英語学習指示不要
-    const skipLevel = (sel === 'Kanbe') || (sel === 'James' && (jamesMode === 'race' || jamesMode === 'ja-engineering'));
+    const skipLevel = (sel === 'Kanbe' || sel === 'Oishi') || (sel === 'James' && (jamesMode === 'race' || jamesMode === 'ja-engineering'));
     // テレメトリ接続状態をリアルタイムで注入（James/Kanbe）
     let teleNote = '';
-    if (sel === 'James' || sel === 'Kanbe') {
+    if (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') {
       if (!bridgeConnected) {
-        teleNote = (sel === 'Kanbe')
+        teleNote = (sel === 'Kanbe' || sel === 'Oishi')
           ? '\n\n【テレメトリ状態：未接続】ブリッジが起動しとらん。走行データは一切見えん。データの話になったら正直に「ブリッジが繋がっとらんけぇ見えんのじゃ。SIM PCでbridge.pyを起動してくれ」と案内せえ。見えんデータを語るな。'
           : '\n\n[TELEMETRY: DISCONNECTED] The bridge is not running. You can see NO live data. If data comes up, say honestly: "Bridge is not connected — start bridge.py on the SIM PC." Never describe data you cannot see.';
       } else if (!iracingLive) {
-        teleNote = (sel === 'Kanbe')
+        teleNote = (sel === 'Kanbe' || sel === 'Oishi')
           ? '\n\n【テレメトリ状態：ブリッジ接続済み・iRacing待機中】iRacingがまだ起動しとらん。起動したら自動でデータが届く。'
           : '\n\n[TELEMETRY: BRIDGE OK, WAITING FOR IRACING] iRacing not detected yet. Data will flow once it starts.';
       } else {
-        teleNote = (sel === 'Kanbe')
+        teleNote = (sel === 'Kanbe' || sel === 'Oishi')
           ? '\n\n【テレメトリ状態：接続中・データ受信中】iRacingのライブデータが届いとる。無線で読み上げた数字は本物じゃ。'
           : '\n\n[TELEMETRY: LIVE] iRacing data is flowing. Numbers in radio calls are real.';
       }
     }
     // 直近ラップのセクターデータを注入（官兵衛が聞かれたら答えられるように）
     let sectorNote = '';
-    if ((sel === 'James' || sel === 'Kanbe') && lastSectors && lastSectors.length) {
+    if ((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') && lastSectors && lastSectors.length) {
       const parts = lastSectors.map(s => {
         const mark = s.best ? '(自己ベスト)' : (s.delta > 0 ? '(+' + s.delta + ')' : '(' + s.delta + ')');
         return 'S' + s.sector + ' ' + s.time + mark;
       });
-      sectorNote = (sel === 'Kanbe')
+      sectorNote = (sel === 'Kanbe' || sel === 'Oishi')
         ? '\n\n【直近ラップのセクタータイム】' + parts.join(' / ') + '\nドライバーがセクターについて聞いたら、この数字で答えろ。走行中は自分から言うな。どこで落としたか聞かれたら +が大きいセクターを指摘せえ。'
         : '\n\n[LATEST LAP SECTORS] ' + parts.join(' / ') + '\nAnswer with these if the driver asks about sectors. Do not volunteer during driving.';
     }
@@ -1448,8 +1544,8 @@ async function sendMessage(text) {
     const MAX_HISTORY = 20;
     const trimmedMessages = messages.slice(-MAX_HISTORY);
     // James Race Mode=超短縮80、日本語エンジニアリング=200、他は通常
-    const maxTok = (sel === 'Kanbe' && jamesMode === 'race') ? 120
-      : (sel === 'Kanbe') ? 250
+    const maxTok = ((sel === 'Kanbe' || sel === 'Oishi') && jamesMode === 'race') ? 120
+      : (sel === 'Kanbe' || sel === 'Oishi') ? 250
       : (sel === 'James' && jamesMode === 'race') ? 80
       : (sel === 'James' && jamesMode === 'ja-engineering') ? 200
       : (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
@@ -1459,16 +1555,16 @@ async function sendMessage(text) {
     removeLoading();
     addMsg('ai', reply);
     messages.push({ role:'assistant', content: replyEn }); // 会話履歴には英語のみ保存
-    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint((sel === 'James' || sel === 'Kanbe') ? 'Listening...' : 'Click mic to speak'), 3000); }
+    if (voiceOn) { setHint('Speaking...'); speak(replyEn); setTimeout(() => setHint((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') ? 'Listening...' : 'Click mic to speak'), 3000); }
     else {
-      setHint((sel === 'James' || sel === 'Kanbe') ? 'Listening...' : 'Click mic to speak');
-      if ((sel === 'James' || sel === 'Kanbe') && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 400);
+      setHint((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') ? 'Listening...' : 'Click mic to speak');
+      if ((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 400);
     }
   } catch(e) {
     removeLoading();
     addMsg('sys', 'Error: ' + e.message);
     setHint('Error. Check the server console.');
-    if ((sel === 'James' || sel === 'Kanbe') && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 1000);
+    if ((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') && jamesAutoMicEnabled && !jamesMuted) setTimeout(startJamesAutoMic, 1000);
   }
   isBusy = false;
   document.getElementById('btn-send').disabled = false;
@@ -1483,7 +1579,7 @@ async function sendMessage(text) {
 
 async function endChat() {
   const userMsgs = messages.filter(m => m.role === 'user');
-  const minTurns = ((sel === 'James' || sel === 'Kanbe') && jamesMode === 'race') ? 1 : 2;
+  const minTurns = ((sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') && jamesMode === 'race') ? 1 : 2;
   if (userMsgs.length < minTurns) { addMsg('sys', 'Chat a bit more first!'); return; }
   window.speechSynthesis.cancel();
   // James auto-mic停止
@@ -1501,7 +1597,7 @@ async function endChat() {
   const evalMsgs = userMsgs.slice(0, 10);
   const convo = evalMsgs.map(m => m.content).join('\n');
   const isRaceMode = (sel === 'James' && jamesMode === 'race');
-  const isKanbe = (sel === 'Kanbe');
+  const isKanbe = (sel === 'Kanbe' || sel === 'Oishi');
   const prompt = isKanbe
     ? `あなたはレースエンジニアリング・コミュニケーションの評価者です。以下は日本人ドライバーがエンジニアに伝えた内容です。「フィーリングを具体的に伝える力」「専門用語の的確さ」「簡潔さ」「状況説明の明瞭さ」を評価してください。JSONのみで返答（マークダウン不要）:\n{"grammar":7,"vocabulary":6,"fluency":7,"natural":6,"level":"B1","stars":3,"feedback":"日本語で2〜3文の励ましフィードバック。grammarは状況説明の明瞭さ、vocabularyは専門用語の的確さ、fluencyは簡潔さ、naturalはフィーリング伝達力として評価。"}\n\nドライバーの発言:\n${convo}`
     : isRaceMode
@@ -1973,14 +2069,14 @@ function connectIRBridge() {
         addMsg('sys', '🔴 ['+new Date().toLocaleTimeString()+'] iRacing切断。');
         return;
       }
-      if (data.type === 'radio' && (sel === 'James' || sel === 'Kanbe')) {
+      if (data.type === 'radio' && (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi')) {
         if ((data.trigger === 'personal_best' || data.trigger === 'session_best' || data.trigger === 'first_lap') && data.time) {
           sessionBestLapStr = data.time;  // 最新ベストを記憶
         }
-        const text = (sel === 'Kanbe') ? (kanbeRadio(data) || data.message) : data.message;
+        const text = (sel === 'Oishi') ? (oishiRadio(data) || data.message) : (sel === 'Kanbe') ? (kanbeRadio(data) || data.message) : data.message;
         injectJamesRadio(text);
       }
-      if (data.type === 'session_info' && (sel === 'James' || sel === 'Kanbe')) {
+      if (data.type === 'session_info' && (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi')) {
         injectSessionBriefing(data.data);
       }
       if (data.type === 'lap_sectors') {
@@ -1991,7 +2087,7 @@ function connectIRBridge() {
     irBridge.onclose = () => {
       bridgeConnected = false; iracingLive = false;
       updateBridgeStatus();
-      if (sel === 'James' || sel === 'Kanbe') {
+      if (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') {
         irBridgeReconnectTimer = setTimeout(connectIRBridge, 3000);
       }
     };
@@ -2026,7 +2122,20 @@ function injectSessionBriefing(info) {
 
   let briefing = '';
 
-  if (sel === 'Kanbe') {
+  if (sel === 'Oishi') {
+    // 大石：標準語ブリーフィング
+    const srWarn = srNum < 3.0 ? ' SRが低い。今日はインシデントゼロを最優先に。' : '';
+    if (!isRace || num <= 1) {
+      briefing = `${driver}、${track}だな。iRating ${irating}、SR ${sr}。${srWarn || '今日もデータを取りながらしっかり走り込もう。'} 準備ができたら出てくれ。`;
+    } else {
+      let strategy = '';
+      if (diff > 500)       strategy = '君が本命だ。表彰台が最低ラインだ。';
+      else if (diff > 0)    strategy = '接戦だ。クリーンに走って上位半分を狙う。';
+      else if (diff > -500) strategy = '格上が多い。クリーンレースで前の3台を狙え。';
+      else                  strategy = '今日は学びのレースだ。完走第一、インシデントゼロでいく。';
+      briefing = `${driver}、${track}。${num}台のレースだ。SOF ${sof}、君のiRating ${irating}、SR ${sr}。${srWarn} ${strategy}`;
+    }
+  } else if (sel === 'Kanbe') {
     // 官兵衛：岡山弁ブリーフィング
     const srWarn = srNum < 3.0 ? ' SRが低いけぇ、今日はインシデントゼロが最優先じゃ。' : '';
     if (!isRace || num <= 1) {
@@ -2058,6 +2167,34 @@ function injectSessionBriefing(info) {
 }
 
 // ── 官兵衛用：ブリッジ無線の岡山弁テンプレート ──
+function oishiRadio(d) {
+  // 大石蔵之助：標準語・走行中は情報のみ・最小音節
+  const t = d.time || '';
+  const diff = (d.diff !== undefined) ? d.diff : '';
+  const pos = (d.pos !== undefined) ? d.pos : '';
+  switch (d.trigger) {
+    case 'personal_best':  return `ベスト更新。${t}。${diff}アップ。`;
+    case 'first_lap':      return `${t}。基準ラップだ。`;
+    case 'session_best':   return `セッションベスト。${t}。`;
+    case 'lap_consistent': return `${t}。安定している。`;
+    case 'lap_time':       return `${t}。${diff}落ち。`;
+    case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
+    case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しろ。焦るな、まだ戦える。確実に持ち帰ろう。`;
+    case 'position_up':    return `P${pos}。`;
+    case 'position_down':  return `P${pos}。1つ後退。`;
+    case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
+    case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
+    case 'final_lap':      return `ファイナルラップ。P${pos}。`;
+    case 'pit_entry':      return `ピット了解。リミッター。`;
+    case 'pit_exit':       return `コースイン。P${pos}。タイヤ1周待て。`;
+    case 'multiclass_approaching': return `後方に速いクラス。${d.delta}秒。道を譲れ。`;
+    case 'battle_behind':  return `後ろ${d.delta}。守れ。`;
+    case 'battle_ahead':   return `前${d.delta}。射程圏だ。`;
+    default: return null;
+  }
+}
+
 function kanbeRadio(d) {
   // 走行中の無線は情報のみ・最小音節。装飾や激励は入れない（実無線準拠）
   const t = d.time || '';
