@@ -63,9 +63,15 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     let { system, messages, max_tokens = 300, userName, character } = req.body;
 
     // ── Build the system prompt SERVER-SIDE (crown jewels never leave the server) ──
+    // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
     if (req.body.useServerPrompt && character) {
       const built = buildSystem(req.body);
-      if (built) system = built;
+      if (built) {
+        system = [
+          { type: 'text', text: built.prefix, cache_control: { type: 'ephemeral' } }
+        ];
+        if (built.suffix) system.push({ type: 'text', text: built.suffix });
+      }
     }
 
     // ── Input validation (reject abusive / malformed payloads) ──
