@@ -1167,7 +1167,7 @@ async function sendMessage(text) {
     const data = await callAPI({
       useServerPrompt: true,
       character: sel, mode: jamesMode, level: userLevel,
-      telemetry: telemetry, sectors: lastSectors || null, profileNote: profileNote,
+      telemetry: telemetry, driverState: driverState, sectors: lastSectors || null, profileNote: profileNote,
       messages: trimmedMessages, max_tokens: maxTok
     });
     const reply = data.content[0].text;
@@ -1639,6 +1639,7 @@ let irBridge = null;
 let irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
 let lastSectors = null;
+let driverState = null; // 'track' | 'pit' | 'garage'
 
 function updateBridgeStatus() {
   let bar = document.getElementById('bridge-status-bar');
@@ -1701,6 +1702,9 @@ function connectIRBridge() {
       }
       if (data.type === 'lap_sectors') {
         lastSectors = data.sectors;  // 走行中は喋らない。聞かれた時/デブリーフ用に保持
+      }
+      if (data.type === 'driver_state') {
+        driverState = data.state;  // track / pit / garage（セッティング指示の可否判断に使う）
       }
     };
 
