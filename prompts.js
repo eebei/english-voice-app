@@ -443,7 +443,10 @@ function buildSystem(p) {
       : '\n\n[LATEST LAP SECTORS] ' + parts.join(' / ') + '\nAnswer with these if the driver asks about sectors. Do not volunteer during driving.';
   }
 
-  return base + (skipLevel ? '' : levelInstruction(level)) + nameNote + modeNote + teleNote + sectorNote;
+  // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
+  const prefix = base + (skipLevel ? '' : levelInstruction(level)) + nameNote + modeNote;
+  const suffix = teleNote + sectorNote;
+  return { prefix: prefix, suffix: suffix };
 }
 
 module.exports = { buildSystem };
