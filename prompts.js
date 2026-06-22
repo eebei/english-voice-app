@@ -383,6 +383,7 @@ function buildSystem(p) {
   const userName = p.userName || '';
   const telemetry = p.telemetry || 'off'; // 'live' | 'bridge' | 'off'
   const sectors = Array.isArray(p.sectors) ? p.sectors : null;
+  const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
 
   const base = CHARACTERS[character];
@@ -443,9 +444,35 @@ function buildSystem(p) {
       : '\n\n[LATEST LAP SECTORS] ' + parts.join(' / ') + '\nAnswer with these if the driver asks about sectors. Do not volunteer during driving.';
   }
 
+  // レースエンジニア共通の鉄則（静的・キャッシュ対象）
+  let engRules = '';
+  if (isRacing) {
+    engRules = isJ
+      ? '\n\n━━ エンジニアリングの鉄則 ━━\n【セッティング変更のタイミング】内圧・サス等のセッティング変更は走行中にはできない。ピット中か走行前のみ。走行中にセッティングの話になったら指示せず「次のピットで内圧を見直そう」と保留しろ。走行中はドライビングの意識づけ・タイヤ/燃料マネジメント・ペースのみ。\n【用語の正確さ】タイヤの調整は必ず「内圧（空気圧）」で言え。「面圧（接地圧）」と混同するな。内圧の上げ下げで面圧の結果は逆になりうる。指示は必ず内圧の上げ下げで表現しろ（例：内圧を0.2上げよう／下げよう）。\n【無線の温かさ】ラップ後はタイム＋改善点を一つだけ簡潔に。ベスト更新できなくても前を向かせろ（例「悪くない。さっきより安定してた。次に活きる走りだ」）。淡々・的確・短く、でも人間味を。'
+      : '\n\n━━ ENGINEERING RULES ━━\n[Setup timing] Tyre pressure / suspension changes CANNOT be made while on track — only in the pits or before running. If a setup issue comes up while driving, do NOT instruct a change; note it and say \'we will adjust at the next pit.\' While driving, focus on driving cues, tyre/fuel management and pace only.\n[Terminology] Always refer to TYRE PRESSURE (air pressure) for adjustments; never confuse it with contact-patch load. Phrase instructions as pressure up/down (e.g. raise pressure 0.2 / drop pressure 0.2).\n[Warm radio] After a lap, give the time plus ONE concrete improvement. If they miss their best, keep them positive (\'not bad — more stable than before, it pays off next time\'). Calm, precise, short, but human.';
+  }
+
+  // ドライバーの現在地（動的・非キャッシュ）
+  let stateNote = '';
+  if (isRacing && driverState) {
+    if (driverState === 'track') {
+      stateNote = isJ
+        ? '\n\n【ドライバー状態：走行中】セッティング変更は指示するな。意識づけ・タイヤ/燃料管理・ペースのみ。調整が必要なら「次のピットで」と保留せよ。'
+        : '\n\n[DRIVER STATE: ON TRACK] Do not instruct setup changes. Driving cues, tyre/fuel management and pace only. Defer adjustments to the next pit.';
+    } else if (driverState === 'pit') {
+      stateNote = isJ
+        ? '\n\n【ドライバー状態：ピット中】ここでセッティング調整（内圧・タイヤ・燃料）を的確に提案してよい。'
+        : '\n\n[DRIVER STATE: IN PIT] You may now propose setup adjustments (pressure, tyres, fuel) precisely.';
+    } else {
+      stateNote = isJ
+        ? '\n\n【ドライバー状態：ガレージ/走行前】ベースセッティングをじっくり相談してよい。'
+        : '\n\n[DRIVER STATE: GARAGE / PRE-SESSION] You may discuss base setup in depth.';
+    }
+  }
+
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
-  const prefix = base + (skipLevel ? '' : levelInstruction(level)) + nameNote + modeNote;
-  const suffix = teleNote + sectorNote;
+  const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote;
+  const suffix = teleNote + sectorNote + stateNote;
   return { prefix: prefix, suffix: suffix };
 }
 
