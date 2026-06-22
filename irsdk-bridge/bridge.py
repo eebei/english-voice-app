@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-19-013
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-22-014
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -425,6 +425,7 @@ def poll_iracing():
     debug_counter = 0
     prev_incidents = None
     incident_times = []
+    prev_driver_state = None
     sector_bounds = []          # 例 [0.0, 0.333, 0.667]
     cur_sector = None
     sector_entry_time = None
@@ -518,6 +519,19 @@ def poll_iracing():
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
+
+        # ── ドライバーの現在地（走行中/ピット/ガレージ）──
+        if onPit:
+            driver_state = 'pit'
+        elif onTrack:
+            driver_state = 'track'
+        else:
+            driver_state = 'garage'
+        if driver_state != prev_driver_state:
+            broadcast({'type': 'driver_state', 'state': driver_state})
+            log('driver state -> ' + driver_state)
+            prev_driver_state = driver_state
+
         lfTemp      = reader.read_float('LFtempCM')
         rfTemp      = reader.read_float('RFtempCM')
         lrTemp      = reader.read_float('LRtempCM')
@@ -755,12 +769,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-18-012 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-22-014 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-18-012  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-22-014  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
