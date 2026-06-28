@@ -422,6 +422,13 @@ def poll_iracing():
     prev_session_state = 0      # previous SessionState value
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
+    # セッションサマリー蓄積
+    session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
+    session_incidents_total = 0
+    session_track = ''
+    session_event_type = ''
+    session_num_in_class = 0
+    summary_sent = False        # チェッカー後に1回だけ送る
     fuel_strategy_warned = False
     session_check_counter = 0
     last_session_sig = None
@@ -500,6 +507,10 @@ def poll_iracing():
                     session_info_sent = True
                     et = str(info.get('event_type', '')).lower()
                     is_race_session = ('race' in et)
+                    session_track = info.get('track', '')
+                    session_event_type = info.get('event_type', '')
+                    session_num_in_class = info.get('num_drivers', 0)
+                    summary_sent = False  # 新セッション = サマリーリセット
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
@@ -656,6 +667,16 @@ def poll_iracing():
                                 'message': t + '. Pace down. Status?'})
 
                 last_lap_time = lapTime
+                # ── セッションサマリー用にラップデータを積算 ──
+                lap_record = {
+                    'lap': lap,
+                    'time': round(lapTime, 3),
+                    'class_pos': class_pos,
+                    'pb': is_personal_best,
+                }
+                if lap_sector_times:
+                    lap_record['sectors'] = [round(s, 2) for s in lap_sector_times]
+                session_laps.append(lap_record)
 
         # ── ローリングスタート中：前走車ギャップが7秒超なら5秒ごとにコール ──
         if in_formation and player_car_idx >= 0:
@@ -735,6 +756,36 @@ def poll_iracing():
         if is_race_session and lapsTot and lap and lapsTot > 0 and lap == lapsTot and lap != prev['lapsTot']:
             broadcast({'type': 'radio', 'trigger': 'final_lap', 'pos': pos,
                 'message': 'Final lap. P' + str(pos) + '.'})
+
+        # ── セッションサマリー（チェッカー/クールダウン時に1回送信）──
+        # SessionState: 5=Checkered, 6=Cooldown
+        if cur_ss in (5, 6) and not summary_sent and session_laps:
+            times = [r['time'] for r in session_laps if r['time'] > 0]
+            best_t = min(times) if times else 0
+            worst_t = max(times) if times else 0
+            avg_t = round(sum(times) / len(times), 3) if times else 0
+            fin_pos = class_pos
+            # ペーストレンド：前半/後半平均
+            half = max(1, len(times) // 2)
+            pace_first = round(sum(times[:half]) / half, 3) if times else 0
+            pace_last  = round(sum(times[half:]) / max(1, len(times) - half), 3) if times else 0
+            summary = {
+                'type': 'session_summary',
+                'track': session_track,
+                'event_type': session_event_type,
+                'total_laps': len(session_laps),
+                'finish_pos': fin_pos,
+                'best_lap': round(best_t, 3),
+                'worst_lap': round(worst_t, 3),
+                'avg_lap': avg_t,
+                'pace_first_half': pace_first,
+                'pace_last_half': pace_last,
+                'incidents': prev_incidents or 0,
+                'laps': session_laps,
+            }
+            broadcast(summary)
+            log('Session summary sent: ' + str(len(session_laps)) + ' laps, best ' + str(best_t))
+            summary_sent = True
 
         # Pit in/out
         if onPit and not prev['onPit']:
