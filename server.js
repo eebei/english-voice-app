@@ -60,7 +60,7 @@ const chatLimiter = rateLimit({
 // ── Chat proxy ──────────────────────────────────────────────────────────────
 app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
-    let { system, messages, max_tokens = 300, userName, character } = req.body;
+    let { system, messages, max_tokens = 300, userName, character, mode } = req.body;
 
     // ── Build the system prompt SERVER-SIDE (crown jewels never leave the server) ──
     // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
@@ -94,8 +94,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       console.log(`[${now}] 👤 ${userName} | 🎭 ${character || '?'} | 💬 turn ${messages.filter(m=>m.role==='user').length}`);
     }
 
+    // Race mode: Haiku (2-3x faster, sufficient for short radio calls)
+    const model = (mode === 'race') ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5';
+
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
+      model,
       max_tokens: safeMaxTokens,
       system,
       messages,
