@@ -385,6 +385,7 @@ function buildSystem(p) {
   const sectors = Array.isArray(p.sectors) ? p.sectors : null;
   const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
+  const raceHistory = typeof p.raceHistory === 'string' ? p.raceHistory : '';
 
   const base = CHARACTERS[character];
   if (!base) return null; // 未知キャラ → 呼び出し側でフォールバック
@@ -470,9 +471,17 @@ function buildSystem(p) {
     }
   }
 
+  // デブリーフ時のレース履歴注入（動的・非キャッシュ）
+  let historyNote = '';
+  if (isRacing && mode === 'debrief' && raceHistory) {
+    historyNote = isJ
+      ? '\n\n━━ ドライバーの過去セッション記録 ━━\n' + raceHistory + '\nこの記録を頭に入れてデブリーフを進めろ。前回からの改善・悪化を自然に指摘し、傾向を見つけろ。数字が揃っていれば自分から触れてよい。'
+      : '\n\n━━ DRIVER SESSION HISTORY ━━\n' + raceHistory + '\nUse this data to frame the debrief. Note improvements or regressions from previous sessions. Spot trends (pace fade, incident patterns). Reference the numbers naturally — you have this data, use it.';
+  }
+
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
   const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote;
-  const suffix = teleNote + sectorNote + stateNote;
+  const suffix = teleNote + sectorNote + stateNote + historyNote;
   return { prefix: prefix, suffix: suffix };
 }
 
