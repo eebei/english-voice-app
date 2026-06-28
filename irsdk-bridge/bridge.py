@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-22-014
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-28-015
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -416,8 +416,12 @@ def poll_iracing():
     player_rel_speed = 0
     is_race_session = False
     inactive_since = None
-    multiclass_warned = {}      # car_idx -> last warned time
+    multiclass_warned = {}      # car_idx -> last warned time (5s stage)
+    multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     battle_warned = {}          # car_idx -> last warned time
+    prev_session_state = 0      # previous SessionState value
+    race_start_time = None      # wall time when Racing state began
+    rolling_gap_warned_time = 0 # last rolling-start gap call time
     fuel_strategy_warned = False
     session_check_counter = 0
     last_session_sig = None
@@ -432,7 +436,7 @@ def poll_iracing():
     lap_sector_times = []
     best_sectors = []
     prev = {
-        'pos': None, 'fuel': None, 'lap': None,
+        'pos': None, 'class_pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None
     }
 
@@ -519,6 +523,16 @@ def poll_iracing():
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
+        cur_ss      = reader.read_int('SessionState') or 0
+        class_pos   = reader.read_int('PlayerCarClassPosition') or pos
+
+        # SessionState: 3=ParadeLaps(formation/rolling), 4=Racing
+        if cur_ss == 4 and prev_session_state != 4:
+            race_start_time = time.time()
+        prev_session_state = cur_ss
+        in_formation  = (cur_ss == 3)   # ローリング中 = ギャップコール停止
+        in_start_rush = (cur_ss == 4 and race_start_time is not None and
+                         time.time() - race_start_time < 30)  # スタート直後30秒
 
         # ── ドライバーの現在地（走行中/ピット/ガレージ）──
         if onPit:
@@ -643,6 +657,30 @@ def poll_iracing():
 
                 last_lap_time = lapTime
 
+        # ── ローリングスタート中：前走車ギャップが7秒超なら5秒ごとにコール ──
+        if in_formation and player_car_idx >= 0:
+            car_est_times_roll = reader.read_float_array('CarIdxEstTime', 64)
+            if car_est_times_roll and player_car_idx < len(car_est_times_roll):
+                player_t = car_est_times_roll[player_car_idx]
+                best_ahead = None  # 同クラスで最も近い前方車のギャップ
+                for idx2, et2 in enumerate(car_est_times_roll):
+                    if idx2 == player_car_idx or et2 <= 0:
+                        continue
+                    if car_class_map.get(idx2, -1) != player_class_id:
+                        continue
+                    d2 = et2 - player_t  # 前方はマイナス(est_timeが小さい)
+                    if -30 < d2 < 0:    # 前方30秒以内
+                        gap = abs(d2)
+                        if best_ahead is None or gap < best_ahead:
+                            best_ahead = gap
+                now_r = time.time()
+                if (best_ahead is not None and best_ahead > 7.0 and
+                        now_r - rolling_gap_warned_time > 5.0):
+                    broadcast({'type': 'radio', 'trigger': 'rolling_gap',
+                        'gap': round(best_ahead, 1),
+                        'message': 'Gap ' + str(round(best_ahead, 1)) + '. Close up.'})
+                    rolling_gap_warned_time = now_r
+
         # ── インシデント検知（コースオフ/接触/クラッシュ） ──────────────
         if incidents is not None:
             if prev_incidents is not None and incidents > prev_incidents:
@@ -675,15 +713,15 @@ def poll_iracing():
                 # delta==1（コースオフ）は基本黙る。連発時のみ上のrecent>=3で拾う
             prev_incidents = incidents
 
-        # Position change（レースセッションのみ。練習に順位は無い）
-        if is_race_session and pos is not None and prev['pos'] is not None and pos != prev['pos']:
-            gained = prev['pos'] - pos
+        # Position change（クラス内順位ベース。レースセッションのみ）
+        if is_race_session and class_pos is not None and prev['class_pos'] is not None and class_pos != prev['class_pos']:
+            gained = prev['class_pos'] - class_pos
             if gained > 0:
-                broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': pos,
-                    'message': 'P' + str(pos) + '.'})
+                broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos,
+                    'message': 'P' + str(class_pos) + '.'})
             else:
-                broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': pos,
-                    'message': 'P' + str(pos) + '. Lost one.'})
+                broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos,
+                    'message': 'P' + str(class_pos) + '. Lost one.'})
 
         # Fuel warning
         if fuel is not None and fuel < 5 and (prev['fuel'] is None or prev['fuel'] >= 5):
@@ -708,49 +746,81 @@ def poll_iracing():
                 'message': 'Out. P' + str(pos) + '. Tyres one lap.'})
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
-        if player_car_idx >= 0 and not onPit:
-            car_est_times = reader.read_float_array('CarIdxEstTime', 64)
-            car_class_pos = reader.read_int_array('CarIdxClassPosition', 64)
+        if player_car_idx >= 0 and not onPit and not in_formation:
+            car_est_times  = reader.read_float_array('CarIdxEstTime', 64)
+            car_last_laps  = reader.read_float_array('CarIdxLastLapTime', 64)
+            car_on_track   = reader.read_int_array('CarIdxTrackSurface', 64)
+            # CarIdxTrackSurface: -1=NotInWorld, 0=OffTrack, 1=InPitStall, 2=ApproachingPits, 3=OnTrack
 
             if car_est_times and player_car_idx < len(car_est_times):
-                player_time = car_est_times[player_car_idx]
+                player_time     = car_est_times[player_car_idx]
+                player_last_lap = car_last_laps[player_car_idx] if car_last_laps else 0
                 now = time.time()
 
                 for idx, est_time in enumerate(car_est_times):
                     if idx == player_car_idx or est_time <= 0:
                         continue
 
+                    # ピット/ガレージの車は完全除外（接近警告を出さない）
+                    if car_on_track:
+                        surf = car_on_track[idx]
+                        if surf not in (2, 3):  # 2=ApproachingPits, 3=OnTrack のみ対象
+                            continue
+
                     # タイム差（プラスなら後方、マイナスなら前方）
                     delta = player_time - est_time
 
-                    # ── マルチクラス接近警告（自分より速いクラスが後方接近）──
                     other_class = car_class_map.get(idx, -1)
-                    other_rel = car_relspeed_map.get(idx, 0)
-                    if (other_class != -1 and other_class != player_class_id and
-                            other_rel > player_rel_speed):  # CarClassRelSpeedで速いクラス判定
-                        if 0 < delta < 5.0:  # 後方5秒以内（IMSA急接近対応）
-                            last_warn = multiclass_warned.get(idx, 0)
-                            if now - last_warn > 20:
-                                broadcast({'type': 'radio', 'trigger': 'multiclass_approaching', 'delta': round(delta, 1),
-                                    'message': 'Faster class behind. ' + str(round(delta, 1)) + '. Give room.'})
-                                multiclass_warned[idx] = now
+                    other_rel   = car_relspeed_map.get(idx, 0)
 
-                    # ── バトル検知（同クラスが近い・レースのみ）──────────
-                    if is_race_session and other_class == player_class_id:
+                    # ── マルチクラス接近警告（GTP/LMP2等が後方接近）2段階コール ──
+                    is_faster_class = (other_class != -1 and other_class != player_class_id and
+                                       other_rel > player_rel_speed)
+                    if is_faster_class:
+                        if 2.0 < delta <= 5.0:  # 5秒前：第1コール
+                            last_warn = multiclass_warned.get(idx, 0)
+                            if now - last_warn > 15:
+                                broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
+                                    'delta': round(delta, 1),
+                                    'message': 'Faster class. ' + str(round(delta, 1)) + ' back. Prepare.'})
+                                multiclass_warned[idx] = now
+                        elif 0 < delta <= 2.0:  # 2秒前：第2コール（緊急）
+                            last_warn = multiclass_2s_warned.get(idx, 0)
+                            if now - last_warn > 8:
+                                broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
+                                    'delta': round(delta, 1),
+                                    'message': 'Give room. Now.'})
+                                multiclass_2s_warned[idx] = now
+
+                    # ── 同クラスバトル（スタート直後30秒は抑制）──────────
+                    if is_race_session and other_class == player_class_id and not in_start_rush:
+                        other_last_lap = car_last_laps[idx] if car_last_laps else 0
+                        # ペース差（プラス=相手が遅い、マイナス=相手が速い）
+                        pace_diff = (other_last_lap - player_last_lap
+                                     if other_last_lap > 0 and player_last_lap > 0 else 0)
+
                         if 0 < delta < 1.5:  # 後方1.5秒以内 = バトル中
                             last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 20:  # 20秒に1回
-                                broadcast({'type': 'radio', 'trigger': 'battle_behind', 'delta': round(delta, 1),
-                                    'message': 'Behind ' + str(round(delta, 1)) + '. Defend.'})
+                            if now - last_warn > 20:
+                                if pace_diff < -1.5:  # 相手が1.5秒以上速い → 先に行かせる
+                                    broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
+                                        'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2),
+                                        'message': 'Behind ' + str(round(delta, 1)) + '. Faster pace. Let him go.'})
+                                else:
+                                    broadcast({'type': 'radio', 'trigger': 'battle_behind',
+                                        'delta': round(delta, 1),
+                                        'message': 'Behind ' + str(round(delta, 1)) + '. Defend.'})
                                 battle_warned[idx] = now
                         elif -1.5 < delta < 0:  # 前方1.5秒以内 = 前を攻める
                             last_warn = battle_warned.get(idx, 0)
                             if now - last_warn > 20:
-                                broadcast({'type': 'radio', 'trigger': 'battle_ahead', 'delta': round(abs(delta), 1),
+                                broadcast({'type': 'radio', 'trigger': 'battle_ahead',
+                                    'delta': round(abs(delta), 1),
                                     'message': 'Ahead ' + str(round(abs(delta), 1)) + '. In range.'})
                                 battle_warned[idx] = now
 
-        prev.update({'pos': pos, 'fuel': fuel, 'lap': lap, 'lapsTot': lapsTot, 'onPit': onPit})
+        prev.update({'pos': pos, 'class_pos': class_pos, 'fuel': fuel, 'lap': lap,
+                     'lapsTot': lapsTot, 'onPit': onPit})
         time.sleep(0.1)  # 0.1秒ポーリング = コントロールライン通過を0.1秒以内に検知
 
 
@@ -769,12 +839,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-22-014 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-28-015 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-22-014  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-28-015  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
