@@ -737,6 +737,49 @@ async function saveSessionMemory() {
   }
 }
 
+// ── セッションサマリーをlocalStorageに積算保存 ──────────────────────────────
+function saveSessionSummary(data) {
+  try {
+    const profile = loadDriverProfile() || {};
+    const history = (profile.raceHistory || []);
+    const entry = {
+      date: new Date().toISOString().slice(0, 10),
+      track: data.track || '',
+      event_type: data.event_type || '',
+      total_laps: data.total_laps || 0,
+      finish_pos: data.finish_pos || 0,
+      best_lap: data.best_lap || 0,
+      avg_lap: data.avg_lap || 0,
+      pace_first_half: data.pace_first_half || 0,
+      pace_last_half: data.pace_last_half || 0,
+      incidents: data.incidents || 0,
+      laps: (data.laps || []).slice(0, 60),  // 最大60周保存
+    };
+    history.unshift(entry);          // 最新を先頭に
+    const trimmed = history.slice(0, 10);  // 直近10セッション保持
+    saveDriverProfile({ raceHistory: trimmed });
+    console.log('Session summary saved:', entry.track, entry.total_laps + ' laps, P' + entry.finish_pos);
+  } catch (e) {
+    console.warn('session summary save failed', e);
+  }
+}
+
+// ── 直近セッションサマリーをデブリーフ用テキストに変換 ────────────────────
+function buildRaceHistoryContext() {
+  try {
+    const profile = loadDriverProfile() || {};
+    const history = (profile.raceHistory || []).slice(0, 3);  // 直近3セッション
+    if (!history.length) return '';
+    return history.map((s, i) => {
+      const label = i === 0 ? '【直近セッション】' : `【${i + 1}回前】`;
+      const trend = (s.pace_last_half && s.pace_first_half)
+        ? (s.pace_last_half < s.pace_first_half ? '後半ペースUP' : '後半ペースDOWN')
+        : '';
+      return `${label} ${s.date} ${s.track} ${s.event_type} / ${s.total_laps}周 P${s.finish_pos} / ベスト${s.best_lap}s 平均${s.avg_lap}s ${trend} インシデント${s.incidents}`;
+    }).join('\n');
+  } catch { return ''; }
+}
+
 // ── 日本語エンジニアリングモード プロンプト ───────────────────────────────
 function jaEngineeringPrompt() { return ''; }
 
@@ -1164,10 +1207,12 @@ async function sendMessage(text) {
       : (sel === 'James' && jamesMode === 'race') ? 80
       : (sel === 'James' && jamesMode === 'ja-engineering') ? 200
       : (userLevel === 'A1' || userLevel === 'A2') ? 450 : 300;
+    const raceCtx = (jamesMode === 'debrief') ? buildRaceHistoryContext() : '';
     const data = await callAPI({
       useServerPrompt: true,
       character: sel, mode: jamesMode, level: userLevel,
-      telemetry: telemetry, driverState: driverState, sectors: lastSectors || null, profileNote: profileNote,
+      telemetry: telemetry, driverState: driverState, sectors: lastSectors || null,
+      profileNote: profileNote, raceHistory: raceCtx || null,
       messages: trimmedMessages, max_tokens: maxTok
     });
     const reply = data.content[0].text;
@@ -1705,6 +1750,9 @@ function connectIRBridge() {
       }
       if (data.type === 'driver_state') {
         driverState = data.state;  // track / pit / garage（セッティング指示の可否判断に使う）
+      }
+      if (data.type === 'session_summary') {
+        saveSessionSummary(data);
       }
     };
 
