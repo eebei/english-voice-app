@@ -564,6 +564,11 @@ async function callAPI(){
   const profileNote = buildProfileNote(profile);
   const raceHistory = buildRaceHistoryContext();
   try{
+    const isJP = (sel==='Kanbe'||sel==='Oishi');
+    const maxTok = (selMode==='race' && isJP) ? 120
+                 : (selMode==='race' && !isJP) ? 80
+                 : (selMode==='debrief' && isJP) ? 250
+                 : 300;
     const res = await fetch('/api/chat',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -577,7 +582,8 @@ async function callAPI(){
         sectors:lastSectors,
         driverState,
         profileNote,
-        raceHistory
+        raceHistory,
+        max_tokens:maxTok
       })
     });
     const data = await res.json();
