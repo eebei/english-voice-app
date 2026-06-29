@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OMORAY PITWALL — AI Race Engineer for iRacing</title>
 <meta name="description" content="Your AI race engineer in your ear. Lap times, strategy, debrief — all session long. For iRacing drivers worldwide.">
-<link rel="icon" type="image/png" href="/OP-icon.png">
+<link rel="icon" type="image/png" href="/PITWALL_logo_mark.png">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -13,8 +13,8 @@
   --bg:#07080f;
   --panel:#0d0e1a;
   --panel2:#11121f;
-  --blue:#0ea5e9;
-  --blue-dim:rgba(14,165,233,0.15);
+  --blue:#9D4EDD;
+  --blue-dim:rgba(157,78,221,0.15);
   --red:#e10600;
   --text:#f0f4ff;
   --muted:#64748b;
@@ -36,15 +36,15 @@ nav{position:sticky;top:0;z-index:100;background:rgba(7,8,15,.9);backdrop-filter
 .nav-cta:hover{opacity:.85}
 
 /* ── HERO ── */
-.hero{position:relative;padding:100px 24px 80px;text-align:center;background:radial-gradient(ellipse 900px 500px at 50% -5%,rgba(14,165,233,.12),transparent 65%)}
+.hero{position:relative;padding:100px 24px 80px;text-align:center;background:radial-gradient(ellipse 900px 500px at 50% -5%,rgba(157,78,221,.12),transparent 65%)}
 .hero .wrap{max-width:760px;margin:0 auto}
-.hero .tag{display:inline-block;font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--blue);border:1px solid rgba(14,165,233,.35);padding:5px 16px;border-radius:99px;margin-bottom:28px;text-transform:uppercase}
+.hero .tag{display:inline-block;font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--blue);border:1px solid rgba(157,78,221,.35);padding:5px 16px;border-radius:99px;margin-bottom:28px;text-transform:uppercase}
 .hero h1{font-size:clamp(36px,6.5vw,68px);font-weight:900;line-height:1.0;margin-bottom:22px}
 .hero h1 .blue{color:var(--blue)}
 .hero p.sub{font-size:clamp(16px,2.2vw,20px);color:var(--silver);max-width:580px;margin:0 auto 40px}
 .hero .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
-.btn-primary{display:inline-block;background:var(--blue);color:#fff;font-weight:700;font-family:'Oxanium';padding:16px 38px;border-radius:10px;font-size:16px;border:none;cursor:pointer;transition:all .15s;box-shadow:0 6px 30px rgba(14,165,233,.3)}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 40px rgba(14,165,233,.45)}
+.btn-primary{display:inline-block;background:var(--blue);color:#fff;font-weight:700;font-family:'Oxanium';padding:16px 38px;border-radius:10px;font-size:16px;border:none;cursor:pointer;transition:all .15s;box-shadow:0 6px 30px rgba(157,78,221,.3)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 40px rgba(157,78,221,.45)}
 .btn-ghost{display:inline-block;background:transparent;border:1.5px solid var(--border);color:var(--silver);font-weight:600;font-family:'Oxanium';padding:15px 30px;border-radius:10px;font-size:15px;cursor:pointer;transition:all .15s}
 .btn-ghost:hover{border-color:var(--blue);color:var(--blue)}
 
@@ -82,7 +82,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
 @media(max-width:760px){.price-grid{grid-template-columns:1fr}}
 .price-card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:28px}
-.price-card.featured{border-color:var(--blue);background:linear-gradient(135deg,rgba(14,165,233,.08),var(--panel))}
+.price-card.featured{border-color:var(--blue);background:linear-gradient(135deg,rgba(157,78,221,.08),var(--panel))}
 .price-card .plan{font-family:'Oxanium';font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
 .price-card .price{font-family:'Oxanium';font-size:38px;font-weight:800;margin-bottom:4px}
 .price-card .price span{font-size:16px;font-weight:400;color:var(--muted)}
@@ -137,8 +137,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .profile-banner b{color:var(--text)}
 
 /* Start button */
-.start-btn{width:100%;background:var(--blue);color:#fff;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:700;font-family:'Oxanium';cursor:pointer;transition:all .15s;box-shadow:0 4px 20px rgba(14,165,233,.25)}
-.start-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 28px rgba(14,165,233,.4)}
+.start-btn{width:100%;background:var(--blue);color:#fff;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:700;font-family:'Oxanium';cursor:pointer;transition:all .15s;box-shadow:0 4px 20px rgba(157,78,221,.25)}
+.start-btn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 28px rgba(157,78,221,.4)}
 .start-btn:disabled{opacity:.35;cursor:not-allowed}
 
 /* ── CHAT SCREEN ── */
@@ -184,8 +184,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <nav>
   <div class="nav-in">
     <div class="logo">
-      <img src="/OP-icon.png" alt="OMORAY">
-      <span>OMORAY <span class="blue">PITWALL</span></span>
+      <img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:32px;border-radius:0">
     </div>
     <button class="nav-cta" onclick="openApp()">Launch PITWALL</button>
   </div>
