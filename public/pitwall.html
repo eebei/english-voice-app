@@ -376,7 +376,6 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="chat-header-top">
             <button class="back-btn" onclick="endSession()">End Session</button>
             <div style="display:flex;gap:8px;align-items:center">
-              <span class="turns-lbl" id="turns-lbl">0 turns</span>
               <button class="voice-tog on" id="voice-tog" onclick="toggleVoice()">🔊 Voice</button>
             </div>
           </div>
@@ -396,7 +395,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 <script>
 // ── State ──
-let sel = null, selMode = null, userName = '', messages = [], turns = 0;
+let sel = null, selMode = null, userName = '', messages = [], turns = 0, sessionMsgCount = 0;
 let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
@@ -406,10 +405,10 @@ let memorySavedThisSession = false, sessionBestLapStr = '';
 
 // ── Character config ──
 const CHARS = {
-  James:  { avatar:'James.png',  desc:'Chief Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.9, rate:0.95 },
-  Hajime: { avatar:'Hajime.png', desc:'Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.92, rate:0.97 },
-  Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.2 },
-  Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.15 }
+  James:  { avatar:'James.png',  desc:'Chief Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.9, rate:1.12 },
+  Hajime: { avatar:'Hajime.png', desc:'Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.92, rate:1.10 },
+  Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.45 },
+  Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.40 }
 };
 
 const GREETINGS = {
@@ -483,9 +482,8 @@ function startSession(){
   document.getElementById('chat-av').src = '/'+c.avatar;
   document.getElementById('chat-name').textContent = sel==='Kanbe'?'宇喜多 官兵衛':sel==='Oishi'?'大石 蔵之助':sel;
   document.getElementById('chat-desc').textContent = c.desc;
-  messages=[]; turns=0;
+  messages=[]; turns=0; sessionMsgCount=0;
   document.getElementById('chat-area').innerHTML='';
-  document.getElementById('turns-lbl').textContent='0 turns';
   showScreen('screen-chat');
   // Profile update
   memorySavedThisSession=false; sessionBestLapStr='';
@@ -528,18 +526,10 @@ function addMsg(type, text){
   div.className = 'msg '+type;
   div.textContent = text;
   area.appendChild(div);
-  // Feedback buttons for AI messages in race/debrief
-  if(type==='ai' && turns>0){
-    const fb = document.createElement('div');
-    fb.className = 'msg feedback-row';
-    fb.innerHTML = '<button class="fb-btn" onclick="sendFeedback(this,1)">👍</button><button class="fb-btn" onclick="sendFeedback(this,-1)">👎</button>';
-    area.appendChild(fb);
-  }
   area.scrollTop = area.scrollHeight;
 }
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }
 function setHint(t){ document.getElementById('hint-text').textContent=t; }
-function updateTurns(){ document.getElementById('turns-lbl').textContent=turns+' turn'+(turns===1?'':'s'); }
 
 // ── Send message ──
 function onKey(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();} }
@@ -551,8 +541,7 @@ async function sendMsg(){
   inp.value=''; inp.style.height='auto';
   addMsg('user',text);
   messages.push({role:'user',content:text});
-  turns++;
-  updateTurns();
+  turns++; sessionMsgCount++;
   await callAPI();
 }
 
@@ -595,8 +584,7 @@ async function callAPI(){
     addMsg('ai',display);
     messages.push({role:'assistant',content:reply});
     speak(display);
-    // Auto-save memory every 10 turns
-    if(turns>0&&turns%10===0) saveMemory();
+    if(sessionMsgCount>0&&sessionMsgCount%15===0) saveMemory();
   } catch(e){
     addMsg('sys','⚠ Connection error. Try again.');
   }
@@ -614,11 +602,19 @@ function pickVoice(lang,names){
   for(const n of names){ const v=voices.find(x=>x.name.toLowerCase().includes(n.toLowerCase())); if(v)return v; }
   return voices.find(v=>v.lang.startsWith(lang))||null;
 }
+function phonetify(text, lang){
+  if(!text) return text;
+  if(lang && lang.startsWith('ja')){
+    return text.replace(/iRacing/g,'アイレーシング');
+  } else {
+    return text.replace(/iRacing/g,'I Racing');
+  }
+}
 function speak(text){
   if(!voiceOn) return;
   const c = CHARS[sel]; if(!c) return;
   window.speechSynthesis.cancel();
-  const clean = stripMarkdown(stripParens(stripEmoji(text)));
+  const clean = phonetify(stripMarkdown(stripParens(stripEmoji(text))), c.voiceLang);
   const utt = new SpeechSynthesisUtterance(clean);
   utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate;
   const voice = pickVoice(c.voiceLang,c.voiceNames);
