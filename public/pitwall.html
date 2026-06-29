@@ -404,10 +404,16 @@ let memorySavedThisSession = false, sessionBestLapStr = '';
 
 // ── Character config ──
 const CHARS = {
-  James:  { avatar:'James.png',  desc:'Chief Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.9, rate:1.12 },
-  Hajime: { avatar:'Hajime.png', desc:'Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.92, rate:1.10 },
-  Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.45 },
-  Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.40 }
+  James:  { avatar:'James.png',  desc:'Chief Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.9, rate:1.12,
+            gVoice:'en-GB-Neural2-B', gLang:'en-GB', gRate:1.08, gPitch:-2.0 },
+  Luna:   { avatar:'Luna.png',   desc:'Race Engineer · OMORAY Racing', voiceLang:'en-US', voiceNames:['Google US English','Samantha','Allison'], pitch:1.05, rate:1.08,
+            gVoice:'en-US-Neural2-F', gLang:'en-US', gRate:1.05, gPitch:1.5 },
+  Hajime: { avatar:'Hajime.png', desc:'Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.92, rate:1.10,
+            gVoice:'en-GB-Neural2-D', gLang:'en-GB', gRate:1.06, gPitch:-1.0 },
+  Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.45,
+            gVoice:'ja-JP-Neural2-C', gLang:'ja-JP', gRate:1.15, gPitch:-2.0 },
+  Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.40,
+            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.12, gPitch:-1.0 }
 };
 
 const GREETINGS = {
@@ -609,24 +615,57 @@ function phonetify(text, lang){
     return text.replace(/iRacing/g,'I Racing');
   }
 }
-function speak(text){
-  if(!voiceOn) return;
-  const c = CHARS[sel]; if(!c) return;
+let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
+let ttsAvailable = true;      // 503等で落ちたらWeb Speechに恒久フォールバック
+function afterSpeak(){ if(jamesAutoMicEnabled&&!jamesMuted) setTimeout(startAutoMic,400); }
+
+function speakWebSpeech(text, c){
   window.speechSynthesis.cancel();
-  const clean = phonetify(stripMarkdown(stripParens(stripEmoji(text))), c.voiceLang);
-  const utt = new SpeechSynthesisUtterance(clean);
+  const utt = new SpeechSynthesisUtterance(text);
   utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate;
   const voice = pickVoice(c.voiceLang,c.voiceNames);
   if(voice) utt.voice=voice;
-  utt.onend=()=>{ if(jamesAutoMicEnabled&&!jamesMuted) setTimeout(startAutoMic,400); };
+  utt.onend=afterSpeak;
   window.speechSynthesis.speak(utt);
+}
+
+async function speak(text){
+  if(!voiceOn) return;
+  const c = CHARS[sel]; if(!c) return;
+  const clean = phonetify(stripMarkdown(stripParens(stripEmoji(text))), c.voiceLang);
+
+  // 進行中の音声を停止
+  window.speechSynthesis.cancel();
+  if(ttsAudio){ try{ttsAudio.pause();}catch(e){} ttsAudio=null; }
+
+  // Cloud TTSが使えない/設定なしなら即Web Speech
+  if(!ttsAvailable || !c.gVoice){ speakWebSpeech(clean, c); return; }
+
+  try{
+    const r = await fetch('/api/tts',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch })
+    });
+    if(r.status===503){ ttsAvailable=false; speakWebSpeech(clean, c); return; }
+    if(!r.ok) throw new Error('tts '+r.status);
+    const data = await r.json();
+    if(!data.audioContent) throw new Error('empty audio');
+    const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
+    ttsAudio = audio;
+    audio.onended = ()=>{ ttsAudio=null; afterSpeak(); };
+    audio.onerror = ()=>{ ttsAudio=null; speakWebSpeech(clean, c); };
+    await audio.play();
+  }catch(e){
+    // ネットワークエラー等 → Web Speechにフォールバック（恒久無効化はしない）
+    speakWebSpeech(clean, c);
+  }
 }
 function toggleVoice(){
   voiceOn=!voiceOn;
   const btn=document.getElementById('voice-tog');
   btn.textContent=voiceOn?'🔊 Voice':'🔇 Muted';
   btn.classList.toggle('on',voiceOn);
-  if(!voiceOn) window.speechSynthesis.cancel();
+  if(!voiceOn){ window.speechSynthesis.cancel(); if(ttsAudio){ try{ttsAudio.pause();}catch(e){} ttsAudio=null; } }
 }
 
 // ── STT (manual) ──
