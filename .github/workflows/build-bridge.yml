@@ -1,13 +1,14 @@
-name: Build OMORAY PITWALL Bridge (Windows EXE)
+name: Build OMORAY PITWALL Bridge (Windows EXE + Installer)
 
 on:
-  workflow_dispatch:        # 手動ボタンで実行できる
+  workflow_dispatch:
   push:
     paths:
-      - 'irsdk-bridge/bridge.py'   # bridge.py更新で自動ビルド
+      - 'irsdk-bridge/bridge.py'
+      - 'irsdk-bridge/installer.iss'
 
 permissions:
-  contents: write           # Releaseに書き込むため
+  contents: write
 
 jobs:
   build:
@@ -21,22 +22,37 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install websockets pyinstaller
 
-      - name: Build EXE
+      - name: Build bridge EXE
         run: |
           pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console irsdk-bridge/bridge.py
 
-      - name: Publish to Release (latest)
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: |
+          iscc irsdk-bridge/installer.iss
+
+      - name: Publish to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: bridge-latest
           name: OMORAY PITWALL Bridge (latest)
           body: |
-            最新のOMORAY PITWALLブリッジ（Windows用）。
-            Pythonのインストール不要。ダウンロードしてダブルクリックで起動。
-          files: dist/OMORAY-PITWALL-Bridge.exe
+            ## OMORAY PITWALL Bridge
+
+            **OMORAY-PITWALL-Setup.exe** をダウンロードしてダブルクリックするだけ。
+            インストール後はPC起動時に自動でBridgeが立ち上がります。
+
+            - Python不要
+            - iRacing起動を自動検出
+            - クラッシュ時も自動再起動
+          files: |
+            installer_output/OMORAY-PITWALL-Setup.exe
+            dist/OMORAY-PITWALL-Bridge.exe
           prerelease: false
