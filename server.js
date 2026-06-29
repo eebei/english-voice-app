@@ -111,6 +111,56 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
   }
 });
 
+// ── Google Cloud TTS proxy ────────────────────────────────────────────────────
+// テキスト → MP3 base64。APIキーはサーバー側のみ（クライアントに漏らさない）。
+const TTS_API_KEY = process.env.GOOGLE_TTS_API_KEY;
+const MAX_TTS_CHARS = 600;  // 1コールの上限（コスト保護）
+
+app.post('/api/tts', chatLimiter, async (req, res) => {
+  try {
+    if (!TTS_API_KEY) {
+      return res.status(503).json({ error: 'tts_unavailable' });
+    }
+    let { text, voice, languageCode, rate, pitch } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'text is required' });
+    }
+    text = text.slice(0, MAX_TTS_CHARS);
+
+    const ttsBody = {
+      input: { text },
+      voice: {
+        languageCode: languageCode || 'en-GB',
+        name: voice || 'en-GB-Neural2-B',
+      },
+      audioConfig: {
+        audioEncoding: 'MP3',
+        speakingRate: Math.min(Math.max(parseFloat(rate) || 1.0, 0.5), 2.0),
+        pitch: Math.min(Math.max(parseFloat(pitch) || 0, -20), 20),
+      },
+    };
+
+    const r = await fetch(
+      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${TTS_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ttsBody),
+      }
+    );
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('Google TTS error:', r.status, errText);
+      return res.status(502).json({ error: 'tts_failed' });
+    }
+    const data = await r.json();
+    res.json({ audioContent: data.audioContent });  // base64 MP3
+  } catch (err) {
+    console.error('TTS proxy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start server ────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
