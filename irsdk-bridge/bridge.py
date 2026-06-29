@@ -429,6 +429,7 @@ def poll_iracing():
     session_event_type = ''
     session_num_in_class = 0
     summary_sent = False        # チェッカー後に1回だけ送る
+    session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
     session_check_counter = 0
     last_session_sig = None
@@ -512,7 +513,9 @@ def poll_iracing():
                     session_track = info.get('track', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
-                    summary_sent = False  # 新セッション = サマリーリセット
+                    summary_sent = False         # 新セッション = サマリーリセット
+                    session_racing_started = False  # 走行開始フラグもリセット
+                    session_laps = []               # 前セッションのラップ記録クリア
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
@@ -542,6 +545,9 @@ def poll_iracing():
         # SessionState: 3=ParadeLaps(formation/rolling), 4=Racing
         if cur_ss == 4 and prev_session_state != 4:
             race_start_time = time.time()
+        if cur_ss >= 2:  # Warmup以上 = 何らかのセッションで走行中
+            if onTrack:
+                session_racing_started = True
         prev_session_state = cur_ss
         in_formation  = (cur_ss == 3)   # ローリング中 = ギャップコール停止
         in_start_rush = (cur_ss == 4 and race_start_time is not None and
@@ -556,6 +562,25 @@ def poll_iracing():
             driver_state = 'garage'
         if driver_state != prev_driver_state:
             broadcast({'type': 'driver_state', 'state': driver_state})
+            # ガレージ戻り＝セッション終了 → Practice/Qualifyでも1回サマリー送信
+            if driver_state == 'garage' and not summary_sent and session_laps and session_racing_started:
+                times = [r['time'] for r in session_laps if r['time'] > 0]
+                if times:
+                    best_t = min(times)
+                    broadcast({
+                        'type': 'session_summary',
+                        'track': session_track,
+                        'event_type': session_event_type,
+                        'total_laps': len(session_laps),
+                        'finish_pos': class_pos,
+                        'best_lap': round(best_t, 3),
+                        'worst_lap': round(max(times), 3),
+                        'avg_lap': round(sum(times)/len(times), 3),
+                        'incidents': prev_incidents or 0,
+                        'laps': session_laps,
+                    })
+                    log('Session summary sent: ' + str(len(session_laps)) + ' laps, best ' + str(round(best_t, 3)))
+                    summary_sent = True
             log('driver state -> ' + driver_state)
             prev_driver_state = driver_state
 
@@ -574,14 +599,15 @@ def poll_iracing():
                 " OnTrack:" + str(onTrack))
 
 
-        # ── コントロールライン通過検知（超高速）──────────────────────────
-        # LapCurrentLapTimeが大きい値から突然0近くにリセット = ライン通過！
-        line_crossed = False
-        if (prev_current_lap is not None and currentLap is not None and
-                prev_current_lap > 5.0 and currentLap < 2.0):
-            line_crossed = True
-
-        prev_current_lap = currentLap
+        # ── ラップ完了検知：Lapカウンター増加ベース（LapCurrentLapTime依存を廃止）──
+        # LapCurrentLapTimeはiRacingによって0を返すケースがあるため使用しない
+        line_crossed = (
+            prev['lap'] is not None and
+            lap is not None and
+            lap > prev['lap'] and
+            lapTime is not None and lapTime > 0
+        )
+        prev_current_lap = currentLap  # 互換性のため残す（使用しない）
 
         # ── セクター計測（走行中は黙る・ラップ完了時にデータのみ送信）──
         if sector_bounds and onTrack:
@@ -760,8 +786,8 @@ def poll_iracing():
                 'message': 'Final lap. P' + str(pos) + '.'})
 
         # ── セッションサマリー（チェッカー/クールダウン時に1回送信）──
-        # SessionState: 5=Checkered, 6=Cooldown
-        if cur_ss in (5, 6) and not summary_sent and session_laps:
+        # SessionState: 5=Checkered, 6=Cooldown　※必ず実際に走行(SS=4)した後のみ
+        if cur_ss in (5, 6) and not summary_sent and session_laps and session_racing_started:
             times = [r['time'] for r in session_laps if r['time'] > 0]
             best_t = min(times) if times else 0
             worst_t = max(times) if times else 0
