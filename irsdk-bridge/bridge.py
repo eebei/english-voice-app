@@ -465,11 +465,11 @@ def poll_iracing():
             ir_was_connected = True
             inactive_since = None
 
-        # 切断は5秒間ずっと非アクティブな時だけ（ピット・メニュー一瞬のブリップで初期化しない）
+        # 切断は15秒間ずっと非アクティブな時だけ（セッション移行・ロード中を含むブリップで初期化しない）
         if not active and ir_was_connected:
             if inactive_since is None:
                 inactive_since = time.time()
-            elif time.time() - inactive_since >= 5.0:
+            elif time.time() - inactive_since >= 15.0:
                 log("<<< iRacing DISCONNECTED (sustained 5s)")
                 broadcast({'type': 'iracing_disconnected'})
                 ir_was_connected = False
