@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-29-016
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-30-017
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -434,6 +434,7 @@ def poll_iracing():
     session_check_counter = 0
     last_session_sig = None
     consecutive_slow = 0
+    consistent_lap_count = 0   # lap_consistentを3周に1回だけ発話するためのカウンター
     debug_counter = 0
     prev_incidents = None
     incident_times = []
@@ -678,8 +679,11 @@ def poll_iracing():
                     diff = lapTime - session_best
                     if diff < 0.3:
                         consecutive_slow = 0
-                        broadcast({'type': 'radio', 'trigger': 'lap_consistent', 'time': t,
-                            'message': t + '. Consistent.'})
+                        consistent_lap_count += 1
+                        if consistent_lap_count >= 3:  # 3周連続安定してから1回だけ
+                            broadcast({'type': 'radio', 'trigger': 'lap_consistent', 'time': t,
+                                'message': t + '. Consistent.'})
+                            consistent_lap_count = 0
                     elif diff < 1.0:
                         broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t, 'diff': round(diff, 2),
                             'message': t + '. ' + str(round(diff, 1)) + ' off.'})
@@ -825,19 +829,20 @@ def poll_iracing():
                 'message': 'Out. P' + str(pos) + '. Tyres one lap.'})
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
+        # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
         if player_car_idx >= 0 and not onPit and not in_formation:
-            car_est_times  = reader.read_float_array('CarIdxEstTime', 64)
+            car_f2_times   = reader.read_float_array('CarIdxF2Time', 64)
             car_last_laps  = reader.read_float_array('CarIdxLastLapTime', 64)
             car_on_track   = reader.read_int_array('CarIdxTrackSurface', 64)
             # CarIdxTrackSurface: -1=NotInWorld, 0=OffTrack, 1=InPitStall, 2=ApproachingPits, 3=OnTrack
 
-            if car_est_times and player_car_idx < len(car_est_times):
-                player_time     = car_est_times[player_car_idx]
+            if car_f2_times and player_car_idx < len(car_f2_times):
+                player_time     = car_f2_times[player_car_idx]
                 player_last_lap = car_last_laps[player_car_idx] if car_last_laps else 0
                 now = time.time()
 
-                for idx, est_time in enumerate(car_est_times):
-                    if idx == player_car_idx or est_time <= 0:
+                for idx, f2_time in enumerate(car_f2_times):
+                    if idx == player_car_idx or f2_time <= 0:
                         continue
 
                     # ピット/ガレージの車は完全除外（接近警告を出さない）
@@ -846,8 +851,10 @@ def poll_iracing():
                         if surf not in (2, 3):  # 2=ApproachingPits, 3=OnTrack のみ対象
                             continue
 
-                    # タイム差（プラスなら後方、マイナスなら前方）
-                    delta = player_time - est_time
+                    # タイム差（F2Time差 = ダッシュボードと同じ値）
+                    # プラス=相手が後方、マイナス=相手が前方
+                    delta = player_time - f2_time
+                    est_time = f2_time  # 後続コードの互換性のため
 
                     other_class = car_class_map.get(idx, -1)
                     other_rel   = car_relspeed_map.get(idx, 0)
@@ -878,9 +885,9 @@ def poll_iracing():
                         pace_diff = (other_last_lap - player_last_lap
                                      if other_last_lap > 0 and player_last_lap > 0 else 0)
 
-                        if 0 < delta < 1.5:  # 後方1.5秒以内 = バトル中
+                        if 0 < delta < 1.0:  # 後方1.0秒以内 = バトル中（1.5→1.0に厳格化）
                             last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 20:
+                            if now - last_warn > 60:  # 60秒クールダウン（20秒→60秒）
                                 if pace_diff < -1.5:  # 相手が1.5秒以上速い → 先に行かせる
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
                                         'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2),
@@ -890,9 +897,9 @@ def poll_iracing():
                                         'delta': round(delta, 1),
                                         'message': 'Behind ' + str(round(delta, 1)) + '. Defend.'})
                                 battle_warned[idx] = now
-                        elif -1.5 < delta < 0:  # 前方1.5秒以内 = 前を攻める
+                        elif -1.0 < delta < 0:  # 前方1.0秒以内 = 前を攻める（1.5→1.0に厳格化）
                             last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 20:
+                            if now - last_warn > 60:  # 60秒クールダウン（20秒→60秒）
                                 broadcast({'type': 'radio', 'trigger': 'battle_ahead',
                                     'delta': round(abs(delta), 1),
                                     'message': 'Ahead ' + str(round(abs(delta), 1)) + '. In range.'})
@@ -918,12 +925,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-29-016 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-30-017 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-29-016  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-30-017  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
