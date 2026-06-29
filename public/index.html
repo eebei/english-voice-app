@@ -764,6 +764,63 @@ function saveSessionSummary(data) {
   }
 }
 
+// ── チェッカー後15秒で自動デブリーフ開始 ──────────────────────────────────
+let autoDebriefTimer = null;
+let autoDebriefSummary = null;
+
+function scheduleAutoDebrief(summaryData) {
+  // Race Mode中のJames/大石/官兵衛のみ対象
+  if (jamesMode !== 'race') return;
+  if (sel !== 'James' && sel !== 'Oishi' && sel !== 'Kanbe') return;
+  if (autoDebriefTimer) clearTimeout(autoDebriefTimer);
+  autoDebriefSummary = summaryData;
+
+  // カウントダウン表示
+  const isJ = (sel === 'Oishi' || sel === 'Kanbe');
+  const msg = isJ
+    ? '🏁 チェッカー。15秒後にデブリーフを開始します...'
+    : '🏁 Checkered. Debrief starts in 15 seconds...';
+  addMsg('sys', msg);
+
+  autoDebriefTimer = setTimeout(() => {
+    autoDebriefTimer = null;
+    triggerAutoDebrief();
+  }, 15000);
+}
+
+function triggerAutoDebrief() {
+  if (!autoDebriefSummary) return;
+  const s = autoDebriefSummary;
+  const isJ = (sel === 'Oishi' || sel === 'Kanbe');
+
+  // デブリーフモードに切替（チャット画面はそのまま維持、モードだけ変える）
+  jamesMode = 'debrief';
+  jamesAutoMicEnabled = false;
+  document.getElementById('mic-btn').onclick = toggleMic;
+
+  // データを使ったオープニング無線
+  const best = s.best_lap ? s.best_lap + 's' : '—';
+  const laps = s.total_laps || '—';
+  const pos  = s.finish_pos ? 'P' + s.finish_pos : '—';
+  const trend = (s.pace_last_half && s.pace_first_half)
+    ? (s.pace_last_half < s.pace_first_half ? (isJ ? '後半ペースは上がった。' : 'Pace improved in the second half.') : (isJ ? '後半ペースが落ちた。' : 'Pace dropped in the second half.'))
+    : '';
+
+  let opening;
+  if (sel === 'Oishi') {
+    opening = `${userName || 'ドライバー'}、お疲れ。デブリーフに入ろう。${laps}周、${pos}フィニッシュ。ベストは${best}だ。${trend}まず、レース中で一番気になった点を聞かせてくれ。`;
+  } else if (sel === 'Kanbe') {
+    opening = `お疲れじゃ。${laps}周走って${pos}フィニッシュ、ベストは${best}じゃったな。${trend}まず、今日のレースで一番気になったところを話してみい。`;
+  } else {
+    opening = `Good run. ${laps} laps, ${pos}, best ${best}. ${trend} Let's debrief. What's the first thing on your mind?`;
+  }
+
+  addMsg('ai', opening);
+  messages.push({ role: 'assistant', content: opening });
+  if (voiceOn) speak(opening);
+  autoDebriefSummary = null;
+}
+
 // ── 直近セッションサマリーをデブリーフ用テキストに変換 ────────────────────
 function buildRaceHistoryContext() {
   try {
@@ -1753,6 +1810,7 @@ function connectIRBridge() {
       }
       if (data.type === 'session_summary') {
         saveSessionSummary(data);
+        scheduleAutoDebrief(data);
       }
     };
 
