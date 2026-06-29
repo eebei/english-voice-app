@@ -1763,6 +1763,37 @@ function updateBridgeStatus() {
   }
 }
 
+function bridgeVoice(key) {
+  const lines = {
+    bridge_up: {
+      James: "Bridge is up. Waiting for iRacing.",
+      Kanbe: "ブリッジOKじゃ。iRacing待ちじゃ。",
+      Oishi: "ブリッジ接続完了。iRacing起動を待つ。",
+      Hajime: "Bridge connected. Waiting for iRacing."
+    },
+    bridge_down: {
+      James: "Bridge is down. Launch the bridge app, then we'll reconnect.",
+      Kanbe: "ブリッジが落ちとる。ブリッジを起動してくれ。自動で繋ぎ直す。",
+      Oishi: "ブリッジが切れた。起動し直してくれ。自動で再接続する。",
+      Hajime: "Bridge is down. Restart the bridge. I'll reconnect automatically."
+    },
+    iracing_live: {
+      James: "iRacing connected. Data coming in. Stand by for briefing.",
+      Kanbe: "iRacing繋がったで。データ受信開始じゃ。",
+      Oishi: "iRacing接続。データ受信開始。",
+      Hajime: "iRacing connected. Data link confirmed."
+    },
+    iracing_lost: {
+      James: "Lost iRacing signal.",
+      Kanbe: "iRacingが切れたで。",
+      Oishi: "iRacing切断。",
+      Hajime: "iRacing signal lost."
+    }
+  };
+  const msg = (lines[key] || {})[sel];
+  if (msg) { addMsg('ai', msg); speak(msg); }
+}
+
 function connectIRBridge() {
   if (irBridge && irBridge.readyState < 2) return; // 既に接続中
   try {
@@ -1773,7 +1804,7 @@ function connectIRBridge() {
       bridgeConnected = true;
       console.log('Bridge connected');
       updateBridgeStatus();
-      addMsg('sys', '🏎️ Bridge接続完了。');
+      bridgeVoice('bridge_up');
     };
 
     irBridge.onmessage = (event) => {
@@ -1783,13 +1814,13 @@ function connectIRBridge() {
       if (data.type === 'iracing_connected') {
         iracingLive = true;
         updateBridgeStatus();
-        addMsg('sys', '🟢 ['+new Date().toLocaleTimeString()+'] iRacing接続。データ受信開始。');
+        bridgeVoice('iracing_live');
         return;
       }
       if (data.type === 'iracing_disconnected') {
         iracingLive = false;
         updateBridgeStatus();
-        addMsg('sys', '🔴 ['+new Date().toLocaleTimeString()+'] iRacing切断。');
+        bridgeVoice('iracing_lost');
         return;
       }
       if (data.type === 'radio' && (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi')) {
@@ -1815,15 +1846,16 @@ function connectIRBridge() {
     };
 
     irBridge.onclose = () => {
+      const wasConnected = bridgeConnected;
       bridgeConnected = false; iracingLive = false;
       updateBridgeStatus();
       if (sel === 'James' || sel === 'Kanbe' || sel === 'Oishi') {
+        if (wasConnected) bridgeVoice('bridge_down');
         irBridgeReconnectTimer = setTimeout(connectIRBridge, 3000);
       }
     };
 
     irBridge.onerror = () => {
-      // ブリッジが起動していない場合は静かに失敗
       irBridge.close();
     };
   } catch (e) {
