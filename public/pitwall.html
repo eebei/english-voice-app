@@ -323,6 +323,12 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="erole">Chief Engineer</div>
           <div class="elang">🇬🇧 English</div>
         </div>
+        <div class="eng-sel-card" id="card-Luna" onclick="selectEng('Luna')">
+          <img src="/Luna.png" alt="Luna">
+          <div class="ename">Luna</div>
+          <div class="erole">Race Engineer</div>
+          <div class="elang">🇬🇧 English</div>
+        </div>
         <div class="eng-sel-card" id="card-Hajime" onclick="selectEng('Hajime')">
           <img src="/Hajime.png" alt="Hajime">
           <div class="ename">Hajime</div>
@@ -419,6 +425,8 @@ const CHARS = {
 const GREETINGS = {
   James:  (n,m) => m==='race' ? `${n||'Driver'}, James here. Radio check. Once iRacing connects I'll pull your numbers and set the strategy. Stand by.`
                               : `${n||'Driver'}, James Mitchell. Good session? Give me iRating, SOF, Safety Rating and we'll set your targets.`,
+  Luna:   (n,m) => m==='race' ? `${n||'Driver'}, Luna here. Radio check. The moment iRacing connects I'll have your numbers. Stay relaxed, breathe, stand by.`
+                              : `${n||'Driver'}, Luna. Let's debrief. Tell me how the car felt out there — I'll read the data, you tell me the story behind it.`,
   Hajime: (n,m) => m==='race' ? `${n||'Driver'}, Hajime. Radio check. Waiting for iRacing data. Stand by.`
                               : `${n||'Driver'}, Hajime. Let's go through the session. Walk me through what you felt — I've got the data, you bring the feel.`,
   Kanbe:  (n,m) => m==='race' ? `${n||'ドライバー'}、官兵衛じゃ。ラジオチェック。iRacingに繋がったらデータを読み上げて作戦を立てるけぇ、そのまま待っときい。`
@@ -720,10 +728,10 @@ function startAutoMic(){
 // ── Bridge / telemetry ──
 function bridgeVoice(key){
   const lines={
-    bridge_up:{ James:"Bridge is up. Waiting for iRacing.", Hajime:"Bridge connected. Waiting for iRacing.", Kanbe:"ブリッジOKじゃ。iRacing待ちじゃ。", Oishi:"ブリッジ接続完了。iRacing起動を待つ。" },
-    bridge_down:{ James:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Hajime:"Bridge is down. Restart the bridge. I'll reconnect automatically.", Kanbe:"ブリッジが落ちとる。起動し直してくれ。自動で繋ぎ直す。", Oishi:"ブリッジが切れた。起動し直してくれ。自動で再接続する。" },
-    iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。" },
-    iracing_lost:{ James:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。" }
+    bridge_up:{ James:"Bridge is up. Waiting for iRacing.", Luna:"Bridge is up. Waiting for iRacing.", Hajime:"Bridge connected. Waiting for iRacing.", Kanbe:"ブリッジOKじゃ。iRacing待ちじゃ。", Oishi:"ブリッジ接続完了。iRacing起動を待つ。" },
+    bridge_down:{ James:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Luna:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Hajime:"Bridge is down. Restart the bridge. I'll reconnect automatically.", Kanbe:"ブリッジが落ちとる。起動し直してくれ。自動で繋ぎ直す。", Oishi:"ブリッジが切れた。起動し直してくれ。自動で再接続する。" },
+    iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Luna:"iRacing connected. Data coming in. Stand by for your briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。" },
+    iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。" }
   };
   const msg=(lines[key]||{})[sel];
   if(msg){ addMsg('ai',msg); speak(msg); }
