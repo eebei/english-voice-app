@@ -464,6 +464,8 @@ def poll_iracing():
             broadcast({'type': 'iracing_connected'})
             ir_was_connected = True
             inactive_since = None
+            prev_current_lap = None   # セッション移行後の誤検知防止
+            last_lap_time   = None   # 次の本当のラップを必ず報告
 
         # 切断は15秒間ずっと非アクティブな時だけ（セッション移行・ロード中を含むブリップで初期化しない）
         if not active and ir_was_connected:
