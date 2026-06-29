@@ -34,7 +34,7 @@ jobs:
 
       - name: Build bridge EXE
         run: |
-          pyinstaller --onefile --name "OMORAY-PITWALL-Bridge-${{ steps.date.outputs.DATE }}" --console irsdk-bridge/bridge.py
+          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console irsdk-bridge/bridge.py
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -43,9 +43,10 @@ jobs:
         run: |
           iscc irsdk-bridge/installer.iss
 
-      - name: Rename installer with date
+      - name: Rename files with date for release
         run: |
-          Move-Item installer_output\OMORAY-PITWALL-Setup.exe "installer_output\OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe"
+          Copy-Item dist\OMORAY-PITWALL-Bridge.exe "dist\OMORAY-PITWALL-Bridge-${{ steps.date.outputs.DATE }}.exe"
+          Copy-Item installer_output\OMORAY-PITWALL-Setup.exe "installer_output\OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe"
         shell: pwsh
 
       - name: Publish to Release
@@ -54,7 +55,7 @@ jobs:
           tag_name: bridge-latest
           name: OMORAY PITWALL Bridge (latest)
           body: |
-            ## OMORAY PITWALL Bridge
+            ## OMORAY PITWALL Bridge - Build ${{ steps.date.outputs.DATE }}
 
             **OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe** をダウンロードしてダブルクリックするだけ。
             インストール後はPC起動時に自動でBridgeが立ち上がります。
