@@ -27,9 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install websockets pyinstaller
 
+      - name: Set build date
+        id: date
+        run: echo "DATE=$(Get-Date -Format 'yyyyMMdd')" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
       - name: Build bridge EXE
         run: |
-          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console irsdk-bridge/bridge.py
+          pyinstaller --onefile --name "OMORAY-PITWALL-Bridge-${{ steps.date.outputs.DATE }}" --console irsdk-bridge/bridge.py
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
@@ -37,6 +42,11 @@ jobs:
       - name: Build installer
         run: |
           iscc irsdk-bridge/installer.iss
+
+      - name: Rename installer with date
+        run: |
+          Move-Item installer_output\OMORAY-PITWALL-Setup.exe "installer_output\OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe"
+        shell: pwsh
 
       - name: Publish to Release
         uses: softprops/action-gh-release@v2
@@ -46,13 +56,13 @@ jobs:
           body: |
             ## OMORAY PITWALL Bridge
 
-            **OMORAY-PITWALL-Setup.exe** をダウンロードしてダブルクリックするだけ。
+            **OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe** をダウンロードしてダブルクリックするだけ。
             インストール後はPC起動時に自動でBridgeが立ち上がります。
 
             - Python不要
             - iRacing起動を自動検出
             - クラッシュ時も自動再起動
           files: |
-            installer_output/OMORAY-PITWALL-Setup.exe
-            dist/OMORAY-PITWALL-Bridge.exe
+            installer_output/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
+            dist/OMORAY-PITWALL-Bridge-${{ steps.date.outputs.DATE }}.exe
           prerelease: false
