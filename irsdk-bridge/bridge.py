@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-30-019
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-30-020
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -44,6 +44,28 @@ try:
 except Exception:
     _base = "."
 LOG_PATH = os.path.join(_base, "bridge_log.txt")
+PTT_CONFIG_PATH = os.path.join(_base, "ptt_config.json")
+
+# ── PTT（プッシュ・トゥ・トーク）状態 ──
+ptt_binding = None        # {"joy": int, "button": int}
+ptt_capturing = False     # 設定モード（次に押されたボタンを登録）
+ptt_pressed = False       # 現在押下中か
+
+def load_ptt_config():
+    global ptt_binding
+    try:
+        with open(PTT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            ptt_binding = json.load(f)
+    except Exception:
+        ptt_binding = None
+
+def save_ptt_config():
+    try:
+        with open(PTT_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(ptt_binding, f)
+    except Exception:
+        pass
+
 def log(msg):
     line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg
     print(line, flush=True)
@@ -907,12 +929,104 @@ def poll_iracing():
         time.sleep(0.1)  # 0.1秒ポーリング = コントロールライン通過を0.1秒以内に検知
 
 
+# ── ジョイスティック/ハンドル監視（PTT用・フルスクリーン裏でも動く）──
+# pygameでボタンを直接読む。フォーカス不要＝iRacingがフルスクリーンでも検出できる。
+def poll_joystick():
+    global ptt_capturing, ptt_pressed, ptt_binding
+    try:
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")  # 画面不要
+        import pygame
+        pygame.init()
+        pygame.joystick.init()
+    except Exception as e:
+        log("PTT joystick disabled (pygame unavailable): " + str(e))
+        return
+
+    sticks = {}
+    last_scan = 0
+    log("PTT joystick monitor started")
+
+    while True:
+        try:
+            try:
+                pygame.event.pump()
+            except Exception:
+                pass
+            now = time.time()
+            # 接続スキャン（ホットプラグ対応）2秒ごと
+            if now - last_scan > 2:
+                last_scan = now
+                cnt = pygame.joystick.get_count()
+                for i in range(cnt):
+                    if i not in sticks:
+                        try:
+                            js = pygame.joystick.Joystick(i)
+                            js.init()
+                            sticks[i] = js
+                            log("PTT: joystick %d connected: %s (%d buttons)" % (i, js.get_name(), js.get_numbuttons()))
+                        except Exception:
+                            pass
+
+            # 各ジョイスティックのボタン読み取り
+            for i, js in list(sticks.items()):
+                try:
+                    nb = js.get_numbuttons()
+                except Exception:
+                    continue
+                for b in range(nb):
+                    try:
+                        pressed = js.get_button(b) == 1
+                    except Exception:
+                        continue
+                    if not pressed:
+                        continue
+                    # 設定モード：押された最初のボタンを登録
+                    if ptt_capturing:
+                        ptt_binding = {"joy": i, "button": b}
+                        save_ptt_config()
+                        ptt_capturing = False
+                        broadcast({'type': 'ptt_set', 'joy': i, 'button': b})
+                        log("PTT bound: joystick %d button %d" % (i, b))
+
+            # 登録済みボタンの押下/離しを監視 → PTTイベント送信
+            if ptt_binding and ptt_binding.get("joy") in sticks:
+                js = sticks[ptt_binding["joy"]]
+                try:
+                    cur = js.get_button(ptt_binding["button"]) == 1
+                except Exception:
+                    cur = False
+                if cur and not ptt_pressed:
+                    ptt_pressed = True
+                    broadcast({'type': 'ptt', 'state': 'down'})
+                elif not cur and ptt_pressed:
+                    ptt_pressed = False
+                    broadcast({'type': 'ptt', 'state': 'up'})
+
+            time.sleep(0.03)  # 約33Hzで監視（押下を即検知）
+        except Exception:
+            time.sleep(0.2)
+
+
 async def handler(websocket):
+    global ptt_capturing
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
         await websocket.send(json.dumps({'type': 'connected'}))
-        await websocket.wait_closed()
+        # 現在のPTT設定を通知
+        await websocket.send(json.dumps({'type': 'ptt_config', 'binding': ptt_binding}))
+        # クライアントからのコマンド受信（PTT設定など）
+        async for raw in websocket:
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+            cmd = msg.get('cmd')
+            if cmd == 'ptt_setup':
+                ptt_capturing = True
+                log("PTT setup mode: waiting for button press")
+            elif cmd == 'ptt_cancel':
+                ptt_capturing = False
     finally:
         connected_clients.discard(websocket)
 
@@ -922,12 +1036,15 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-30-019 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-30-020 ===\n")
     except Exception:
         pass
+    load_ptt_config()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-30-019  started")
+    tj = threading.Thread(target=poll_joystick, daemon=True)
+    tj.start()
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-30-020  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
