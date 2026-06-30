@@ -1,0 +1,68 @@
+name: Build OMORAY PITWALL Desktop (Windows EXE)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'desktop/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build bridge EXE
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets pyinstaller
+          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console irsdk-bridge/bridge.py
+
+      - name: Bundle bridge into desktop app
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/bridge
+          Copy-Item dist/OMORAY-PITWALL-Bridge.exe desktop/bridge/OMORAY-PITWALL-Bridge.exe
+        shell: pwsh
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install & build Electron app
+        working-directory: desktop
+        run: |
+          npm install
+          npm run dist
+
+      - name: Set build date
+        id: date
+        run: echo "DATE=$(Get-Date -Format 'yyyyMMdd')" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Rename for release
+        run: |
+          $exe = Get-ChildItem desktop/dist/*.exe | Select-Object -First 1
+          Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-${{ steps.date.outputs.DATE }}.exe"
+        shell: pwsh
+
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-latest
+          name: OMORAY PITWALL Desktop (latest)
+          body: |
+            ## OMORAY PITWALL Desktop - Build ${{ steps.date.outputs.DATE }}
+            ダウンロードしてダブルクリックするだけ。Node/Python不要。bridge内蔵・自動起動。
+          files: |
+            desktop/dist/OMORAY-PITWALL-Desktop-${{ steps.date.outputs.DATE }}.exe
+          prerelease: false
