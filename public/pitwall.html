@@ -425,9 +425,9 @@ const CHARS = {
   Hajime: { avatar:'Hajime.png', desc:'Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.92, rate:1.10,
             gVoice:'en-GB-Neural2-D', gLang:'en-GB', gRate:1.06, gPitch:-1.0 },
   Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.45,
-            gVoice:'ja-JP-Neural2-C', gLang:'ja-JP', gRate:1.15, gPitch:-2.0 },
+            gVoice:'ja-JP-Neural2-C', gLang:'ja-JP', gRate:1.28, gPitch:-2.0 },
   Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.40,
-            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.12, gPitch:-1.0 }
+            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.25, gPitch:-1.0 }
 };
 
 const GREETINGS = {
@@ -633,9 +633,11 @@ function phonetify(text, lang){
 }
 let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
 let ttsAvailable = true;      // 503等で落ちたらWeb Speechに恒久フォールバック
-function afterSpeak(){ if(jamesAutoMicEnabled&&!jamesMuted) setTimeout(startAutoMic,400); }
+let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
+function afterSpeak(){ isSpeaking=false; if(jamesAutoMicEnabled&&!jamesMuted) setTimeout(startAutoMic,400); }
 
 function speakWebSpeech(text, c){
+  isSpeaking=true;
   window.speechSynthesis.cancel();
   const utt = new SpeechSynthesisUtterance(text);
   utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate;
@@ -649,6 +651,10 @@ async function speak(text){
   if(!voiceOn) return;
   const c = CHARS[sel]; if(!c) return;
   const clean = phonetify(stripMarkdown(stripParens(stripEmoji(text))), c.voiceLang);
+
+  // 発話開始：マイクを止めて自分の声を拾わないようにする
+  isSpeaking=true;
+  if(autoMicActive && autoMicRec){ try{autoMicRec.stop();}catch(e){} }
 
   // 進行中の音声を停止
   window.speechSynthesis.cancel();
@@ -718,19 +724,31 @@ function toggleMute(){
   if(jamesMuted){ setHint('🔇 Muted'); if(recognition)recognition.stop(); }
   else{ setHint(''); startAutoMic(); }
 }
-let autoMicActive=false;
+let autoMicActive=false, autoMicRec=null, micPermissionDenied=false;
+function scheduleMicRestart(delay){
+  // 自動でマイクを開き直す（連続リスニング）。発話中・処理中・ミュート中は待つ。
+  if(!jamesAutoMicEnabled||jamesMuted||micPermissionDenied) return;
+  setTimeout(startAutoMic, delay||500);
+}
 function startAutoMic(){
-  if(isBusy||jamesMuted||!jamesAutoMicEnabled||autoMicActive) return;
+  if(jamesMuted||!jamesAutoMicEnabled||autoMicActive||micPermissionDenied) return;
+  // AI発話中・API処理中はまだ開かず、少し後に再試行
+  if(isSpeaking||isBusy){ scheduleMicRestart(600); return; }
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR) return;
   autoMicActive=true;
-  const r=new SR();
+  const r=new SR(); autoMicRec=r;
   r.lang=(sel==='Kanbe'||sel==='Oishi')?'ja-JP':'en-US';
   r.continuous=false; r.interimResults=false;
   r.onresult=(e)=>{ const t=e.results[0][0].transcript; if(t){ document.getElementById('chat-input').value=t; sendMsg(); } };
-  r.onend=()=>{ autoMicActive=false; };
-  r.onerror=()=>{ autoMicActive=false; };
-  try{ r.start(); } catch(e){ autoMicActive=false; }
+  r.onend=()=>{ autoMicActive=false; autoMicRec=null; scheduleMicRestart(400); };  // 終了したら自動で開き直す
+  r.onerror=(e)=>{
+    autoMicActive=false; autoMicRec=null;
+    if(e && e.error==='not-allowed'){ micPermissionDenied=true; addMsg('sys','⚠ マイク権限が拒否されています。ブラウザの設定で許可してください。'); return; }
+    // no-speech / aborted / network 等は黙って開き直す
+    scheduleMicRestart(e && e.error==='no-speech' ? 300 : 800);
+  };
+  try{ r.start(); } catch(e){ autoMicActive=false; autoMicRec=null; scheduleMicRestart(800); }
 }
 
 // ── Bridge / telemetry ──
