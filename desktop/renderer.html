@@ -785,7 +785,15 @@ function startAutoMic(){
 }
 
 // ── Bridge / telemetry ──
+// 連続告知の抑制：同じ告知は30秒に1回まで（bridge点滅で喋りまくるのを防ぐ）
+let lastBridgeVoiceKey='', lastBridgeVoiceAt=0;
 function bridgeVoice(key){
+  const now=Date.now();
+  // bridge_up/down の点滅は特にうるさい → 同じkeyは30秒に1回、かつ前回と違うkeyの時だけ
+  if(key===lastBridgeVoiceKey && now-lastBridgeVoiceAt < 30000) return;
+  // bridge_up と bridge_down が短時間で交互に来る（点滅）場合も抑制
+  if((key==='bridge_up'||key==='bridge_down') && now-lastBridgeVoiceAt < 8000) { lastBridgeVoiceKey=key; lastBridgeVoiceAt=now; return; }
+  lastBridgeVoiceKey=key; lastBridgeVoiceAt=now;
   const lines={
     bridge_up:{ James:"Bridge is up. Waiting for iRacing.", Luna:"Bridge is up. Waiting for iRacing.", Hajime:"Bridge connected. Waiting for iRacing.", Kanbe:"ブリッジOKじゃ。iRacing待ちじゃ。", Oishi:"ブリッジ接続完了。iRacing起動を待つ。" },
     bridge_down:{ James:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Luna:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Hajime:"Bridge is down. Restart the bridge. I'll reconnect automatically.", Kanbe:"ブリッジが落ちとる。起動し直してくれ。自動で繋ぎ直す。", Oishi:"ブリッジが切れた。起動し直してくれ。自動で再接続する。" },
