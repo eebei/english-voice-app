@@ -48,13 +48,23 @@ app.use(cors({
 app.use(express.json({ limit: '128kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Per-IP rate limit on the expensive endpoint.
+// Per-IP rate limit on the chat endpoint (the driver's conversation — never starve this).
+// レース中は会話が生命線。十分余裕を持たせる。
 const chatLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30,               // 30 requests / minute / IP
+  max: 120,              // 120 chat requests / minute / IP（会話を絶対に弾かない）
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests. Please slow down.' },
+});
+
+// TTS は別枠。自動ラジオの音声化で消費するため独立した余裕枠を持つ。
+const ttsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 200,              // 200 TTS requests / minute / IP（ラジオ＋会話の音声化）
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'tts_rate_limited' },
 });
 
 // ── Chat proxy ──────────────────────────────────────────────────────────────
@@ -116,7 +126,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 const TTS_API_KEY = process.env.GOOGLE_TTS_API_KEY;
 const MAX_TTS_CHARS = 600;  // 1コールの上限（コスト保護）
 
-app.post('/api/tts', chatLimiter, async (req, res) => {
+app.post('/api/tts', ttsLimiter, async (req, res) => {
   try {
     if (!TTS_API_KEY) {
       return res.status(503).json({ error: 'tts_unavailable' });
