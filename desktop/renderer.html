@@ -838,6 +838,10 @@ function connectBridge(){
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='driver_state') driverState=data.state;
       if(data.type==='session_summary'){ saveSessionSummary(data); scheduleAutoDebrief(data); }
+      // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
+      if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
+      if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint('✅ PTT登録：ボタン'+data.button+'（押して話す）'); }
+      if(data.type==='ptt_config'){ if(data.binding){ pttBinding={index:data.binding.joy,button:data.binding.button}; updatePTTLabel(); } }
     };
     irBridge.onclose=()=>{
       const was=bridgeConnected; bridgeConnected=false; iracingLive=false; updateBridgeStatus();
@@ -1037,9 +1041,10 @@ function updatePTTLabel(){
   else { b.textContent='🎙 PTT設定'; b.classList.remove('on'); }
 }
 
-// 設定：次に押されたゲームパッドのボタンを記録
+// 設定：bridgeに「次に押されたボタンを登録して」と依頼（ボタン検出はネイティブのbridgeが担当）
 function setupPTT(){
-  pttCapturing = true;
+  if(!irBridge || irBridge.readyState!==1){ setHint('⚠ Bridge未接続。少し待って再試行'); return; }
+  irBridge.send(JSON.stringify({cmd:'ptt_setup'}));
   setHint('🎮 ハンドルの使いたいボタンを今すぐ押してください…');
   const b=document.getElementById('ptt-btn'); if(b) b.textContent='⏺ ボタン待機…';
 }
@@ -1106,35 +1111,9 @@ function blobToBase64(blob){
   });
 }
 
-// ゲームパッド検出ループ（押下/離しを監視）
-function pollGamepads(){
-  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-  for(let i=0;i<pads.length;i++){
-    const gp=pads[i]; if(!gp) continue;
-    for(let bi=0; bi<gp.buttons.length; bi++){
-      const pressed = gp.buttons[bi].pressed;
-      if(pttCapturing && pressed){
-        pttBinding = {index:i, button:bi};
-        localStorage.setItem('pw_ptt', JSON.stringify(pttBinding));
-        pttCapturing = false;
-        updatePTTLabel();
-        setHint('✅ PTT登録：ゲームパッド'+i+' ボタン'+bi+'（押して話す）');
-        return requestAnimationFrame(pollGamepads);
-      }
-    }
-    // 登録済みボタンの押下/離しでPTT発火
-    if(pttBinding && i===pttBinding.index){
-      const btn = gp.buttons[pttBinding.button];
-      if(btn){
-        if(btn.pressed && !pttHeld) pttStart();
-        else if(!btn.pressed && pttHeld) pttStop();
-      }
-    }
-  }
-  requestAnimationFrame(pollGamepads);
-}
-window.addEventListener('gamepadconnected', (e)=>{ addMsg('sys','🎮 コントローラー接続: '+e.gamepad.id); });
-requestAnimationFrame(pollGamepads);
+// ※ボタン検出はブラウザのGamepad APIではなく、ネイティブのbridge（pygame）が担当する。
+//   理由：iRacingフルスクリーンの裏ではGamepad APIが入力を受け取れないため。
+//   bridgeが {type:'ptt',state:'down'/'up'} を送ってくる → 上のWS受信でpttStart/pttStopを呼ぶ。
 updatePTTLabel();
 </script>
 </body>
