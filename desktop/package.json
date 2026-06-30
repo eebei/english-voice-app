@@ -1,0 +1,39 @@
+{
+  "name": "omoray-pitwall",
+  "version": "0.1.0",
+  "description": "OMORAY PITWALL — AI Race Engineer (desktop client)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "author": "OMORAY",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "racing.omoray.pitwall",
+    "productName": "OMORAY PITWALL",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "renderer.html"
+    ],
+    "extraResources": [
+      {
+        "from": "bridge/OMORAY-PITWALL-Bridge.exe",
+        "to": "OMORAY-PITWALL-Bridge.exe"
+      }
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "OMORAY-PITWALL-Desktop-${version}.exe"
+    }
+  }
+}
