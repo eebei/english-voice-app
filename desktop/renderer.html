@@ -641,6 +641,7 @@ let ttsDisabledUntil = 0;     // TTS失敗時はこの時刻まで一時的にWe
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
 let speakQueue = [];          // 発話待ち行列
 let draining = false;         // キュー処理中フラグ
+let speakWatchdog = null;     // 発話が完了イベントを返さず固まるのを防ぐ見張り番
 const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる（鮮度優先）
 
 // text を発話キューに積む。priority=true（ドライバーへの会話返答）は古いラジオを捨てて先頭へ。
@@ -663,6 +664,7 @@ function stopCurrentAudio(){
 }
 
 function onUtteranceDone(){
+  if(speakWatchdog){ clearTimeout(speakWatchdog); speakWatchdog=null; }
   isSpeaking=false;
   draining=false;
   if(speakQueue.length){ drainQueue(); }
@@ -681,14 +683,23 @@ async function drainQueue(){
   const raw = speakQueue.shift();
   const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
 
+  // 見張り番：完了イベントが来なくても必ず一定時間で次へ進める（キュー永久固まり防止）
+  if(speakWatchdog) clearTimeout(speakWatchdog);
+  const watchMs = Math.min(40000, 5000 + clean.length * 130);
+  speakWatchdog = setTimeout(()=>{ try{stopCurrentAudio();}catch(e){} onUtteranceDone(); }, watchMs);
+
   // Cloud TTSが使えない/設定なしなら即Web Speech
   if(Date.now() < ttsDisabledUntil || !c.gVoice){ playWebSpeech(clean, c); return; }
 
   try{
+    const ctrl = new AbortController();
+    const fetchTimer = setTimeout(()=>ctrl.abort(), 8000);  // TTS取得が固まらないようタイムアウト
     const r = await fetch('/api/tts',{
       method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch })
+      body:JSON.stringify({ text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch }),
+      signal: ctrl.signal
     });
+    clearTimeout(fetchTimer);
     if(r.status===503){ ttsDisabledUntil = Date.now()+60000; playWebSpeech(clean, c); return; }
     if(!r.ok) throw new Error('tts '+r.status);
     const data = await r.json();
@@ -696,7 +707,7 @@ async function drainQueue(){
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
     ttsAudio = audio;
     audio.onended = ()=>{ ttsAudio=null; onUtteranceDone(); };
-    audio.onerror = ()=>{ ttsAudio=null; playWebSpeech(clean, c); };
+    audio.onerror = ()=>{ ttsAudio=null; onUtteranceDone(); };  // 再生失敗でも次へ（固まらせない）
     await audio.play();
   }catch(e){
     playWebSpeech(clean, c);  // ネットワークエラー等 → Web Speechにフォールバック
