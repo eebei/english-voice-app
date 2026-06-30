@@ -59,6 +59,9 @@ async function startBridge() {
         return;
       }
     }
+    // bridgeの出力をデスクトップのログに書き出す（実態把握用・ユーザーがすぐ見つけられる場所）
+    if (bridgeProc.stdout) bridgeProc.stdout.on('data', d => log('[bridge] ' + d.toString().trim()));
+    if (bridgeProc.stderr) bridgeProc.stderr.on('data', d => log('[bridge-err] ' + d.toString().trim()));
     bridgeProc.on('exit', (code) => log('bridge exited code=' + code));
     bridgeProc.on('error', (e) => log('bridge spawn error: ' + e.message));
   } catch (e) {
@@ -70,8 +73,12 @@ function stopBridge() {
   if (bridgeProc) { try { bridgeProc.kill(); } catch (e) {} bridgeProc = null; }
 }
 
+// ログをデスクトップのファイルに残す（SIM PCで実態を確認するため）。app ready後にwhenReadyで設定。
+let LOG_FILE = '';
 function log(msg) {
-  console.log('[main] ' + msg);
+  const line = '[' + new Date().toLocaleTimeString() + '][main] ' + msg;
+  console.log(line);
+  try { if (LOG_FILE) fs.appendFileSync(LOG_FILE, line + '\n'); } catch (e) {}
 }
 
 function createWindow() {
@@ -98,6 +105,11 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => {
     cb(permission === 'media' ? true : true);
   });
+  // ログファイルを準備（毎回新規）
+  try {
+    LOG_FILE = path.join(app.getPath('desktop'), 'OMORAY-bridge-debug.log');
+    fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + new Date().toISOString() + ' ===\n');
+  } catch (e) {}
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
   app.on('activate', () => {
