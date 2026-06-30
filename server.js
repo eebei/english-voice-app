@@ -173,6 +173,52 @@ app.post('/api/tts', ttsLimiter, async (req, res) => {
   }
 });
 
+// ── Google Speech-to-Text proxy (PTT: 押してる間の音声→文字) ───────────────────
+// クライアントが録音した音声(base64)を受けてGoogle STTで文字起こし。
+// ※同じGOOGLE_TTS_API_KEYを使うが、Google CloudでSpeech-to-Text APIの有効化＋
+//   APIキー制限にSpeech-to-Textを追加する必要がある（TTSのみ許可だと動かない）。
+app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res) => {
+  try {
+    if (!TTS_API_KEY) return res.status(503).json({ error: 'stt_unavailable' });
+    const { audio, languageCode, encoding, sampleRateHertz } = req.body;
+    if (!audio || typeof audio !== 'string') {
+      return res.status(400).json({ error: 'audio is required' });
+    }
+    const sttBody = {
+      config: {
+        encoding: encoding || 'WEBM_OPUS',
+        languageCode: languageCode || 'en-US',
+        enableAutomaticPunctuation: true,
+        model: 'latest_short',
+      },
+      audio: { content: audio },
+    };
+    if (sampleRateHertz) sttBody.config.sampleRateHertz = sampleRateHertz;
+
+    const r = await fetch(
+      `https://speech.googleapis.com/v1/speech:recognize?key=${TTS_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sttBody),
+      }
+    );
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error('Google STT error:', r.status, errText);
+      return res.status(502).json({ error: 'stt_failed', detail: errText.slice(0, 200) });
+    }
+    const data = await r.json();
+    const text = (data.results || [])
+      .map(x => x.alternatives && x.alternatives[0] && x.alternatives[0].transcript)
+      .filter(Boolean).join(' ').trim();
+    res.json({ text });
+  } catch (err) {
+    console.error('STT proxy error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start server ────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
