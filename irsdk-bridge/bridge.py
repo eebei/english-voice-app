@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-30-017
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-30-018
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -503,20 +503,22 @@ def poll_iracing():
             if yaml_str:
                 info = parse_session_info(yaml_str)
                 if info.get('player_irating'):
-                    sig = str(info.get('event_type', '')) + '|' + str(info.get('sof', '')) + '|' + str(info.get('num_drivers', ''))
-                    if sig != last_session_sig:
-                        broadcast({'type': 'session_info', 'data': info})
-                        log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof')))
-                        last_session_sig = sig
-                    session_info_sent = True
+                    # シグネチャは「セッションを定義する安定値」のみ（SOF/人数は他車ジョインで変動するため除外）
+                    sig = str(info.get('event_type', '')) + '|' + str(info.get('track', ''))
                     et = str(info.get('event_type', '')).lower()
                     is_race_session = ('race' in et)
                     session_track = info.get('track', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
-                    summary_sent = False         # 新セッション = サマリーリセット
-                    session_racing_started = False  # 走行開始フラグもリセット
-                    session_laps = []               # 前セッションのラップ記録クリア
+                    session_info_sent = True
+                    # ── 本当に新しいセッションの時だけ：briefing送信＋状態リセット ──
+                    if sig != last_session_sig:
+                        broadcast({'type': 'session_info', 'data': info})
+                        log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof')))
+                        last_session_sig = sig
+                        summary_sent = False            # サマリーリセット
+                        session_racing_started = False  # 走行開始フラグもリセット
+                        session_laps = []               # 前セッションのラップ記録クリア
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
@@ -925,12 +927,12 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-30-017 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-30-018 ===\n")
     except Exception:
         pass
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-30-017  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-06-30-018  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
