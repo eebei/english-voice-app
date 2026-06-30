@@ -537,6 +537,7 @@ function endSession(){
   disconnectBridge();
   jamesAutoMicEnabled=false;
   if(recognition){ try{recognition.stop();}catch(e){} }
+  speakQueue=[]; stopCurrentAudio();
   showScreen('screen-select');
 }
 
@@ -604,7 +605,7 @@ async function callAPI(){
     display = display.replace(/\[JA:[\s\S]*\]$/,'').trim();
     addMsg('ai',display);
     messages.push({role:'assistant',content:reply});
-    speak(display);
+    speak(display, true);   // 会話返答は最優先（溜まったラジオより先に喋る）
     if(sessionMsgCount>0&&sessionMsgCount%15===0) saveMemory();
   } catch(e){
     addMsg('sys','⚠ Connection error. Try again.');
@@ -631,63 +632,92 @@ function phonetify(text, lang){
     return text.replace(/iRacing/g,'I Racing');
   }
 }
+// ── 発話キュー（二重音声防止：常に1つずつ順番に再生）──
 let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
 let ttsAvailable = true;      // 503等で落ちたらWeb Speechに恒久フォールバック
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
-function afterSpeak(){ isSpeaking=false; if(jamesAutoMicEnabled&&!jamesMuted) setTimeout(startAutoMic,400); }
+let speakQueue = [];          // 発話待ち行列
+let draining = false;         // キュー処理中フラグ
+const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる（鮮度優先）
 
-function speakWebSpeech(text, c){
-  isSpeaking=true;
-  window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate;
-  const voice = pickVoice(c.voiceLang,c.voiceNames);
-  if(voice) utt.voice=voice;
-  utt.onend=afterSpeak;
-  window.speechSynthesis.speak(utt);
+// text を発話キューに積む。priority=true（ドライバーへの会話返答）は古いラジオを捨てて先頭へ。
+function speak(text, priority){
+  if(!voiceOn || !text) return;
+  if(priority){
+    speakQueue = [];                 // 溜まったラジオを破棄して会話を最優先
+    stopCurrentAudio();              // 再生中のラジオも止める
+  } else if(speakQueue.length >= MAX_RADIO_QUEUE){
+    speakQueue.shift();              // 古いラジオを1件捨てる
+  }
+  speakQueue.push(text);
+  drainQueue();
 }
 
-async function speak(text){
-  if(!voiceOn) return;
-  const c = CHARS[sel]; if(!c) return;
-  const clean = phonetify(stripMarkdown(stripParens(stripEmoji(text))), c.voiceLang);
-
-  // 発話開始：マイクを止めて自分の声を拾わないようにする
-  isSpeaking=true;
-  if(autoMicActive && autoMicRec){ try{autoMicRec.stop();}catch(e){} }
-
-  // 進行中の音声を停止
+function stopCurrentAudio(){
   window.speechSynthesis.cancel();
   if(ttsAudio){ try{ttsAudio.pause();}catch(e){} ttsAudio=null; }
+  isSpeaking=false;
+}
+
+function onUtteranceDone(){
+  isSpeaking=false;
+  draining=false;
+  if(speakQueue.length){ drainQueue(); }
+  else if(jamesAutoMicEnabled && !jamesMuted){ setTimeout(startAutoMic,400); }
+}
+
+async function drainQueue(){
+  if(draining || isSpeaking) return;
+  if(!speakQueue.length) return;
+  const c = CHARS[sel]; if(!c){ speakQueue=[]; return; }
+  draining = true;
+  isSpeaking = true;
+  // 発話中はマイクを止めて自分の声を拾わない
+  if(autoMicActive && autoMicRec){ try{autoMicRec.stop();}catch(e){} }
+
+  const raw = speakQueue.shift();
+  const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
 
   // Cloud TTSが使えない/設定なしなら即Web Speech
-  if(!ttsAvailable || !c.gVoice){ speakWebSpeech(clean, c); return; }
+  if(!ttsAvailable || !c.gVoice){ playWebSpeech(clean, c); return; }
 
   try{
     const r = await fetch('/api/tts',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch })
     });
-    if(r.status===503){ ttsAvailable=false; speakWebSpeech(clean, c); return; }
+    if(r.status===503){ ttsAvailable=false; playWebSpeech(clean, c); return; }
     if(!r.ok) throw new Error('tts '+r.status);
     const data = await r.json();
     if(!data.audioContent) throw new Error('empty audio');
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
     ttsAudio = audio;
-    audio.onended = ()=>{ ttsAudio=null; afterSpeak(); };
-    audio.onerror = ()=>{ ttsAudio=null; speakWebSpeech(clean, c); };
+    audio.onended = ()=>{ ttsAudio=null; onUtteranceDone(); };
+    audio.onerror = ()=>{ ttsAudio=null; playWebSpeech(clean, c); };
     await audio.play();
   }catch(e){
-    // ネットワークエラー等 → Web Speechにフォールバック（恒久無効化はしない）
-    speakWebSpeech(clean, c);
+    playWebSpeech(clean, c);  // ネットワークエラー等 → Web Speechにフォールバック
   }
+}
+
+function playWebSpeech(text, c){
+  try{
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate;
+    const voice = pickVoice(c.voiceLang,c.voiceNames);
+    if(voice) utt.voice=voice;
+    utt.onend=onUtteranceDone;
+    utt.onerror=onUtteranceDone;
+    window.speechSynthesis.speak(utt);
+  }catch(e){ onUtteranceDone(); }
 }
 function toggleVoice(){
   voiceOn=!voiceOn;
   const btn=document.getElementById('voice-tog');
   btn.textContent=voiceOn?'🔊 Voice':'🔇 Muted';
   btn.classList.toggle('on',voiceOn);
-  if(!voiceOn){ window.speechSynthesis.cancel(); if(ttsAudio){ try{ttsAudio.pause();}catch(e){} ttsAudio=null; } }
+  if(!voiceOn){ speakQueue=[]; stopCurrentAudio(); }
 }
 
 // ── STT (manual) ──
@@ -804,38 +834,85 @@ function disconnectBridge(){
 }
 
 // ── Radio injection ──
-function kanbeRadio(d){
-  const m=d.message||'';
-  const t=d.trigger;
-  if(t==='personal_best'&&d.time) return `ベスト更新じゃ！${d.time}。ええ走りしとるで、このまま行けい！`;
-  if(t==='lap_complete'&&d.time) return `${d.time}。${d.delta<0?'ベストより'+Math.abs(d.delta).toFixed(1)+'良かったで':'ベストより'+d.delta.toFixed(1)+'遅かった'}。`;
-  if(t==='gap_ahead'&&d.gap!=null) return `前との差${d.gap.toFixed(1)}秒じゃ。`;
-  if(t==='close_behind'&&d.gap!=null) return `後ろ${d.gap.toFixed(1)}。仕掛けてくるかもしれんで。`;
-  if(t==='pit_now') return 'ピットインじゃ。速度制限、絶対守れよ。';
-  if(t==='fuel_low') return '燃料やばいけぇ、今すぐセーブしてや。';
-  if(t==='incident') return '落ち着いて走りい。焦ってもおえん。';
-  if(t==='gtp_warning') return `上位クラスが来とるで。${d.gap?d.gap.toFixed(1)+'秒後ろ':''} 道を空けい。`;
-  if(t==='checker') return 'チェッカーじゃ。ええ走りやった、止まったら話そうで。';
-  return m;
-}
+// bridgeが実際に送る全トリガーに対応（trigger名・フィールド名はbridge.pyと一致させること）
 function oishiRadio(d){
-  const t=d.trigger;
-  if(t==='personal_best'&&d.time) return `ベスト更新。${d.time}。この一本を刻み続けろ。`;
-  if(t==='lap_complete'&&d.time) return `${d.time}。${d.delta<0?'ベストより'+Math.abs(d.delta).toFixed(1)+'上':'ベストより'+d.delta.toFixed(1)+'落ち'}。`;
-  if(t==='gap_ahead'&&d.gap!=null) return `前との差${d.gap.toFixed(1)}秒。焦るな、機を待て。`;
-  if(t==='close_behind'&&d.gap!=null) return `後ろ${d.gap.toFixed(1)}。落ち着け。`;
-  if(t==='pit_now') return '仕掛けるのは次のピットだ。落ち着いてピットへ。';
-  if(t==='fuel_low') return '燃料を守れ。ここが正念場だ。';
-  if(t==='incident') return '落ち着け。まだ十分に戦える。';
-  if(t==='gtp_warning') return `上位クラスが来る。${d.gap?d.gap.toFixed(1)+'秒後方':''} 道を開けろ。`;
-  if(t==='checker') return 'チェッカー旗。お見事。止めたら聞かせてくれ。';
-  return d.message||'';
+  const t=d.time||'';
+  const diff=(d.diff!==undefined)?d.diff:'';
+  const pos=(d.pos!==undefined)?d.pos:'';
+  switch(d.trigger){
+    case 'personal_best':  return `ベスト更新。${t}。${diff}アップ。`;
+    case 'first_lap':      return `${t}。基準ラップだ。`;
+    case 'session_best':   return `セッションベスト。${t}。`;
+    case 'lap_consistent': return `${t}。安定している。`;
+    case 'lap_time':       return `${t}。${diff}落ち。`;
+    case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
+    case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しろ。焦るな、まだ戦える。確実に持ち帰ろう。`;
+    case 'incident': {
+      const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
+      if(r3) return ['インシデントが多い。落ち着け。順位より完走だ。','もう十分だ。頭を冷やせ。確実に持ち帰ろう。','これ以上リスクを取るな。まず一台、無事に戻す。'][Math.floor(Math.random()*3)];
+      if(d4) return ['接触だ。落ち着け。これ以上リスクを取るな。','大きいのを受けたな。冷静に。今あるものを守ろう。','一度リセットしろ。ここからクリーンにいく。'][Math.floor(Math.random()*3)];
+      return ['気をつけろ。立て直せ。','スピンか。落ち着け、まだ大丈夫だ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
+    }
+    case 'position_up':    return `P${pos}。`;
+    case 'position_down':  return `P${pos}。1つ後退。`;
+    case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
+    case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
+    case 'final_lap':      return `ファイナルラップ。P${pos}。`;
+    case 'pit_entry':      return `ピット了解。リミッター。`;
+    case 'pit_exit':       return `コースイン。P${pos}。タイヤ1周待て。`;
+    case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
+    case 'multiclass_approaching': return `後方に速いクラス。${d.delta}秒。道を譲れ。`;
+    case 'multiclass_imminent':    return `道を空けろ。今だ。`;
+    case 'battle_behind':  return `後ろ${d.delta}。守れ。`;
+    case 'battle_behind_faster': return `後ろ${d.delta}。相手が速い。先に行かせろ。`;
+    case 'battle_ahead':   return `前${d.delta}。射程圏だ。`;
+    default: return null;
+  }
 }
+function kanbeRadio(d){
+  const t=d.time||'';
+  const diff=(d.diff!==undefined)?d.diff:'';
+  const pos=(d.pos!==undefined)?d.pos:'';
+  switch(d.trigger){
+    case 'personal_best':  return `ベスト更新。${t}。${diff}アップ。`;
+    case 'first_lap':      return `${t}。基準ラップじゃ。`;
+    case 'session_best':   return `セッションベスト。${t}。`;
+    case 'lap_consistent': return `${t}。揃っとる。`;
+    case 'lap_time':       return `${t}。${diff}落ち。`;
+    case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
+    case 'pace_unstable':  return `2周続けて落ちとる。一回深呼吸せえ。慌てんでええ、まだ戦えとる。確実に持って帰るで。`;
+    case 'incident': {
+      const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
+      if(r3) return ['インシデント多すぎる。落ち着け、順位より完走じゃ。','もうええ。頭冷やせ。確実に持って帰るで。','これ以上リスク取るな。一台持って帰るんが先じゃ。'][Math.floor(Math.random()*3)];
+      if(d4) return ['接触じゃ。落ち着け。これ以上リスク取るな。','でかいの食らったな。冷静になれ。今あるもん守るで。','一回リセットせえ。ここからクリーンに行くで。'][Math.floor(Math.random()*3)];
+      return ['気をつけえ。立て直せ。','スピンか。落ち着け、まだ大丈夫じゃ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
+    }
+    case 'position_up':    return `P${pos}。`;
+    case 'position_down':  return `P${pos}。1つダウン。`;
+    case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
+    case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
+    case 'final_lap':      return `ファイナルラップ。P${pos}。`;
+    case 'pit_entry':      return `ピット了解。リミッター。`;
+    case 'pit_exit':       return `コースイン。P${pos}。タイヤ1周辛抱。`;
+    case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
+    case 'multiclass_approaching': return `後方速いクラス。${d.delta}秒。譲れ。`;
+    case 'multiclass_imminent':    return `道を空けえ。今じゃ。`;
+    case 'battle_behind':  return `後ろ${d.delta}。守れ。`;
+    case 'battle_behind_faster': return `後ろ${d.delta}。相手が速い。先に行かせえ。`;
+    case 'battle_ahead':   return `前${d.delta}。いけるで。`;
+    default: return null;
+  }
+}
+// 英語キャラ（James/Luna/Hajime）はbridgeの英語messageをそのまま使う（既に自然な英語）
 function injectRadio(data){
   if(selMode!=='race') return;
-  let text=data.message||'';
-  if(sel==='Kanbe') text=kanbeRadio(data)||text;
-  else if(sel==='Oishi') text=oishiRadio(data)||text;
+  let text;
+  if(sel==='Kanbe')      text=kanbeRadio(data)||data.message||'';
+  else if(sel==='Oishi') text=oishiRadio(data)||data.message||'';
+  else                   text=data.message||'';   // James/Luna/Hajime
+  if(!text) return;
   if(data.trigger==='personal_best'&&data.time) sessionBestLapStr=data.time;
   addMsg('ai',text);
   messages.push({role:'assistant',content:text});
