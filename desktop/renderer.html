@@ -391,6 +391,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="chat-header-top">
             <button class="back-btn" onclick="endSession()">End Session</button>
             <div style="display:flex;gap:8px;align-items:center">
+              <button class="voice-tog" id="ptt-btn" onclick="setupPTT()" title="ハンドルのボタンをPTTに割り当て">🎙 PTT設定</button>
               <button class="voice-tog on" id="voice-tog" onclick="toggleVoice()">🔊 Voice</button>
             </div>
           </div>
@@ -1000,6 +1001,122 @@ if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
 // ── Electron native app: LPを飛ばして直接アプリ画面を開く ──
 // （Webブラウザ版ではLPを見せるが、デスクトップアプリ＝本体なので即起動）
 window.addEventListener('DOMContentLoaded', ()=>{ try{ openApp(); }catch(e){} });
+
+// ══════════════════════════════════════════════════════════════
+// PTT（Push-To-Talk）：ハンドル/コントローラーのボタンで押して話す
+//   押してる間だけマイク録音→離したらGoogle STTへ→文字→大石へ
+//   フルスクリーン裏でもbackgroundThrottling:falseでゲームパッド検出が生きる
+// ══════════════════════════════════════════════════════════════
+let pttBinding = JSON.parse(localStorage.getItem('pw_ptt')||'null'); // {index, button}
+let pttCapturing = false;
+let pttHeld = false;
+let mediaStream = null, mediaRec = null, recChunks = [];
+
+function updatePTTLabel(){
+  const b=document.getElementById('ptt-btn'); if(!b) return;
+  if(pttBinding){ b.textContent='🎙 PTT: B'+pttBinding.button; b.classList.add('on'); }
+  else { b.textContent='🎙 PTT設定'; b.classList.remove('on'); }
+}
+
+// 設定：次に押されたゲームパッドのボタンを記録
+function setupPTT(){
+  pttCapturing = true;
+  setHint('🎮 ハンドルの使いたいボタンを今すぐ押してください…');
+  const b=document.getElementById('ptt-btn'); if(b) b.textContent='⏺ ボタン待機…';
+}
+
+// マイク準備（初回のみ）
+async function ensureMic(){
+  if(mediaStream) return true;
+  try{ mediaStream = await navigator.mediaDevices.getUserMedia({audio:true}); return true; }
+  catch(e){ addMsg('sys','⚠ マイクにアクセスできません: '+e.message); return false; }
+}
+
+async function pttStart(){
+  if(pttHeld || isBusy) return;
+  if(!(await ensureMic())) return;
+  pttHeld = true;
+  recChunks = [];
+  // 録音中はAI発話を止める（自分の声に被せない）
+  speakQueue=[]; stopCurrentAudio();
+  try{
+    mediaRec = new MediaRecorder(mediaStream, {mimeType:'audio/webm;codecs=opus'});
+    mediaRec.ondataavailable = (e)=>{ if(e.data&&e.data.size) recChunks.push(e.data); };
+    mediaRec.onstop = pttSend;
+    mediaRec.start();
+    document.getElementById('mic-btn').classList.add('recording');
+    setHint('🔴 録音中…（ボタンを離すと送信）');
+  }catch(e){ pttHeld=false; addMsg('sys','⚠ 録音開始失敗: '+e.message); }
+}
+
+function pttStop(){
+  if(!pttHeld) return;
+  pttHeld = false;
+  document.getElementById('mic-btn').classList.remove('recording');
+  setHint('… 文字起こし中');
+  try{ if(mediaRec && mediaRec.state!=='inactive') mediaRec.stop(); }catch(e){}
+}
+
+async function pttSend(){
+  try{
+    const blob = new Blob(recChunks, {type:'audio/webm'});
+    if(blob.size < 800){ setHint(''); return; } // 短すぎ＝無音
+    const b64 = await blobToBase64(blob);
+    const isJP = (sel==='Kanbe'||sel==='Oishi');
+    const r = await fetch('/api/stt',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ audio:b64, languageCode:isJP?'ja-JP':'en-US', encoding:'WEBM_OPUS' })
+    });
+    const data = await r.json();
+    const text = (data.text||'').trim();
+    setHint('');
+    if(text){
+      document.getElementById('chat-input').value = text;
+      sendMsg();   // 既存フロー：→Claude→大石の返答→TTS
+    } else {
+      setHint('（聞き取れず）');
+    }
+  }catch(e){ setHint('⚠ 文字起こし失敗'); }
+}
+
+function blobToBase64(blob){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onloadend=()=>res(String(r.result).split(',')[1]);
+    r.onerror=rej; r.readAsDataURL(blob);
+  });
+}
+
+// ゲームパッド検出ループ（押下/離しを監視）
+function pollGamepads(){
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for(let i=0;i<pads.length;i++){
+    const gp=pads[i]; if(!gp) continue;
+    for(let bi=0; bi<gp.buttons.length; bi++){
+      const pressed = gp.buttons[bi].pressed;
+      if(pttCapturing && pressed){
+        pttBinding = {index:i, button:bi};
+        localStorage.setItem('pw_ptt', JSON.stringify(pttBinding));
+        pttCapturing = false;
+        updatePTTLabel();
+        setHint('✅ PTT登録：ゲームパッド'+i+' ボタン'+bi+'（押して話す）');
+        return requestAnimationFrame(pollGamepads);
+      }
+    }
+    // 登録済みボタンの押下/離しでPTT発火
+    if(pttBinding && i===pttBinding.index){
+      const btn = gp.buttons[pttBinding.button];
+      if(btn){
+        if(btn.pressed && !pttHeld) pttStart();
+        else if(!btn.pressed && pttHeld) pttStop();
+      }
+    }
+  }
+  requestAnimationFrame(pollGamepads);
+}
+window.addEventListener('gamepadconnected', (e)=>{ addMsg('sys','🎮 コントローラー接続: '+e.gamepad.id); });
+requestAnimationFrame(pollGamepads);
+updatePTTLabel();
 </script>
 </body>
 </html>
