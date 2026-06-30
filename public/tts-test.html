@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大石ボイス聞き比べ — OMORAY PITWALL</title>
+<style>
+  body{background:#0d0d0d;color:#f5f5f5;font-family:sans-serif;max-width:640px;margin:0 auto;padding:24px;line-height:1.6}
+  h1{font-size:20px;color:#9D4EDD}
+  .sample{background:#1a1a24;border:1px solid #2a2a3a;border-radius:8px;padding:12px;margin:16px 0;font-size:15px}
+  .row{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid #2a2a3a;border-radius:8px;margin:8px 0;background:#15151f}
+  .row .label{flex:1}
+  .row .vname{font-weight:700;color:#9D4EDD}
+  .row .meta{font-size:12px;color:#888}
+  button{background:#9D4EDD;color:#fff;border:none;border-radius:6px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer}
+  button:hover{opacity:.85}
+  .pick{background:#19d36b}
+  input{width:100%;background:#1a1a24;border:1px solid #2a2a3a;color:#f5f5f5;border-radius:6px;padding:10px;font-size:14px;margin-top:8px}
+  .note{font-size:13px;color:#888;margin-top:20px}
+</style>
+</head>
+<body>
+<h1>🎙 大石ボイス聞き比べ</h1>
+<p>各ボタンを押すと、その声で大石のセリフを再生します。一番しっくりくる声を選んでください。</p>
+
+<div class="sample">
+  セリフ：<input id="line" value="ベスト更新だ。1分42秒3。いい走りだ、このまま行こう。">
+</div>
+
+<div id="rows"></div>
+
+<p class="note">※ 現在の本番設定は <b>ja-JP-Neural2-D / pitch -1.0</b>（老けて聞こえると指摘あり）<br>
+Neural2 = 標準高品質 / WaveNet = 高品質 / Studio = 最高品質（最も人間的）</p>
+
+<script>
+const VOICES = [
+  { v:'ja-JP-Neural2-B',  rate:1.25, pitch:0,    note:'Neural2 男性B・標準ピッチ（若め候補）' },
+  { v:'ja-JP-Neural2-D',  rate:1.25, pitch:0,    note:'Neural2 男性D・ピッチ0（現状を若返らせた版）' },
+  { v:'ja-JP-Neural2-C',  rate:1.25, pitch:0,    note:'Neural2 男性C（官兵衛と同じ系統）' },
+  { v:'ja-JP-Wavenet-C',  rate:1.25, pitch:0,    note:'WaveNet 男性C・標準ピッチ' },
+  { v:'ja-JP-Wavenet-D',  rate:1.25, pitch:0,    note:'WaveNet 男性D・標準ピッチ' },
+  { v:'ja-JP-Wavenet-B',  rate:1.25, pitch:1.0,  note:'WaveNet 男性B・少し高め（最も若い候補）' },
+  { v:'ja-JP-Studio-B',   rate:1.2,  pitch:0,    note:'Studio 男性B・最高品質（最も人間的）' },
+];
+const rows = document.getElementById('rows');
+VOICES.forEach(o=>{
+  const div=document.createElement('div'); div.className='row';
+  div.innerHTML=`<div class="label"><span class="vname">${o.v}</span><br><span class="meta">${o.note} · rate ${o.rate} / pitch ${o.pitch}</span></div>`;
+  const btn=document.createElement('button'); btn.textContent='▶ 再生';
+  btn.onclick=()=>play(o, btn);
+  div.appendChild(btn); rows.appendChild(div);
+});
+async function play(o, btn){
+  const text=document.getElementById('line').value;
+  const old=btn.textContent; btn.textContent='…';
+  try{
+    const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text, voice:o.v, languageCode:'ja-JP', rate:o.rate, pitch:o.pitch})});
+    if(!r.ok){ btn.textContent='✕ '+r.status; setTimeout(()=>btn.textContent=old,2000); return; }
+    const d=await r.json();
+    const a=new Audio('data:audio/mp3;base64,'+d.audioContent);
+    a.onended=()=>btn.textContent=old;
+    a.play();
+  }catch(e){ btn.textContent='✕ err'; setTimeout(()=>btn.textContent=old,2000); }
+}
+</script>
+</body>
+</html>
