@@ -2,7 +2,7 @@
 // 最重要設定：backgroundThrottling:false
 //   → iRacingがフルスクリーンで前面に来てウィンドウが裏に回っても、
 //     タイマー・音声・JSが絞られず動き続ける（=ブラウザの「裏で死ぬ」問題の解決）
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -77,6 +77,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // マイク権限を自動許可（PTT用。Electronなので毎回ダイアログを出さない）
+  session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => {
+    cb(permission === 'media' ? true : true);
+  });
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
   app.on('activate', () => {
