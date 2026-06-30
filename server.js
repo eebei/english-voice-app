@@ -39,7 +39,9 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
 app.use(cors({
   origin(origin, cb) {
     // same-origin / curl / mobile webview have no Origin header → allow
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    // 'null' = Electronデスクトップアプリ(file://)が送るオリジン。デスクトップ版を許可。
+    //   ※本命の防御はアカウント実装時のトークン認証。CORSは補助。レート制限で当面ガード。
+    if (!origin || origin === 'null' || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error('Not allowed by CORS'));
   },
 }));
