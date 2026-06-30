@@ -9,13 +9,15 @@ const net = require('net');
 const { spawn } = require('child_process');
 
 // 既にbridgeがport8765で動いているか確認（重複起動＝点滅の原因を防ぐ）
-function isBridgeAlreadyRunning() {
+// 古い/ゾンビのbridgeを掃除（前回のアプリ実行残り・昔の手動起動・スケジューラ起動を一掃）
+function killStaleBridges() {
   return new Promise((resolve) => {
-    const sock = net.connect({ host: '127.0.0.1', port: 8765 }, () => {
-      sock.destroy(); resolve(true);   // 誰かが既に8765で待ち受け中
-    });
-    sock.on('error', () => { sock.destroy(); resolve(false); });
-    sock.setTimeout(800, () => { sock.destroy(); resolve(false); });
+    if (process.platform !== 'win32') return resolve();
+    try {
+      const k = spawn('taskkill', ['/F', '/IM', 'OMORAY-PITWALL-Bridge.exe', '/T'], { windowsHide: true });
+      k.on('exit', () => { log('killed stale bridges (if any)'); setTimeout(resolve, 600); });
+      k.on('error', () => resolve());
+    } catch (e) { resolve(); }
   });
 }
 
@@ -23,15 +25,10 @@ let win;
 let bridgeProc = null;
 
 // ── テレメトリbridgeを自動起動（ユーザーが手動でexeを立ち上げる必要をなくす）──
-// Windows: 同梱の OMORAY-PITWALL-Bridge.exe を起動
-// 開発(Mac/Linux): bridge.py があれば python3 で起動（iRacing無しなので実データは出ないが配線確認用）
+// 必ず「古いbridgeを掃除→最新の同梱bridgeを起動」する。古い壊れたbridgeを再利用しない。
 async function startBridge() {
   try {
-    // 既にbridgeが動いてたら起動しない（旧スケジューラ起動のbridge等との衝突＝点滅を防ぐ）
-    if (await isBridgeAlreadyRunning()) {
-      log('bridge already running on :8765 — reuse, skip spawn');
-      return;
-    }
+    await killStaleBridges();   // ★まず古いbridgeを全部消す（前回ゾンビ・旧バージョンの再利用を防ぐ）
     const exeName = 'OMORAY-PITWALL-Bridge.exe';
     // 配布時は resources、開発時は app直下/隣の irsdk-bridge を探す
     const candidates = [
@@ -71,6 +68,10 @@ async function startBridge() {
 
 function stopBridge() {
   if (bridgeProc) { try { bridgeProc.kill(); } catch (e) {} bridgeProc = null; }
+  // 念のためimage名でも掃除（ゾンビ残り防止）
+  if (process.platform === 'win32') {
+    try { spawn('taskkill', ['/F', '/IM', 'OMORAY-PITWALL-Bridge.exe', '/T'], { windowsHide: true }); } catch (e) {}
+  }
 }
 
 // ログをデスクトップのファイルに残す（SIM PCで実態を確認するため）。app ready後にwhenReadyで設定。
