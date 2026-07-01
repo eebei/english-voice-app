@@ -46,7 +46,7 @@ jobs:
 
       - name: Set build date
         id: date
-        run: echo "DATE=$(Get-Date -Format 'yyyyMMdd')" >> $env:GITHUB_OUTPUT
+        run: echo "DATE=$(Get-Date -Format 'yyyyMMdd-HHmm')" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
       - name: Rename for release
