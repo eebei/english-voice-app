@@ -842,6 +842,18 @@ function connectBridge(){
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
       if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint('✅ PTT登録：ボタン'+data.button+'（押して話す）'); }
       if(data.type==='ptt_config'){ if(data.binding){ pttBinding={index:data.binding.joy,button:data.binding.button}; updatePTTLabel(); } }
+      // ── PTT v2：bridge側STT結果受信（ネイティブマイク） ──
+      if(data.type==='ptt_text'){
+        setHint('');
+        const text=(data.text||'').trim();
+        if(text){
+          document.getElementById('chat-input').value=text;
+          sendMsg();  // Claude→大石の返答フロー
+          addMsg('driver','[PTT] '+text);  // ドライバ発話を表示
+        } else {
+          setHint('（聞き取れず）');
+        }
+      }
     };
     irBridge.onclose=()=>{
       const was=bridgeConnected; bridgeConnected=false; iracingLive=false; updateBridgeStatus();
@@ -1056,21 +1068,22 @@ async function ensureMic(){
   catch(e){ addMsg('sys','⚠ マイクにアクセスできません: '+e.message); return false; }
 }
 
+// ── PTT v2：bridge側ネイティブマイク（pyaudio）──
+// ブラウザのマイク制限を回避。ネイティブPythonプロセスでキャプチャ
 async function pttStart(){
   if(pttHeld || isBusy) return;
-  if(!(await ensureMic())) return;
+  if(!irBridge || irBridge.readyState!==1){ setHint('⚠ Bridge未接続'); return; }
   pttHeld = true;
-  recChunks = [];
   // 録音中はAI発話を止める（自分の声に被せない）
   speakQueue=[]; stopCurrentAudio();
+  document.getElementById('mic-btn').classList.add('recording');
+  setHint('🔴 録音中…（ボタンを離すと送信）');
   try{
-    mediaRec = new MediaRecorder(mediaStream, {mimeType:'audio/webm;codecs=opus'});
-    mediaRec.ondataavailable = (e)=>{ if(e.data&&e.data.size) recChunks.push(e.data); };
-    mediaRec.onstop = pttSend;
-    mediaRec.start();
-    document.getElementById('mic-btn').classList.add('recording');
-    setHint('🔴 録音中…（ボタンを離すと送信）');
-  }catch(e){ pttHeld=false; addMsg('sys','⚠ 録音開始失敗: '+e.message); }
+    irBridge.send(JSON.stringify({cmd:'ptt_start'}));
+  }catch(e){
+    pttHeld=false;
+    addMsg('sys','⚠ bridge PTT開始失敗: '+e.message);
+  }
 }
 
 function pttStop(){
@@ -1078,29 +1091,12 @@ function pttStop(){
   pttHeld = false;
   document.getElementById('mic-btn').classList.remove('recording');
   setHint('… 文字起こし中');
-  try{ if(mediaRec && mediaRec.state!=='inactive') mediaRec.stop(); }catch(e){}
-}
-
-async function pttSend(){
   try{
-    const blob = new Blob(recChunks, {type:'audio/webm'});
-    if(blob.size < 800){ setHint(''); return; } // 短すぎ＝無音
-    const b64 = await blobToBase64(blob);
-    const isJP = (sel==='Kanbe'||sel==='Oishi');
-    const r = await fetch('/api/stt',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ audio:b64, languageCode:isJP?'ja-JP':'en-US', encoding:'WEBM_OPUS' })
-    });
-    const data = await r.json();
-    const text = (data.text||'').trim();
-    setHint('');
-    if(text){
-      document.getElementById('chat-input').value = text;
-      sendMsg();   // 既存フロー：→Claude→大石の返答→TTS
-    } else {
-      setHint('（聞き取れず）');
-    }
-  }catch(e){ setHint('⚠ 文字起こし失敗'); }
+    irBridge.send(JSON.stringify({cmd:'ptt_stop'}));
+  }catch(e){
+    addMsg('sys','⚠ bridge PTT停止失敗: '+e.message);
+  }
+}
 }
 
 function blobToBase64(blob){
