@@ -1,7 +1,7 @@
 {
   "name": "omoray-pitwall",
-  "version": "0.1.0",
-  "description": "OMORAY PITWALL — AI Race Engineer (desktop client)",
+  "version": "20260701",
+  "description": "OMORAY PITWALL — AI Race Engineer (desktop client) [BUILD 2026-07-01-021]",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
