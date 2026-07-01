@@ -1062,12 +1062,6 @@ function setupPTT(){
 }
 
 // マイク準備（初回のみ）
-async function ensureMic(){
-  if(mediaStream) return true;
-  try{ mediaStream = await navigator.mediaDevices.getUserMedia({audio:true}); return true; }
-  catch(e){ addMsg('sys','⚠ マイクにアクセスできません: '+e.message); return false; }
-}
-
 // ── PTT v2：bridge側ネイティブマイク（pyaudio）──
 // ブラウザのマイク制限を回避。ネイティブPythonプロセスでキャプチャ
 async function pttStart(){
@@ -1097,19 +1091,9 @@ function pttStop(){
     addMsg('sys','⚠ bridge PTT停止失敗: '+e.message);
   }
 }
-}
 
-function blobToBase64(blob){
-  return new Promise((res,rej)=>{
-    const r=new FileReader();
-    r.onloadend=()=>res(String(r.result).split(',')[1]);
-    r.onerror=rej; r.readAsDataURL(blob);
-  });
-}
-
-// ※ボタン検出はブラウザのGamepad APIではなく、ネイティブのbridge（pygame）が担当する。
-//   理由：iRacingフルスクリーンの裏ではGamepad APIが入力を受け取れないため。
-//   bridgeが {type:'ptt',state:'down'/'up'} を送ってくる → 上のWS受信でpttStart/pttStopを呼ぶ。
+// ※ボタン検出・マイク入力・STT処理は全てbridge側（pyaudio+Google STT）
+//   ブラウザのマイク制限を回避するため。
 updatePTTLabel();
 </script>
 </body>
