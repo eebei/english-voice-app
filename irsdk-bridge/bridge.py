@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-01-021
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-01-022
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -68,6 +68,117 @@ def save_ptt_config():
 
 def log(msg):
     line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg
+
+# ── マイク入力（PTT用・ネイティブキャプチャ）──
+# pyaudioでマイクから直接音声をキャプチャ（フルスクリーン背後でも動作）
+ptt_audio = None
+ptt_recording = False
+
+def init_mic():
+    global ptt_audio
+    try:
+        import pyaudio
+        ptt_audio = pyaudio.PyAudio()
+        log("PTT: pyaudio initialized")
+        return True
+    except Exception as e:
+        log("PTT: pyaudio init failed - " + str(e))
+        return False
+
+def start_ptt_record():
+    global ptt_recording
+    if not ptt_audio:
+        return
+    ptt_recording = True
+    log("PTT: recording started (native pyaudio)")
+
+def stop_ptt_record():
+    global ptt_recording
+    if not ptt_recording:
+        return
+    ptt_recording = False
+    log("PTT: recording stopped, sending to STT...")
+
+def record_ptt_audio():
+    """バックグラウンドスレッド：マイク入力をキャプチャ＆STT送信"""
+    if not ptt_audio:
+        return
+    try:
+        import pyaudio
+        import base64
+        
+        CHUNK = 2048
+        FORMAT = pyaudio.paFloat32
+        CHANNELS = 1
+        RATE = 16000
+        
+        stream = ptt_audio.open(format=FORMAT, channels=CHANNELS, rate=RATE,
+                                input=True, frames_per_buffer=CHUNK)
+        frames = []
+        
+        while True:
+            if ptt_recording:
+                try:
+                    data = stream.read(CHUNK, exception_on_overflow=False)
+                    frames.append(data)
+                except Exception:
+                    pass
+            else:
+                # 録音停止→STT送信
+                if frames:
+                    import wave
+                    wav_file = "/tmp/ptt_audio.wav"
+                    with wave.open(wav_file, 'wb') as wf:
+                        wf.setnchannels(CHANNELS)
+                        wf.setsampwidth(ptt_audio.get_sample_size(FORMAT))
+                        wf.setframerate(RATE)
+                        wf.writeframes(b''.join(frames))
+                    
+                    with open(wav_file, 'rb') as f:
+                        b64 = base64.b64encode(f.read()).decode()
+                    
+                    # STT送信（非同期）
+                    asyncio.run_coroutine_threadsafe(
+                        send_stt_request(b64), loop)
+                    
+                    frames = []
+                time.sleep(0.05)
+    except Exception as e:
+        log("PTT record error: " + str(e))
+
+async def send_stt_request(audio_b64):
+    """Google STTにマイク音声を送信"""
+    global TTS_API_KEY
+    try:
+        if not TTS_API_KEY:
+            return
+        stt_body = {
+            "config": {
+                "encoding": "LINEAR16",
+                "languageCode": "en-US",
+                "sampleRateHertz": 16000,
+            },
+            "audio": {"content": audio_b64},
+        }
+        r = await fetch_async(
+            f"https://speech.googleapis.com/v1/speech:recognize?key={TTS_API_KEY}",
+            method="POST",
+            body=json.dumps(stt_body),
+        )
+        data = await r.json()
+        text = (data.get("results", [{}])[0].get("alternatives", [{}])[0].get("transcript", "")).strip()
+        if text:
+            broadcast({"type": "ptt_text", "text": text})
+            log("PTT: recognized -> " + text)
+    except Exception as e:
+        log("STT error: " + str(e))
+
+async def fetch_async(url, **kwargs):
+    """asyncio-friendly fetch"""
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, **kwargs) as r:
+            return await r.json()
     print(line, flush=True)
     try:
         with open(LOG_PATH, "a", encoding="utf-8") as f:
@@ -1033,6 +1144,11 @@ async def handler(websocket):
                 msg = json.loads(raw)
             except Exception:
                 continue
+            # PTT recording control
+            if cmd == "ptt_start":
+                start_ptt_record()
+            elif cmd == "ptt_stop":
+                stop_ptt_record()
             cmd = msg.get('cmd')
             if cmd == 'ptt_setup':
                 ptt_capturing = True
@@ -1048,7 +1164,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-01-021 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-01-022 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1056,7 +1172,7 @@ async def main():
     t.start()
     tj = threading.Thread(target=poll_joystick, daemon=True)
     tj.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-01-021  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-01-022  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
