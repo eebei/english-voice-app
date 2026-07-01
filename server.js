@@ -47,7 +47,11 @@ app.use(cors({
 }));
 
 // Cap request body size → bounds the cost of any single call.
-app.use(express.json({ limit: '128kb' }));
+// ※ /api/stt は音声(base64 WAV)を送るため大きい。ここでは弾かず、ルート側の 4mb パーサに任せる。
+app.use((req, res, next) => {
+  if (req.path === '/api/stt') return next();
+  return express.json({ limit: '128kb' })(req, res, next);
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Per-IP rate limit on the chat endpoint (the driver's conversation — never starve this).
