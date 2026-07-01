@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-06-30-020
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-01-021
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -76,6 +76,16 @@ def log(msg):
         pass
 
 def broadcast(event):
+    # 診断ログ：ラジオ発話とPTTイベントを記録（画面と突き合わせるため）
+    try:
+        et = event.get('type')
+        if et == 'radio':
+            log("RADIO -> trigger=%s time=%s diff=%s (lap timing check)" %
+                (event.get('trigger'), event.get('time'), event.get('diff')))
+        elif et == 'ptt':
+            log("PTT event -> " + str(event.get('state')))
+    except Exception:
+        pass
     if not connected_clients or loop is None:
         return
     msg = json.dumps(event)
@@ -935,6 +945,8 @@ def poll_joystick():
     global ptt_capturing, ptt_pressed, ptt_binding
     try:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")  # 画面不要
+        # フォーカスが無く（iRacingがフルスクリーン前面）てもジョイスティック入力を受け取る
+        os.environ["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
         import pygame
         pygame.init()
         pygame.joystick.init()
@@ -1036,7 +1048,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-06-30-020 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-01-021 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1044,7 +1056,7 @@ async def main():
     t.start()
     tj = threading.Thread(target=poll_joystick, daemon=True)
     tj.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-06-30-020  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-01-021  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
