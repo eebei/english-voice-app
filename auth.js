@@ -84,6 +84,10 @@ async function init() {
 
   if (BREVO_API_KEY) {
     mailer = 'brevo';
+    // 診断：鍵の長さと頭だけログ（秘密は出さない）。正しいv3鍵は xkeysib- で始まり約89文字。
+    console.log('[auth] BREVO key check: len=' + BREVO_API_KEY.length +
+      ' prefix=' + JSON.stringify(BREVO_API_KEY.slice(0, 9)) +
+      ' tailhasSpace=' + /\s/.test(BREVO_API_KEY));
     console.log('[auth] email via Brevo HTTP API (from ' + EMAIL_FROM + ').');
   } else if (nodemailer && GMAIL_USER && GMAIL_APP_PASSWORD) {
     // フォールバック（ローカル開発用）。RailwayはSMTP遮断のため本番では不可。
