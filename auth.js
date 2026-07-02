@@ -82,6 +82,10 @@ async function init() {
     mailer = nodemailer.createTransport({
       service: 'gmail',
       auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+      // PaaSがSMTPポートをブロックしている場合に無限ハングせず速く失敗させる
+      connectionTimeout: 12000,
+      greetingTimeout: 10000,
+      socketTimeout: 12000,
     });
   } else {
     console.warn('[auth] email disabled — set GMAIL_USER and GMAIL_APP_PASSWORD to send magic links.');
