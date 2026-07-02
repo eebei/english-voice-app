@@ -806,8 +806,8 @@ function bridgeVoice(key){
   if((key==='bridge_up'||key==='bridge_down') && now-lastBridgeVoiceAt < 8000) { lastBridgeVoiceKey=key; lastBridgeVoiceAt=now; return; }
   lastBridgeVoiceKey=key; lastBridgeVoiceAt=now;
   const lines={
-    bridge_up:{ James:"Bridge is up. Waiting for iRacing.", Luna:"Bridge is up. Waiting for iRacing.", Hajime:"Bridge connected. Waiting for iRacing.", Kanbe:"ブリッジOKじゃ。iRacing待ちじゃ。", Oishi:"ブリッジ接続完了。iRacing起動を待つ。" },
-    bridge_down:{ James:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Luna:"Bridge is down. Launch the bridge app — I'll reconnect automatically.", Hajime:"Bridge is down. Restart the bridge. I'll reconnect automatically.", Kanbe:"ブリッジが落ちとる。起動し直してくれ。自動で繋ぎ直す。", Oishi:"ブリッジが切れた。起動し直してくれ。自動で再接続する。" },
+    bridge_up:{ James:"System's up. Waiting for iRacing.", Luna:"System's ready. Waiting for iRacing.", Hajime:"System online. Waiting for iRacing.", Kanbe:"システム起動。iRacing待ちじゃ。", Oishi:"システム起動完了。iRacingを待つ。" },
+    bridge_down:{ James:"System offline. Make sure the app is running — I'll reconnect automatically.", Luna:"System's offline. Keep the app open — I'll reconnect automatically.", Hajime:"System offline. Keep the app running. I'll reconnect automatically.", Kanbe:"システムが切れとる。アプリが起動しとるか確認してくれ。自動で繋ぎ直す。", Oishi:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。" },
     iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Luna:"iRacing connected. Data coming in. Stand by for your briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。" },
     iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。" }
   };
@@ -819,9 +819,9 @@ function updateBridgeStatus(){
   if(!bar){ bar=document.createElement('div'); bar.id='bridge-status-bar';
     bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;text-align:center;padding:5px 10px;font-size:13px;font-weight:700;font-family:sans-serif;transition:all 0.3s;';
     document.body.appendChild(bar); }
-  if(iracingLive){ bar.textContent='🟢 iRacing LIVE'; bar.style.background='#0a7d2e'; bar.style.color='#fff'; }
-  else if(bridgeConnected){ bar.textContent='🟡 Bridge OK — Waiting for iRacing'; bar.style.background='#7a5c00'; bar.style.color='#fff'; }
-  else{ bar.textContent='🔴 Bridge offline — auto-reconnecting…'; bar.style.background='#6b0000'; bar.style.color='#fff'; }
+  if(iracingLive){ bar.textContent='🟢 iRacing connected · システム稼働中'; bar.style.background='#0a7d2e'; bar.style.color='#fff'; }
+  else if(bridgeConnected){ bar.textContent='🟡 システム起動 · iRacingの起動を待っています'; bar.style.background='#7a5c00'; bar.style.color='#fff'; }
+  else{ bar.textContent='🔴 システム接続中… アプリが起動しているか確認してください'; bar.style.background='#6b0000'; bar.style.color='#fff'; }
 }
 function connectBridge(){
   if(irBridge&&irBridge.readyState<2) return;
