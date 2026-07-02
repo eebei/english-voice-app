@@ -8,6 +8,10 @@ const fs = require('fs');
 const net = require('net');
 const { spawn } = require('child_process');
 
+// ★音声の自動再生を常に許可：TTSはfetch後の非同期コールバックで鳴らすため、
+//   デフォルト（ユーザー操作直後のみ許可）だとブロックされ無音になる。
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 // 既にbridgeがport8765で動いているか確認（重複起動＝点滅の原因を防ぐ）
 // 古い/ゾンビのbridgeを掃除（前回のアプリ実行残り・昔の手動起動・スケジューラ起動を一掃）
 function killStaleBridges() {
@@ -90,6 +94,7 @@ function createWindow() {
     backgroundColor: '#07080f',
     webPreferences: {
       backgroundThrottling: false,   // ★ 裏に回っても止めない（このプロジェクトの肝）
+      autoplayPolicy: 'no-user-gesture-required',  // ★ TTS音声を確実に再生
       contextIsolation: true,
       nodeIntegration: false,
     },
