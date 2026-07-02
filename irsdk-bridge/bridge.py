@@ -919,7 +919,10 @@ def poll_iracing():
                     'message': 'P' + str(class_pos) + '. Lost one.'})
 
         # Fuel warning
-        if fuel is not None and fuel < 5 and (prev['fuel'] is None or prev['fuel'] >= 5):
+        # ※実際にトラック走行中＆燃料が有効な数値の時だけ警告する。
+        #   ガレージ/ピット/セッション開始直後は燃料0やデータ未取得で誤発火するため除外。
+        if driver_state == 'track' and fuel is not None and 0.5 < fuel < 5 \
+                and (prev['fuel'] is None or prev['fuel'] >= 5):
             broadcast({'type': 'radio', 'trigger': 'fuel_warning', 'fuel': round(fuel, 1),
                 'message': 'Fuel ' + str(round(fuel, 1)) + '. Save mode now.'})
 
