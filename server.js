@@ -6,6 +6,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const { buildSystem } = require('./prompts');
+const auth = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -54,6 +55,60 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ── 会員基盤（マジックリンク認証） ───────────────────────────────────────────
+// 現在ユーザーをreqに付与（未ログイン/未設定ならreq.user=null。既存機能は不変）。
+app.use(auth.attachUser);
+
+// メールアドレス → ログインリンクを送る
+const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
+app.post('/api/auth/request', authLimiter, async (req, res) => {
+  try {
+    if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
+    const { email, product } = req.body || {};
+    const r = await auth.requestMagicLink(email, product);
+    res.json({ ok: true, sent: r.sent !== false });
+  } catch (err) {
+    const map = { invalid_email: 400, auth_not_ready: 503 };
+    res.status(map[err.message] || 500).json({ error: err.message });
+  }
+});
+
+// リンククリック → セッション発行 → アプリへ戻す
+app.get('/api/auth/verify', async (req, res) => {
+  try {
+    if (!auth.isReady()) return res.status(503).send('auth unavailable');
+    const { user, token } = await auth.verifyMagicToken(req.query.token);
+    const product = req.query.product === 'pitwall' ? 'pitwall' : 'racevoice';
+    // トークンをフロントに渡すため、簡易な完了ページを返す（localStorageに保存→アプリへ）
+    res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><meta charset="utf-8">
+<title>OMORAY ログイン完了</title>
+<body style="font-family:system-ui,sans-serif;background:#0a0a0a;color:#eee;text-align:center;padding:15vh 20px">
+<h2 style="color:#9D4EDD">ログイン完了 ✅</h2>
+<p>${user.email}</p>
+<p id="msg">アプリに戻ります…</p>
+<script>
+  try{ localStorage.setItem('omoray_token', ${JSON.stringify(token)}); }catch(e){}
+  // PITWALLデスクトップ用：トークンをコード表示（アプリに貼り付け）
+  var isPitwall = ${JSON.stringify(product === 'pitwall')};
+  if(isPitwall){
+    document.getElementById('msg').innerHTML =
+      'このコードをアプリに貼り付けてください：<br><textarea readonly style="width:90%;height:80px;margin-top:10px">' +
+      ${JSON.stringify(token)} + '</textarea>';
+  } else {
+    setTimeout(function(){ location.href='/'; }, 1200);
+  }
+</script></body>`);
+  } catch (err) {
+    res.status(400).set('Content-Type', 'text/html; charset=utf-8')
+      .send('<body style="font-family:sans-serif;padding:40px">リンクが無効か期限切れです。もう一度お試しください。<br>Link invalid or expired.</body>');
+  }
+});
+
+// 現在のログイン状態
+app.get('/api/auth/me', (req, res) => {
+  res.json({ user: auth.publicUser(req.user) });
+});
+
 // Per-IP rate limit on the chat endpoint (the driver's conversation — never starve this).
 // レース中は会話が生命線。十分余裕を持たせる。
 const chatLimiter = rateLimit({
@@ -77,6 +132,15 @@ const ttsLimiter = rateLimit({
 app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
     let { system, messages, max_tokens = 300, userName, character, mode } = req.body;
+
+    // ── PITWALL課金ゲート ──
+    // exe(PITWALL)は product:'pitwall' を送る。課金者(is_member)のみ許可。
+    // RaceVoice(無料)や旧クライアントは product を送らない → 従来通り通す。
+    if (req.body.product === 'pitwall') {
+      if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
+      if (!req.user) return res.status(401).json({ error: 'login_required' });
+      if (!req.user.is_member) return res.status(403).json({ error: 'membership_required' });
+    }
 
     // ── Build the system prompt SERVER-SIDE (crown jewels never leave the server) ──
     // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
@@ -224,10 +288,14 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
 });
 
 // ── Start server ────────────────────────────────────────────────────────────
+// 会員基盤を初期化（env未設定なら静かに無効化＝既存機能は不変）。失敗してもサーバーは起動。
+auth.init().catch(err => console.error('[auth] init failed (site still runs):', err.message));
+
 app.listen(PORT, () => {
   console.log('');
   console.log('  ✅  English Voice Practice is running!');
   console.log(`  🌐  Open → http://localhost:${PORT}`);
+  console.log(`  🔐  Auth: ${auth.isConfigured() ? 'configured' : 'DISABLED (set DATABASE_URL + JWT_SECRET)'}`);
   console.log('');
   console.log('  Press Ctrl+C to stop.');
   console.log('');
