@@ -20,6 +20,14 @@ if (!process.env.ANTHROPIC_API_KEY) {
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// ── Stripe（課金）──未設定でもサイトは動く ──
+let stripe = null;
+try {
+  const StripeLib = require('stripe');
+  if (process.env.STRIPE_SECRET_KEY) stripe = new StripeLib(process.env.STRIPE_SECRET_KEY);
+} catch (e) { console.warn('[stripe] lib not installed:', e.message); }
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
 // ── Abuse / cost guards (server-side, never trust the client) ─────────────────
 const MAX_TOKENS_CAP = 2000;   // legit usage tops out at 1500
 const MAX_MESSAGES   = 100;    // cap conversation length per request
@@ -47,6 +55,41 @@ app.use(cors({
   },
 }));
 
+// ── Stripe Webhook（署名検証のため“生ボディ”が必要。JSONパーサより前に置く）──
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe || !STRIPE_WEBHOOK_SECRET) return res.status(503).json({ error: 'stripe_unavailable' });
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('[stripe] signature verify failed:', err.message);
+    return res.status(400).send('bad signature');
+  }
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const s = event.data.object;
+      const email = (s.customer_details && s.customer_details.email) || s.customer_email;
+      await auth.setMemberByEmail(email, {
+        plan: 'founding',
+        stripeCustomerId: s.customer,
+        subscriptionStatus: 'active',
+      });
+      console.log('[stripe] checkout completed → member:', email);
+    } else if (event.type === 'customer.subscription.deleted') {
+      await auth.unsetMemberByCustomer(event.data.object.customer, 'canceled');
+    } else if (event.type === 'customer.subscription.updated') {
+      const sub = event.data.object;
+      if (['canceled', 'unpaid', 'incomplete_expired'].includes(sub.status)) {
+        await auth.unsetMemberByCustomer(sub.customer, sub.status);
+      }
+    }
+    res.json({ received: true });
+  } catch (err) {
+    console.error('[stripe] webhook handler error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Cap request body size → bounds the cost of any single call.
 // ※ /api/stt は音声(base64 WAV)を送るため大きい。ここでは弾かず、ルート側の 4mb パーサに任せる。
 app.use((req, res, next) => {
@@ -54,6 +97,12 @@ app.use((req, res, next) => {
   return express.json({ limit: '128kb' })(req, res, next);
 });
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Founding 枠の残り（サイトの「参加」ボタンの出し分けに使う）
+app.get('/api/founding/status', async (_req, res) => {
+  try { res.json(await auth.foundingStatus()); }
+  catch { res.json({ members: 0, cap: 50, spotsLeft: 50, soldOut: false }); }
+});
 
 // ── 会員基盤（マジックリンク認証） ───────────────────────────────────────────
 // 現在ユーザーをreqに付与（未ログイン/未設定ならreq.user=null。既存機能は不変）。
