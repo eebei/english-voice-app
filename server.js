@@ -193,7 +193,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 
     // ── Build the system prompt SERVER-SIDE (crown jewels never leave the server) ──
     // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
-    if (req.body.useServerPrompt && character) {
+    // クライアントが system を送ってこない場合はサーバー側でキャラのプロンプトを構築する
+    // （crown jewels をサーバーに保持。デスクトップ/RaceVoice双方に自動適用）。
+    if (character && (req.body.useServerPrompt || !system)) {
       const built = buildSystem(req.body);
       if (built) {
         system = [
