@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-02-024
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-02-025
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -531,12 +531,12 @@ def fmt_time(seconds):
 def fmt_radio(seconds):
     # 本物のF1無線方式：分は一切言わない。常に「秒」だけ言う。
     # ドライバーは自分が何分台かは分かっている。1:41.58 も 2:21.05 も「秒の部分」だけ言えば通じる。
-    #   101.58s -> 「41.58」 / 141.05s -> 「21.05」 / 45.3s -> 「45.30」
-    # コロン・分を消すことでTTS誤読も防ぐ。
+    #   101.589s -> 「41.589」 / 141.05s -> 「21.050」 / 45.3s -> 「45.300」
+    # タイムは1/1000秒（サウザンス）まで読み上げる＝iRacing表示と一致。コロン・分は消してTTS誤読も防ぐ。
     if seconds is None or seconds <= 0:
         return None
     s_in_min = seconds % 60
-    return "%.2f" % s_in_min
+    return "%.3f" % s_in_min
 
 
 reader = IRacingReader()
@@ -1174,7 +1174,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-02-024 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-02-025 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1186,7 +1186,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-02-024  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-02-025  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
