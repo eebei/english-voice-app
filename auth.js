@@ -17,8 +17,12 @@ try {
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
-const GMAIL_USER = process.env.GMAIL_USER;               // 例: omoraypitwall@gmail.com
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD; // Googleアプリパスワード（16桁）
+const GMAIL_USER = process.env.GMAIL_USER;               // 例: omoraypitwall@gmail.com（送信元アドレス）
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD; // （旧SMTP用・RailwayはSMTP遮断のため未使用）
+// Brevo（HTTP API・ポート443・PaaSでも遮断されない）でメール送信
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
+const EMAIL_FROM = process.env.EMAIL_FROM || GMAIL_USER || 'omoraypitwall@gmail.com'; // Brevoで認証済みの送信元
+const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'OMORAY PITWALL';
 const BASE_URL = (process.env.BASE_URL || 'https://english-voice-app-production.up.railway.app').replace(/\/$/, '');
 
 const MAGIC_TTL_MIN = 20;        // マジックリンクの有効期限（分）
@@ -78,17 +82,19 @@ async function init() {
     );
   `);
 
-  if (nodemailer && GMAIL_USER && GMAIL_APP_PASSWORD) {
+  if (BREVO_API_KEY) {
+    mailer = 'brevo';
+    console.log('[auth] email via Brevo HTTP API (from ' + EMAIL_FROM + ').');
+  } else if (nodemailer && GMAIL_USER && GMAIL_APP_PASSWORD) {
+    // フォールバック（ローカル開発用）。RailwayはSMTP遮断のため本番では不可。
     mailer = nodemailer.createTransport({
       service: 'gmail',
       auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
-      // PaaSがSMTPポートをブロックしている場合に無限ハングせず速く失敗させる
-      connectionTimeout: 12000,
-      greetingTimeout: 10000,
-      socketTimeout: 12000,
+      connectionTimeout: 12000, greetingTimeout: 10000, socketTimeout: 12000,
     });
+    console.warn('[auth] email via Gmail SMTP (may be blocked on PaaS).');
   } else {
-    console.warn('[auth] email disabled — set GMAIL_USER and GMAIL_APP_PASSWORD to send magic links.');
+    console.warn('[auth] email disabled — set BREVO_API_KEY to send magic links.');
   }
 
   ready = true;
@@ -98,6 +104,31 @@ async function init() {
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
+}
+
+// ── メール送信（Brevo HTTP APIを優先。無ければnodemailerフォールバック） ──
+async function sendEmail({ to, subject, text, html }) {
+  if (mailer === 'brevo') {
+    const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json', 'accept': 'application/json' },
+      body: JSON.stringify({
+        sender: { email: EMAIL_FROM, name: EMAIL_FROM_NAME },
+        to: [{ email: to }],
+        subject, textContent: text, htmlContent: html,
+      }),
+    });
+    if (!resp.ok) {
+      const detail = await resp.text();
+      throw new Error('brevo_send_failed: ' + resp.status + ' ' + detail.slice(0, 200));
+    }
+    return;
+  }
+  if (mailer && mailer.sendMail) {
+    await mailer.sendMail({ from: `${EMAIL_FROM_NAME} <${EMAIL_FROM}>`, to, subject, text, html });
+    return;
+  }
+  throw new Error('no_mailer');
 }
 
 // ── マジックリンク発行＋メール送信 ──
@@ -122,8 +153,7 @@ async function requestMagicLink(rawEmail, product) {
     return { sent: false, devLink: verifyUrl };
   }
 
-  await mailer.sendMail({
-    from: `OMORAY PITWALL <${GMAIL_USER}>`,
+  await sendEmail({
     to: email,
     subject: 'OMORAY ログインリンク / Your login link',
     text:
