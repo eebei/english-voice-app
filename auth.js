@@ -230,6 +230,48 @@ function publicUser(u) {
   };
 }
 
+// ── 課金／会員管理（Stripe Webhookから呼ぶ） ──
+const FOUNDING_CAP = parseInt(process.env.FOUNDING_CAP || '50', 10);
+
+// 決済成功 → そのメールのユーザーを会員化（アカウントが無ければ作る）
+async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscriptionStatus } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const email = normalizeEmail(rawEmail);
+  if (!email) throw new Error('no_email');
+  const { rows } = await pool.query(
+    `INSERT INTO users (email, is_member, plan, stripe_customer_id, subscription_status)
+     VALUES ($1, true, $2, $3, $4)
+     ON CONFLICT (email) DO UPDATE SET
+       is_member = true,
+       plan = COALESCE($2, users.plan),
+       stripe_customer_id = COALESCE($3, users.stripe_customer_id),
+       subscription_status = COALESCE($4, users.subscription_status)
+     RETURNING *`,
+    [email, plan || 'founding', stripeCustomerId || null, subscriptionStatus || 'active']
+  );
+  log('member set: ' + email + ' (plan=' + (plan || 'founding') + ')');
+  return rows[0];
+}
+
+// 解約 → 会員フラグを落とす（Stripe customer id で特定）
+async function unsetMemberByCustomer(stripeCustomerId, status) {
+  if (!ready || !stripeCustomerId) return;
+  await pool.query(
+    `UPDATE users SET is_member = false, subscription_status = $2 WHERE stripe_customer_id = $1`,
+    [stripeCustomerId, status || 'canceled']
+  );
+  log('member unset (customer ' + stripeCustomerId + ')');
+}
+
+// 現在の会員数と Founding 枠の残り
+async function foundingStatus() {
+  if (!ready) return { members: 0, cap: FOUNDING_CAP, spotsLeft: FOUNDING_CAP, soldOut: false };
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM users WHERE is_member = true');
+  const members = rows[0].n;
+  const spotsLeft = Math.max(0, FOUNDING_CAP - members);
+  return { members, cap: FOUNDING_CAP, spotsLeft, soldOut: spotsLeft <= 0 };
+}
+
 // Authorizationヘッダ（Bearer）or ?token= から現在ユーザーを解決するミドルウェア
 async function attachUser(req, _res, next) {
   try {
@@ -245,5 +287,7 @@ module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser,
+  setMemberByEmail, unsetMemberByCustomer, foundingStatus,
+  FOUNDING_CAP,
   _pool: () => pool,
 };
