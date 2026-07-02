@@ -217,7 +217,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
 
     // Never trust the client's token count — clamp it server-side.
-    const safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
+    let safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
+    // レース無線は物理的にも短く（長文の暴走を防ぐバックストップ）
+    if (mode === 'race') safeMaxTokens = Math.min(safeMaxTokens, 100);
 
     // ユーザーログ（Railway のログで確認可能）
     if (userName) {
