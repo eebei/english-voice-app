@@ -182,6 +182,25 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 </head>
 <body>
 
+<!-- ═══ ベータ・アクセスコード ゲート（八木さん・Tobi等の限定配布） ═══ -->
+<div id="beta-gate" style="position:fixed;inset:0;z-index:99999;background:#0a0a0f;display:none;align-items:center;justify-content:center;padding:24px">
+  <div style="max-width:420px;width:100%;text-align:center">
+    <img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:40px;margin-bottom:28px">
+    <div style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">アクセスコード</div>
+    <div id="beta-gate-sub" style="font-size:14px;color:#9aa;margin-bottom:24px;line-height:1.6">
+      Yujiから受け取ったコードを入力してください。<br>このコードはあなた専用です。
+    </div>
+    <input id="beta-code-input" type="text" placeholder="PITWALL-XXXX-XXXX" autocomplete="off"
+      style="width:100%;padding:14px 16px;font-size:16px;text-align:center;letter-spacing:1px;border-radius:12px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:16px;text-transform:uppercase"
+      onkeydown="if(event.key==='Enter')submitBetaCode()">
+    <button id="beta-code-btn" onclick="submitBetaCode()"
+      style="width:100%;padding:14px;font-size:16px;font-weight:700;border:none;border-radius:12px;background:linear-gradient(135deg,#9D4EDD,#6a2fb5);color:#fff;cursor:pointer">
+      認証する
+    </button>
+    <div id="beta-gate-msg" style="font-size:13px;margin-top:16px;min-height:18px;color:#f66"></div>
+  </div>
+</div>
+
 <!-- ═══ NAV ═══ -->
 <nav>
   <div class="nav-in">
@@ -449,6 +468,53 @@ const GREETINGS = {
 // ── LP / App overlay ──
 function openApp(){ document.getElementById('app-overlay').classList.add('active'); window.scrollTo(0,0); }
 function closeApp(){ document.getElementById('app-overlay').classList.remove('active'); }
+
+// ── ベータ・アクセスコード ゲート ──
+// 起動のたびにサーバーで照合する。Yujiがactive=falseにしたら次回起動で弾かれる。
+function showBetaGate(){ document.getElementById('beta-gate').style.display='flex';
+  setTimeout(()=>{ try{document.getElementById('beta-code-input').focus();}catch(e){} },100); }
+function hideBetaGate(){ document.getElementById('beta-gate').style.display='none'; }
+
+async function verifyBeta(code){
+  try{
+    const r = await fetch('/api/beta/verify',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({code})});
+    return await r.json();
+  }catch(e){ return {ok:false, reason:'network'}; }
+}
+
+async function submitBetaCode(){
+  const inp=document.getElementById('beta-code-input');
+  const btn=document.getElementById('beta-code-btn');
+  const msg=document.getElementById('beta-gate-msg');
+  const code=(inp.value||'').trim().toUpperCase();
+  if(!code){ msg.textContent='コードを入力してください。'; return; }
+  btn.disabled=true; btn.textContent='確認中…'; msg.textContent='';
+  const res=await verifyBeta(code);
+  btn.disabled=false; btn.textContent='認証する';
+  if(res.ok){
+    localStorage.setItem('pw_beta_code', code);
+    msg.style.color='#6f6'; msg.textContent='ようこそ、'+(res.name||'')+' さん。';
+    setTimeout(()=>{ hideBetaGate(); },700);
+  }else{
+    const reasons={not_found:'このコードは見つかりません。',revoked:'このコードは現在無効です。Yujiに連絡してください。',
+      network:'サーバーに接続できません。ネット接続を確認してください。',unavailable:'認証サーバー準備中です。少し待って再試行してください。'};
+    msg.style.color='#f66'; msg.textContent=reasons[res.reason]||'認証に失敗しました。';
+  }
+}
+
+// 起動時ゲート：保存済みコードがあればサーバー再照合。無効/未入力ならゲート表示。
+async function bootGate(){
+  const saved=localStorage.getItem('pw_beta_code');
+  if(saved){
+    const res=await verifyBeta(saved);
+    if(res.ok){ hideBetaGate(); return true; }
+    // 無効化された/消された → 保存を消してゲートへ
+    if(res.reason==='revoked'||res.reason==='not_found'){ localStorage.removeItem('pw_beta_code'); }
+  }
+  showBetaGate();
+  return false;
+}
 
 // ── Screens ──
 function showScreen(id){
@@ -1035,7 +1101,7 @@ if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
 
 // ── Electron native app: LPを飛ばして直接アプリ画面を開く ──
 // （Webブラウザ版ではLPを見せるが、デスクトップアプリ＝本体なので即起動）
-window.addEventListener('DOMContentLoaded', ()=>{ try{ openApp(); }catch(e){} });
+window.addEventListener('DOMContentLoaded', ()=>{ try{ openApp(); }catch(e){} try{ bootGate(); }catch(e){} });
 
 // ══════════════════════════════════════════════════════════════
 // PTT（Push-To-Talk）：ハンドル/コントローラーのボタンで押して話す

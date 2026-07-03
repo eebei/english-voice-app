@@ -104,6 +104,48 @@ app.get('/api/founding/status', async (_req, res) => {
   catch { res.json({ members: 0, cap: 50, spotsLeft: 50, soldOut: false }); }
 });
 
+// ── ベータ・アクセスコード照合（exe起動ゲート／八木さん・Tobi等） ──
+const betaLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
+app.post('/api/beta/verify', betaLimiter, express.json(), async (req, res) => {
+  try {
+    const r = await auth.verifyBetaToken((req.body || {}).code);
+    if (r.ok) return res.json({ ok: true, name: r.name, tier: r.tier });
+    return res.status(403).json({ ok: false, reason: r.reason || 'denied' });
+  } catch (err) {
+    res.status(500).json({ ok: false, reason: 'error' });
+  }
+});
+
+// ── ベータコード管理（Yuji専用・ADMIN_SECRETヘッダで保護） ──
+//   発行:   POST /api/beta/admin/create {name,tier,billingStart}
+//   一覧:   GET  /api/beta/admin/list
+//   無効化: POST /api/beta/admin/revoke {code}   / 再有効化: {code,active:true}
+function requireAdmin(req, res, next) {
+  const secret = process.env.ADMIN_SECRET;
+  if (!secret) return res.status(503).json({ error: 'admin_disabled (set ADMIN_SECRET)' });
+  const given = req.headers['x-admin-secret'] || (req.query && req.query.secret);
+  if (given !== secret) return res.status(401).json({ error: 'unauthorized' });
+  next();
+}
+app.post('/api/beta/admin/create', requireAdmin, express.json(), async (req, res) => {
+  try {
+    const { name, tier, billingStart } = req.body || {};
+    const r = await auth.createBetaToken({ name, tier, billingStart });
+    res.json({ ok: true, ...r });
+  } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+app.get('/api/beta/admin/list', requireAdmin, async (_req, res) => {
+  try { res.json({ ok: true, tokens: await auth.listBetaTokens() }); }
+  catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+app.post('/api/beta/admin/revoke', requireAdmin, express.json(), async (req, res) => {
+  try {
+    const { code, active } = req.body || {};
+    const r = await auth.setBetaActive(code, active === true);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+
 // ── 会員基盤（マジックリンク認証） ───────────────────────────────────────────
 // 現在ユーザーをreqに付与（未ログイン/未設定ならreq.user=null。既存機能は不変）。
 app.use(auth.attachUser);

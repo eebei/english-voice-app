@@ -70,6 +70,21 @@ async function init() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // ベータ・テスター用アクセスコード（八木さん・Tobi等の限定配布を管理）。
+  //   隠しロックではなく「Yujiが発行した個人コード」。Yujiがactive=falseで即無効化できる。
+  //   tier: 'lifetime'=永久無料 / 'cost_share'=billing_start以降にコスト代($9.99/年)請求。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS beta_tokens (
+      code          TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      tier          TEXT NOT NULL DEFAULT 'lifetime',
+      active        BOOLEAN NOT NULL DEFAULT true,
+      billing_start DATE,
+      note          TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen     TIMESTAMPTZ
+    );
+  `);
   // 大石との会話・成長記録（アカウントに紐付く永続メモリ）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memories (
@@ -272,6 +287,59 @@ async function foundingStatus() {
   return { members, cap: FOUNDING_CAP, spotsLeft, soldOut: spotsLeft <= 0 };
 }
 
+// ── ベータ・アクセスコード照合（exe起動ゲート） ──
+function normalizeCode(code) {
+  return String(code || '').trim().toUpperCase();
+}
+
+async function verifyBetaToken(rawCode) {
+  const code = normalizeCode(rawCode);
+  if (!code) return { ok: false, reason: 'empty' };
+  if (!ready) return { ok: false, reason: 'unavailable' };
+  const { rows } = await pool.query('SELECT * FROM beta_tokens WHERE code = $1', [code]);
+  const row = rows[0];
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (!row.active) return { ok: false, reason: 'revoked' };
+  // 最終接続時刻を更新（Yujiが「最後にいつ使ったか」を見られる）
+  pool.query('UPDATE beta_tokens SET last_seen = now() WHERE code = $1', [code]).catch(() => {});
+  return { ok: true, name: row.name, tier: row.tier };
+}
+
+// ── ベータコード管理（Yuji専用・ADMIN_SECRETで保護） ──
+function genBetaCode(name) {
+  const tag = String(name || 'USER').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4) || 'USER';
+  const rand = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6桁
+  return `PITWALL-${tag}-${rand}`;
+}
+
+async function createBetaToken({ name, tier = 'lifetime', billingStart = null, note = null }) {
+  if (!ready) throw new Error('unavailable');
+  const code = genBetaCode(name);
+  await pool.query(
+    `INSERT INTO beta_tokens (code, name, tier, billing_start, note) VALUES ($1,$2,$3,$4,$5)`,
+    [code, name || 'tester', tier, billingStart, note]
+  );
+  return { code, name, tier, billingStart };
+}
+
+async function listBetaTokens() {
+  if (!ready) return [];
+  const { rows } = await pool.query(
+    `SELECT code, name, tier, active, billing_start, note, created_at, last_seen
+       FROM beta_tokens ORDER BY created_at DESC`
+  );
+  return rows;
+}
+
+async function setBetaActive(rawCode, active) {
+  if (!ready) throw new Error('unavailable');
+  const code = normalizeCode(rawCode);
+  const { rowCount } = await pool.query(
+    `UPDATE beta_tokens SET active = $2 WHERE code = $1`, [code, !!active]
+  );
+  return { ok: rowCount > 0 };
+}
+
 // Authorizationヘッダ（Bearer）or ?token= から現在ユーザーを解決するミドルウェア
 async function attachUser(req, _res, next) {
   try {
@@ -288,6 +356,7 @@ module.exports = {
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser,
   setMemberByEmail, unsetMemberByCustomer, foundingStatus,
+  verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   FOUNDING_CAP,
   _pool: () => pool,
 };
