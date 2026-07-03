@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-02-025
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-026
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -794,12 +794,9 @@ def poll_iracing():
                 pass
 
         # ── ラップタイム処理（LapLastLapTimeの値変化＝ライン通過直後に即発火）──
-        if lap_time_changed and last_lap_time is None:
-            # ピット停止位置がスタートライン前のコースでは、最初の1本はアウトラップ。
-            # 基準として飲むだけで読み上げない（TEST DRIVE/予選/練習ほぼ全てこの形）。
-            last_lap_time = lapTime
-            log("out-lap absorbed (not announced): %.3f" % lapTime)
-        elif lap_time_changed:
+        # スタートライン通過で上がったタイムは、コースに関係なく即座にそのまま読み上げる。
+        # （最初の1本もアウトラップ扱いで握りつぶさない。1周目はfirst_lap=Baselineとしてコール）
+        if lap_time_changed:
             t = fmt_radio(lapTime)
             if t:
                 is_session_best = (session_best is None or lapTime < session_best)
@@ -1174,7 +1171,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-02-025 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-026 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1186,7 +1183,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-02-025  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-026  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
