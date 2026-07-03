@@ -1073,7 +1073,11 @@ async function pttStart(){
   document.getElementById('mic-btn').classList.add('recording');
   setHint('🔴 録音中…（ボタンを離すと送信）');
   try{
-    irBridge.send(JSON.stringify({cmd:'ptt_start'}));
+    // 選択キャラの言語でSTTさせる（James/Luna/Hajime=英語, 官兵衛/大石=日本語）。
+    // これが無いと英語で喋っても日本語モデルで文字起こしされ崩れる。
+    const _c = CHARS[sel];
+    const sttLang = (_c && _c.gLang) ? _c.gLang : 'ja-JP';
+    irBridge.send(JSON.stringify({cmd:'ptt_start', lang:sttLang}));
   }catch(e){
     pttHeld=false;
     addMsg('sys','⚠ bridge PTT開始失敗: '+e.message);

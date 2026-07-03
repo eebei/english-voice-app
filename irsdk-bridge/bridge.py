@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-027
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-028
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -50,6 +50,7 @@ PTT_CONFIG_PATH = os.path.join(_base, "ptt_config.json")
 ptt_binding = None        # {"joy": int, "button": int}
 ptt_capturing = False     # 設定モード（次に押されたボタンを登録）
 ptt_pressed = False       # 現在押下中か
+ptt_lang = "ja-JP"        # STT言語（選択キャラに追従。English勢=en-GB/en-US、日本語勢=ja-JP）
 
 def load_ptt_config():
     global ptt_binding
@@ -166,7 +167,7 @@ async def send_stt_request(audio_b64):
             "audio": audio_b64,
             "encoding": "LINEAR16",
             "sampleRateHertz": 16000,
-            "languageCode": "ja-JP",
+            "languageCode": ptt_lang,
         }).encode("utf-8")
         req = urllib.request.Request(
             RAILWAY_URL + "/api/stt",
@@ -1144,7 +1145,7 @@ def poll_joystick():
 
 
 async def handler(websocket):
-    global ptt_capturing
+    global ptt_capturing, ptt_lang
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
@@ -1160,6 +1161,10 @@ async def handler(websocket):
             cmd = msg.get('cmd')
             log("CMD received: " + str(cmd))
             if cmd == "ptt_start":
+                lang = msg.get('lang')
+                if lang:
+                    ptt_lang = lang
+                    log("PTT STT language -> " + str(lang))
                 start_ptt_record()
             elif cmd == "ptt_stop":
                 stop_ptt_record()
@@ -1177,7 +1182,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-027 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-028 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1189,7 +1194,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-027  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-028  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
