@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-026
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-027
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -608,6 +608,12 @@ def poll_iracing():
             inactive_since = None
             prev_current_lap = None   # セッション移行後の誤検知防止
             last_lap_time   = None   # 次の本当のラップを必ず報告
+            # ★コース/セッションが変わったら前のベストを引きずらない。
+            #   でないと前コースのベストと比較して「2周続けて遅い」等の誤爆が出る。
+            session_best        = None
+            personal_best       = None
+            consecutive_slow    = 0
+            consistent_lap_count = 0
 
         # 切断は15秒間ずっと非アクティブな時だけ（セッション移行・ロード中を含むブリップで初期化しない）
         if not active and ir_was_connected:
@@ -1171,7 +1177,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-026 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-027 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1183,7 +1189,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-026  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-027  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
