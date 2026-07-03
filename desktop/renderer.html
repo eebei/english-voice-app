@@ -416,6 +416,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
                 <span id="vol-icon" style="font-size:14px">🔊</span>
                 <input type="range" id="vol-slider" min="0" max="100" value="100" oninput="onVolume(this.value)"
                   style="width:90px;accent-color:#9D4EDD;cursor:pointer">
+                <button class="voice-tog" id="vol-dn-btn" onclick="setupVol('down')" title="ステアリングのボタン/ダイヤルを音量↓に割当">小 設定</button>
+                <button class="voice-tog" id="vol-up-btn" onclick="setupVol('up')" title="ステアリングのボタン/ダイヤルを音量↑に割当">大 設定</button>
               </div>
             </div>
           </div>
@@ -714,6 +716,26 @@ function onVolume(val){
   if(ttsAudio){ try{ ttsAudio.volume = pwVolume; }catch(e){} }  // 再生中でも即反映
   const icon=document.getElementById('vol-icon'); if(icon) icon.textContent = pwVolume===0?'🔇':(pwVolume<0.5?'🔉':'🔊');
 }
+// ステアリングのボタン/ダイヤルから1段変更（走行中に手を離さず音量調整）
+const VOL_STEP = 0.08;
+function stepVolume(dir){
+  const next = dir==='up' ? pwVolume+VOL_STEP : pwVolume-VOL_STEP;
+  const clamped = Math.min(Math.max(next,0),1);
+  const s=document.getElementById('vol-slider'); if(s) s.value=Math.round(clamped*100);
+  onVolume(Math.round(clamped*100));
+}
+// 音量ボタン割当（PTTと同じ：bridgeに設定モードを頼む→次に押したボタンを登録）
+let volBinding = {up:null, down:null};
+function setupVol(dir){
+  if(!irBridge || irBridge.readyState!==1){ setHint('⚠ Bridge未接続'); return; }
+  irBridge.send(JSON.stringify({cmd:'vol_setup', dir}));
+  setHint('🎛 音量'+(dir==='up'?'＋（大）':'−（小）')+'に割り当てるボタン/ダイヤルを押して…');
+}
+function updateVolLabel(){
+  const up=document.getElementById('vol-up-btn'), dn=document.getElementById('vol-dn-btn');
+  if(up) up.textContent = volBinding.up ? '大:B'+volBinding.up.button : '大 設定';
+  if(dn) dn.textContent = volBinding.down ? '小:B'+volBinding.down.button : '小 設定';
+}
 
 // ── 発話キュー（二重音声防止：常に1つずつ順番に再生）──
 let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
@@ -923,6 +945,9 @@ function connectBridge(){
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
       if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint('✅ PTT登録：ボタン'+data.button+'（押して話す）'); }
       if(data.type==='ptt_config'){ if(data.binding){ pttBinding={index:data.binding.joy,button:data.binding.button}; updatePTTLabel(); } }
+      if(data.type==='volume'){ stepVolume(data.dir); }
+      if(data.type==='vol_set'){ volBinding[data.dir]={joy:data.joy,button:data.button}; updateVolLabel(); setHint('✅ 音量'+(data.dir==='up'?'＋':'−')+'登録：ボタン'+data.button); }
+      if(data.type==='vol_config'){ if(data.binding){ volBinding=data.binding; updateVolLabel(); } }
       // ── PTT v2：bridge側STT結果受信（ネイティブマイク） ──
       if(data.type==='ptt_text'){
         setHint('');

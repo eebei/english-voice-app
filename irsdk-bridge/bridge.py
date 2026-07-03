@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-028
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-029
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -45,12 +45,18 @@ except Exception:
     _base = "."
 LOG_PATH = os.path.join(_base, "bridge_log.txt")
 PTT_CONFIG_PATH = os.path.join(_base, "ptt_config.json")
+VOL_CONFIG_PATH = os.path.join(_base, "vol_config.json")
 
 # ── PTT（プッシュ・トゥ・トーク）状態 ──
 ptt_binding = None        # {"joy": int, "button": int}
 ptt_capturing = False     # 設定モード（次に押されたボタンを登録）
 ptt_pressed = False       # 現在押下中か
 ptt_lang = "ja-JP"        # STT言語（選択キャラに追従。English勢=en-GB/en-US、日本語勢=ja-JP）
+
+# ── 音量ボタン（ステアリングのダイヤル/ボタンで走行中に音量上下）──
+vol_binding = {"up": None, "down": None}   # 各 {"joy": int, "button": int}
+vol_capturing = None       # 設定モード中の対象 'up' | 'down' | None
+vol_pressed = {"up": False, "down": False} # 各方向の現在押下状態（エッジ検出用）
 
 def load_ptt_config():
     global ptt_binding
@@ -64,6 +70,23 @@ def save_ptt_config():
     try:
         with open(PTT_CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(ptt_binding, f)
+    except Exception:
+        pass
+
+def load_vol_config():
+    global vol_binding
+    try:
+        with open(VOL_CONFIG_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+            if isinstance(d, dict):
+                vol_binding = {"up": d.get("up"), "down": d.get("down")}
+    except Exception:
+        vol_binding = {"up": None, "down": None}
+
+def save_vol_config():
+    try:
+        with open(VOL_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(vol_binding, f)
     except Exception:
         pass
 
@@ -1067,7 +1090,7 @@ def poll_iracing():
 # ── ジョイスティック/ハンドル監視（PTT用・フルスクリーン裏でも動く）──
 # pygameでボタンを直接読む。フォーカス不要＝iRacingがフルスクリーンでも検出できる。
 def poll_joystick():
-    global ptt_capturing, ptt_pressed, ptt_binding
+    global ptt_capturing, ptt_pressed, ptt_binding, vol_capturing
     try:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")  # 画面不要
         # フォーカスが無く（iRacingがフルスクリーン前面）てもジョイスティック入力を受け取る
@@ -1124,6 +1147,13 @@ def poll_joystick():
                         ptt_capturing = False
                         broadcast({'type': 'ptt_set', 'joy': i, 'button': b})
                         log("PTT bound: joystick %d button %d" % (i, b))
+                    # 音量ボタン設定モード（up/down）：押されたボタンをその方向に登録
+                    elif vol_capturing in ("up", "down"):
+                        vol_binding[vol_capturing] = {"joy": i, "button": b}
+                        save_vol_config()
+                        broadcast({'type': 'vol_set', 'dir': vol_capturing, 'joy': i, 'button': b})
+                        log("VOL bound: %s -> joystick %d button %d" % (vol_capturing, i, b))
+                        vol_capturing = None
 
             # 登録済みボタンの押下/離しを監視 → PTTイベント送信
             if ptt_binding and ptt_binding.get("joy") in sticks:
@@ -1139,19 +1169,36 @@ def poll_joystick():
                     ptt_pressed = False
                     broadcast({'type': 'ptt', 'state': 'up'})
 
+            # 音量ボタン監視：押した瞬間（立ち上がりエッジ）に1段変更を送る。
+            # ダイヤル（ロータリー）は1クリック=1パルスなので、回すたびに1段動く。
+            for d in ("up", "down"):
+                bind = vol_binding.get(d)
+                if bind and bind.get("joy") in sticks:
+                    js = sticks[bind["joy"]]
+                    try:
+                        cur = js.get_button(bind["button"]) == 1
+                    except Exception:
+                        cur = False
+                    if cur and not vol_pressed[d]:
+                        vol_pressed[d] = True
+                        broadcast({'type': 'volume', 'dir': d})
+                    elif not cur and vol_pressed[d]:
+                        vol_pressed[d] = False
+
             time.sleep(0.03)  # 約33Hzで監視（押下を即検知）
         except Exception:
             time.sleep(0.2)
 
 
 async def handler(websocket):
-    global ptt_capturing, ptt_lang
+    global ptt_capturing, ptt_lang, vol_capturing
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
         await websocket.send(json.dumps({'type': 'connected'}))
-        # 現在のPTT設定を通知
+        # 現在のPTT設定・音量ボタン設定を通知
         await websocket.send(json.dumps({'type': 'ptt_config', 'binding': ptt_binding}))
+        await websocket.send(json.dumps({'type': 'vol_config', 'binding': vol_binding}))
         # クライアントからのコマンド受信（PTT設定など）
         async for raw in websocket:
             try:
@@ -1173,6 +1220,13 @@ async def handler(websocket):
                 log("PTT setup mode: waiting for button press")
             elif cmd == 'ptt_cancel':
                 ptt_capturing = False
+            elif cmd == 'vol_setup':
+                which = msg.get('dir')
+                if which in ('up', 'down'):
+                    vol_capturing = which
+                    log("VOL setup mode (%s): waiting for button press" % which)
+            elif cmd == 'vol_cancel':
+                vol_capturing = None
     finally:
         connected_clients.discard(websocket)
 
@@ -1182,10 +1236,11 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-028 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-029 ===\n")
     except Exception:
         pass
     load_ptt_config()
+    load_vol_config()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
     tj = threading.Thread(target=poll_joystick, daemon=True)
@@ -1194,7 +1249,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-028  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-029  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
