@@ -412,6 +412,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div style="display:flex;gap:8px;align-items:center">
               <button class="voice-tog" id="ptt-btn" onclick="setupPTT()" title="ハンドルのボタンをPTTに割り当て">🎙 PTT設定</button>
               <button class="voice-tog on" id="voice-tog" onclick="toggleVoice()">🔊 Voice</button>
+              <div style="display:flex;align-items:center;gap:6px" title="エンジニアの音量">
+                <span id="vol-icon" style="font-size:14px">🔊</span>
+                <input type="range" id="vol-slider" min="0" max="100" value="100" oninput="onVolume(this.value)"
+                  style="width:90px;accent-color:#9D4EDD;cursor:pointer">
+              </div>
             </div>
           </div>
         </div>
@@ -701,6 +706,15 @@ function phonetify(text, lang){
     return text.replace(/iRacing/g,'I Racing');
   }
 }
+// ── エンジニア音量（0.0〜1.0・localStorage永続）──
+let pwVolume = (()=>{ const v=parseFloat(localStorage.getItem('pw_volume')); return isNaN(v)?1.0:Math.min(Math.max(v,0),1); })();
+function onVolume(val){
+  pwVolume = Math.min(Math.max(parseInt(val,10)/100, 0), 1);
+  localStorage.setItem('pw_volume', String(pwVolume));
+  if(ttsAudio){ try{ ttsAudio.volume = pwVolume; }catch(e){} }  // 再生中でも即反映
+  const icon=document.getElementById('vol-icon'); if(icon) icon.textContent = pwVolume===0?'🔇':(pwVolume<0.5?'🔉':'🔊');
+}
+
 // ── 発話キュー（二重音声防止：常に1つずつ順番に再生）──
 let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
 let ttsDisabledUntil = 0;     // TTS失敗時はこの時刻まで一時的にWeb Speech。過ぎたらCloud TTSへ自動復帰（恒久無効化しない）
@@ -771,6 +785,7 @@ async function drainQueue(){
     const data = await r.json();
     if(!data.audioContent) throw new Error('empty audio');
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
+    audio.volume = pwVolume;   // ユーザー設定の音量を適用
     ttsAudio = audio;
     audio.onended = ()=>{ ttsAudio=null; onUtteranceDone(); };
     audio.onerror = ()=>{ ttsAudio=null; onUtteranceDone(); };  // 再生失敗でも次へ（固まらせない）
@@ -784,7 +799,7 @@ function playWebSpeech(text, c){
   try{
     window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(text);
-    utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate;
+    utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate; utt.volume=pwVolume;
     const voice = pickVoice(c.voiceLang,c.voiceNames);
     if(voice) utt.voice=voice;
     utt.onend=onUtteranceDone;
@@ -1101,7 +1116,9 @@ if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
 
 // ── Electron native app: LPを飛ばして直接アプリ画面を開く ──
 // （Webブラウザ版ではLPを見せるが、デスクトップアプリ＝本体なので即起動）
-window.addEventListener('DOMContentLoaded', ()=>{ try{ openApp(); }catch(e){} try{ bootGate(); }catch(e){} });
+window.addEventListener('DOMContentLoaded', ()=>{ try{ openApp(); }catch(e){} try{ bootGate(); }catch(e){}
+  try{ const s=document.getElementById('vol-slider'); if(s){ s.value=Math.round(pwVolume*100); onVolume(s.value); } }catch(e){}
+});
 
 // ══════════════════════════════════════════════════════════════
 // PTT（Push-To-Talk）：ハンドル/コントローラーのボタンで押して話す
