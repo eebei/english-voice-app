@@ -120,6 +120,16 @@ app.post('/api/beta/verify', betaLimiter, express.json(), async (req, res) => {
 //   発行:   POST /api/beta/admin/create {name,tier,billingStart}
 //   一覧:   GET  /api/beta/admin/list
 //   無効化: POST /api/beta/admin/revoke {code}   / 再有効化: {code,active:true}
+// 一時診断：値は出さず「見えているか」だけboolで返す（切り分け用）
+app.get('/api/beta/admin/_debug', (_req, res) => {
+  const s = process.env.ADMIN_SECRET || '';
+  res.json({
+    adminConfigured: !!s,
+    adminLen: s.length,
+    dbConfigured: !!process.env.DATABASE_URL,
+    brevoConfigured: !!process.env.BREVO_API_KEY,
+  });
+});
 function requireAdmin(req, res, next) {
   const secret = process.env.ADMIN_SECRET;
   if (!secret) return res.status(503).json({ error: 'admin_disabled (set ADMIN_SECRET)' });
