@@ -117,14 +117,16 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .field-input::placeholder{color:var(--muted)}
 
 /* Engineer selection */
-.eng-select-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:20px 0 28px}
-.eng-sel-card{background:var(--panel);border:1.5px solid var(--border);border-radius:14px;padding:16px;cursor:pointer;transition:all .15s;text-align:center}
-.eng-sel-card:hover{border-color:var(--blue)}
+.eng-select-grid{display:flex;flex-direction:column;gap:10px;margin:18px 0 26px}
+.eng-sel-card{display:flex;align-items:center;gap:16px;background:#191c2e;border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;cursor:pointer;transition:all .15s;text-align:left}
+.eng-sel-card:hover{border-color:var(--blue);background:#1f2236}
 .eng-sel-card.selected{border-color:var(--blue);background:var(--blue-dim)}
-.eng-sel-card img{width:64px;height:64px;border-radius:10px;object-fit:cover;margin-bottom:10px;border:2px solid var(--border)}
-.eng-sel-card .ename{font-family:'Oxanium';font-weight:700;font-size:15px;margin-bottom:2px}
-.eng-sel-card .erole{font-size:11px;color:var(--blue)}
-.eng-sel-card .elang{font-size:11px;color:var(--muted);margin-top:3px}
+.eng-sel-card img{width:88px;height:88px;border-radius:12px;object-fit:cover;object-position:center 12%;flex-shrink:0;border:2px solid #2a2e45}
+.eng-sel-card .einfo{flex:1;min-width:0}
+.eng-sel-card .ename{font-family:'Oxanium';font-weight:700;font-size:17px;margin-bottom:2px}
+.eng-sel-card .erole{font-size:12px;color:var(--blue);margin-bottom:1px}
+.eng-sel-card .elang{font-size:11px;color:var(--muted)}
+.eng-sel-card .etrait{font-size:12.5px;color:var(--silver);margin-top:6px;line-height:1.5}
 
 /* Mode selection */
 .mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 24px}
@@ -349,33 +351,48 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       <div class="eng-select-grid">
         <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
           <img src="James.png" alt="James">
-          <div class="ename">James</div>
-          <div class="erole">Chief Engineer</div>
-          <div class="elang">🇬🇧 English</div>
+          <div class="einfo">
+            <div class="ename">James</div>
+            <div class="erole">Chief Engineer</div>
+            <div class="elang">🇬🇧 English</div>
+            <div class="etrait">冷静・データ重視のチーフ。ブレない司令塔。</div>
+          </div>
         </div>
         <div class="eng-sel-card" id="card-Luna" onclick="selectEng('Luna')">
           <img src="Luna.png" alt="Luna">
-          <div class="ename">Luna</div>
-          <div class="erole">Race Engineer</div>
-          <div class="elang">🇬🇧 English</div>
+          <div class="einfo">
+            <div class="ename">Luna</div>
+            <div class="erole">Race Engineer</div>
+            <div class="elang">🇬🇧 English</div>
+            <div class="etrait">静かな観察眼。心理とデータ、両方を読む。</div>
+          </div>
         </div>
         <div class="eng-sel-card" id="card-Hajime" onclick="selectEng('Hajime')">
           <img src="Hajime.png" alt="Hajime">
-          <div class="ename">Hajime</div>
-          <div class="erole">Race Engineer</div>
-          <div class="elang">🇯🇵🇬🇧 EN / JP</div>
+          <div class="einfo">
+            <div class="ename">Hajime</div>
+            <div class="erole">Race Engineer</div>
+            <div class="elang">🇬🇧 English</div>
+            <div class="etrait">氷と炎。要点だけを、鋭く。</div>
+          </div>
         </div>
         <div class="eng-sel-card" id="card-Kanbe" onclick="selectEng('Kanbe')">
           <img src="Kanbe.png" alt="Kanbe">
-          <div class="ename">官兵衛</div>
-          <div class="erole">チーフエンジニア</div>
-          <div class="elang">🇯🇵 岡山弁</div>
+          <div class="einfo">
+            <div class="ename">官兵衛</div>
+            <div class="erole">チーフエンジニア</div>
+            <div class="elang">🇯🇵 岡山弁</div>
+            <div class="etrait">熱と知略。岡山弁の兄貴肌。</div>
+          </div>
         </div>
         <div class="eng-sel-card" id="card-Oishi" onclick="selectEng('Oishi')">
           <img src="Oishi.png" alt="Oishi">
-          <div class="ename">大石</div>
-          <div class="erole">チーフストラテジスト</div>
-          <div class="elang">🇯🇵 標準語</div>
+          <div class="einfo">
+            <div class="ename">大石</div>
+            <div class="erole">チーフストラテジスト</div>
+            <div class="elang">🇯🇵 標準語</div>
+            <div class="etrait">静かな策士。大局を見る武士。</div>
+          </div>
         </div>
       </div>
       <button class="start-btn" id="btn-next" disabled onclick="goToMode()">Choose Mode →</button>
@@ -1092,7 +1109,7 @@ function scheduleAutoDebrief(data){
     addMsg('ai',msg);
     messages.push({role:'assistant',content:msg});
     speak(msg);
-  },2000);
+  },20000);  // チェッカー後20秒でデブリーフ発出（Yuji実走の体感で調整予定）
 }
 
 // ── Session memory (localStorage) ──
