@@ -118,8 +118,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 /* Engineer selection */
 .eng-select-grid{display:flex;flex-direction:column;gap:10px;margin:18px 0 26px}
-.eng-sel-card{display:flex;align-items:center;gap:16px;background:#191c2e;border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;cursor:pointer;transition:all .15s;text-align:left}
-.eng-sel-card:hover{border-color:var(--blue);background:#1f2236}
+.eng-sel-card{display:flex;align-items:center;gap:16px;background:#262a40;border:1.5px solid #333855;border-radius:14px;padding:14px 16px;cursor:pointer;transition:all .15s;text-align:left}
+.eng-sel-card:hover{border-color:var(--blue);background:#2e3350}
 .eng-sel-card.selected{border-color:var(--blue);background:var(--blue-dim)}
 .eng-sel-card img{width:88px;height:88px;border-radius:12px;object-fit:cover;object-position:center 12%;flex-shrink:0;border:2px solid #2a2e45}
 .eng-sel-card .einfo{flex:1;min-width:0}
@@ -148,7 +148,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 /* ── CHAT SCREEN ── */
 #screen-chat .chat-header{background:var(--panel);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:16px}
-.chat-av{width:100%;height:220px;object-fit:cover;object-position:center 15%;display:block}
+.chat-av{width:100%;height:280px;object-fit:cover;object-position:center 22%;display:block}
 .chat-header-info{padding:14px 18px}
 .chat-name{font-family:'Oxanium';font-weight:800;font-size:20px;margin-bottom:2px}
 .chat-desc{font-size:12px;color:var(--muted)}
@@ -445,7 +445,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       <div class="busy-indicator" id="busy-ind">Engineer thinking…</div>
       <div class="input-row">
         <textarea class="chat-input" id="chat-input" placeholder="Talk to your engineer…" rows="1" onkeydown="onKey(event)" oninput="autoResize(this)"></textarea>
-        <button class="mic-btn" id="mic-btn" onclick="toggleMic()" title="Hold to speak">🎤</button>
+        <button class="mic-btn" id="mic-btn" onclick="toggleMic()" title="PTT：ステアリングの割当ボタンで話す（クリックでも可）"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.4"/><line x1="12" y1="14.4" x2="12" y2="21"/><line x1="9.9" y1="10.6" x2="4.2" y2="7.6"/><line x1="14.1" y1="10.6" x2="19.8" y2="7.6"/></svg></button>
         <button class="send-btn" onclick="sendMsg()">↑</button>
       </div>
       <div class="hint-text" id="hint-text"></div>
@@ -474,7 +474,7 @@ const CHARS = {
   Hajime: { avatar:'Hajime.png', desc:'Race Engineer · OMORAY Racing', voiceLang:'en-GB', voiceNames:['Google UK English Male','Daniel','Reed','Rocko'], pitch:0.92, rate:1.10,
             gVoice:'en-GB-Neural2-D', gLang:'en-GB', gRate:1.16, gPitch:-1.0 },
   Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.45,
-            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.32, gPitch:-3.0 },
+            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.30, gPitch:-5.5 },
   Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.40,
             gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.35, gPitch:0 }
 };
