@@ -375,12 +375,25 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
     if (!audio || typeof audio !== 'string') {
       return res.status(400).json({ error: 'audio is required' });
     }
+    const lang = languageCode || 'en-US';
+    const isJapanese = lang.startsWith('ja');
+    const racingPhrases = isJapanese
+      ? ['燃料', '燃料残量', 'タイヤ', '内圧', 'タイヤ内圧', 'ギャップ', 'ピット', 'ピットイン',
+         'セクター', 'ラップタイム', 'ベスト', '自己ベスト', '順位', 'アンダーカット', 'オーバーカット',
+         'ブレーキバランス', 'セーフティカー', 'イエローフラッグ']
+      : ['fuel', 'fuel level', 'fuel remaining', 'tyre', 'tyres', 'tire', 'tires',
+         'tyre pressure', 'tire pressure', 'tyre temperature', 'tire temperature',
+         'gap', 'gap ahead', 'gap behind', 'box', 'box box box', 'pit', 'pit stop',
+         'undercut', 'overcut', 'brake bias', 'sector', 'lap time', 'personal best',
+         'safety car', 'yellow flag', 'push now', 'free air'];
+
     const sttBody = {
       config: {
         encoding: encoding || 'WEBM_OPUS',
-        languageCode: languageCode || 'en-US',
+        languageCode: lang,
         enableAutomaticPunctuation: true,
         model: 'latest_short',
+        speechContexts: [{ phrases: racingPhrases, boost: 15 }],
       },
       audio: { content: audio },
     };
