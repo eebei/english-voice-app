@@ -31,7 +31,7 @@ h1,h2,h3,.brand,.oxanium{font-family:'Oxanium',sans-serif;letter-spacing:.3px}
 
 /* ── NAV ── */
 nav{position:sticky;top:0;z-index:100;background:rgba(7,8,15,.9);backdrop-filter:blur(12px);border-bottom:1px solid var(--border)}
-.nav-in{max-width:1100px;margin:0 auto;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:72px}
+.nav-in{max-width:1100px;margin:0 auto;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:88px}
 .logo{display:flex;align-items:center;gap:10px;font-family:'Oxanium';font-weight:800;font-size:17px}
 .logo img{width:28px;height:28px;border-radius:6px}
 .logo .blue{color:var(--blue)}
@@ -73,9 +73,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 /* Engineer cards */
 .eng-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:40px}
 @media(max-width:640px){.eng-grid{grid-template-columns:1fr}}
-.eng-card{background:#262a40;border:1px solid #333855;border-radius:16px;padding:22px;display:flex;gap:18px;align-items:flex-start;transition:border-color .2s}
+.eng-card{background:#39406a;border:1px solid #5866a8;border-radius:16px;padding:22px;display:flex;gap:18px;align-items:flex-start;transition:border-color .2s}
 .eng-card:hover{border-color:var(--blue)}
-.eng-card img{width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--border);flex-shrink:0}
+.eng-card img{width:128px;height:150px;border-radius:12px;object-fit:cover;object-position:center 12%;border:2px solid #333855;flex-shrink:0}
 .eng-card .nm{font-family:'Oxanium';font-weight:700;font-size:17px;margin-bottom:3px}
 .eng-card .role{font-size:13px;color:var(--blue);margin-bottom:6px}
 .eng-card .bio{font-size:13px;color:var(--muted);line-height:1.5}
@@ -118,9 +118,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 /* Engineer selection */
 .eng-select-grid{display:flex;flex-direction:column;gap:10px;margin:18px 0 26px}
-.eng-sel-card{display:flex;align-items:center;gap:16px;background:#262a40;border:1.5px solid #333855;border-radius:14px;padding:14px 16px;cursor:pointer;transition:all .15s;text-align:left}
-.eng-sel-card:hover{border-color:var(--blue);background:#2e3350}
-.eng-sel-card.selected{border-color:var(--blue);background:var(--blue-dim)}
+.eng-sel-card{display:flex;align-items:center;gap:16px;background:#39406a;border:1.5px solid #5866a8;border-radius:14px;padding:14px 16px;cursor:pointer;transition:all .15s;text-align:left}
+.eng-sel-card:hover{border-color:var(--blue);background:#434b7d}
+.eng-sel-card.selected{border-color:var(--blue);background:rgba(157,78,221,.3);box-shadow:0 0 0 2px rgba(157,78,221,.35)}
 .eng-sel-card img{width:88px;height:88px;border-radius:12px;object-fit:cover;object-position:center 12%;flex-shrink:0;border:2px solid #2a2e45}
 .eng-sel-card .einfo{flex:1;min-width:0}
 .eng-sel-card .ename{font-family:'Oxanium';font-weight:700;font-size:17px;margin-bottom:2px}
@@ -210,7 +210,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <nav>
   <div class="nav-in">
     <div class="logo">
-      <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:46px;border-radius:0">
+      <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:60px;border-radius:0">
     </div>
     <button class="nav-cta" onclick="openApp()">Launch PITWALL</button>
   </div>
