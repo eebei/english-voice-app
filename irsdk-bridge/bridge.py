@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-033
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-034
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -605,6 +605,9 @@ def poll_iracing():
     prev_session_state = 0      # previous SessionState value
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
+    last_telem_ts = 0.0         # ライブテレメトリ・スナップショットの最終送信時刻
+    nearest_ahead_gap = None    # 直前の車とのギャップ（秒）
+    nearest_behind_gap = None   # 直後の車とのギャップ（秒）
     # セッションサマリー蓄積
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
@@ -1037,6 +1040,8 @@ def poll_iracing():
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
+        nearest_ahead_gap = None    # 毎ループ更新（前後の最近接ギャップ）
+        nearest_behind_gap = None
         if player_car_idx >= 0 and onTrack and not onPit and not in_formation:
             car_f2_times   = reader.read_float_array('CarIdxF2Time', 64)
             car_last_laps  = reader.read_float_array('CarIdxLastLapTime', 64)
@@ -1051,6 +1056,13 @@ def poll_iracing():
                 for idx, f2_time in enumerate(car_f2_times):
                     if idx == player_car_idx or f2_time <= 0:
                         continue
+
+                    # 前後の最近接ギャップを更新（テレメトリスナップショット用・全クラス対象）
+                    _d = player_time - f2_time
+                    if _d > 0 and (nearest_behind_gap is None or _d < nearest_behind_gap):
+                        nearest_behind_gap = _d
+                    elif _d < 0 and (nearest_ahead_gap is None or -_d < nearest_ahead_gap):
+                        nearest_ahead_gap = -_d
 
                     # ピット/ガレージの車は完全除外（接近警告を出さない）
                     if car_on_track:
@@ -1107,6 +1119,24 @@ def poll_iracing():
                                         'message': 'Behind ' + str(round(delta, 1)) + '. Closing.'})
                                 behind_armed[idx] = False   # 1回言ったら再武装まで黙る
                                 last_battle_global = now
+
+        # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
+        # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。
+        _tnow = time.time()
+        if onTrack and _tnow - last_telem_ts > 3:
+            broadcast({
+                'type': 'telemetry_live',
+                'class_pos': class_pos,
+                'pos': pos,
+                'fuel': round(fuel, 1) if fuel is not None else None,
+                'best': round(personal_best, 3) if personal_best else None,
+                'last': round(lapTime, 3) if (lapTime and lapTime > 0) else None,
+                'lap': lap,
+                'laps_total': lapsTot if (lapsTot and lapsTot > 0) else None,
+                'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
+                'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
+            })
+            last_telem_ts = _tnow
 
         prev.update({'pos': pos, 'class_pos': class_pos, 'fuel': fuel, 'lap': lap,
                      'lapsTot': lapsTot, 'onPit': onPit})
@@ -1262,7 +1292,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-033 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-034 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1275,7 +1305,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-033  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-034  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):

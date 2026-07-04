@@ -466,6 +466,7 @@ function buildSystem(p) {
   const userName = p.userName || '';
   const telemetry = p.telemetry || 'off'; // 'live' | 'bridge' | 'off'
   const sectors = Array.isArray(p.sectors) ? p.sectors : null;
+  const live = (p.liveData && typeof p.liveData === 'object') ? p.liveData : null; // ライブテレメトリ実値
   const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
   const raceHistory = typeof p.raceHistory === 'string' ? p.raceHistory : '';
@@ -536,6 +537,26 @@ function buildSystem(p) {
       : '\n\n[LATEST LAP SECTORS] ' + parts.join(' / ') + '\nAnswer with these if the driver asks about sectors. Do not volunteer during driving.';
   }
 
+  // ── ライブテレメトリ実値（順位・燃料・ギャップ等）＝聞かれたらこの数字で答える。捏造根絶 ──
+  let liveNote = '';
+  if (isRacing && live) {
+    const jp = [];
+    const en = [];
+    if (live.class_pos != null) { jp.push('クラス順位 ' + live.class_pos + '番手'); en.push('Class position P' + live.class_pos); }
+    if (live.pos != null)        { jp.push('総合 ' + live.pos + '番手'); en.push('Overall P' + live.pos); }
+    if (live.fuel != null)       { jp.push('燃料 ' + live.fuel + 'L'); en.push('Fuel ' + live.fuel + ' L'); }
+    if (live.lap != null)        { jp.push('周回 ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); }
+    if (live.best != null)       { jp.push('自己ベスト ' + live.best); en.push('Best ' + live.best); }
+    if (live.last != null)       { jp.push('直近ラップ ' + live.last); en.push('Last ' + live.last); }
+    if (live.gap_ahead != null)  { jp.push('前とのギャップ ' + live.gap_ahead + '秒'); en.push('Gap ahead ' + live.gap_ahead + 's'); }
+    if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
+    if (jp.length) {
+      liveNote = isJ
+        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。'
+        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.';
+    }
+  }
+
   // レースエンジニア共通の鉄則（静的・キャッシュ対象）
   let engRules = '';
   if (isRacing) {
@@ -572,7 +593,7 @@ function buildSystem(p) {
 
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
   const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote;
-  const suffix = teleNote + sectorNote + stateNote + historyNote;
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote;
   return { prefix: prefix, suffix: suffix };
 }
 

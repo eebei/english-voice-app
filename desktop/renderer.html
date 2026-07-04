@@ -484,7 +484,7 @@ let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
-let lastSectors = null, driverState = null;
+let lastSectors = null, driverState = null, lastTelemetry = null;
 let memorySavedThisSession = false, sessionBestLapStr = '';
 
 // ── Character config ──
@@ -746,6 +746,7 @@ async function callAPI(){
         userName,
         telemetry,
         sectors:lastSectors,
+        liveData:lastTelemetry,
         driverState,
         profileNote,
         raceHistory,
@@ -1018,6 +1019,7 @@ function connectBridge(){
       if(data.type==='radio') injectRadio(data);
       if(data.type==='session_info') injectBriefing(data.data);
       if(data.type==='lap_sectors') lastSectors=data.sectors;
+      if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state') driverState=data.state;
       if(data.type==='session_summary'){ saveSessionSummary(data); scheduleAutoDebrief(data); }
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
