@@ -1170,10 +1170,14 @@ function scheduleAutoDebrief(data){
   if(selMode!=='race') return;
   setTimeout(()=>{
     const isJP=(sel==='Kanbe'||sel==='Oishi');
-    const laps=data.totalLaps||'?';
-    const best=data.bestLap||sessionBestLapStr||'?';
-    const msg=isJP?`${userName||'ドライバー'}、レース終了じゃ。${laps}周、ベスト${best}。デブリーフを始めようか？`
-                  :`${userName||'Driver'}, that's the race. ${laps} laps, best ${best}. Ready for the debrief?`;
+    const laps=data.total_laps||'?';
+    const best=data.best_lap||sessionBestLapStr||'?';
+    // 実セッション種別が分かればそれで呼ぶ（予選/練習をレースと決め打ちしない）
+    const st=(lastSessionType||'').toLowerCase();
+    const sessJP = st.includes('race')?'レース':st.includes('qualif')?'予選':st.includes('practice')?'練習':'セッション';
+    const sessEN = st.includes('race')?'race':st.includes('qualif')?'qualifying':st.includes('practice')?'practice':'session';
+    const msg=isJP?`${userName||'ドライバー'}、${sessJP}終了じゃ。${laps}周、ベスト${best}。デブリーフを始めようか？`
+                  :`${userName||'Driver'}, that's the ${sessEN}. ${laps} laps, best ${best}. Ready for the debrief?`;
     addMsg('ai',msg);
     messages.push({role:'assistant',content:msg});
     speak(msg);
@@ -1207,7 +1211,7 @@ function saveMemory(){
 function saveSessionSummary(data){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',bestLap:data.bestLap||'',avgLap:data.avgLap||'',totalLaps:data.totalLaps||0,incidents:data.incidents||0});
+    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}

@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-036
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-037
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -603,6 +603,7 @@ def poll_iracing():
     inactive_since = None
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
+    multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
     battle_warned = {}          # car_idx -> last warned time
     last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
     behind_armed = {}           # car_idx -> bool（一度離れて再接近した時だけ1回警告する再武装フラグ）
@@ -1135,23 +1136,27 @@ def poll_iracing():
                     other_rel   = car_relspeed_map.get(idx, 0)
 
                     # ── マルチクラス接近警告（GTP/LMP2等が後方接近）2段階コール ──
+                    # ※車が0-2秒圏内に張り付いたまま(同クラス列走行等)だと単純タイマーでは
+                    #   永遠に再発火してしまうため、再武装(armed)方式に変更＝1回の接近につき
+                    #   approaching→imminentを最大1回ずつ。6秒より離れたら再武装。
                     is_faster_class = (other_class != -1 and other_class != player_class_id and
                                        other_rel > player_rel_speed)
                     if is_faster_class:
-                        if 2.0 < delta <= 5.0:  # 5秒前：第1コール
+                        if delta > 6.0:
+                            multiclass_armed[idx] = True
+                        elif 2.0 < delta <= 5.0 and multiclass_armed.get(idx, False):  # 5秒前：第1コール
                             last_warn = multiclass_warned.get(idx, 0)
                             if now - last_warn > 15:
                                 broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
                                     'delta': round(delta, 1),
                                     'message': 'Faster class. ' + str(round(delta, 1)) + ' back. Prepare.'})
                                 multiclass_warned[idx] = now
-                        elif 0 < delta <= 2.0:  # 2秒前：第2コール（緊急）
-                            last_warn = multiclass_2s_warned.get(idx, 0)
-                            if now - last_warn > 8:
-                                broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
-                                    'delta': round(delta, 1),
-                                    'message': 'Give room. Now.'})
-                                multiclass_2s_warned[idx] = now
+                        elif 0 < delta <= 2.0 and multiclass_armed.get(idx, False):  # 2秒前：第2コール（緊急・1回のみ）
+                            broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
+                                'delta': round(delta, 1),
+                                'message': 'Give room. Now.'})
+                            multiclass_2s_warned[idx] = now
+                            multiclass_armed[idx] = False  # 再武装まで両方とも黙る
 
                     # ── 危険ドライバー警告（低iRating/低SR、前後どちらも）──────────
                     # Yuji方針：バトル警告と同じタイミング(0.55→0.3の急接近で1回だけ)に乗せる。
@@ -1377,7 +1382,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-036 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-037 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1390,7 +1395,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-036  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-037  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
