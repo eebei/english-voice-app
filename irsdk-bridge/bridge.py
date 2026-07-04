@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-032
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-033
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -854,7 +854,8 @@ def poll_iracing():
         # ── ラップタイム処理（LapLastLapTimeの値変化＝ライン通過直後に即発火）──
         # スタートライン通過で上がったタイムは、コースに関係なく即座にそのまま読み上げる。
         # （最初の1本もアウトラップ扱いで握りつぶさない。1周目はfirst_lap=Baselineとしてコール）
-        if lap_time_changed:
+        # ※onTrack必須：ガレージ/グリッド/牽引中(OnTrack:False)のゴミラップ値を弾く。
+        if lap_time_changed and onTrack:
             t = fmt_radio(lapTime)
             if t:
                 is_session_best = (session_best is None or lapTime < session_best)
@@ -968,8 +969,9 @@ def poll_iracing():
                 # delta==1（コースオフ）は基本黙る。連発時のみ上のrecent>=3で拾う
             prev_incidents = incidents
 
-        # Position change（クラス内順位ベース。レースセッションのみ）
-        if is_race_session and class_pos is not None and prev['class_pos'] is not None and class_pos != prev['class_pos']:
+        # Position change（クラス内順位ベース。レースセッション＆コース走行中のみ。
+        #   グリッド整列中(OnTrack:False)は順位がシャッフルするので黙る）
+        if is_race_session and onTrack and class_pos is not None and prev['class_pos'] is not None and class_pos != prev['class_pos']:
             gained = prev['class_pos'] - class_pos
             if gained > 0:
                 broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos,
@@ -1035,7 +1037,7 @@ def poll_iracing():
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
-        if player_car_idx >= 0 and not onPit and not in_formation:
+        if player_car_idx >= 0 and onTrack and not onPit and not in_formation:
             car_f2_times   = reader.read_float_array('CarIdxF2Time', 64)
             car_last_laps  = reader.read_float_array('CarIdxLastLapTime', 64)
             car_on_track   = reader.read_int_array('CarIdxTrackSurface', 64)
@@ -1260,7 +1262,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-032 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-033 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1273,7 +1275,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-032  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-033  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
