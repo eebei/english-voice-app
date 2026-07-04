@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-03-029
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-030
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -422,6 +422,22 @@ def parse_session_info(yaml_str):
             elif line.startswith('EventType:'):
                 result['event_type'] = line.split(':', 1)[1].strip()
 
+        # Parse Sessions list → {SessionNum: SessionType}
+        #   EventTypeは"週末イベント全体の種別"(Race週末なら予選中でも Race)なので当てにならない。
+        #   現在走ってるセッションの種別は SessionNum で Sessions リストを引く必要がある。
+        sessions = {}
+        cur_snum = None
+        for line in yaml_str.split('\n'):
+            s = line.strip()
+            if s.startswith('- SessionNum:'):
+                try:
+                    cur_snum = int(s.split(':', 1)[1].strip())
+                except:
+                    cur_snum = None
+            elif s.startswith('SessionType:') and cur_snum is not None:
+                sessions[cur_snum] = s.split(':', 1)[1].strip()
+        result['sessions'] = sessions
+
         # Parse drivers for iRating and SOF
         drivers = []
         in_drivers = False
@@ -576,6 +592,7 @@ def poll_iracing():
     player_car_idx = -1
     player_class_id = -1
     car_class_map = {}          # car_idx -> class_id
+    sessions_map = {}           # SessionNum -> SessionType（現在のセッション種別判定用）
     car_relspeed_map = {}       # car_idx -> rel speed
     player_rel_speed = 0
     is_race_session = False
@@ -675,8 +692,8 @@ def poll_iracing():
                 if info.get('player_irating'):
                     # シグネチャは「セッションを定義する安定値」のみ（SOF/人数は他車ジョインで変動するため除外）
                     sig = str(info.get('event_type', '')) + '|' + str(info.get('track', ''))
-                    et = str(info.get('event_type', '')).lower()
-                    is_race_session = ('race' in et)
+                    if info.get('sessions'):
+                        sessions_map = info['sessions']   # {SessionNum: SessionType}
                     session_track = info.get('track', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
@@ -714,6 +731,12 @@ def poll_iracing():
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
         cur_ss      = reader.read_int('SessionState') or 0
         class_pos   = reader.read_int('PlayerCarClassPosition') or pos
+
+        # 現在のセッションが「レース」か毎ループ判定（予選/練習でレース用アラートを出さない）。
+        # EventTypeでなく SessionNum→SessionType で現在走行中のセッション種別を引く。
+        cur_snum        = reader.read_int('SessionNum')
+        cur_sess_type   = sessions_map.get(cur_snum, '') if cur_snum is not None else ''
+        is_race_session = ('race' in cur_sess_type.lower())
 
         # SessionState: 3=ParadeLaps(formation/rolling), 4=Racing
         if cur_ss == 4 and prev_session_state != 4:
@@ -1236,7 +1259,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-03-029 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-030 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1249,7 +1272,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-03-029  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-030  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
