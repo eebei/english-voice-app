@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<!-- Electron(file://)から画像・API呼び出しをRailwayに解決させる。この1行で<img>もfetch('/api/..')も全部Railway向き -->
-<base href="https://english-voice-app-production.up.railway.app/">
+<!-- 画像はアプリに同梱（相対パス）。API/TTS/STTは下記 API_BASE で明示的にRailwayを叩く。
+     ※以前は<base href=Railway>で画像もRailway参照にしていたが、Electron(file://)で画像が読めず
+       全部表示されなかった。静的画像は同梱が確実。 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OMORAY PITWALL — AI Race Engineer for iRacing</title>
 <meta name="description" content="Your AI race engineer in your ear. Lap times, strategy, debrief — all session long. For iRacing drivers worldwide.">
@@ -185,7 +186,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <!-- ═══ ベータ・アクセスコード ゲート（八木さん・Tobi等の限定配布） ═══ -->
 <div id="beta-gate" style="position:fixed;inset:0;z-index:99999;background:#0a0a0f;display:none;align-items:center;justify-content:center;padding:24px">
   <div style="max-width:420px;width:100%;text-align:center">
-    <img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:40px;margin-bottom:28px">
+    <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:40px;margin-bottom:28px">
     <div style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">アクセスコード</div>
     <div id="beta-gate-sub" style="font-size:14px;color:#9aa;margin-bottom:24px;line-height:1.6">
       Yujiから受け取ったコードを入力してください。<br>このコードはあなた専用です。
@@ -205,7 +206,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <nav>
   <div class="nav-in">
     <div class="logo">
-      <img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:32px;border-radius:0">
+      <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:32px;border-radius:0">
     </div>
     <button class="nav-cta" onclick="openApp()">Launch PITWALL</button>
   </div>
@@ -240,7 +241,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
     <p class="sec-lead">Five engineers. Different styles, same mission — get you across the line.</p>
     <div class="eng-grid">
       <div class="eng-card">
-        <img src="/James.png" alt="James">
+        <img src="James.png" alt="James">
         <div>
           <div class="nm">James Mitchell</div>
           <div class="role">Chief Engineer · OMORAY Racing</div>
@@ -248,7 +249,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         </div>
       </div>
       <div class="eng-card">
-        <img src="/Luna.png" alt="Luna">
+        <img src="Luna.png" alt="Luna">
         <div>
           <div class="nm">Luna</div>
           <div class="role">Race Engineer · OMORAY Racing</div>
@@ -256,7 +257,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         </div>
       </div>
       <div class="eng-card">
-        <img src="/Hajime.png" alt="Hajime">
+        <img src="Hajime.png" alt="Hajime">
         <div>
           <div class="nm">Hajime Omatsu</div>
           <div class="role">Race Engineer · OMORAY Racing</div>
@@ -264,7 +265,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         </div>
       </div>
       <div class="eng-card">
-        <img src="/Kanbe.png" alt="Kanbe">
+        <img src="Kanbe.png" alt="Kanbe">
         <div>
           <div class="nm">宇喜多 官兵衛</div>
           <div class="role">チーフエンジニア · OMORAY Racing</div>
@@ -272,7 +273,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         </div>
       </div>
       <div class="eng-card">
-        <img src="/Oishi.png" alt="Oishi">
+        <img src="Oishi.png" alt="Oishi">
         <div>
           <div class="nm">大石 蔵之助</div>
           <div class="role">チーフストラテジスト · OMORAY Racing</div>
@@ -334,7 +335,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
   <div class="app-wrap">
     <div class="app-nav">
       <div class="logo">
-        <img src="/OP-icon.png" alt="OMORAY">
+        <img src="OP-icon.png" alt="OMORAY">
         <span>OMORAY <span class="blue">PITWALL</span></span>
       </div>
       <button class="btn-close" onclick="closeApp()">← Back</button>
@@ -347,31 +348,31 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       <div class="field-label">Select Your Engineer</div>
       <div class="eng-select-grid">
         <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
-          <img src="/James.png" alt="James">
+          <img src="James.png" alt="James">
           <div class="ename">James</div>
           <div class="erole">Chief Engineer</div>
           <div class="elang">🇬🇧 English</div>
         </div>
         <div class="eng-sel-card" id="card-Luna" onclick="selectEng('Luna')">
-          <img src="/Luna.png" alt="Luna">
+          <img src="Luna.png" alt="Luna">
           <div class="ename">Luna</div>
           <div class="erole">Race Engineer</div>
           <div class="elang">🇬🇧 English</div>
         </div>
         <div class="eng-sel-card" id="card-Hajime" onclick="selectEng('Hajime')">
-          <img src="/Hajime.png" alt="Hajime">
+          <img src="Hajime.png" alt="Hajime">
           <div class="ename">Hajime</div>
           <div class="erole">Race Engineer</div>
           <div class="elang">🇯🇵🇬🇧 EN / JP</div>
         </div>
         <div class="eng-sel-card" id="card-Kanbe" onclick="selectEng('Kanbe')">
-          <img src="/Kanbe.png" alt="Kanbe">
+          <img src="Kanbe.png" alt="Kanbe">
           <div class="ename">官兵衛</div>
           <div class="erole">チーフエンジニア</div>
           <div class="elang">🇯🇵 岡山弁</div>
         </div>
         <div class="eng-sel-card" id="card-Oishi" onclick="selectEng('Oishi')">
-          <img src="/Oishi.png" alt="Oishi">
+          <img src="Oishi.png" alt="Oishi">
           <div class="ename">大石</div>
           <div class="erole">チーフストラテジスト</div>
           <div class="elang">🇯🇵 標準語</div>
@@ -403,7 +404,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
     <!-- SCREEN: Chat -->
     <div id="screen-chat" class="app-screen">
       <div class="chat-header">
-        <img class="chat-av" id="chat-av" src="/James.png" alt="">
+        <img class="chat-av" id="chat-av" src="James.png" alt="">
         <div class="chat-header-info">
           <div class="chat-name" id="chat-name"></div>
           <div class="chat-desc" id="chat-desc"></div>
@@ -436,6 +437,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 </div>
 
 <script>
+// API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
+const API_BASE = 'https://english-voice-app-production.up.railway.app';
 // ── State ──
 let sel = null, selMode = null, userName = '', messages = [], turns = 0, sessionMsgCount = 0;
 let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
@@ -484,7 +487,7 @@ function hideBetaGate(){ document.getElementById('beta-gate').style.display='non
 
 async function verifyBeta(code){
   try{
-    const r = await fetch('/api/beta/verify',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r = await fetch(API_BASE+'/api/beta/verify',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({code})});
     return await r.json();
   }catch(e){ return {ok:false, reason:'network'}; }
@@ -576,7 +579,7 @@ function selectMode(mode){
 function startSession(){
   if(!sel||!selMode) return;
   const c = CHARS[sel];
-  document.getElementById('chat-av').src = '/'+c.avatar;
+  document.getElementById('chat-av').src = c.avatar;
   document.getElementById('chat-name').textContent = sel==='Kanbe'?'宇喜多 官兵衛':sel==='Oishi'?'大石 蔵之助':sel;
   document.getElementById('chat-desc').textContent = c.desc;
   messages=[]; turns=0; sessionMsgCount=0;
@@ -656,7 +659,7 @@ async function callAPI(){
                  : (selMode==='race' && !isJP) ? 80
                  : (selMode==='debrief' && isJP) ? 250
                  : 300;
-    const res = await fetch('/api/chat',{
+    const res = await fetch(API_BASE+'/api/chat',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -796,7 +799,7 @@ async function drainQueue(){
   try{
     const ctrl = new AbortController();
     const fetchTimer = setTimeout(()=>ctrl.abort(), 8000);  // TTS取得が固まらないようタイムアウト
-    const r = await fetch('/api/tts',{
+    const r = await fetch(API_BASE+'/api/tts',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch }),
       signal: ctrl.signal

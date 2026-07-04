@@ -21,7 +21,8 @@
     },
     "files": [
       "main.js",
-      "renderer.html"
+      "renderer.html",
+      "*.png"
     ],
     "extraResources": [
       {
