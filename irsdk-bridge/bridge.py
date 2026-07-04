@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-034
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-035
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -594,6 +594,10 @@ def poll_iracing():
     car_class_map = {}          # car_idx -> class_id
     sessions_map = {}           # SessionNum -> SessionType（現在のセッション種別判定用）
     car_relspeed_map = {}       # car_idx -> rel speed
+    car_irating_map = {}        # car_idx -> iRating（危険ドライバー警告用）
+    car_sr_map = {}             # car_idx -> Safety Rating値（例 2.34）
+    ahead_armed = {}            # car_idx -> bool（前方の危険ドライバー警告・再武装フラグ）
+    danger_warned = {}          # car_idx -> last warned time（前後共通クールダウン）
     player_rel_speed = 0
     is_race_session = False
     inactive_since = None
@@ -717,6 +721,12 @@ def poll_iracing():
                             car_class_map[d['car_idx']] = d['class_id']
                         if 'car_idx' in d and 'class_rel_speed' in d:
                             car_relspeed_map[d['car_idx']] = d['class_rel_speed']
+                        if 'car_idx' in d and 'irating' in d:
+                            car_irating_map[d['car_idx']] = d['irating']
+                        if 'car_idx' in d and 'lic_level' in d:
+                            # LicSubLevelは100倍値（例234→2.34）。無ければ中間値扱いで警告しない。
+                            sub = d.get('lic_sublevel', 300)
+                            car_sr_map[d['car_idx']] = round(sub / 100, 2)
                 player_car_idx = info.get('player_car_idx', -1)
                 player_class_id = car_class_map.get(player_car_idx, -1)
                 player_rel_speed = car_relspeed_map.get(player_car_idx, 0)
@@ -1097,6 +1107,31 @@ def poll_iracing():
                                     'message': 'Give room. Now.'})
                                 multiclass_2s_warned[idx] = now
 
+                    # ── 危険ドライバー警告（低iRating/低SR、前後どちらも）──────────
+                    # Yuji方針：バトル警告と同じタイミング(0.55→0.3の急接近で1回だけ)に乗せる。
+                    other_irating = car_irating_map.get(idx, 0)
+                    other_sr = car_sr_map.get(idx)
+                    is_risky = (0 < other_irating < 1500) or (other_sr is not None and 1.0 <= other_sr <= 2.5)
+                    if is_risky and not in_start_rush:
+                        adist = abs(delta)
+                        if adist > 0.55:
+                            ahead_armed[idx] = True
+                        elif adist <= 0.3 and ahead_armed.get(idx, False):
+                            last_warn = danger_warned.get(idx, 0)
+                            if now - last_warn > 20 and now - last_battle_global > 15:
+                                reason = 'SR ' + str(other_sr) if (other_sr is not None and other_sr <= 2.5) else 'iR ' + str(other_irating)
+                                if delta > 0:  # 相手が後方（delta>0=後方）
+                                    broadcast({'type': 'radio', 'trigger': 'danger_behind',
+                                        'delta': round(delta, 1), 'reason': reason,
+                                        'message': 'Careful. Risky driver behind (' + reason + ').'})
+                                else:  # 相手が前方
+                                    broadcast({'type': 'radio', 'trigger': 'danger_ahead',
+                                        'delta': round(abs(delta), 1), 'reason': reason,
+                                        'message': 'Careful passing — risky driver ahead (' + reason + ').'})
+                                ahead_armed[idx] = False
+                                danger_warned[idx] = now
+                                last_battle_global = now
+
                     # ── 同クラス：後ろが"急接近した瞬間"だけ1回警告（連呼しない）──────────
                     # 前方の車は離れても迫っても見えてるので黙る（Yuji方針）。
                     # 後ろは死角。一度クリア(>0.55)だった車が接近(<=0.3)した最初の1回だけ「後ろ注意」。
@@ -1292,7 +1327,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-034 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-035 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1305,7 +1340,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-034  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-035  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):

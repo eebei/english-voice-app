@@ -1091,6 +1091,8 @@ function oishiRadio(d){
     case 'multiclass_imminent':    return `道を空けろ。今だ。`;
     case 'battle_behind':  return `後ろ注意。${d.delta}。詰めてきてる。`;
     case 'battle_behind_faster': return `後ろ注意。${d.delta}。相手が速い、先に行かせろ。`;
+    case 'danger_behind': return `注意しろ。後ろ、危ないドライバーだ（${d.reason}）。`;
+    case 'danger_ahead':  return `抜く時気をつけろ。前、危ないドライバーだ（${d.reason}）。`;
     default: return null;
   }
 }
@@ -1125,6 +1127,8 @@ function kanbeRadio(d){
     case 'multiclass_imminent':    return `道を空けえ。今じゃ。`;
     case 'battle_behind':  return `後ろ注意じゃ。${d.delta}。詰めてきとる。`;
     case 'battle_behind_faster': return `後ろ注意じゃ。${d.delta}。相手が速い、先に行かせえ。`;
+    case 'danger_behind': return `気を付けえ。後ろ、危ないドライバーじゃ（${d.reason}）。`;
+    case 'danger_ahead':  return `抜く時気を付けえ。前、危ないドライバーじゃ（${d.reason}）。`;
     default: return null;
   }
 }
