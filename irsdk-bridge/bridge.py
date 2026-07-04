@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-035
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-036
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -217,8 +217,8 @@ def broadcast(event):
     try:
         et = event.get('type')
         if et == 'radio':
-            log("RADIO -> trigger=%s time=%s diff=%s (lap timing check)" %
-                (event.get('trigger'), event.get('time'), event.get('diff')))
+            log("RADIO -> trigger=%s time=%s diff=%s delta=%s reason=%s (lap timing check)" %
+                (event.get('trigger'), event.get('time'), event.get('diff'), event.get('delta'), event.get('reason')))
         elif et == 'ptt':
             log("PTT event -> " + str(event.get('state')))
     except Exception:
@@ -612,6 +612,11 @@ def poll_iracing():
     last_telem_ts = 0.0         # ライブテレメトリ・スナップショットの最終送信時刻
     nearest_ahead_gap = None    # 直前の車とのギャップ（秒）
     nearest_behind_gap = None   # 直後の車とのギャップ（秒）
+    car_pos_hist = {}           # car_idx -> (LapDistPct, timestamp)（停止車両検知用）
+    car_stopped_since = {}      # car_idx -> 停止し始めた時刻（動いていればキー無し）
+    stopped_check_ts = 0.0      # 停止判定の最終サンプリング時刻
+    stopped_armed = {}          # car_idx -> bool（7秒圏外まで離れたら再武装）
+    stopped_warned = {}         # car_idx -> last warned time
     # セッションサマリー蓄積
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
@@ -1058,6 +1063,27 @@ def poll_iracing():
             car_on_track   = reader.read_int_array('CarIdxTrackSurface', 64)
             # CarIdxTrackSurface: -1=NotInWorld, 0=OffTrack, 1=InPitStall, 2=ApproachingPits, 3=OnTrack
 
+            # ── 停止/クラッシュ車両検知（コース上・オフトラックで動きが止まってる車）──
+            # 1秒おきにLapDistPctの変化をサンプリングし、ほぼ動いてなければ「停止」とみなす。
+            car_dist_pct = reader.read_float_array('CarIdxLapDistPct', 64)
+            _snow = time.time()
+            if car_dist_pct and _snow - stopped_check_ts > 1.0:
+                for _i, _dist in enumerate(car_dist_pct):
+                    if _i == player_car_idx or _dist is None or _dist < 0:
+                        continue
+                    _surf = car_on_track[_i] if car_on_track and _i < len(car_on_track) else -1
+                    if _surf not in (0, 3):  # ピット/未使用の車は対象外（オフトラック含め対象）
+                        car_pos_hist.pop(_i, None); car_stopped_since.pop(_i, None)
+                        continue
+                    _prev = car_pos_hist.get(_i)
+                    if _prev is not None and abs(_dist - _prev[0]) < 0.0004:
+                        if _i not in car_stopped_since:
+                            car_stopped_since[_i] = _snow
+                    else:
+                        car_stopped_since.pop(_i, None)
+                    car_pos_hist[_i] = (_dist, _snow)
+                stopped_check_ts = _snow
+
             if car_f2_times and player_car_idx < len(car_f2_times):
                 player_time     = car_f2_times[player_car_idx]
                 player_last_lap = car_last_laps[player_car_idx] if car_last_laps else 0
@@ -1073,6 +1099,26 @@ def poll_iracing():
                         nearest_behind_gap = _d
                     elif _d < 0 and (nearest_ahead_gap is None or -_d < nearest_ahead_gap):
                         nearest_ahead_gap = -_d
+
+                    # ── 停止/クラッシュ車両の警告（コース上・オフトラック問わず、2秒以上停止確定した車）──
+                    # Yuji方針：5〜7秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
+                    _stopped_dur = _snow - car_stopped_since.get(idx, _snow) if idx in car_stopped_since else 0
+                    if _stopped_dur >= 2.0:
+                        _sdist = abs(_d)
+                        if _sdist > 8.0:
+                            stopped_armed[idx] = True
+                        elif _sdist <= 7.0 and stopped_armed.get(idx, False):
+                            _lastw = stopped_warned.get(idx, 0)
+                            if now - _lastw > 20 and now - last_battle_global > 15:
+                                _where = 'behind' if _d > 0 else 'ahead'
+                                broadcast({'type': 'radio',
+                                    'trigger': 'stopped_behind' if _where == 'behind' else 'stopped_ahead',
+                                    'delta': round(_sdist, 1),
+                                    'message': ('Stopped car behind, ' if _where == 'behind' else 'Stopped car ahead, ')
+                                                + str(round(_sdist, 1)) + '.'})
+                                stopped_armed[idx] = False
+                                stopped_warned[idx] = now
+                                last_battle_global = now
 
                     # ピット/ガレージの車は完全除外（接近警告を出さない）
                     if car_on_track:
@@ -1113,10 +1159,11 @@ def poll_iracing():
                     other_sr = car_sr_map.get(idx)
                     is_risky = (0 < other_irating < 1500) or (other_sr is not None and 1.0 <= other_sr <= 2.5)
                     if is_risky and not in_start_rush:
+                        # 危険ドライバーは早めの安全予告なので3秒圏内で1回（バトルの0.3秒より広い）
                         adist = abs(delta)
-                        if adist > 0.55:
+                        if adist > 4.0:
                             ahead_armed[idx] = True
-                        elif adist <= 0.3 and ahead_armed.get(idx, False):
+                        elif adist <= 3.0 and ahead_armed.get(idx, False):
                             last_warn = danger_warned.get(idx, 0)
                             if now - last_warn > 20 and now - last_battle_global > 15:
                                 reason = 'SR ' + str(other_sr) if (other_sr is not None and other_sr <= 2.5) else 'iR ' + str(other_irating)
@@ -1157,8 +1204,10 @@ def poll_iracing():
 
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
         # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。
+        # ※onTrack限定にしない：ピット/ガレージでの直後デブリーフでもデータが古くなり
+        #   すぎないよう、走行中でなくても(session接続中は)更新し続ける。
         _tnow = time.time()
-        if onTrack and _tnow - last_telem_ts > 3:
+        if player_car_idx >= 0 and _tnow - last_telem_ts > 3:
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -1170,6 +1219,7 @@ def poll_iracing():
                 'laps_total': lapsTot if (lapsTot and lapsTot > 0) else None,
                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
+                'on_track': onTrack,
             })
             last_telem_ts = _tnow
 
@@ -1327,7 +1377,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-035 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-036 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1340,7 +1390,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-035  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-036  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):

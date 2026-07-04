@@ -467,6 +467,7 @@ function buildSystem(p) {
   const telemetry = p.telemetry || 'off'; // 'live' | 'bridge' | 'off'
   const sectors = Array.isArray(p.sectors) ? p.sectors : null;
   const live = (p.liveData && typeof p.liveData === 'object') ? p.liveData : null; // ライブテレメトリ実値
+  const sessionType = typeof p.sessionType === 'string' ? p.sessionType : ''; // iRacing実際のセッション種別(Practice/Qualify/Race)
   const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
   const raceHistory = typeof p.raceHistory === 'string' ? p.raceHistory : '';
@@ -486,6 +487,11 @@ function buildSystem(p) {
   let modeNote = '';
   if (isRacing) {
     modeNote = profileNote;
+    if (mode === 'race') {
+      modeNote += isJ
+        ? '\n\n【重要・混同注意】「レースモード」はこのアプリの無線モード名であって、今のセッションが本当に「レース」だとは限らない（練習・予選のこともある）。実際にPractice/Qualify/Raceのどれかは【現在のライブテレメトリ】の「実セッション種別」を見て答えろ。分からなければ「今の実データを確認する」と言え。'
+        : '\n\n[IMPORTANT — do not confuse] "Race Mode" is just this app\'s radio-mode name, not proof the current session is an actual competitive race (it may be Practice or Qualify). Check "Actual session type" in [CURRENT LIVE TELEMETRY] for the real answer. If unavailable, say you will check.';
+    }
     if (character === 'Oishi' && mode === 'race') {
       modeNote += '\n\n━━ 現在のモード：レースモード ━━\nドライバーは走行中または走行直前。無線は情報のみ——激励・世間話・装飾は一切不要。最短の言葉で標準語で伝えろ（例：「ベスト更新。1:42.3。」「後ろ0.6。守れ。」）。最大1〜2文。冷静沈着に。\n\n【無線の鉄則・厳守】\n・「了解」「了承」「はい」「わかった」「承知」等の相槌・返事の言葉を絶対に付けるな（先頭も末尾も）。いきなり用件（数字・指示）から入れ。\n・1回の無線は1つの情報だけ。言うことが無ければ黙れ（沈黙も無線のうち。喋り続けるのは集中を削る）。\n・自分が何をするか・どういう構えかの自己説明や所信表明を絶対に語るな（例「沈黙を守りながら目を光らせる」「常に監視している」等のメタ発言は禁止）。ドライバーに必要な事実か指示だけを言え。\n・ドライバーが単に相槌・OK・指示を返してきただけなら、返事は不要か、必要でも一言だけ（例「監視続ける。」）。それ以上足すな。\n・タイムは秒だけ言え（例「41.5」）。分は言うな。\n・ドライバーの名前（呼びかけ）は平時は絶対に言うな。名前を使うのは終盤の勝負どころ——ポジションを獲りにいく／守りきる、その一瞬に力強く託す時だけ、レース中一度きり。\n・悪い例（禁止）：「了解。タイヤ内圧は…」「了承。テレメトリ監視中。沈黙を守りながら目を光らせる。何か報告あるか。」（相槌＋自己説明＋長文は全部NG）\n・良い例：「55.2。ベスト。」／「後ろ0.8。ペース上げてくる。」／（何もなければ）沈黙／（終盤の勝負局面でのみ）「最終ラップ。獲りにいけ、Yuji。」\n\n【鉄則】レース中に運転技術の指導は絶対するな。数字を伝え、懸念は質問で投げろ：「セクター2で0.5落ち。タイヤか？」。診断はドライバーがする。技術の話はデブリーフで。\n\n━━ iRating・SOF・SR戦略 ━━\nドライバーの数字はテレメトリから自動で届く。未接続で不明な時だけ聞け。【絶対禁止】知らない数字を捏造するな。届いた数字で作戦を一つだけ設定：\n- iRating >> SOF（500以上上）：「君が本命だ。表彰台が最低ラインだ。」\n- iRating ≈ SOF（200以内）：「接戦だ。クリーンに上位半分を狙う。」\n- iRating << SOF（500以上下）：「学びのレースだ。完走第一、前の3台を狙え。」\n- SR 3.0未満：「今日はインシデントゼロが順位より大事だ。」\nレース中は目標に触れろ。達成したら短く認めろ。標準語のみ。';
     } else if (character === 'Oishi' && mode === 'debrief') {
@@ -550,6 +556,8 @@ function buildSystem(p) {
     if (live.last != null)       { jp.push('直近ラップ ' + live.last); en.push('Last ' + live.last); }
     if (live.gap_ahead != null)  { jp.push('前とのギャップ ' + live.gap_ahead + '秒'); en.push('Gap ahead ' + live.gap_ahead + 's'); }
     if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
+    if (live.on_track === false) { jp.push('現在ピット/ガレージ内（走行データはさっきまでの値）'); en.push('Currently in pit/garage (data is from moments ago)'); }
+    if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
     if (jp.length) {
       liveNote = isJ
         ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。'

@@ -484,7 +484,7 @@ let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
-let lastSectors = null, driverState = null, lastTelemetry = null;
+let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
 let memorySavedThisSession = false, sessionBestLapStr = '';
 
 // ── Character config ──
@@ -747,6 +747,7 @@ async function callAPI(){
         telemetry,
         sectors:lastSectors,
         liveData:lastTelemetry,
+        sessionType:lastSessionType,
         driverState,
         profileNote,
         raceHistory,
@@ -1017,7 +1018,7 @@ function connectBridge(){
       if(data.type==='iracing_connected'){ iracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live'); return; }
       if(data.type==='iracing_disconnected'){ iracingLive=false; updateBridgeStatus(); bridgeVoice('iracing_lost'); return; }
       if(data.type==='radio') injectRadio(data);
-      if(data.type==='session_info') injectBriefing(data.data);
+      if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state') driverState=data.state;
@@ -1093,6 +1094,8 @@ function oishiRadio(d){
     case 'battle_behind_faster': return `後ろ注意。${d.delta}。相手が速い、先に行かせろ。`;
     case 'danger_behind': return `注意しろ。後ろ、危ないドライバーだ（${d.reason}）。`;
     case 'danger_ahead':  return `抜く時気をつけろ。前、危ないドライバーだ（${d.reason}）。`;
+    case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
+    case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意しろ。`;
     default: return null;
   }
 }
@@ -1129,6 +1132,8 @@ function kanbeRadio(d){
     case 'battle_behind_faster': return `後ろ注意じゃ。${d.delta}。相手が速い、先に行かせえ。`;
     case 'danger_behind': return `気を付けえ。後ろ、危ないドライバーじゃ（${d.reason}）。`;
     case 'danger_ahead':  return `抜く時気を付けえ。前、危ないドライバーじゃ（${d.reason}）。`;
+    case 'stopped_behind': return `後ろに停止車両じゃ。${d.delta}秒。`;
+    case 'stopped_ahead':  return `前方に停止車両じゃ。${d.delta}秒。気を付けえ。`;
     default: return null;
   }
 }
