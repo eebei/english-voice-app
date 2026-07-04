@@ -127,6 +127,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-sel-card .erole{font-size:12px;color:var(--blue);margin-bottom:1px}
 .eng-sel-card .elang{font-size:11px;color:var(--muted)}
 .eng-sel-card .etrait{font-size:12.5px;color:var(--silver);margin-top:6px;line-height:1.5}
+.setup-row{display:flex;align-items:center;justify-content:space-between;background:#262a40;border:1px solid #333855;border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.setup-lbl{font-size:13px;color:var(--silver)}
+.setup-hint{font-size:12px;color:var(--muted);line-height:1.6;margin-top:8px}
 
 /* Mode selection */
 .mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 24px}
@@ -345,11 +348,31 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       <button class="btn-close" onclick="closeApp()">← Back</button>
     </div>
 
-    <!-- SCREEN: Select Engineer -->
-    <div id="screen-select" class="app-screen active">
-      <div class="field-label">Driver Name</div>
-      <input class="field-input" id="user-name-input" type="text" placeholder="Your name" oninput="onNameInput()" maxlength="30" style="margin-bottom:24px">
-      <div class="field-label">Select Your Engineer</div>
+    <!-- SCREEN ①: Setup（走行前の設定・確実に先に） -->
+    <div id="screen-setup" class="app-screen active">
+      <div class="field-label" style="color:var(--blue)">① 走行前の設定</div>
+      <div class="field-label" style="margin-top:14px">ドライバー名</div>
+      <input class="field-input" id="user-name-input" type="text" placeholder="Your name" oninput="onNameInput()" maxlength="30" style="margin-bottom:20px">
+      <div class="field-label">コントローラー設定</div>
+      <div class="setup-row">
+        <div class="setup-lbl">PTT（話すボタン）</div>
+        <button class="voice-tog flash" id="ptt-btn" onclick="setupPTT()" title="ステアリングのボタン/スイッチをPTTに割り当て">スイッチ設定</button>
+      </div>
+      <div class="setup-row">
+        <div class="setup-lbl">音量ダイヤル（任意）</div>
+        <div style="display:flex;gap:8px">
+          <button class="voice-tog" id="vol-dn-btn" onclick="setupVol('down')" title="ステアリングのボタン/ダイヤルを音量↓に割当">小 設定</button>
+          <button class="voice-tog" id="vol-up-btn" onclick="setupVol('up')" title="ステアリングのボタン/ダイヤルを音量↑に割当">大 設定</button>
+        </div>
+      </div>
+      <div class="setup-hint">紫に光ってたらステアリングのボタンを1回押して割当。「PTT: B〇」と番号が出れば設定済み。音量ダイヤルは任意。</div>
+      <button class="start-btn" id="btn-setup-next" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
+    </div>
+
+    <!-- SCREEN ④: Select Engineer（楽しみは最後） -->
+    <div id="screen-select" class="app-screen">
+      <div id="profile-banner" class="profile-banner" style="display:none;margin-bottom:16px"></div>
+      <div class="field-label">エンジニアを選ぶ</div>
       <div class="eng-select-grid">
         <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
           <img src="James.png" alt="James">
@@ -397,27 +420,27 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           </div>
         </div>
       </div>
-      <button class="start-btn" id="btn-next" disabled onclick="goToMode()">Choose Mode →</button>
+      <button class="start-btn" id="btn-next" disabled onclick="startSession()">セッション開始 →</button>
+      <button class="btn-close" onclick="showScreen('screen-mode')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
     </div>
 
-    <!-- SCREEN: Mode Select -->
+    <!-- SCREEN ③: Mode Select -->
     <div id="screen-mode" class="app-screen">
-      <div id="profile-banner" class="profile-banner" style="display:none"></div>
-      <div class="field-label" id="mode-label">Select Mode</div>
+      <div class="field-label" id="mode-label">モードを選択</div>
       <div class="mode-grid">
         <div class="mode-btn" id="mode-race" onclick="selectMode('race')">
           <div class="micon">🏎️</div>
-          <div class="mtitle" id="mode-race-title">Race Mode</div>
-          <div class="mdesc" id="mode-race-desc">Live radio during your race</div>
+          <div class="mtitle" id="mode-race-title">Race Mode / レース</div>
+          <div class="mdesc" id="mode-race-desc">走行中のリアルタイム無線</div>
         </div>
         <div class="mode-btn" id="mode-debrief" onclick="selectMode('debrief')">
           <div class="micon">📋</div>
-          <div class="mtitle" id="mode-debrief-title">Debrief</div>
-          <div class="mdesc" id="mode-debrief-desc">Post-session analysis</div>
+          <div class="mtitle" id="mode-debrief-title">Debrief / デブリーフ</div>
+          <div class="mdesc" id="mode-debrief-desc">セッション後の分析</div>
         </div>
       </div>
-      <button class="start-btn" id="btn-start-session" disabled onclick="startSession()">Start Session →</button>
-      <button class="btn-close" onclick="showScreen('screen-select')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
+      <button class="start-btn" id="btn-start-session" disabled onclick="goToEngineer()">次へ →</button>
+      <button class="btn-close" onclick="showScreen('screen-setup')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
     </div>
 
     <!-- SCREEN: Chat -->
@@ -430,14 +453,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="chat-header-top">
             <button class="back-btn" onclick="endSession()">End Session</button>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="voice-tog flash" id="ptt-btn" onclick="setupPTT()" title="ステアリングのボタン/スイッチをPTTに割り当て">スイッチ設定</button>
               <button class="voice-tog on" id="voice-tog" onclick="toggleVoice()">🔊 Voice</button>
               <div style="display:flex;align-items:center;gap:6px" title="エンジニアの音量">
                 <span id="vol-icon" style="font-size:14px">🔊</span>
                 <input type="range" id="vol-slider" min="0" max="100" value="100" oninput="onVolume(this.value)"
                   style="width:90px;accent-color:#9D4EDD;cursor:pointer">
-                <button class="voice-tog" id="vol-dn-btn" onclick="setupVol('down')" title="ステアリングのボタン/ダイヤルを音量↓に割当">小 設定</button>
-                <button class="voice-tog" id="vol-up-btn" onclick="setupVol('up')" title="ステアリングのボタン/ダイヤルを音量↑に割当">大 設定</button>
               </div>
             </div>
           </div>
@@ -495,7 +515,18 @@ const GREETINGS = {
 };
 
 // ── LP / App overlay ──
-function openApp(){ document.getElementById('app-overlay').classList.add('active'); window.scrollTo(0,0); }
+function openApp(){
+  document.getElementById('app-overlay').classList.add('active'); window.scrollTo(0,0);
+  showScreen('screen-setup');              // ①設定から始める（設定は先に確実に）
+  try{ connectBridge(); }catch(e){}         // 設定画面でボタン割当できるよう先にbridge接続
+  try{ updatePTTLabel(); updateVolLabel(); }catch(e){}
+  // 前回の名前を自動入力（常連は再入力不要）
+  try{
+    const savedName=localStorage.getItem('pw_username')||'';
+    if(savedName){ const inp=document.getElementById('user-name-input'); inp.value=savedName; userName=savedName;
+      document.getElementById('btn-setup-next').disabled=false; }
+  }catch(e){}
+}
 function closeApp(){ document.getElementById('app-overlay').classList.remove('active'); }
 
 // ── ベータ・アクセスコード ゲート ──
@@ -549,7 +580,7 @@ async function bootGate(){
 function showScreen(id){
   document.querySelectorAll('.app-screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  if(id==='screen-chat'){ try{ updatePTTLabel(); updateVolLabel(); }catch(e){} }
+  if(id==='screen-setup'){ try{ updatePTTLabel(); updateVolLabel(); }catch(e){} }
 }
 
 // ── Engineer selection ──
@@ -558,10 +589,35 @@ function selectEng(name){
   document.querySelectorAll('.eng-sel-card').forEach(c=>c.classList.remove('selected'));
   document.getElementById('card-'+name).classList.add('selected');
   document.getElementById('btn-next').disabled = !userName;
+  // プロフィールバナー（このエンジニアとの過去セッション）
+  const profile = loadProfile();
+  const banner = document.getElementById('profile-banner');
+  if(profile && profile.sessions){
+    const isEN = (sel==='James'||sel==='Hajime'||sel==='Luna');
+    banner.style.display='block';
+    banner.innerHTML = isEN
+      ? `<b>Welcome back, ${profile.name||userName}!</b> Sessions: ${profile.sessions} · Last: ${profile.lastDate||'—'}`
+      : `<b>また来たか、${profile.name||userName}。</b>セッション数: ${profile.sessions} · 最終: ${profile.lastDate||'—'}`;
+  } else { banner.style.display='none'; }
 }
 function onNameInput(){
   userName = document.getElementById('user-name-input').value.trim();
-  document.getElementById('btn-next').disabled = !(sel && userName);
+  document.getElementById('btn-setup-next').disabled = !userName;   // 設定画面：名前が入れば次へ
+  try{ if(userName) localStorage.setItem('pw_username', userName); }catch(e){}
+}
+// ①設定 → ③モードへ
+function goToModeStep(){
+  if(!userName) return;
+  selMode = null;
+  document.getElementById('mode-race').classList.remove('selected');
+  document.getElementById('mode-debrief').classList.remove('selected');
+  document.getElementById('btn-start-session').disabled = true;
+  showScreen('screen-mode');
+}
+// ③モード → ④エンジニア選択
+function goToEngineer(){
+  if(!selMode) return;
+  showScreen('screen-select');
 }
 function goToMode(){
   if(!sel || !userName) return;
