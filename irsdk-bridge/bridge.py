@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-030
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-031
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -600,6 +600,7 @@ def poll_iracing():
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     battle_warned = {}          # car_idx -> last warned time
+    last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
     prev_session_state = 0      # previous SessionState value
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
@@ -746,8 +747,11 @@ def poll_iracing():
                 session_racing_started = True
         prev_session_state = cur_ss
         in_formation  = (cur_ss == 3)   # ローリング中 = ギャップコール停止
-        in_start_rush = (cur_ss == 4 and race_start_time is not None and
-                         time.time() - race_start_time < 30)  # スタート直後30秒
+        # スタート直後の密集でバトルコールが暴発するのを抑制。
+        # 30秒＋「1周目まるごと」＝ロングコース(ニュル等・1周7-8分)でも密集が解けるまで黙る。
+        in_start_rush = (cur_ss == 4 and (
+                            (race_start_time is not None and time.time() - race_start_time < 30)
+                            or (lap is not None and lap <= 1)))
 
         # ── ドライバーの現在地（走行中/ピット/ガレージ）──
         if onPit:
@@ -1085,9 +1089,11 @@ def poll_iracing():
                         pace_diff = (other_last_lap - player_last_lap
                                      if other_last_lap > 0 and player_last_lap > 0 else 0)
 
-                        if 0 < delta < 1.0:  # 後方1.0秒以内 = バトル中（1.5→1.0に厳格化）
+                        # delta 0.3未満（ほぼ真横）は「射程圏だ」等が無意味＝ドライバーには見えてる。黙る。
+                        # さらに全車共通20秒クールダウンで、複数台が数秒おきに連鎖するのを防ぐ。
+                        if 0.3 < delta < 1.0:  # 後方＝バトル中
                             last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 60:  # 60秒クールダウン（20秒→60秒）
+                            if now - last_warn > 60 and now - last_battle_global > 20:
                                 if pace_diff < -1.5:  # 相手が1.5秒以上速い → 先に行かせる
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
                                         'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2),
@@ -1097,13 +1103,15 @@ def poll_iracing():
                                         'delta': round(delta, 1),
                                         'message': 'Behind ' + str(round(delta, 1)) + '. Defend.'})
                                 battle_warned[idx] = now
-                        elif -1.0 < delta < 0:  # 前方1.0秒以内 = 前を攻める（1.5→1.0に厳格化）
+                                last_battle_global = now
+                        elif -1.0 < delta < -0.3:  # 前方＝前を攻める
                             last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 60:  # 60秒クールダウン（20秒→60秒）
+                            if now - last_warn > 60 and now - last_battle_global > 20:
                                 broadcast({'type': 'radio', 'trigger': 'battle_ahead',
                                     'delta': round(abs(delta), 1),
                                     'message': 'Ahead ' + str(round(abs(delta), 1)) + '. In range.'})
                                 battle_warned[idx] = now
+                                last_battle_global = now
 
         prev.update({'pos': pos, 'class_pos': class_pos, 'fuel': fuel, 'lap': lap,
                      'lapsTot': lapsTot, 'onPit': onPit})
@@ -1259,7 +1267,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-030 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-031 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1272,7 +1280,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-030  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-031  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
