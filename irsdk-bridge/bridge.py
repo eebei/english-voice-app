@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-038
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-039
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -604,6 +604,7 @@ def poll_iracing():
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
+    last_mc_diag_ts = 0.0       # マルチクラス「コールゼロ」診断ログの最終出力時刻
     battle_warned = {}          # car_idx -> last warned time
     last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
     behind_armed = {}           # car_idx -> bool（一度離れて再接近した時だけ1回警告する再武装フラグ）
@@ -1145,6 +1146,13 @@ def poll_iracing():
                     #   approaching→imminentを最大1回ずつ。6秒より離れたら再武装。
                     is_faster_class = (other_class != -1 and other_class != player_class_id and
                                        other_rel > player_rel_speed)
+                    # 診断ログ：別クラスの車が5秒以内に近いのに「速いクラス」と判定されなかった
+                    # ケースを記録（Yuji報告「GTP接近でコールゼロ」の原因特定用・10秒に1回まで）
+                    if (other_class != -1 and other_class != player_class_id and not is_faster_class
+                            and abs(delta) <= 5.0 and now - last_mc_diag_ts > 10):
+                        log("MC-DIAG no-call: my_class=%s my_rel=%s other_class=%s other_rel=%s delta=%.1f" %
+                            (player_class_id, player_rel_speed, other_class, other_rel, delta))
+                        last_mc_diag_ts = now
                     if is_faster_class:
                         if delta > 6.0:
                             multiclass_armed[idx] = True
@@ -1386,7 +1394,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-038 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-039 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1399,7 +1407,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-038  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-039  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
