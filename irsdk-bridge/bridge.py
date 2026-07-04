@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-031
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-032
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -601,6 +601,7 @@ def poll_iracing():
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     battle_warned = {}          # car_idx -> last warned time
     last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
+    behind_armed = {}           # car_idx -> bool（一度離れて再接近した時だけ1回警告する再武装フラグ）
     prev_session_state = 0      # previous SessionState value
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
@@ -1082,35 +1083,27 @@ def poll_iracing():
                                     'message': 'Give room. Now.'})
                                 multiclass_2s_warned[idx] = now
 
-                    # ── 同クラスバトル（スタート直後30秒は抑制）──────────
-                    if is_race_session and other_class == player_class_id and not in_start_rush:
-                        other_last_lap = car_last_laps[idx] if car_last_laps else 0
-                        # ペース差（プラス=相手が遅い、マイナス=相手が速い）
-                        pace_diff = (other_last_lap - player_last_lap
-                                     if other_last_lap > 0 and player_last_lap > 0 else 0)
-
-                        # delta 0.3未満（ほぼ真横）は「射程圏だ」等が無意味＝ドライバーには見えてる。黙る。
-                        # さらに全車共通20秒クールダウンで、複数台が数秒おきに連鎖するのを防ぐ。
-                        if 0.3 < delta < 1.0:  # 後方＝バトル中
-                            last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 60 and now - last_battle_global > 20:
-                                if pace_diff < -1.5:  # 相手が1.5秒以上速い → 先に行かせる
+                    # ── 同クラス：後ろが"急接近した瞬間"だけ1回警告（連呼しない）──────────
+                    # 前方の車は離れても迫っても見えてるので黙る（Yuji方針）。
+                    # 後ろは死角。一度クリア(>0.55)だった車が接近(<=0.3)した最初の1回だけ「後ろ注意」。
+                    # 再武装(behind_armed)方式で、離れて再度迫るまで二度は言わない＝連呼防止。
+                    if is_race_session and other_class == player_class_id and not in_start_rush and delta > 0:
+                        if delta > 0.55:
+                            behind_armed[idx] = True  # 十分離れた＝次の接近で警告できる状態に
+                        elif delta <= 0.3 and behind_armed.get(idx, False):
+                            if now - last_battle_global > 15:
+                                other_last_lap = car_last_laps[idx] if car_last_laps else 0
+                                pace_diff = (other_last_lap - player_last_lap
+                                             if other_last_lap > 0 and player_last_lap > 0 else 0)
+                                if pace_diff < -1.5:  # 相手が明らかに速い → 抑えるより先に行かせる
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
                                         'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2),
                                         'message': 'Behind ' + str(round(delta, 1)) + '. Faster pace. Let him go.'})
                                 else:
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind',
                                         'delta': round(delta, 1),
-                                        'message': 'Behind ' + str(round(delta, 1)) + '. Defend.'})
-                                battle_warned[idx] = now
-                                last_battle_global = now
-                        elif -1.0 < delta < -0.3:  # 前方＝前を攻める
-                            last_warn = battle_warned.get(idx, 0)
-                            if now - last_warn > 60 and now - last_battle_global > 20:
-                                broadcast({'type': 'radio', 'trigger': 'battle_ahead',
-                                    'delta': round(abs(delta), 1),
-                                    'message': 'Ahead ' + str(round(abs(delta), 1)) + '. In range.'})
-                                battle_warned[idx] = now
+                                        'message': 'Behind ' + str(round(delta, 1)) + '. Closing.'})
+                                behind_armed[idx] = False   # 1回言ったら再武装まで黙る
                                 last_battle_global = now
 
         prev.update({'pos': pos, 'class_pos': class_pos, 'fuel': fuel, 'lap': lap,
@@ -1267,7 +1260,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-031 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-032 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1280,7 +1273,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-031  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-032  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):

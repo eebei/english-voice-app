@@ -1031,9 +1031,8 @@ function oishiRadio(d){
     case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
     case 'multiclass_approaching': return `後方に速いクラス。${d.delta}秒。道を譲れ。`;
     case 'multiclass_imminent':    return `道を空けろ。今だ。`;
-    case 'battle_behind':  return `後ろ${d.delta}。守れ。`;
-    case 'battle_behind_faster': return `後ろ${d.delta}。相手が速い。先に行かせろ。`;
-    case 'battle_ahead':   return `前${d.delta}。射程圏だ。`;
+    case 'battle_behind':  return `後ろ注意。${d.delta}。詰めてきてる。`;
+    case 'battle_behind_faster': return `後ろ注意。${d.delta}。相手が速い、先に行かせろ。`;
     default: return null;
   }
 }
@@ -1066,9 +1065,8 @@ function kanbeRadio(d){
     case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
     case 'multiclass_approaching': return `後方速いクラス。${d.delta}秒。譲れ。`;
     case 'multiclass_imminent':    return `道を空けえ。今じゃ。`;
-    case 'battle_behind':  return `後ろ${d.delta}。守れ。`;
-    case 'battle_behind_faster': return `後ろ${d.delta}。相手が速い。先に行かせえ。`;
-    case 'battle_ahead':   return `前${d.delta}。いけるで。`;
+    case 'battle_behind':  return `後ろ注意じゃ。${d.delta}。詰めてきとる。`;
+    case 'battle_behind_faster': return `後ろ注意じゃ。${d.delta}。相手が速い、先に行かせえ。`;
     default: return null;
   }
 }
