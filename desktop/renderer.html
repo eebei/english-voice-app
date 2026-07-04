@@ -765,7 +765,12 @@ async function callAPI(){
     speak(display, true);   // 会話返答は最優先（溜まったラジオより先に喋る）
     if(sessionMsgCount>0&&sessionMsgCount%15===0) saveMemory();
   } catch(e){
+    // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
+    // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
     addMsg('sys','⚠ Connection error. Try again.');
+    const isJP2 = (sel==='Kanbe'||sel==='Oishi');
+    const errMsg = isJP2 ? 'すまん、今の届いとらん。もう一回言うてくれ。' : "Didn't catch that — say again.";
+    speak(errMsg, true);
   }
   isBusy=false;
   document.getElementById('busy-ind').classList.remove('show');

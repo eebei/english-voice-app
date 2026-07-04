@@ -1,5 +1,5 @@
 """
-OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-037
+OMORAY PITWALL - iRacing Bridge  BUILD 2026-07-04-038
 Reads iRacing shared memory directly
 Features: lap times, personal best, tire temps, iRating, SOF, Safety Rating, track info
 Requires: pip install websockets
@@ -1068,12 +1068,16 @@ def poll_iracing():
             # 1秒おきにLapDistPctの変化をサンプリングし、ほぼ動いてなければ「停止」とみなす。
             car_dist_pct = reader.read_float_array('CarIdxLapDistPct', 64)
             _snow = time.time()
+            # CarIdxOnPitRoad: ピットレーン上の車を確実に除外（ホームストレート沿いのピットで
+            # 停車中の車をコース上の停止車両と誤検知しないための保険。無ければNoneで無視される）
+            car_on_pitroad = reader.read_int_array('CarIdxOnPitRoad', 64)
             if car_dist_pct and _snow - stopped_check_ts > 1.0:
                 for _i, _dist in enumerate(car_dist_pct):
                     if _i == player_car_idx or _dist is None or _dist < 0:
                         continue
                     _surf = car_on_track[_i] if car_on_track and _i < len(car_on_track) else -1
-                    if _surf not in (0, 3):  # ピット/未使用の車は対象外（オフトラック含め対象）
+                    _onpit = bool(car_on_pitroad[_i]) if car_on_pitroad and _i < len(car_on_pitroad) else False
+                    if _surf not in (0, 3) or _onpit:  # ピット関連/未使用の車は対象外
                         car_pos_hist.pop(_i, None); car_stopped_since.pop(_i, None)
                         continue
                     _prev = car_pos_hist.get(_i)
@@ -1102,13 +1106,13 @@ def poll_iracing():
                         nearest_ahead_gap = -_d
 
                     # ── 停止/クラッシュ車両の警告（コース上・オフトラック問わず、2秒以上停止確定した車）──
-                    # Yuji方針：5〜7秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
+                    # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
                     _stopped_dur = _snow - car_stopped_since.get(idx, _snow) if idx in car_stopped_since else 0
                     if _stopped_dur >= 2.0:
                         _sdist = abs(_d)
-                        if _sdist > 8.0:
+                        if _sdist > 6.0:
                             stopped_armed[idx] = True
-                        elif _sdist <= 7.0 and stopped_armed.get(idx, False):
+                        elif _sdist <= 5.0 and stopped_armed.get(idx, False):
                             _lastw = stopped_warned.get(idx, 0)
                             if now - _lastw > 20 and now - last_battle_global > 15:
                                 _where = 'behind' if _d > 0 else 'ahead'
@@ -1382,7 +1386,7 @@ async def main():
     # ログファイルをリセット（今回のセッションだけ記録）
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-037 ===\n")
+            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-038 ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1395,7 +1399,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-037  started")
+    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-038  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
