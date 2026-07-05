@@ -1439,7 +1439,7 @@ async function checkPaceJudgment(data){
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
     liveData:lastTelemetry, sessionType:lastSessionType, driverState,
-    paceCheck:{recent_deltas:data.recent_deltas, pos:data.pos, gap_ahead:data.gap_ahead,
+    paceCheck:{recent_deltas:data.recent_deltas, direction:data.direction, pos:data.pos, gap_ahead:data.gap_ahead,
       gap_behind:data.gap_behind, fuel_strategy:data.fuel_strategy},
     max_tokens:80
   };

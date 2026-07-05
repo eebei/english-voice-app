@@ -962,6 +962,22 @@ def poll_iracing():
                     if len(lap_delta_hist) > 8:
                         lap_delta_hist.pop(0)
 
+                    # ── ペース向上パターン（2026/7/5追加・Yuji発案）──
+                    # 直近3周平均 vs その前3周平均で、はっきり速くなってる時だけ声をかける対象にする
+                    # （1周だけの偶然でなく、本当に上げてきてるかを均して判定）。
+                    # ここも固定の褒め言葉でなく、文脈込みでClaudeに「褒める価値があるか」判断させる。
+                    if len(lap_delta_hist) >= 6:
+                        recent3 = sum(lap_delta_hist[-3:]) / 3
+                        prev3 = sum(lap_delta_hist[-6:-3]) / 3
+                        if prev3 - recent3 >= 0.3:  # 3周平均で0.3秒以上速くなってる＝本物の向上傾向
+                            broadcast({'type': 'pace_check', 'direction': 'improving',
+                                'recent_deltas': lap_delta_hist[:],
+                                'pos': pos, 'class_pos': class_pos,
+                                'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
+                                'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
+                                'fuel_strategy': fuel_strategy,
+                            })
+
                     if diff < 0.3:
                         consecutive_slow = 0
                         consistent_lap_count += 1
@@ -979,7 +995,7 @@ def poll_iracing():
                             # 「一般的なエンジニア」止まり(文脈無視)。ここでは判断そのものをClaudeに渡し、
                             # タイヤ劣化か単なる誤差/トラフィックか文脈込みで判断させる(pace_check)。
                             # 喋る価値なしとClaudeが判断したら無音のまま(renderer側でNO_CALL処理)。
-                            broadcast({'type': 'pace_check',
+                            broadcast({'type': 'pace_check', 'direction': 'degrading',
                                 'recent_deltas': lap_delta_hist[:],
                                 'pos': pos, 'class_pos': class_pos,
                                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,

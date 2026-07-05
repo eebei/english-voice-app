@@ -759,9 +759,16 @@ function buildSystem(p) {
     if (paceCheck.gap_behind != null) ctxParts.push((isJ ? '後ろとのギャップ ' : 'Gap behind ') + paceCheck.gap_behind + 's');
     if (paceCheck.fuel_strategy) ctxParts.push((isJ ? '残り推定' : '~') + paceCheck.fuel_strategy.laps_remaining_est + (isJ ? '周' : ' laps remaining'));
     const ctx = ctxParts.join(' / ');
+    const improving = paceCheck.direction === 'improving';
     paceCheckNote = isJ
-      ? '\n\n【ペースチェック（内部トリガー・これはドライバーの発言ではない）】直近ラップのセッションベストとの差の推移（古い順）：' + deltas + '秒。' + ctx + '。\nこれがタイヤ劣化の兆候か、単なる誤差・トラフィック・ミスかを、この文脈込みで判断しろ。固定ルールでなく状況全体で判断せよ（例：残り周回が少なくリードが安全なら様子見、僅差の攻防中なら早めに指摘）。本当に無線で伝える価値があると判断した時だけ、キャラの口調で1文だけ返せ。伝える価値がないと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。'
-      : '\n\n[PACE CHECK (internal trigger — this is NOT something the driver said)] Recent lap deltas vs session best, oldest first: ' + deltas + 's. ' + ctx + '.\nJudge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with nothing else but the exact string "NO_CALL".';
+      ? '\n\n【ペースチェック（内部トリガー・これはドライバーの発言ではない）】直近ラップのセッションベストとの差の推移（古い順）：' + deltas + '秒。' + ctx + '。\n'
+        + (improving
+          ? '直近3周平均が、その前3周平均より明確に速くなっている（本物の向上傾向、1周だけの偶然ではない）。ドライバーのテンションが上がるような、短く力強い一言をかける価値があるか判断しろ。単に「速い」と言うだけでなく、状況（追い上げ中・自己ベスト更新の兆し等）を踏まえた一言だと効果的。褒める価値が薄いと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。'
+          : 'これがタイヤ劣化の兆候か、単なる誤差・トラフィック・ミスかを、この文脈込みで判断しろ。固定ルールでなく状況全体で判断せよ（例：残り周回が少なくリードが安全なら様子見、僅差の攻防中なら早めに指摘）。本当に無線で伝える価値があると判断した時だけ、キャラの口調で1文だけ返せ。伝える価値がないと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。')
+      : '\n\n[PACE CHECK (internal trigger — this is NOT something the driver said)] Recent lap deltas vs session best, oldest first: ' + deltas + 's. ' + ctx + '.\n'
+        + (improving
+          ? 'The last 3 laps are clearly faster on average than the 3 before them (a genuine improving trend, not a one-lap fluke). Judge whether a short, energizing radio line is worth it — reference the situation (closing a gap, approaching a personal best, etc.) rather than a generic "nice lap". If not genuinely worth it, reply with nothing else but the exact string "NO_CALL".'
+          : 'Judge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with nothing else but the exact string "NO_CALL".');
   }
 
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
