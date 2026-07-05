@@ -598,6 +598,7 @@ function buildSystem(p) {
   const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
   const raceHistory = typeof p.raceHistory === 'string' ? p.raceHistory : '';
+  const paceCheck = (p.paceCheck && typeof p.paceCheck === 'object') ? p.paceCheck : null; // AIペース文脈判断用の生データ
 
   const base = CHARACTERS[character];
   if (!base) return null; // 未知キャラ → 呼び出し側でフォールバック
@@ -746,9 +747,26 @@ function buildSystem(p) {
       : '\n\n━━ DRIVER SESSION HISTORY ━━\n' + raceHistory + '\nUse this data to frame the debrief. Note improvements or regressions from previous sessions. Spot trends (pace fade, incident patterns). Reference the numbers naturally — you have this data, use it.';
   }
 
+  // ── ペースチェック(内部トリガー)：固定閾値でなくAIに文脈判断させる(2026/7/5設計) ──
+  // bridgeは「2周連続でセッションベストより1秒以上遅い」を検知した生データを渡すだけ。
+  // タイヤ劣化か、トラフィック/ミス等の単なる誤差かはここでClaudeに判断させる。
+  let paceCheckNote = '';
+  if (isRacing && paceCheck && Array.isArray(paceCheck.recent_deltas) && paceCheck.recent_deltas.length) {
+    const deltas = paceCheck.recent_deltas.map(d => (d >= 0 ? '+' : '') + d).join(', ');
+    const ctxParts = [];
+    if (paceCheck.pos != null) ctxParts.push((isJ ? '順位 P' : 'Position P') + paceCheck.pos);
+    if (paceCheck.gap_ahead != null) ctxParts.push((isJ ? '前とのギャップ ' : 'Gap ahead ') + paceCheck.gap_ahead + 's');
+    if (paceCheck.gap_behind != null) ctxParts.push((isJ ? '後ろとのギャップ ' : 'Gap behind ') + paceCheck.gap_behind + 's');
+    if (paceCheck.fuel_strategy) ctxParts.push((isJ ? '残り推定' : '~') + paceCheck.fuel_strategy.laps_remaining_est + (isJ ? '周' : ' laps remaining'));
+    const ctx = ctxParts.join(' / ');
+    paceCheckNote = isJ
+      ? '\n\n【ペースチェック（内部トリガー・これはドライバーの発言ではない）】直近ラップのセッションベストとの差の推移（古い順）：' + deltas + '秒。' + ctx + '。\nこれがタイヤ劣化の兆候か、単なる誤差・トラフィック・ミスかを、この文脈込みで判断しろ。固定ルールでなく状況全体で判断せよ（例：残り周回が少なくリードが安全なら様子見、僅差の攻防中なら早めに指摘）。本当に無線で伝える価値があると判断した時だけ、キャラの口調で1文だけ返せ。伝える価値がないと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。'
+      : '\n\n[PACE CHECK (internal trigger — this is NOT something the driver said)] Recent lap deltas vs session best, oldest first: ' + deltas + 's. ' + ctx + '.\nJudge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with nothing else but the exact string "NO_CALL".';
+  }
+
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
   const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote;
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote;
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote;
   return { prefix: prefix, suffix: suffix };
 }
 

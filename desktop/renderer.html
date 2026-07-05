@@ -1251,6 +1251,7 @@ function connectBridge(){
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state') driverState=data.state;
       if(data.type==='session_summary'){ saveSessionSummary(data); scheduleAutoDebrief(data); }
+      if(data.type==='pace_check') checkPaceJudgment(data);
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
       if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint('✅ PTT登録：ボタン'+data.button+'（押して話す）'); }
@@ -1424,6 +1425,35 @@ function injectRadio(data){
   messages.push({role:'assistant',content:text});
   speak(text);
 }
+// ── ペースチェック（AI文脈判断・2026/7/5設計）──
+// bridgeが「2周連続でセッションベストより1秒以上遅い」という生データを送ってくる。
+// 固定文言でなく、Claudeにタイヤ劣化か誤差かを文脈込みで判断させ、喋る価値がなければ黙る。
+// ⚠️通常会話のmessages配列には一切触れない一回限りの問い合わせにする
+// （エラー時にrole交互が壊れる問題を再発させないため・独立した単発リクエストとして扱う）。
+async function checkPaceJudgment(data){
+  if(selMode!=='race') return;
+  const authToken = localStorage.getItem('pw_auth_token');
+  const headers = {'Content-Type':'application/json'};
+  const body = {
+    messages:[{role:'user', content:'[PACE_CHECK]'}],
+    character:sel, mode:selMode, level:'C2', userName,
+    telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
+    liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+    paceCheck:{recent_deltas:data.recent_deltas, pos:data.pos, gap_ahead:data.gap_ahead,
+      gap_behind:data.gap_behind, fuel_strategy:data.fuel_strategy},
+    max_tokens:80
+  };
+  if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+  try{
+    const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});
+    const resData = await res.json();
+    const reply = (resData.content?.[0]?.text||'').trim();
+    if(!reply || reply==='NO_CALL' || reply.includes('NO_CALL')) return;  // 喋る価値なしと判断＝無音
+    addMsg('ai',reply);
+    speak(reply);
+  }catch(e){ /* サイレント失敗でよい（元々テンプレ発話ではないため無理に埋めない） */ }
+}
+
 function injectBriefing(data){
   if(!data) return;
   const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');

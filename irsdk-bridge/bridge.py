@@ -647,6 +647,7 @@ def poll_iracing():
     last_session_sig = None
     consecutive_slow = 0
     consistent_lap_count = 0   # lap_consistentを3周に1回だけ発話するためのカウンター
+    lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
     prev_incidents = None
     incident_times = []
@@ -956,6 +957,11 @@ def poll_iracing():
 
                 else:
                     diff = lapTime - session_best
+                    # ── ペース推移の生データ蓄積（AI文脈判断用・直近8周）──
+                    lap_delta_hist.append(round(diff, 2))
+                    if len(lap_delta_hist) > 8:
+                        lap_delta_hist.pop(0)
+
                     if diff < 0.3:
                         consecutive_slow = 0
                         consistent_lap_count += 1
@@ -969,9 +975,17 @@ def poll_iracing():
                     else:
                         consecutive_slow += 1
                         if consecutive_slow >= 2:
-                            # 2周連続スロー＝ドライバーが乱れている可能性。落ち着かせる
-                            broadcast({'type': 'radio', 'trigger': 'pace_unstable', 'time': t, 'pos': pos,
-                                'message': 'Two laps off. Breathe. Reset. We are still in this. Clean laps to the flag.'})
+                            # ⚠️2026/7/5改修：固定ルール("2周連続スロー")で即座に定型文を喋らせるのは
+                            # 「一般的なエンジニア」止まり(文脈無視)。ここでは判断そのものをClaudeに渡し、
+                            # タイヤ劣化か単なる誤差/トラフィックか文脈込みで判断させる(pace_check)。
+                            # 喋る価値なしとClaudeが判断したら無音のまま(renderer側でNO_CALL処理)。
+                            broadcast({'type': 'pace_check',
+                                'recent_deltas': lap_delta_hist[:],
+                                'pos': pos, 'class_pos': class_pos,
+                                'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
+                                'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
+                                'fuel_strategy': fuel_strategy,
+                            })
                             consecutive_slow = 0
                         else:
                             broadcast({'type': 'radio', 'trigger': 'lap_slow', 'time': t,
