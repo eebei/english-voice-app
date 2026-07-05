@@ -832,7 +832,11 @@ async function callAPI(){
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
     addMsg('sys','⚠ Connection error. Try again.');
     const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
-    const errMsg = isJP2 ? 'すまん、今の届いとらん。もう一回言うてくれ。' : "Didn't catch that — say again.";
+    // 「すまん」は官兵衛の岡山弁口調。他の日本語キャラに使い回してたのは誤り。
+    const errMsg = (sel==='Kanbe') ? 'すまん、今の届いとらん。もう一回言うてくれ。'
+                 : (sel==='LunaJP') ? 'ごめん、今の聞こえなかった。もう一回言って。'
+                 : isJP2 ? '悪い、今の届いていない。もう一度言ってくれ。'
+                 : "Didn't catch that — say again.";
     speak(errMsg, true);
     // ★重要：ここでmessagesにassistant側を積まないと、次のユーザー発言と合わせて
     // user/userが連続してしまいClaude APIのrole交互ルールに反し続け、
@@ -1294,7 +1298,12 @@ function scheduleAutoDebrief(data){
     const st=(lastSessionType||'').toLowerCase();
     const sessJP = st.includes('race')?'レース':st.includes('qualif')?'予選':st.includes('practice')?'練習':'セッション';
     const sessEN = st.includes('race')?'race':st.includes('qualif')?'qualifying':st.includes('practice')?'practice':'session';
-    const msg=isJP?`${userName||'ドライバー'}、${sessJP}終了じゃ。${laps}周、ベスト${best}。デブリーフを始めようか？`
+    // 岡山弁(官兵衛)専用の語尾「じゃ」を全日本語キャラに使い回してた誤り。
+    // 大石/HajimeJP=標準語、LunaJP=タメ口標準語、官兵衛だけ岡山弁、で語尾を分ける。
+    const jpEnding = (sel==='Kanbe') ? `${sessJP}終了じゃ。${laps}周、ベスト${best}。デブリーフを始めようか？`
+                   : (sel==='LunaJP') ? `${userName||'ドライバー'}、${sessJP}終わったよ。${laps}周、ベスト${best}。デブリーフ始めよっか？`
+                   : `${userName||'ドライバー'}、${sessJP}終了だ。${laps}周、ベスト${best}。デブリーフを始めようか。`;
+    const msg=isJP?jpEnding
                   :`${userName||'Driver'}, that's the ${sessEN}. ${laps} laps, best ${best}. Ready for the debrief?`;
     addMsg('ai',msg);
     messages.push({role:'assistant',content:msg});
