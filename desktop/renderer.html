@@ -1476,17 +1476,29 @@ function scheduleAutoDebrief(data){
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const laps=data.total_laps||'?';
     const best=data.best_lap||sessionBestLapStr||'?';
+    const pos=data.finish_pos;
     // 実セッション種別が分かればそれで呼ぶ（予選/練習をレースと決め打ちしない）
     const st=(lastSessionType||'').toLowerCase();
     const sessJP = st.includes('race')?'レース':st.includes('qualif')?'予選':st.includes('practice')?'練習':'セッション';
     const sessEN = st.includes('race')?'race':st.includes('qualif')?'qualifying':st.includes('practice')?'practice':'session';
+    // ⚠️2026/7/5緊急追加：チェッカー直後に順位を伝えるのが完全に抜けていた重大な穴。
+    // F1TVの無線のように、結果次第でテンションを変える（表彰台級は本気で喜ぶ、それ以外も前向きに）。
+    const posJP = pos ? (pos<=3 ? `P${pos}！表彰台だ！` : pos<=10 ? `P${pos}。上出来だ。` : `P${pos}。`) : '';
+    const posEN = pos ? (pos<=3 ? `P${pos}! That's a podium!` : pos<=10 ? `P${pos}. Solid result.` : `P${pos}.`) : '';
     // 岡山弁(官兵衛)専用の語尾「じゃ」を全日本語キャラに使い回してた誤り。
     // 大石/HajimeJP=標準語、LunaJP=タメ口標準語、官兵衛だけ岡山弁、で語尾を分ける。
-    const jpEnding = (sel==='Kanbe') ? `${sessJP}終了じゃ。${laps}周、ベスト${best}。デブリーフを始めようか？`
-                   : (sel==='LunaJP') ? `${userName||'ドライバー'}、${sessJP}終わったよ。${laps}周、ベスト${best}。デブリーフ始めよっか？`
-                   : `${userName||'ドライバー'}、${sessJP}終了だ。${laps}周、ベスト${best}。デブリーフを始めようか。`;
-    const msg=isJP?jpEnding
-                  :`${userName||'Driver'}, that's the ${sessEN}. ${laps} laps, best ${best}. Ready for the debrief?`;
+    const jpEnding = (sel==='Kanbe')
+        ? (pos<=3 ? `${sessJP}終了じゃ！${posJP}見事な走りじゃったで！${laps}周、ベスト${best}。デブリーフを始めようか？`
+                  : `${sessJP}終了じゃ。${posJP}${laps}周、ベスト${best}。デブリーフを始めようか？`)
+      : (sel==='LunaJP')
+        ? (pos<=3 ? `${userName||'ドライバー'}、${sessJP}終わったよ！${posJP}やったね！${laps}周、ベスト${best}。デブリーフ始めよっか？`
+                  : `${userName||'ドライバー'}、${sessJP}終わったよ。${posJP}${laps}周、ベスト${best}。デブリーフ始めよっか？`)
+        : (pos<=3 ? `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}見事な結果だ。${laps}周、ベスト${best}。デブリーフを始めようか。`
+                  : `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}${laps}周、ベスト${best}。デブリーフを始めようか。`);
+    const enEnding = pos<=3
+        ? `${userName||'Driver'}, that's the ${sessEN}! ${posEN} Great drive out there. ${laps} laps, best ${best}. Ready for the debrief?`
+        : `${userName||'Driver'}, that's the ${sessEN}. ${posEN} ${laps} laps, best ${best}. Ready for the debrief?`;
+    const msg=isJP?jpEnding:enEnding;
     addMsg('ai',msg);
     messages.push({role:'assistant',content:msg});
     speak(msg);
