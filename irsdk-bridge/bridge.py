@@ -1029,6 +1029,13 @@ def poll_iracing():
 
         # ── セッションサマリー（チェッカー/クールダウン時に1回送信）──
         # SessionState: 5=Checkered, 6=Cooldown　※必ず実際に走行(SS=4)した後のみ
+        # ⚠️既知の課題(Yuji実走指摘・2026/7/5・IMSA等マルチクラス時間制)：SessionStateはセッション
+        # 全体の状態で、上位カテゴリ(リーダー)がチェッカーを受けた瞬間に全員5(Checkered)へ切り替わる。
+        # 自分がまだ半周残っていてもここだけ見ると即発火する。正しい判定には「自分がS/Fラインに対し
+        # リーダーより先か後か」の相対位置判定が要る＝2026/7/5に設計した戦略エンジンのリーダー基準
+        # チェッカーロジック(LapDistPct比較)と同じ実装が必要。単純にonTrack条件を足すと「チェッカー
+        # 直後コース上で停止→即デブリーフ」という評価の高い挙動を壊す(ピットレーンもonTrack扱いの
+        # ため)ため、ここでは修正を保留し、戦略エンジン実装時にまとめて直す。
         if cur_ss in (5, 6) and not summary_sent and session_laps and session_racing_started:
             times = [r['time'] for r in session_laps if r['time'] > 0]
             best_t = min(times) if times else 0
