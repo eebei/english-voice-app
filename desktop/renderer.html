@@ -1094,7 +1094,14 @@ function connectBridge(){
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
       if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint('✅ PTT登録：ボタン'+data.button+'（押して話す）'); }
-      if(data.type==='ptt_config'){ if(data.binding){ pttBinding={index:data.binding.joy,button:data.binding.button}; updatePTTLabel(); } }
+      // bridge側(実際にジョイスティックを監視してる本体)の設定が正=常に上書きする。
+      // bridgeが「未設定」と言ってきたら、localStorageに古い表示が残っていても消して再点滅させる
+      // （表示だけ設定済みに見えて実際は無反応、という食い違いを防ぐ）
+      if(data.type==='ptt_config'){
+        if(data.binding){ pttBinding={index:data.binding.joy,button:data.binding.button}; }
+        else { pttBinding=null; localStorage.removeItem('pw_ptt'); }
+        updatePTTLabel();
+      }
       if(data.type==='volume'){ stepVolume(data.dir); }
       if(data.type==='vol_set'){ volBinding[data.dir]={joy:data.joy,button:data.button}; updateVolLabel(); setHint('✅ 音量'+(data.dir==='up'?'＋':'−')+'登録：ボタン'+data.button); }
       if(data.type==='vol_config'){ if(data.binding){ volBinding=data.binding; updateVolLabel(); } }

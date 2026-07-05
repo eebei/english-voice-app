@@ -44,8 +44,18 @@ try:
 except Exception:
     _base = "."
 LOG_PATH = os.path.join(_base, "bridge_log.txt")
-PTT_CONFIG_PATH = os.path.join(_base, "ptt_config.json")
-VOL_CONFIG_PATH = os.path.join(_base, "vol_config.json")
+
+# ⚠️PTT/音量設定は実行ファイルと同じ場所ではなく、OS標準の永続フォルダに保存する。
+# desktop版はportable形式で毎回ランダムな一時フォルダに展開されるため、_base基準だと
+# 設定ファイルも使い捨てフォルダに書かれ、次回起動時には消えている（設定が復元されない不具合の原因）。
+try:
+    _appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+    _config_dir = os.path.join(_appdata, "OMORAY-PITWALL")
+    os.makedirs(_config_dir, exist_ok=True)
+except Exception:
+    _config_dir = _base
+PTT_CONFIG_PATH = os.path.join(_config_dir, "ptt_config.json")
+VOL_CONFIG_PATH = os.path.join(_config_dir, "vol_config.json")
 
 # ── PTT（プッシュ・トゥ・トーク）状態 ──
 ptt_binding = None        # {"joy": int, "button": int}
