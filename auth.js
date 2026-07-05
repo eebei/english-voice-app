@@ -58,7 +58,8 @@ async function init() {
       plan          TEXT,                             -- 'founding' | 'standard' | 'pro' 等
       stripe_customer_id TEXT,
       subscription_status TEXT,                       -- 'active' | 'canceled' | null
-      display_name  TEXT
+      display_name  TEXT,
+      leaderboard_opt_in BOOLEAN NOT NULL DEFAULT false  -- 将来のランキング/速報ページにニックネーム表示を許可するか（明示同意）
     );
   `);
   await pool.query(`
@@ -242,7 +243,20 @@ function publicUser(u) {
     plan: u.plan || null,
     subscriptionStatus: u.subscription_status || null,
     displayName: u.display_name || null,
+    leaderboardOptIn: u.leaderboard_opt_in || false,
   };
+}
+
+// ニックネーム（呼び名）とランキング公開同意を更新。本名でなく識別子にも使わない＝表示専用。
+async function updateProfile(userId, { displayName, leaderboardOptIn }) {
+  if (!ready) throw new Error('auth_not_ready');
+  const name = typeof displayName === 'string' ? displayName.trim().slice(0, 40) : null;
+  const optIn = !!leaderboardOptIn;
+  const { rows } = await pool.query(
+    `UPDATE users SET display_name = COALESCE($1, display_name), leaderboard_opt_in = $2 WHERE id = $3 RETURNING *`,
+    [name, optIn, userId]
+  );
+  return rows[0] || null;
 }
 
 // ── 課金／会員管理（Stripe Webhookから呼ぶ） ──
@@ -354,7 +368,7 @@ async function attachUser(req, _res, next) {
 module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
-  publicUser, attachUser,
+  publicUser, attachUser, updateProfile,
   setMemberByEmail, unsetMemberByCustomer, foundingStatus,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   FOUNDING_CAP,

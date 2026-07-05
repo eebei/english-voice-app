@@ -228,6 +228,18 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ user: auth.publicUser(req.user) });
 });
 
+// ニックネーム（呼び名）とランキング公開同意の登録・更新。要ログイン。
+app.patch('/api/auth/profile', express.json(), async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ error: 'login_required' });
+    const { displayName, leaderboardOptIn } = req.body || {};
+    const updated = await auth.updateProfile(req.user.id, { displayName, leaderboardOptIn });
+    res.json({ user: auth.publicUser(updated) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Per-IP rate limit on the chat endpoint (the driver's conversation — never starve this).
 // レース中は会話が生命線。十分余裕を持たせる。
 const chatLimiter = rateLimit({
