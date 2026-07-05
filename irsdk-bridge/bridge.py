@@ -1124,22 +1124,22 @@ def poll_iracing():
                     elif _d < 0 and (nearest_ahead_gap is None or -_d < nearest_ahead_gap):
                         nearest_ahead_gap = -_d
 
-                    # ── 停止/クラッシュ車両の警告（コース上・オフトラック問わず、2秒以上停止確定した車）──
+                    # ── 停止/クラッシュ車両の警告（前方のみ・コース上/オフトラック問わず、2秒以上停止確定）──
                     # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
+                    # ⚠️後方(stopped_behind)は2026/7/5に廃止。元々はドライバーの心理的プレッシャーを
+                    # 和らげる目的だったが、武装/解除方式の検知漏れリスクがある機能を安全上クリティカル
+                    # でない用途に使うのはリスクに見合わない判断。前方(衝突リスクに直結)のみ残す。
                     _stopped_dur = _snow - car_stopped_since.get(idx, _snow) if idx in car_stopped_since else 0
-                    if _stopped_dur >= 2.0:
+                    if _stopped_dur >= 2.0 and _d < 0:  # _d<0 = 相手が前方
                         _sdist = abs(_d)
                         if _sdist > 6.0:
                             stopped_armed[idx] = True
                         elif _sdist <= 5.0 and stopped_armed.get(idx, False):
                             _lastw = stopped_warned.get(idx, 0)
                             if now - _lastw > 20 and now - last_battle_global > 15:
-                                _where = 'behind' if _d > 0 else 'ahead'
-                                broadcast({'type': 'radio',
-                                    'trigger': 'stopped_behind' if _where == 'behind' else 'stopped_ahead',
+                                broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
                                     'delta': round(_sdist, 1),
-                                    'message': ('Stopped car behind, ' if _where == 'behind' else 'Stopped car ahead, ')
-                                                + str(round(_sdist, 1)) + '.'})
+                                    'message': 'Stopped car ahead, ' + str(round(_sdist, 1)) + '.'})
                                 stopped_armed[idx] = False
                                 stopped_warned[idx] = now
                                 last_battle_global = now
