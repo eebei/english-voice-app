@@ -1318,6 +1318,7 @@ function oishiRadio(d){
     case 'position_up':    return `P${pos}。`;
     case 'position_down':  return `P${pos}。1つ後退。`;
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'fuel_strategy_warning': return `このペースだと燃料が最後まで持たない。ピット必須だ。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -1356,6 +1357,7 @@ function kanbeRadio(d){
     case 'position_up':    return `P${pos}。`;
     case 'position_down':  return `P${pos}。1つダウン。`;
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'fuel_strategy_warning': return `このペースだと燃料が最後まで持たん。ピット必須じゃ。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -1394,6 +1396,7 @@ function matthiasRadio(d){
     case 'position_up':    return `P${pos}.`;
     case 'position_down':  return `P${pos}. Eine Position verloren.`;
     case 'fuel_warning':   return `Resttreibstoff ${d.fuel}. Sparen jetzt.`;
+    case 'fuel_strategy_warning': return `Bei diesem Tempo reicht der Sprit nicht bis zum Ziel. Boxenstopp nötig.`;
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
     case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
     case 'final_lap':      return `Letzte Runde. P${pos}.`;

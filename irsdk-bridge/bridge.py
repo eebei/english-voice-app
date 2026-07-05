@@ -642,6 +642,7 @@ def poll_iracing():
     fuel_strategy_warned = False
     fuel_at_lap_start = None    # 直近ラップ開始時点の燃料残量（ラップ消費量算出用）
     fuel_per_lap_hist = []      # 直近ラップ毎の消費量（外れ値を均すため直近5周の平均を使う）
+    lap_time_hist = []          # 直近ラップタイム履歴（時間制セッションの残り周回推定に使う・瞬間値の異常値対策）
     fuel_strategy = None        # 直近算出した燃料戦略(dict)。telemetry_liveで毎回同送する
     session_check_counter = 0
     last_session_sig = None
@@ -904,15 +905,25 @@ def poll_iracing():
                         fuel_per_lap_hist.pop(0)
             fuel_at_lap_start = fuel
 
+            # ⚠️2026/7/5判明バグ：ラップ切り替わり直後の瞬間的なlapTime単発値をそのまま使うと、
+            # 稀に異常に小さい値を拾って「20分で78周」のような物理的にありえない残り周回数を
+            # 算出してしまう(Yuji実走IMSAテストで発覚・致命的)。妥当な範囲(20秒〜600秒)のラップ
+            # タイムだけ履歴に積み、直近3周の平均を使うことで単発の異常値に引きずられなくする。
+            if lapTime and 20 < lapTime < 600:
+                lap_time_hist.append(lapTime)
+                if len(lap_time_hist) > 5:
+                    lap_time_hist.pop(0)
+
             if fuel_per_lap_hist:
                 avg_fuel_lap = sum(fuel_per_lap_hist) / len(fuel_per_lap_hist)
                 # 残り周回数の推定：周回制セッションはlapsTot-lap、時間制(IMSA等)はSessionTimeRemainと
-                # 直近ラップタイムから逆算。lapsTotが異常値(周回制でない/未確定)の場合は時間制側を使う。
+                # 直近ラップタイム"平均"から逆算。lapsTotが異常値(周回制でない/未確定)の場合は時間制側を使う。
                 laps_remaining_est = None
                 if lapsTot and 0 < lapsTot < 3000:
                     laps_remaining_est = max(0, lapsTot - lap)
-                elif timeRemain and 0 < timeRemain < 100000 and lapTime and lapTime > 0:
-                    laps_remaining_est = math.ceil(timeRemain / lapTime)
+                elif timeRemain and 0 < timeRemain < 100000 and lap_time_hist:
+                    avg_lap_time = sum(lap_time_hist[-3:]) / len(lap_time_hist[-3:])
+                    laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
 
                 if laps_remaining_est is not None and avg_fuel_lap > 0:
                     fuel_needed = avg_fuel_lap * (laps_remaining_est + 1)  # +1周分の安全マージン込み
