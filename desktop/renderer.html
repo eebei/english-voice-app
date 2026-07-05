@@ -127,6 +127,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-sel-card .erole{font-size:12px;color:var(--blue);margin-bottom:1px}
 .eng-sel-card .elang{font-size:11px;color:var(--muted)}
 .eng-sel-card .etrait{font-size:12.5px;color:var(--silver);margin-top:6px;line-height:1.5}
+.lang-toggle{display:flex;gap:8px;margin-top:10px}
+.lang-pill{font-size:12px;padding:6px 12px;border-radius:20px;border:1.5px solid #5866a8;background:transparent;color:var(--silver);cursor:pointer}
+.lang-pill.active{border-color:var(--blue);background:var(--blue-dim);color:var(--blue)}
 .setup-row{display:flex;align-items:center;justify-content:space-between;background:#262a40;border:1px solid #333855;border-radius:10px;padding:12px 14px;margin-bottom:10px}
 .setup-lbl{font-size:13px;color:var(--silver)}
 .setup-hint{font-size:12px;color:var(--muted);line-height:1.6;margin-top:8px}
@@ -461,8 +464,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="einfo">
             <div class="ename">Luna</div>
             <div class="erole">Race Engineer</div>
-            <div class="elang">🇬🇧 English</div>
-            <div class="etrait">静かな観察眼。心理とデータ、両方を読む。</div>
+            <div class="elang">静かな観察眼。心理とデータ、両方を読む。</div>
+            <div class="lang-toggle">
+              <button class="lang-pill" id="langpill-Luna-en" onclick="event.stopPropagation();selectEng('Luna')">🇬🇧 English</button>
+              <button class="lang-pill" id="langpill-Luna-jp" onclick="event.stopPropagation();selectEng('LunaJP')">🇯🇵 日本語</button>
+            </div>
           </div>
         </div>
         <div class="eng-sel-card" id="card-Hajime" onclick="selectEng('Hajime')">
@@ -470,8 +476,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="einfo">
             <div class="ename">Hajime</div>
             <div class="erole">Race Engineer</div>
-            <div class="elang">🇬🇧 English</div>
-            <div class="etrait">氷と炎。要点だけを、鋭く。</div>
+            <div class="elang">氷と炎。要点だけを、鋭く。単身で結果を出してきた侍。</div>
+            <div class="lang-toggle">
+              <button class="lang-pill" id="langpill-Hajime-en" onclick="event.stopPropagation();selectEng('Hajime')">🇬🇧 English</button>
+              <button class="lang-pill" id="langpill-Hajime-jp" onclick="event.stopPropagation();selectEng('HajimeJP')">🇯🇵 日本語</button>
+            </div>
           </div>
         </div>
         <div class="eng-sel-card" id="card-Kanbe" onclick="selectEng('Kanbe')">
@@ -490,24 +499,6 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="erole">チーフストラテジスト</div>
             <div class="elang">🇯🇵 標準語</div>
             <div class="etrait">静かな策士。大局を見る武士。</div>
-          </div>
-        </div>
-        <div class="eng-sel-card" id="card-HajimeJP" onclick="selectEng('HajimeJP')">
-          <img src="Hajime.png" alt="Hajime">
-          <div class="einfo">
-            <div class="ename">大松（日本語）</div>
-            <div class="erole">Race Engineer</div>
-            <div class="elang">🇯🇵 標準語</div>
-            <div class="etrait">理路整然、静かな胆力。単身で結果を出してきた侍。</div>
-          </div>
-        </div>
-        <div class="eng-sel-card" id="card-LunaJP" onclick="selectEng('LunaJP')">
-          <img src="Luna.png" alt="Luna">
-          <div class="einfo">
-            <div class="ename">Luna（日本語）</div>
-            <div class="erole">Race Engineer</div>
-            <div class="elang">🇯🇵 標準語</div>
-            <div class="etrait">帰国子女。静かな観察眼で、心理とデータ両方を読む。</div>
           </div>
         </div>
         <div class="eng-sel-card" id="card-Matthias" onclick="selectEng('Matthias')">
@@ -794,8 +785,15 @@ function showScreen(id){
 // ── Engineer selection ──
 function selectEng(name){
   sel = name;
+  // Hajime/Lunaは1人枠の中でEN/JPを切り替える方式（同じ人物が2枚のカードに分かれるのは不自然、との
+  // Yuji指摘・2026/7/5で統合）。カードのハイライトはスロットID(HajimeJP→Hajime等)に対して行う。
+  const slotId = (name==='HajimeJP') ? 'Hajime' : (name==='LunaJP') ? 'Luna' : name;
   document.querySelectorAll('.eng-sel-card').forEach(c=>c.classList.remove('selected'));
-  document.getElementById('card-'+name).classList.add('selected');
+  document.getElementById('card-'+slotId).classList.add('selected');
+  document.querySelectorAll('.lang-pill').forEach(b=>b.classList.remove('active'));
+  const pillId = (name==='HajimeJP') ? 'langpill-Hajime-jp' : (name==='LunaJP') ? 'langpill-Luna-jp'
+               : (name==='Hajime') ? 'langpill-Hajime-en' : (name==='Luna') ? 'langpill-Luna-en' : null;
+  if(pillId){ const p=document.getElementById(pillId); if(p) p.classList.add('active'); }
   document.getElementById('btn-next').disabled = !userName;
   // プロフィールバナー（このエンジニアとの過去セッション）
   const profile = loadProfile();
