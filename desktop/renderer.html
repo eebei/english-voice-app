@@ -834,6 +834,10 @@ async function callAPI(){
     const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const errMsg = isJP2 ? 'すまん、今の届いとらん。もう一回言うてくれ。' : "Didn't catch that — say again.";
     speak(errMsg, true);
+    // ★重要：ここでmessagesにassistant側を積まないと、次のユーザー発言と合わせて
+    // user/userが連続してしまいClaude APIのrole交互ルールに反し続け、
+    // 以降の質問が全部このエラーメッセージを繰り返すだけになる（履歴が永久に壊れる）。
+    messages.push({role:'assistant',content:errMsg});
   }
   isBusy=false;
   document.getElementById('busy-ind').classList.remove('show');

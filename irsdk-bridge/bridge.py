@@ -608,6 +608,7 @@ def poll_iracing():
     car_sr_map = {}             # car_idx -> Safety Rating値（例 2.34）
     ahead_armed = {}            # car_idx -> bool（前方の危険ドライバー警告・再武装フラグ）
     danger_warned = {}          # car_idx -> last warned time（前後共通クールダウン）
+    danger_ever_warned = set()  # car_idx -> このセッションで既に警告済みか（同じ危険ドライバーへの連呼を根絶。ギャップ往復での再発火を防ぐため再武装方式でなく永久に1回のみ）
     player_rel_speed = 0
     is_race_session = False
     inactive_since = None
@@ -1185,8 +1186,11 @@ def poll_iracing():
                     other_irating = car_irating_map.get(idx, 0)
                     other_sr = car_sr_map.get(idx)
                     is_risky = (0 < other_irating < 1500) or (other_sr is not None and 1.0 <= other_sr <= 2.5)
-                    if is_risky and not in_start_rush:
+                    if is_risky and not in_start_rush and idx not in danger_ever_warned:
                         # 危険ドライバーは早めの安全予告なので3秒圏内で1回（バトルの0.3秒より広い）
+                        # ⚠️このドライバーへの警告はセッション中1回のみ(danger_ever_warned)。
+                        # 再武装方式だとギャップが4秒→3秒を何度も往復するだけで同じ相手に何度も鳴ってしまい
+                        # 鬱陶しい(Yuji実走指摘・2026/7/5)。同一車には二度と警告しない。
                         adist = abs(delta)
                         if adist > 4.0:
                             ahead_armed[idx] = True
@@ -1204,6 +1208,7 @@ def poll_iracing():
                                         'message': 'Careful passing — risky driver ahead (' + reason + ').'})
                                 ahead_armed[idx] = False
                                 danger_warned[idx] = now
+                                danger_ever_warned.add(idx)
                                 last_battle_global = now
 
                     # ── 同クラス：後ろが"急接近した瞬間"だけ1回警告（連呼しない）──────────
