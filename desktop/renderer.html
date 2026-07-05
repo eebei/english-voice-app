@@ -245,7 +245,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
   <div class="wrap-lg">
     <div class="eyebrow">Your Crew</div>
     <h2 class="sec-title">Choose Your Engineer</h2>
-    <p class="sec-lead">Five engineers. Different styles, same mission — get you across the line.</p>
+    <p class="sec-lead">Eight engineers. Different styles, same mission — get you across the line.</p>
     <div class="eng-grid">
       <div class="eng-card">
         <img src="James.png" alt="James">
@@ -285,6 +285,30 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="nm">大石 蔵之助</div>
           <div class="role">チーフストラテジスト · OMORAY Racing</div>
           <div class="bio">忍耐と緻密さの策士。慌てず機を読み、ここぞで仕掛ける。「見事な走りだった。」</div>
+        </div>
+      </div>
+      <div class="eng-card">
+        <img src="Hajime.png" alt="Hajime (Japanese)">
+        <div>
+          <div class="nm">大松 一（日本語）</div>
+          <div class="role">Race Engineer · OMORAY Racing</div>
+          <div class="bio">理路整然、静かな胆力。単身で言葉の壁と厳しい環境を乗り越え頂点へ。「データは嘘をつかん。」</div>
+        </div>
+      </div>
+      <div class="eng-card">
+        <img src="Luna.png" alt="Luna (Japanese)">
+        <div>
+          <div class="nm">Luna（日本語）</div>
+          <div class="role">Race Engineer · OMORAY Racing</div>
+          <div class="bio">日本生まれの帰国子女。静かな観察眼で、心理とデータ両方を読む。「それがあなたのペース。」</div>
+        </div>
+      </div>
+      <div class="eng-card">
+        <img src="James.png" alt="Matthias">
+        <div>
+          <div class="nm">Matthias Richter</div>
+          <div class="role">Race Engineer · OMORAY Racing</div>
+          <div class="bio">German. Direct, process-driven, precise. Factory motorsport background. "Die Daten lügen nicht."</div>
         </div>
       </div>
     </div>
@@ -419,6 +443,33 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="etrait">静かな策士。大局を見る武士。</div>
           </div>
         </div>
+        <div class="eng-sel-card" id="card-HajimeJP" onclick="selectEng('HajimeJP')">
+          <img src="Hajime.png" alt="Hajime">
+          <div class="einfo">
+            <div class="ename">大松（日本語）</div>
+            <div class="erole">Race Engineer</div>
+            <div class="elang">🇯🇵 標準語</div>
+            <div class="etrait">理路整然、静かな胆力。単身で結果を出してきた侍。</div>
+          </div>
+        </div>
+        <div class="eng-sel-card" id="card-LunaJP" onclick="selectEng('LunaJP')">
+          <img src="Luna.png" alt="Luna">
+          <div class="einfo">
+            <div class="ename">Luna（日本語）</div>
+            <div class="erole">Race Engineer</div>
+            <div class="elang">🇯🇵 標準語</div>
+            <div class="etrait">帰国子女。静かな観察眼で、心理とデータ両方を読む。</div>
+          </div>
+        </div>
+        <div class="eng-sel-card" id="card-Matthias" onclick="selectEng('Matthias')">
+          <img src="James.png" alt="Matthias">
+          <div class="einfo">
+            <div class="ename">Matthias</div>
+            <div class="erole">Race Engineer</div>
+            <div class="elang">🇩🇪 Deutsch</div>
+            <div class="etrait">直接的・プロセス重視。ドイツ流の精密さ。</div>
+          </div>
+        </div>
       </div>
       <button class="start-btn" id="btn-next" disabled onclick="startSession()">セッション開始 →</button>
       <button class="btn-close" onclick="showScreen('screen-mode')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
@@ -498,7 +549,14 @@ const CHARS = {
   Kanbe:  { avatar:'Kanbe.png',  desc:'チーフエンジニア · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.8, rate:1.45,
             gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.28, gPitch:-8.0 },
   Oishi:  { avatar:'Oishi.png',  desc:'チーフストラテジスト · OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.82, rate:1.40,
-            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.35, gPitch:0 }
+            gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.35, gPitch:0 },
+  HajimeJP: { avatar:'Hajime.png', desc:'レースエンジニア（日本語）· OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Keita','Microsoft Ichiro','Ichiro','Otoya','Google 日本語'], pitch:0.85, rate:1.30,
+            gVoice:'ja-JP-Neural2-C', gLang:'ja-JP', gRate:1.15, gPitch:-3.0 },
+  LunaJP: { avatar:'Luna.png',   desc:'レースエンジニア（日本語）· OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Google 日本語','Kyoko','O-Ren'], pitch:1.05, rate:1.25,
+            gVoice:'ja-JP-Neural2-B', gLang:'ja-JP', gRate:1.12, gPitch:1.0 },
+  // ⚠️Matthiasのアバター画像は未作成。当面James.pngを仮流用（要差し替え）
+  Matthias: { avatar:'James.png', desc:'Race Engineer (German) · OMORAY Racing', voiceLang:'de-DE', voiceNames:['Google Deutsch','Anna','Markus'], pitch:0.9, rate:1.05,
+            gVoice:'de-DE-Neural2-B', gLang:'de-DE', gRate:1.1, gPitch:-2.0 }
 };
 
 const GREETINGS = {
@@ -511,7 +569,13 @@ const GREETINGS = {
   Kanbe:  (n,m) => m==='race' ? `${n||'ドライバー'}、官兵衛じゃ。ラジオチェック。iRacingに繋がったらデータを読み上げて作戦を立てるけぇ、そのまま待っときい。`
                               : `${n||'ドライバー'}、官兵衛じゃ。今日はどのコースを走ったんじゃ？まずコースとコンディションを話してみい。`,
   Oishi:  (n,m) => m==='race' ? `${n||'ドライバー'}、大石だ。無線チェック。iRacingに繋がれば君のデータを読み上げ、作戦を立てる。落ち着いて待っていてくれ。`
-                              : `${n||'ドライバー'}、大石だ。今日はどのコースを走った？まずコースとコンディションを聞かせてくれ。`
+                              : `${n||'ドライバー'}、大石だ。今日はどのコースを走った？まずコースとコンディションを聞かせてくれ。`,
+  HajimeJP: (n,m) => m==='race' ? `${n||'ドライバー'}、大松だ。ラジオチェック。iRacingに繋がったらデータを読み上げる。そのまま待っていてくれ。`
+                              : `${n||'ドライバー'}、大松だ。今日はどのコースを走った。コースとコンディションから聞かせてくれ。`,
+  LunaJP: (n,m) => m==='race' ? `${n||'ドライバー'}、Lunaよ。ラジオチェック。iRacingに繋がったらすぐデータが届くわ。リラックスして、深呼吸して、待ってて。`
+                              : `${n||'ドライバー'}、Luna。デブリーフしましょう。車の感触を教えて——データは私が見るから、あなたは物語を聞かせて。`,
+  Matthias: (n,m) => m==='race' ? `${n||'Fahrer'}, hier ist Matthias. Funkcheck. Sobald iRacing verbunden ist, habe ich deine Daten. Warte.`
+                              : `${n||'Fahrer'}, Matthias hier. Lass uns die Session durchgehen. Wie hat sich das Auto angefühlt — ich habe die Daten, du bringst das Gefühl.`
 };
 
 // ── LP / App overlay ──
@@ -621,7 +685,7 @@ function goToEngineer(){
 }
 function goToMode(){
   if(!sel || !userName) return;
-  const isJP = (sel==='Kanbe'||sel==='Oishi');
+  const isJP = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // Update mode labels for JP engineers
   document.getElementById('mode-race-title').textContent  = isJP ? 'レースモード' : 'Race Mode';
   document.getElementById('mode-race-desc').textContent   = isJP ? '走行中のリアルタイム無線' : 'Live radio during your race';
@@ -656,7 +720,7 @@ function startSession(){
   if(!sel||!selMode) return;
   const c = CHARS[sel];
   document.getElementById('chat-av').src = c.avatar;
-  document.getElementById('chat-name').textContent = sel==='Kanbe'?'宇喜多 官兵衛':sel==='Oishi'?'大石 蔵之助':sel;
+  document.getElementById('chat-name').textContent = sel==='Kanbe'?'宇喜多 官兵衛':sel==='Oishi'?'大石 蔵之助':sel==='HajimeJP'?'大松 一':sel==='LunaJP'?'Luna':sel;
   document.getElementById('chat-desc').textContent = c.desc;
   messages=[]; turns=0; sessionMsgCount=0;
   document.getElementById('chat-area').innerHTML='';
@@ -730,7 +794,7 @@ async function callAPI(){
   const profileNote = buildProfileNote(profile);
   const raceHistory = buildRaceHistoryContext();
   try{
-    const isJP = (sel==='Kanbe'||sel==='Oishi');
+    const isJP = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const maxTok = (selMode==='race' && isJP) ? 120
                  : (selMode==='race' && !isJP) ? 80
                  : (selMode==='debrief' && isJP) ? 250
@@ -768,7 +832,7 @@ async function callAPI(){
     // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
     addMsg('sys','⚠ Connection error. Try again.');
-    const isJP2 = (sel==='Kanbe'||sel==='Oishi');
+    const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const errMsg = isJP2 ? 'すまん、今の届いとらん。もう一回言うてくれ。' : "Didn't catch that — say again.";
     speak(errMsg, true);
   }
@@ -931,7 +995,7 @@ function startRec(){
   if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){ addMsg('sys','Speech recognition not supported.'); return; }
   const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
   recognition = new SR();
-  recognition.lang = (sel==='Kanbe'||sel==='Oishi')?'ja-JP':'en-US';
+  recognition.lang = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja-JP':(sel==='Matthias')?'de-DE':'en-US';
   recognition.continuous=false; recognition.interimResults=false;
   recognition.onstart=()=>{ isRecording=true; document.getElementById('mic-btn').classList.add('recording'); setHint('Listening…'); };
   recognition.onresult=(e)=>{ const t=e.results[0][0].transcript; document.getElementById('chat-input').value=t; };
@@ -971,7 +1035,7 @@ function startAutoMic(){
   if(!SR) return;
   autoMicActive=true;
   const r=new SR(); autoMicRec=r;
-  r.lang=(sel==='Kanbe'||sel==='Oishi')?'ja-JP':'en-US';
+  r.lang=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja-JP':(sel==='Matthias')?'de-DE':'en-US';
   r.continuous=false; r.interimResults=false;
   r.onresult=(e)=>{ const t=e.results[0][0].transcript; if(t){ document.getElementById('chat-input').value=t; sendMsg(); } };
   r.onend=()=>{ autoMicActive=false; autoMicRec=null; scheduleMicRestart(400); };  // 終了したら自動で開き直す
@@ -995,10 +1059,10 @@ function bridgeVoice(key){
   if((key==='bridge_up'||key==='bridge_down') && now-lastBridgeVoiceAt < 8000) { lastBridgeVoiceKey=key; lastBridgeVoiceAt=now; return; }
   lastBridgeVoiceKey=key; lastBridgeVoiceAt=now;
   const lines={
-    bridge_up:{ James:"System's up. Waiting for iRacing.", Luna:"System's ready. Waiting for iRacing.", Hajime:"System online. Waiting for iRacing.", Kanbe:"システム起動。iRacing待ちじゃ。", Oishi:"システム起動完了。iRacingを待つ。" },
-    bridge_down:{ James:"System offline. Make sure the app is running — I'll reconnect automatically.", Luna:"System's offline. Keep the app open — I'll reconnect automatically.", Hajime:"System offline. Keep the app running. I'll reconnect automatically.", Kanbe:"システムが切れとる。アプリが起動しとるか確認してくれ。自動で繋ぎ直す。", Oishi:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。" },
-    iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Luna:"iRacing connected. Data coming in. Stand by for your briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。" },
-    iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。" }
+    bridge_up:{ James:"System's up. Waiting for iRacing.", Luna:"System's ready. Waiting for iRacing.", Hajime:"System online. Waiting for iRacing.", Kanbe:"システム起動。iRacing待ちじゃ。", Oishi:"システム起動完了。iRacingを待つ。", HajimeJP:"システム起動。iRacing待ち。", LunaJP:"システム起動完了。iRacing待ってるわ。", Matthias:"System online. Warte auf iRacing." },
+    bridge_down:{ James:"System offline. Make sure the app is running — I'll reconnect automatically.", Luna:"System's offline. Keep the app open — I'll reconnect automatically.", Hajime:"System offline. Keep the app running. I'll reconnect automatically.", Kanbe:"システムが切れとる。アプリが起動しとるか確認してくれ。自動で繋ぎ直す。", Oishi:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。", HajimeJP:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。", LunaJP:"システムが切れちゃった。アプリが起動してるか確認して。自動で繋ぎ直すわ。", Matthias:"System offline. Bitte App-Start prüfen — automatische Wiederverbindung." },
+    iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Luna:"iRacing connected. Data coming in. Stand by for your briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。", HajimeJP:"iRacing接続。データ受信開始。", LunaJP:"iRacing繋がったわ。データ受信開始。", Matthias:"iRacing verbunden. Daten kommen an." },
+    iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。", HajimeJP:"iRacing切断。", LunaJP:"iRacingが切れちゃった。", Matthias:"iRacing-Signal verloren." }
   };
   const msg=(lines[key]||{})[sel];
   if(msg){ addMsg('ai',msg); speak(msg); }
@@ -1142,12 +1206,51 @@ function kanbeRadio(d){
     default: return null;
   }
 }
+function matthiasRadio(d){
+  const t=d.time||'';
+  const diff=(d.diff!==undefined)?d.diff:'';
+  const pos=(d.pos!==undefined)?d.pos:'';
+  switch(d.trigger){
+    case 'personal_best':  return `Persönliche Bestzeit. ${t}. Plus ${diff}.`;
+    case 'first_lap':      return `${t}. Referenzrunde.`;
+    case 'session_best':   return `Sessionbestzeit. ${t}.`;
+    case 'lap_consistent': return `${t}. Konstant.`;
+    case 'lap_time':       return `${t}. Minus ${diff}.`;
+    case 'lap_slow':       return `${t}. Tempo runter. Status?`;
+    case 'pace_unstable':  return `Zwei Runden in Folge langsamer. Kurz durchatmen. Kein Stress, wir sind noch dabei.`;
+    case 'incident': {
+      const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
+      if(r3) return ['Zu viele Incidents. Ruhig bleiben. Ankommen vor Position.','Genug jetzt. Kopf freimachen. Sicher nach Hause.','Kein Risiko mehr. Erst mal ein Auto sicher zurückbringen.'][Math.floor(Math.random()*3)];
+      if(d4) return ['Kontakt. Ruhig bleiben. Kein weiteres Risiko.','Das war heftig. Konzentrier dich. Was wir haben, verteidigen.','Reset jetzt. Ab hier sauber fahren.'][Math.floor(Math.random()*3)];
+      return ['Vorsicht. Neu ausrichten.','Dreher? Ruhig bleiben, alles gut.','Kein Stress. Sauber weiterfahren.'][Math.floor(Math.random()*3)];
+    }
+    case 'position_up':    return `P${pos}.`;
+    case 'position_down':  return `P${pos}. Eine Position verloren.`;
+    case 'fuel_warning':   return `Resttreibstoff ${d.fuel}. Sparen jetzt.`;
+    case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
+    case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
+    case 'final_lap':      return `Letzte Runde. P${pos}.`;
+    case 'pit_entry':      return `Copy. Limiter prüfen.`;
+    case 'pit_exit':       return `Auf der Strecke. Reifen und Bremsen aufwärmen.`;
+    case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Ranfahren.`;
+    case 'multiclass_approaching': return `Schnellere Klasse dahinter. ${d.delta} Sekunden. Platz machen.`;
+    case 'multiclass_imminent':    return `Platz machen. Jetzt.`;
+    case 'battle_behind':  return `Achtung hinten. ${d.delta}. Er kommt näher.`;
+    case 'battle_behind_faster': return `Achtung hinten. ${d.delta}. Er ist schneller, vorbeilassen.`;
+    case 'danger_behind': return `Vorsicht hinten. Gefährlicher Fahrer (${d.reason}).`;
+    case 'danger_ahead':  return `Vorsicht beim Überholen. Gefährlicher Fahrer vorne (${d.reason}).`;
+    case 'stopped_behind': return `Stehendes Auto hinten. ${d.delta} Sekunden.`;
+    case 'stopped_ahead':  return `Stehendes Auto vorne. ${d.delta} Sekunden. Vorsicht.`;
+    default: return null;
+  }
+}
 // 英語キャラ（James/Luna/Hajime）はbridgeの英語messageをそのまま使う（既に自然な英語）
 function injectRadio(data){
   if(selMode!=='race') return;
   let text;
   if(sel==='Kanbe')      text=kanbeRadio(data)||data.message||'';
-  else if(sel==='Oishi') text=oishiRadio(data)||data.message||'';
+  else if(sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP') text=oishiRadio(data)||data.message||'';
+  else if(sel==='Matthias') text=matthiasRadio(data)||data.message||'';
   else                   text=data.message||'';   // James/Luna/Hajime
   if(!text) return;
   if(data.trigger==='personal_best'&&data.time) sessionBestLapStr=data.time;
@@ -1157,7 +1260,7 @@ function injectRadio(data){
 }
 function injectBriefing(data){
   if(!data) return;
-  const isJP=(sel==='Kanbe'||sel==='Oishi');
+  const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   const parts=[];
   if(data.track) parts.push(isJP?`コース：${data.track}`:`Track: ${data.track}`);
   if(data.sof)   parts.push(isJP?`SOF ${data.sof}`:`SOF ${data.sof}`);
@@ -1174,7 +1277,7 @@ function injectBriefing(data){
 function scheduleAutoDebrief(data){
   if(selMode!=='race') return;
   setTimeout(()=>{
-    const isJP=(sel==='Kanbe'||sel==='Oishi');
+    const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const laps=data.total_laps||'?';
     const best=data.best_lap||sessionBestLapStr||'?';
     // 実セッション種別が分かればそれで呼ぶ（予選/練習をレースと決め打ちしない）
@@ -1194,7 +1297,7 @@ function loadProfile(){ try{ return JSON.parse(localStorage.getItem('pw_profile_
 function saveProfile(p){ try{ localStorage.setItem('pw_profile_'+sel, JSON.stringify(p)); }catch{} }
 function buildProfileNote(profile){
   if(!profile||!profile.sessions) return '';
-  const isJP=(sel==='Kanbe'||sel==='Oishi');
+  const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   const lines=[];
   if(profile.sessions) lines.push(isJP?`セッション数：${profile.sessions}`:`Sessions with this engineer: ${profile.sessions}`);
   if(profile.lastDate) lines.push(isJP?`最終セッション：${profile.lastDate}`:`Last session: ${profile.lastDate}`);
@@ -1225,7 +1328,7 @@ function buildRaceHistoryContext(){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
     if(!history.length) return '';
-    const isJP=(sel==='Kanbe'||sel==='Oishi');
+    const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     return history.slice(-5).map(s=>isJP
       ?`${s.date} ${s.track} ベスト${s.bestLap} 平均${s.avgLap} ${s.totalLaps}周 インシデント${s.incidents}`
       :`${s.date} ${s.track} best ${s.bestLap} avg ${s.avgLap} ${s.totalLaps} laps inc ${s.incidents}`
