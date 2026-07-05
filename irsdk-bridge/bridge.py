@@ -1413,10 +1413,12 @@ async def handler(websocket):
 async def main():
     global loop
     loop = asyncio.get_running_loop()
-    # ログファイルをリセット（今回のセッションだけ記録）
+    # ⚠️以前は"w"(上書き)で起動毎にログを消していた→アプリ再起動(バグ対処等)すると
+    # 直前セッションの記録が消え、後から原因診断できなくなる問題があった(2026/7/5判明)。
+    # 追記＋セッション区切りマークに変更し、複数起動をまたいで履歴を残す。
     try:
-        with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("=== OMORAY PITWALL Bridge BUILD 2026-07-04-039 ===\n")
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write("\n=== OMORAY PITWALL Bridge session start (BUILD 2026-07-04-039) ===\n")
     except Exception:
         pass
     load_ptt_config()
