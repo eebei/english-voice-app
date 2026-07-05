@@ -15,6 +15,7 @@ import ctypes
 from ctypes import wintypes
 import struct
 import time
+import math
 import random
 from datetime import datetime
 import threading
@@ -639,6 +640,9 @@ def poll_iracing():
     summary_sent = False        # チェッカー後に1回だけ送る
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
+    fuel_at_lap_start = None    # 直近ラップ開始時点の燃料残量（ラップ消費量算出用）
+    fuel_per_lap_hist = []      # 直近ラップ毎の消費量（外れ値を均すため直近5周の平均を使う）
+    fuel_strategy = None        # 直近算出した燃料戦略(dict)。telemetry_liveで毎回同送する
     session_check_counter = 0
     last_session_sig = None
     consecutive_slow = 0
@@ -759,6 +763,7 @@ def poll_iracing():
         fuel        = reader.read_float('FuelLevel')
         lap         = reader.read_int('Lap')
         lapsTot     = reader.read_int('SessionLapsTotal')
+        timeRemain  = reader.read_float('SessionTimeRemain')  # 時間制セッション用(秒)。周回制では巨大値/無関係
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
@@ -886,6 +891,46 @@ def poll_iracing():
         # スタートライン通過で上がったタイムは、コースに関係なく即座にそのまま読み上げる。
         # （最初の1本もアウトラップ扱いで握りつぶさない。1周目はfirst_lap=Baselineとしてコール）
         # ※onTrack必須：ガレージ/グリッド/牽引中(OnTrack:False)のゴミラップ値を弾く。
+        # ── 燃料to-フィニッシュ戦略計算（ラップ完了ごとに更新）──
+        # 直近5周の平均消費量から、残り周回を走り切れるかを算出。数値は捏造せずここで計算した
+        # 実測値のみをClaudeへ渡す(prompts.jsのliveNote経由)。
+        if lap_time_changed and onTrack and fuel is not None:
+            if fuel_at_lap_start is not None:
+                used = fuel_at_lap_start - fuel
+                if 0 < used < 20:  # ピット給油等の異常値（増加/急減）は学習データから除外
+                    fuel_per_lap_hist.append(used)
+                    if len(fuel_per_lap_hist) > 5:
+                        fuel_per_lap_hist.pop(0)
+            fuel_at_lap_start = fuel
+
+            if fuel_per_lap_hist:
+                avg_fuel_lap = sum(fuel_per_lap_hist) / len(fuel_per_lap_hist)
+                # 残り周回数の推定：周回制セッションはlapsTot-lap、時間制(IMSA等)はSessionTimeRemainと
+                # 直近ラップタイムから逆算。lapsTotが異常値(周回制でない/未確定)の場合は時間制側を使う。
+                laps_remaining_est = None
+                if lapsTot and 0 < lapsTot < 3000:
+                    laps_remaining_est = max(0, lapsTot - lap)
+                elif timeRemain and 0 < timeRemain < 100000 and lapTime and lapTime > 0:
+                    laps_remaining_est = math.ceil(timeRemain / lapTime)
+
+                if laps_remaining_est is not None and avg_fuel_lap > 0:
+                    fuel_needed = avg_fuel_lap * (laps_remaining_est + 1)  # +1周分の安全マージン込み
+                    margin_laps = round((fuel - fuel_needed) / avg_fuel_lap, 1)
+                    fuel_strategy = {
+                        'avg_fuel_per_lap': round(avg_fuel_lap, 2),
+                        'laps_remaining_est': laps_remaining_est,
+                        'fuel_needed': round(fuel_needed, 1),
+                        'margin_laps': margin_laps,
+                        'pit_required': margin_laps < 0,
+                    }
+                    if margin_laps < 0 and not fuel_strategy_warned:
+                        broadcast({'type': 'radio', 'trigger': 'fuel_strategy_warning',
+                            'margin_laps': margin_laps,
+                            'message': 'Fuel will not last to the finish at this pace. Pit required.'})
+                        fuel_strategy_warned = True
+                    elif margin_laps >= 0:
+                        fuel_strategy_warned = False  # ピット等で給油後、再度不足すれば再警告できるようリセット
+
         if lap_time_changed and onTrack:
             t = fmt_radio(lapTime)
             if t:
@@ -1259,6 +1304,7 @@ def poll_iracing():
                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,
+                'fuel_strategy': fuel_strategy,
             })
             last_telem_ts = _tnow
 

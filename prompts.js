@@ -698,6 +698,13 @@ function buildSystem(p) {
     if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
     if (live.on_track === false) { jp.push('現在ピット/ガレージ内（走行データはさっきまでの値）'); en.push('Currently in pit/garage (data is from moments ago)'); }
     if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
+    // 燃料to-フィニッシュ戦略（bridgeが直近ラップの実消費量から計算済み・Claudeは計算せず転記するだけ）
+    const fs = live.fuel_strategy;
+    if (fs) {
+      const marginTxt = fs.margin_laps >= 0 ? '約' + fs.margin_laps + '周分の余裕' : fs.margin_laps + '周分不足（給油必須）';
+      jp.push('燃料戦略: 平均消費' + fs.avg_fuel_per_lap + 'L/周・残り推定' + fs.laps_remaining_est + '周・' + marginTxt);
+      en.push('Fuel strategy: avg ' + fs.avg_fuel_per_lap + 'L/lap, ~' + fs.laps_remaining_est + ' laps remaining, margin ' + fs.margin_laps + ' laps' + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
+    }
     if (jp.length) {
       liveNote = isJ
         ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。'
