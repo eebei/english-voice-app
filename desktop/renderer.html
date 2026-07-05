@@ -206,6 +206,55 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       認証する
     </button>
     <div id="beta-gate-msg" style="font-size:13px;margin-top:16px;min-height:18px;color:#f66"></div>
+
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid #222">
+      <a href="#" onclick="toggleLoginPanel();return false" id="login-toggle-link" style="font-size:13px;color:#9aa">アクセスコードをお持ちでない方はこちら（会員ログイン）</a>
+    </div>
+
+    <div id="login-panel" style="display:none;margin-top:16px;text-align:left">
+      <div id="login-step-email">
+        <div style="font-size:13px;color:#9aa;margin-bottom:10px">メールアドレスを入力してください。ログインリンクを送ります。</div>
+        <input id="login-email-input" type="email" placeholder="you@example.com" autocomplete="off"
+          style="width:100%;padding:12px 14px;font-size:14px;border-radius:10px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:10px">
+        <button id="login-send-btn" onclick="sendLoginLink()"
+          style="width:100%;padding:12px;font-size:14px;font-weight:700;border:none;border-radius:10px;background:#2a2a35;color:#fff;cursor:pointer">
+          ログインリンクを送信
+        </button>
+        <div id="login-email-msg" style="font-size:12px;margin-top:10px;min-height:16px;color:#f66"></div>
+      </div>
+      <div id="login-step-token" style="display:none">
+        <div style="font-size:13px;color:#9aa;margin-bottom:10px">メール内のリンクを開くと、貼り付け用のコードが表示されます。ここに貼り付けてください。</div>
+        <textarea id="login-token-input" placeholder="ここにコードを貼り付け"
+          style="width:100%;height:70px;padding:12px 14px;font-size:12px;border-radius:10px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:10px"></textarea>
+        <button id="login-verify-btn" onclick="verifyLoginToken()"
+          style="width:100%;padding:12px;font-size:14px;font-weight:700;border:none;border-radius:10px;background:linear-gradient(135deg,#9D4EDD,#6a2fb5);color:#fff;cursor:pointer">
+          ログイン
+        </button>
+        <div id="login-token-msg" style="font-size:12px;margin-top:10px;min-height:16px;color:#f66"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 初回ログイン：ニックネーム登録 ═══ -->
+<div id="nickname-gate" style="position:fixed;inset:0;z-index:99999;background:#0a0a0f;display:none;align-items:center;justify-content:center;padding:24px">
+  <div style="max-width:420px;width:100%;text-align:center">
+    <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:40px;margin-bottom:28px">
+    <div style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">呼び名を教えてください</div>
+    <div style="font-size:13px;color:#9aa;margin-bottom:24px;line-height:1.6">
+      エンジニアがあなたを呼ぶ時の名前です（本名でなくてOK）。<br>アカウントの識別には使われません。
+    </div>
+    <input id="nickname-input" type="text" placeholder="Yuji" autocomplete="off"
+      style="width:100%;padding:14px 16px;font-size:16px;text-align:center;border-radius:12px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:16px">
+    <label style="display:flex;align-items:flex-start;gap:10px;text-align:left;font-size:12px;color:#9aa;margin-bottom:20px;cursor:pointer">
+      <input id="leaderboard-optin" type="checkbox" style="margin-top:2px">
+      <span>将来PITWALLでランキングやレース速報の公開ページを作る際、このニックネームを表示することを許可します（いつでも変更可能）</span>
+    </label>
+    <button id="nickname-save-btn" onclick="saveNickname()"
+      style="width:100%;padding:14px;font-size:16px;font-weight:700;border:none;border-radius:12px;background:linear-gradient(135deg,#9D4EDD,#6a2fb5);color:#fff;cursor:pointer">
+      始める
+    </button>
+    <div id="nickname-msg" style="font-size:13px;margin-top:16px;min-height:18px;color:#f66"></div>
   </div>
 </div>
 
@@ -583,9 +632,10 @@ function openApp(){
   showScreen('screen-setup');              // ①設定から始める（設定は先に確実に）
   try{ connectBridge(); }catch(e){}         // 設定画面でボタン割当できるよう先にbridge接続
   try{ updatePTTLabel(); updateVolLabel(); }catch(e){}
-  // 前回の名前を自動入力（常連は再入力不要）
+  // 名前を自動入力（アカウントのニックネームを優先、なければ前回入力した名前）
   try{
-    const savedName=localStorage.getItem('pw_username')||'';
+    const authUser = JSON.parse(localStorage.getItem('pw_auth_user')||'null');
+    const savedName = (authUser && authUser.displayName) || localStorage.getItem('pw_username') || '';
     if(savedName){ const inp=document.getElementById('user-name-input'); inp.value=savedName; userName=savedName;
       document.getElementById('btn-setup-next').disabled=false; }
   }catch(e){}
@@ -626,8 +676,103 @@ async function submitBetaCode(){
   }
 }
 
-// 起動時ゲート：保存済みコードがあればサーバー再照合。無効/未入力ならゲート表示。
+// ── 会員ログイン（メールアドレス軸・Webのマジックリンク認証をexe用に流用）──
+// アクセスコード方式(信頼できる少数の配布用)とは別に、Founding会員はこちらでログインする。
+function toggleLoginPanel(){
+  const p=document.getElementById('login-panel');
+  p.style.display = (p.style.display==='none') ? 'block' : 'none';
+}
+
+async function sendLoginLink(){
+  const inp=document.getElementById('login-email-input');
+  const btn=document.getElementById('login-send-btn');
+  const msg=document.getElementById('login-email-msg');
+  const email=(inp.value||'').trim();
+  if(!email || !email.includes('@')){ msg.textContent='正しいメールアドレスを入力してください。'; return; }
+  btn.disabled=true; btn.textContent='送信中…'; msg.textContent='';
+  try{
+    const r=await fetch(API_BASE+'/api/auth/request',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email, product:'pitwall'})});
+    const data=await r.json();
+    btn.disabled=false; btn.textContent='ログインリンクを送信';
+    if(data.ok){
+      document.getElementById('login-step-email').style.display='none';
+      document.getElementById('login-step-token').style.display='block';
+    }else{
+      msg.style.color='#f66'; msg.textContent='送信に失敗しました。少し待って再試行してください。';
+    }
+  }catch(e){
+    btn.disabled=false; btn.textContent='ログインリンクを送信';
+    msg.style.color='#f66'; msg.textContent='サーバーに接続できません。';
+  }
+}
+
+async function verifyLoginToken(){
+  const inp=document.getElementById('login-token-input');
+  const btn=document.getElementById('login-verify-btn');
+  const msg=document.getElementById('login-token-msg');
+  const token=(inp.value||'').trim();
+  if(!token){ msg.textContent='コードを貼り付けてください。'; return; }
+  btn.disabled=true; btn.textContent='確認中…'; msg.textContent='';
+  const result = await verifyAndEnterWithToken(token);
+  btn.disabled=false; btn.textContent='ログイン';
+  if(!result.ok){ msg.style.color='#f66'; msg.textContent=result.reason||'ログインに失敗しました。'; }
+}
+
+// トークンを検証し、会員なら保存してゲートを閉じる。ニックネーム未登録なら登録画面へ。
+async function verifyAndEnterWithToken(token){
+  try{
+    const r=await fetch(API_BASE+'/api/auth/me',{headers:{'Authorization':'Bearer '+token}});
+    const data=await r.json();
+    if(!data.user) return {ok:false, reason:'コードが無効か期限切れです。'};
+    if(!data.user.isMember) return {ok:false, reason:'アカウントは確認できましたが、Founding会員登録がまだのようです。Webサイトで購入手続きをお願いします。'};
+    localStorage.setItem('pw_auth_token', token);
+    localStorage.setItem('pw_auth_user', JSON.stringify(data.user));
+    hideBetaGate();
+    if(!data.user.displayName){ showNicknameGate(); }
+    return {ok:true};
+  }catch(e){ return {ok:false, reason:'サーバーに接続できません。'}; }
+}
+
+function showNicknameGate(){ document.getElementById('nickname-gate').style.display='flex'; }
+function hideNicknameGate(){ document.getElementById('nickname-gate').style.display='none'; }
+
+async function saveNickname(){
+  const inp=document.getElementById('nickname-input');
+  const btn=document.getElementById('nickname-save-btn');
+  const msg=document.getElementById('nickname-msg');
+  const name=(inp.value||'').trim();
+  if(!name){ msg.textContent='呼び名を入力してください。'; return; }
+  const optIn=document.getElementById('leaderboard-optin').checked;
+  const token=localStorage.getItem('pw_auth_token');
+  btn.disabled=true; btn.textContent='保存中…';
+  try{
+    const r=await fetch(API_BASE+'/api/auth/profile',{method:'PATCH',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+      body:JSON.stringify({displayName:name, leaderboardOptIn:optIn})});
+    const data=await r.json();
+    if(data.user){
+      localStorage.setItem('pw_auth_user', JSON.stringify(data.user));
+      hideNicknameGate();
+    }else{
+      msg.style.color='#f66'; msg.textContent='保存に失敗しました。';
+      btn.disabled=false; btn.textContent='始める';
+    }
+  }catch(e){
+    msg.style.color='#f66'; msg.textContent='サーバーに接続できません。';
+    btn.disabled=false; btn.textContent='始める';
+  }
+}
+
+// 起動時ゲート：①保存済みの会員ログイントークン→②保存済みアクセスコード、の順で再照合。
+// どちらも無効/未設定ならゲート表示（アクセスコード欄がデフォルト表示）。
 async function bootGate(){
+  const savedToken=localStorage.getItem('pw_auth_token');
+  if(savedToken){
+    const result=await verifyAndEnterWithToken(savedToken);
+    if(result.ok) return true;
+    localStorage.removeItem('pw_auth_token'); localStorage.removeItem('pw_auth_user');
+  }
   const saved=localStorage.getItem('pw_beta_code');
   if(saved){
     const res=await verifyBeta(saved);
@@ -798,10 +943,12 @@ async function callAPI(){
                  : (selMode==='race' && !isJP) ? 80
                  : (selMode==='debrief' && isJP) ? 250
                  : 300;
-    const res = await fetch(API_BASE+'/api/chat',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
+    // ⚠️アクセスコードのみのセッション(八木さん/Tobi等)ではproductを送らない＝従来通りゲート無し。
+    // アカウントログイン済み(pw_auth_token有り)の時だけproduct:'pitwall'を送り、サーバー側の
+    // 会員チェック(is_member)を実際に働かせる。
+    const authToken = localStorage.getItem('pw_auth_token');
+    const chatHeaders = {'Content-Type':'application/json'};
+    const chatBody = {
         messages,
         character:sel,
         mode:selMode,
@@ -815,7 +962,12 @@ async function callAPI(){
         profileNote,
         raceHistory,
         max_tokens:maxTok
-      })
+    };
+    if(authToken){ chatHeaders['Authorization']='Bearer '+authToken; chatBody.product='pitwall'; }
+    const res = await fetch(API_BASE+'/api/chat',{
+      method:'POST',
+      headers:chatHeaders,
+      body:JSON.stringify(chatBody)
     });
     const data = await res.json();
     const reply = data.content?.[0]?.text||'';
