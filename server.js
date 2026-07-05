@@ -330,6 +330,11 @@ app.post('/api/tts', ttsLimiter, async (req, res) => {
     }
     text = text.slice(0, MAX_TTS_CHARS);
 
+    // 日本語音声でPSI等の略語がローマ字読み("プシー")になるのを防ぐ→カタカナ読みを強制
+    if ((languageCode || '').startsWith('ja')) {
+      text = text.replace(/\bPSI\b/gi, 'ピーエスアイ');
+    }
+
     const ttsBody = {
       input: { text },
       voice: {
