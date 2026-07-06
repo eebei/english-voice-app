@@ -278,12 +278,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // クライアントが system を送ってこない場合はサーバー側でキャラのプロンプトを構築する
     // （crown jewels をサーバーに保持。デスクトップ/RaceVoice双方に自動適用）。
     if (character && (req.body.useServerPrompt || !system)) {
+      console.log(`[buildSystem] char=${character}, mode=${req.body.mode}, liveData=${req.body.liveData ? JSON.stringify(req.body.liveData).substring(0,100) : 'null'}`);
       const built = buildSystem(req.body);
       if (built) {
         system = [
           { type: 'text', text: built.prefix, cache_control: { type: 'ephemeral' } }
         ];
         if (built.suffix) system.push({ type: 'text', text: built.suffix });
+        console.log(`[buildSystem] suffix length=${built.suffix.length}, has fuel=${built.suffix.includes('fuel')}`);
       }
     }
 
