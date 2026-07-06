@@ -323,8 +323,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 
     res.json(response);
   } catch (err) {
-    console.error('Anthropic API error:', err.message);
-    res.status(err.status || 500).json({ error: err.message });
+    console.error(`[/api/chat ERROR] char=${character}, mode=${mode}`);
+    console.error(`  Type: ${err.constructor.name}`);
+    console.error(`  Message: ${err.message}`);
+    console.error(`  Status: ${err.status || 'none'}`);
+    if (err.error) console.error(`  API Error: ${JSON.stringify(err.error)}`);
+    res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
   }
 });
 
