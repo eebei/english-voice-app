@@ -834,6 +834,20 @@ def poll_iracing():
         lrTemp      = reader.read_float('LRtempCM')
         rrTemp      = reader.read_float('RRtempCM')
 
+        # ── タイヤ詳細（4輪×内中外温度＋摩耗）と損傷代理(修理所要秒) ──
+        # 項目7：「右フロント垂れてる」「損傷は？」に実データで答えるため。聞かれた時だけ使う。
+        def _tire(corner):
+            # 温度[内,中,外]と摩耗残%[内,中,外]。%は0-1で来るので100倍。
+            t = [reader.read_float(corner+'tempCL'), reader.read_float(corner+'tempCM'), reader.read_float(corner+'tempCR')]
+            w = [reader.read_float(corner+'wearL'), reader.read_float(corner+'wearM'), reader.read_float(corner+'wearR')]
+            t = [round(x,1) if x is not None else None for x in t]
+            w = [round(x*100,1) if x is not None else None for x in w]
+            return {'t': t, 'w': w}
+        tires = {'lf': _tire('LF'), 'rf': _tire('RF'), 'lr': _tire('LR'), 'rr': _tire('RR')}
+        repair_mand = reader.read_float('PitRepairLeft')      # 義務修理の残り秒（>0=要修理の損傷あり）
+        repair_opt  = reader.read_float('PitOptRepairLeft')   # 任意修理の残り秒
+        damage_s = round((repair_mand or 0) + (repair_opt or 0), 1)
+
         # ── 診断ログ：データが実際に読めているか5秒ごとに表示 ──
         debug_counter += 1
         if debug_counter >= 50:
@@ -1352,6 +1366,8 @@ def poll_iracing():
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,
                 'fuel_strategy': fuel_strategy,
+                'tires': tires,
+                'damage_s': damage_s,
             })
             last_telem_ts = _tnow
 

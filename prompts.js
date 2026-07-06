@@ -717,6 +717,28 @@ function buildSystem(p) {
         ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。'
         : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.';
     }
+    // ── タイヤ詳細＆損傷（項目7）：聞かれた時だけ答える。走行中は自分から言うな ──
+    const tr = live.tires;
+    if (tr && tr.lf) {
+      const fmtC = (c, r) => {
+        if (!r) return null;
+        const t = r.t, w = r.w;
+        const tTxt = (t && t[1] != null) ? (isJ ? '温度' + t[0] + '/' + t[1] + '/' + t[2] + '℃' : t[0] + '/' + t[1] + '/' + t[2] + 'C') : '';
+        const wTxt = (w && w[1] != null) ? (isJ ? '残' + w[0] + '/' + w[1] + '/' + w[2] + '%' : 'wear ' + w[0] + '/' + w[1] + '/' + w[2] + '%') : '';
+        return c + ' ' + [tTxt, wTxt].filter(Boolean).join(' ');
+      };
+      const rows = [fmtC('LF', tr.lf), fmtC('RF', tr.rf), fmtC('LR', tr.lr), fmtC('RR', tr.rr)].filter(Boolean);
+      if (rows.length) {
+        liveNote += isJ
+          ? '\n\n【タイヤ詳細（各輪：内/中/外の温度℃・残トレッド%）】\n' + rows.join('\n') + '\nタイヤの状態を聞かれた時だけこの実値で答えろ。左右・内外の偏り、摩耗の進んだ輪を指摘できる（例「右フロントの外側だけ温度高い、荷重かかりすぎ」）。走行中に自分から読み上げるな。'
+          : '\n\n[TYRE DETAIL (per corner: inner/mid/outer temp C, tread remaining %)]\n' + rows.join('\n') + '\nAnswer with these real values ONLY when asked about tyres. You may point out left/right or inner/outer imbalance and the most worn corner. Do not volunteer this while driving.';
+      }
+    }
+    if (live.damage_s != null && live.damage_s > 0) {
+      liveNote += isJ
+        ? '\n\n【損傷状況】現在マシンに損傷あり＝ピットでの修理に約' + live.damage_s + '秒必要な状態。ドライバーに損傷やボディの状態を聞かれたら、この修理所要時間を損傷の目安として正直に伝えろ（例「損傷あり、修理に' + live.damage_s + '秒。走行に影響が出てるはずだ、感触どう？」）。iRacingは個別パーツ名までは出さないので、パーツ名を捏造するな。'
+        : '\n\n[DAMAGE] The car currently has damage — about ' + live.damage_s + 's of pit repair needed. If the driver asks about damage or bodywork, report this repair time honestly as the damage gauge (e.g. "you have damage, ~' + live.damage_s + 's of repairs — it should be affecting the car, how does it feel?"). iRacing does not expose individual part names, so never invent a part name.';
+    }
   }
 
   // レースエンジニア共通の鉄則（静的・キャッシュ対象）
