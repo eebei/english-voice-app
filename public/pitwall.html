@@ -80,6 +80,28 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-card .role{font-size:13px;color:var(--blue);margin-bottom:6px}
 .eng-card .bio{font-size:13px;color:var(--muted);line-height:1.5}
 .luna-badge{display:inline-block;font-size:10px;font-family:'Oxanium';letter-spacing:1px;color:var(--muted);border:1px solid var(--border);padding:2px 10px;border-radius:99px;margin-top:6px}
+/* ── Engineer showcase v2 ── */
+.eng-card .subrole{font-size:12px;color:var(--silver);margin-bottom:8px}
+.eng-card .persona-tag{display:inline-block;font-size:9px;font-family:'Oxanium';letter-spacing:1.5px;color:var(--muted);border:1px solid var(--border);padding:2px 7px;border-radius:4px;margin-bottom:8px;text-transform:uppercase}
+.eng-langs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.eng-lang{font-size:10px;font-family:'Oxanium';letter-spacing:1px;color:#e2e8f0;background:var(--blue-dim);border:1px solid var(--blue);padding:2px 8px;border-radius:99px}
+.eng-lang.soon{color:var(--muted);background:transparent;border-color:var(--border)}
+.eng-styles{font-size:11px;font-family:'Oxanium';letter-spacing:1.5px;color:#8b93a7;text-transform:uppercase;margin-bottom:8px}
+.eng-card .bio2{font-size:13.5px;color:#cbd5e1;line-height:1.55;margin-bottom:10px}
+.eng-sig{font-size:13.5px;color:#e2e8f0;font-style:italic;border-left:2px solid var(--blue);padding-left:10px;margin-bottom:12px;line-height:1.5}
+.eng-sig .tr{display:block;font-style:normal;font-size:12px;color:var(--muted);margin-top:3px}
+.preview-btn{display:inline-flex;align-items:center;gap:7px;font-family:'Oxanium';font-size:12px;letter-spacing:.5px;color:#e2e8f0;background:var(--panel2);border:1px solid var(--border);padding:7px 13px;border-radius:99px;cursor:pointer;transition:all .15s}
+.preview-btn:hover{border-color:var(--blue);color:#fff}
+.preview-btn.playing{border-color:var(--blue);background:var(--blue-dim)}
+.preview-btn svg{width:14px;height:14px;flex-shrink:0}
+.eng-card.hidden-eng{display:none}
+.eng-more-wrap{text-align:center;margin-top:26px}
+.eng-more-btn{font-family:'Oxanium';font-size:13px;letter-spacing:1px;color:#e2e8f0;background:transparent;border:1px solid var(--blue);padding:11px 26px;border-radius:99px;cursor:pointer;transition:all .15s}
+.eng-more-btn:hover{background:var(--blue-dim)}
+.eng-footer-note{text-align:center;color:var(--silver);font-size:13px;margin-top:26px}
+.eng-card.v2{flex-direction:column;gap:14px}
+.eng-card.v2 .ec-head{display:flex;gap:16px;align-items:flex-start}
+.eng-card.v2 img{width:64px;height:64px}
 
 /* Pricing */
 .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
@@ -247,51 +269,118 @@ function showDemo(mode){
 <!-- ═══ ENGINEERS ═══ -->
 <section class="section" id="engineers">
   <div class="wrap-lg">
-    <div class="eyebrow">Your Crew</div>
+    <div class="eyebrow">Your Pit Wall</div>
     <h2 class="sec-title">Choose Your Engineer</h2>
-    <p class="sec-lead">Five engineers. Different styles, same mission — get you across the line.</p>
+    <p class="sec-lead">Six engineers. Different voices, languages, and temperaments.<br>One mission: keep you informed, composed, and moving forward.</p>
     <div class="eng-grid">
-      <div class="eng-card">
-        <img src="/James.png" alt="James">
-        <div>
-          <div class="nm">James Mitchell</div>
-          <div class="role">Chief Engineer · OMORAY Racing</div>
-          <div class="bio">British. Sharp, direct, dry wit. Former F1 midfield engineer. Calls it straight — no fluff. "Well, that happened."</div>
+
+      <!-- James -->
+      <div class="eng-card v2">
+        <div class="ec-head">
+          <img src="/James.png" alt="James Mitchell">
+          <div>
+            <div class="nm">James Mitchell</div>
+            <div class="subrole">Chief AI Race Engineer</div>
+            <div class="persona-tag">AI Engineer Persona</div>
+            <div class="eng-langs"><span class="eng-lang">ENGLISH · UK</span></div>
+            <div class="eng-styles">Direct · Strategic · Dry Wit</div>
+          </div>
         </div>
+        <div class="bio2">Clear priorities, concise calls, no wasted words. James keeps pressure from becoming panic.</div>
+        <div class="eng-sig">“Reset. One target at a time.”</div>
+        <button class="preview-btn" onclick="previewVoice('James',this)">▶ Preview Voice</button>
       </div>
-      <div class="eng-card">
-        <img src="/Luna.png" alt="Luna">
-        <div>
-          <div class="nm">Luna</div>
-          <div class="role">Race Engineer · OMORAY Racing</div>
-          <div class="bio">Japanese returnee, fluent English. Calm and perceptive — reads the driver behind the data. Notices what you feel before you say it. "I've got your data. You've got this."</div>
+
+      <!-- Luna -->
+      <div class="eng-card v2">
+        <div class="ec-head">
+          <img src="/Luna.png" alt="Luna">
+          <div>
+            <div class="nm">Luna</div>
+            <div class="subrole">AI Race Engineer</div>
+            <div class="persona-tag">AI Engineer Persona</div>
+            <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
+            <div class="eng-styles">Calm · Perceptive · Supportive</div>
+          </div>
         </div>
+        <div class="bio2">Calm under pressure and attentive to changes in your pace. Luna helps you reset without losing focus.</div>
+        <div class="eng-sig">“I’ve got the data. You’ve got the car.”</div>
+        <button class="preview-btn" onclick="previewVoice('Luna',this)">▶ Preview Voice</button>
       </div>
-      <div class="eng-card">
-        <img src="/Hajime.png" alt="Hajime">
-        <div>
-          <div class="nm">Hajime Omatsu</div>
-          <div class="role">Race Engineer · OMORAY Racing</div>
-          <div class="bio">Japanese-born, European-based. Cool exterior, fire inside. Broke the language barrier to reach the top. Bilingual. "Data doesn't lie. Let's keep it clean."</div>
+
+      <!-- Hajime -->
+      <div class="eng-card v2">
+        <div class="ec-head">
+          <img src="/Hajime.png" alt="Hajime Omatsu">
+          <div>
+            <div class="nm">Hajime Omatsu</div>
+            <div class="subrole">AI Race Engineer</div>
+            <div class="persona-tag">AI Engineer Persona</div>
+            <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
+            <div class="eng-styles">Bilingual · Precise · Motivating</div>
+          </div>
         </div>
+        <div class="bio2">Clear explanations with disciplined race communication. Hajime gives you the decision, then lets you drive.</div>
+        <div class="eng-sig">“Keep it clean. The pace will come.”</div>
+        <button class="preview-btn" onclick="previewVoice('Hajime',this)">▶ Preview Voice</button>
       </div>
-      <div class="eng-card">
-        <img src="/Kanbe.png" alt="Kanbe">
-        <div>
-          <div class="nm">宇喜多 官兵衛</div>
-          <div class="role">チーフエンジニア · OMORAY Racing</div>
-          <div class="bio">岡山弁で語りかける熱血エンジニア。GT500で3度チャンピオン。「おもれえ走りしとったで。」</div>
+
+      <!-- Kanbe (hidden until View All) -->
+      <div class="eng-card v2 hidden-eng">
+        <div class="ec-head">
+          <img src="/Kanbe.png" alt="Kanbei Ukita">
+          <div>
+            <div class="nm">宇喜多 官兵衛 <span style="font-size:12px;color:var(--muted)">/ Kanbei Ukita</span></div>
+            <div class="subrole">AI Race Engineer</div>
+            <div class="persona-tag">AI Engineer Persona</div>
+            <div class="eng-langs"><span class="eng-lang">JAPANESE · OKAYAMA DIALECT</span></div>
+            <div class="eng-styles">Passionate · Assertive · Loyal</div>
+          </div>
         </div>
+        <div class="bio2">Warm, energetic radio with firm calls when the race gets difficult. Kanbei keeps the fighting spirit alive.</div>
+        <div class="eng-sig">「おもれえ走りしとったで。次、取り返そうや。」</div>
+        <button class="preview-btn" onclick="previewVoice('Kanbe',this)">▶ Preview Voice</button>
       </div>
-      <div class="eng-card">
-        <img src="/Oishi.png" alt="Oishi">
-        <div>
-          <div class="nm">大石 蔵之助</div>
-          <div class="role">チーフストラテジスト · OMORAY Racing</div>
-          <div class="bio">忍耐と緻密さの策士。慌てず機を読み、ここぞで仕掛ける。「見事な走りだった。」</div>
+
+      <!-- Oishi (hidden until View All) -->
+      <div class="eng-card v2 hidden-eng">
+        <div class="ec-head">
+          <img src="/Oishi.png" alt="Kuranosuke Oishi">
+          <div>
+            <div class="nm">大石 蔵之助 <span style="font-size:12px;color:var(--muted)">/ Kuranosuke Oishi</span></div>
+            <div class="subrole">Chief Strategist</div>
+            <div class="persona-tag">AI Engineer Persona</div>
+            <div class="eng-langs"><span class="eng-lang">JAPANESE</span></div>
+            <div class="eng-styles">Patient · Analytical · Composed</div>
+          </div>
         </div>
+        <div class="bio2">Patient, observant, and never rushed. Oishi waits for the right moment and calls it with purpose.</div>
+        <div class="eng-sig">「焦らなくていい。次の一周を整えよう。」</div>
+        <button class="preview-btn" onclick="previewVoice('Oishi',this)">▶ Preview Voice</button>
       </div>
+
+      <!-- Matthias (hidden until View All) -->
+      <div class="eng-card v2 hidden-eng">
+        <div class="ec-head">
+          <img src="/Matthias.png" alt="Matthias Richter">
+          <div>
+            <div class="nm">Matthias Richter</div>
+            <div class="subrole">AI Race Engineer</div>
+            <div class="persona-tag">AI Engineer Persona</div>
+            <div class="eng-langs"><span class="eng-lang soon">GERMAN · COMING SOON</span><span class="eng-lang">ENGLISH</span></div>
+            <div class="eng-styles">Precise · Methodical · Technical</div>
+          </div>
+        </div>
+        <div class="bio2">Structured, disciplined, and exact. Matthias turns race data into clear decisions.</div>
+        <div class="eng-sig">“Ruhig bleiben. Wir bleiben beim Plan.”<span class="tr">Stay calm. We stick to the plan.</span></div>
+        <button class="preview-btn" onclick="previewVoice('Matthias',this)">▶ Preview Voice</button>
+      </div>
+
     </div>
+    <div class="eng-more-wrap">
+      <button class="eng-more-btn" id="eng-more-btn" onclick="toggleAllEngineers(this)">View All Engineers →</button>
+    </div>
+    <p class="eng-footer-note">You can change your engineer and communication language at any time.</p>
   </div>
 </section>
 
@@ -1027,6 +1116,54 @@ function buildRaceHistoryContext(){
 
 // Init voices
 if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
+
+// ── Engineer showcase: Preview Voice（決め台詞を実際のキャラ音声で再生）──
+const PREVIEW_VOICES = {
+  James:    { gVoice:'en-GB-Neural2-B', gLang:'en-GB', gRate:1.08, gPitch:-2.0, line:"Reset. One target at a time." },
+  Luna:     { gVoice:'en-US-Neural2-F', gLang:'en-US', gRate:1.05, gPitch:1.5,  line:"I've got the data. You've got the car." },
+  Hajime:   { gVoice:'en-GB-Neural2-D', gLang:'en-GB', gRate:1.06, gPitch:-1.0, line:"Keep it clean. The pace will come." },
+  Kanbe:    { gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.22, gPitch:-3.0, line:"おもれえ走りしとったで。次、取り返そうや。" },
+  Oishi:    { gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.25, gPitch:0,    line:"焦らなくていい。次の一周を整えよう。" },
+  Matthias: { gVoice:'de-DE-Neural2-B', gLang:'de-DE', gRate:1.1,  gPitch:-2.0, line:"Ruhig bleiben. Wir bleiben beim Plan." },
+};
+let previewAudio = null;
+async function previewVoice(char, btn){
+  const v = PREVIEW_VOICES[char]; if(!v) return;
+  // 再生中のものを止める（連打・別カード対応）
+  try{ if(previewAudio){ previewAudio.pause(); previewAudio=null; } }catch(e){}
+  try{ window.speechSynthesis.cancel(); }catch(e){}
+  document.querySelectorAll('.preview-btn.playing').forEach(b=>{ b.classList.remove('playing'); b.innerHTML='▶ Preview Voice'; });
+  btn.classList.add('playing'); btn.innerHTML='◼ Playing…';
+  const reset = ()=>{ btn.classList.remove('playing'); btn.innerHTML='▶ Preview Voice'; };
+  try{
+    const r = await fetch('/api/tts',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ text:v.line, voice:v.gVoice, languageCode:v.gLang, rate:v.gRate, pitch:v.gPitch })
+    });
+    if(!r.ok) throw new Error('tts '+r.status);
+    const data = await r.json();
+    if(!data.audioContent) throw new Error('empty');
+    const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
+    previewAudio = audio;
+    audio.onended = ()=>{ previewAudio=null; reset(); };
+    audio.onerror = ()=>{ previewAudio=null; reset(); };
+    await audio.play();
+  }catch(e){
+    // Cloud TTS不可時はブラウザ音声にフォールバック
+    try{
+      const utt = new SpeechSynthesisUtterance(v.line);
+      utt.lang = v.gLang; utt.onend = reset; utt.onerror = reset;
+      window.speechSynthesis.speak(utt);
+    }catch(e2){ reset(); }
+  }
+}
+function toggleAllEngineers(btn){
+  const hidden = document.querySelectorAll('.eng-card.hidden-eng');
+  const expanded = btn.dataset.expanded === '1';
+  hidden.forEach(c=>{ c.style.display = expanded ? 'none' : 'flex'; });
+  btn.dataset.expanded = expanded ? '0' : '1';
+  btn.innerHTML = expanded ? 'View All Engineers →' : 'Show Fewer ↑';
+}
 </script>
 </body>
 </html>
