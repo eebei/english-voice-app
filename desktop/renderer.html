@@ -535,6 +535,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
     <div id="screen-mode" class="app-screen">
       <div class="field-label" id="mode-label">モードを選択</div>
       <div class="mode-grid">
+        <div class="mode-btn" id="mode-strategy" onclick="selectMode('strategy')">
+          <div class="micon">🗺️</div>
+          <div class="mtitle" id="mode-strategy-title">Strategy / 戦略</div>
+          <div class="mdesc" id="mode-strategy-desc">レース前の作戦相談</div>
+        </div>
         <div class="mode-btn" id="mode-race" onclick="selectMode('race')">
           <div class="micon">🏎️</div>
           <div class="mtitle" id="mode-race-title">Race Mode / レース</div>
@@ -845,12 +850,15 @@ function goToMode(){
   if(!sel || !userName) return;
   const isJP = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // Update mode labels for JP engineers
+  document.getElementById('mode-strategy-title').textContent = isJP ? '戦略' : 'Strategy';
+  document.getElementById('mode-strategy-desc').textContent  = isJP ? 'レース前の作戦相談' : 'Pre-race strategy briefing';
   document.getElementById('mode-race-title').textContent  = isJP ? 'レースモード' : 'Race Mode';
   document.getElementById('mode-race-desc').textContent   = isJP ? '走行中のリアルタイム無線' : 'Live radio during your race';
   document.getElementById('mode-debrief-title').textContent = isJP ? 'デブリーフ' : 'Debrief';
   document.getElementById('mode-debrief-desc').textContent  = isJP ? 'セッション後の分析' : 'Post-session analysis';
   document.getElementById('mode-label').textContent = isJP ? 'モードを選択' : 'Select Mode';
   selMode = null;
+  document.getElementById('mode-strategy').classList.remove('selected');
   document.getElementById('mode-race').classList.remove('selected');
   document.getElementById('mode-debrief').classList.remove('selected');
   document.getElementById('btn-start-session').disabled = true;
@@ -868,6 +876,7 @@ function goToMode(){
 }
 function selectMode(mode){
   selMode = mode;
+  document.getElementById('mode-strategy').classList.toggle('selected', mode==='strategy');
   document.getElementById('mode-race').classList.toggle('selected', mode==='race');
   document.getElementById('mode-debrief').classList.toggle('selected', mode==='debrief');
   document.getElementById('btn-start-session').disabled = false;

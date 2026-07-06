@@ -49,7 +49,10 @@ nav{position:sticky;top:0;z-index:100;background:rgba(7,8,15,.9);backdrop-filter
 .btn-ghost:hover{border-color:var(--blue);color:var(--blue)}
 
 /* ── RADIO DEMO ── */
-.radio-demo{margin:52px auto 0;max-width:540px;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;text-align:left;box-shadow:0 40px 80px rgba(0,0,0,.6)}
+.demo-tabs{display:flex;gap:8px;justify-content:center;margin:52px auto 0;max-width:540px}
+.demo-tab{font-family:'Oxanium';font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:10px 18px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer}
+.demo-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+.radio-demo{margin:16px auto 0;max-width:540px;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;text-align:left;box-shadow:0 40px 80px rgba(0,0,0,.6)}
 .radio-hd{display:flex;align-items:center;gap:10px;font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--red);text-transform:uppercase;margin-bottom:16px}
 .radio-dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:pulse 1.4s infinite}
 @keyframes pulse{50%{opacity:.25}}
@@ -194,22 +197,52 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <section class="hero">
   <div class="wrap">
     <div class="tag">for iRacing · AI Race Engineer</div>
-    <h1>Race With<br><span class="blue">Strategy.</span></h1>
-    <p class="sub">Your AI engineer in your ear — lap times, traffic alerts, pit strategy, and debrief. All session long.</p>
+    <h1>Your Race Engineer.<br><span class="blue">Before. During. After.</span></h1>
+    <p class="sub">Talk strategy before the start.<br>Get calm, timely support during the race.<br>Debrief every result and leave with one clear mission.</p>
     <div class="cta-row">
       <button class="btn-primary" onclick="openApp()">Start Your Session →</button>
       <a href="#engineers" class="btn-ghost">Meet the Engineers</a>
     </div>
+    <div class="demo-tabs">
+      <button class="demo-tab active" id="tab-strategy" onclick="showDemo('strategy')">Strategy</button>
+      <button class="demo-tab" id="tab-race" onclick="showDemo('race')">Race</button>
+      <button class="demo-tab" id="tab-debrief" onclick="showDemo('debrief')">Debrief</button>
+    </div>
     <div class="radio-demo">
-      <div class="radio-hd"><span class="radio-dot"></span> LIVE — Race Mode</div>
-      <div class="rline eng"><span class="who">JAMES</span><span class="msg">Personal best. 1:42.3. Gap to P3 is 1.8 and closing. Push now.</span></div>
-      <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Copy. Front left feels loose on exit.</span></div>
-      <div class="rline eng"><span class="who">JAMES</span><span class="msg">Understood. Two more laps in them. We'll adjust pressures at the box.</span></div>
-      <div class="rline drv"><span class="who">DRIVER</span><span class="msg">How many laps to the leader?</span></div>
-      <div class="rline eng"><span class="who">JAMES</span><span class="msg">P1 is 8.4 ahead. Focus on P3. He's yours.</span></div>
+      <div id="demo-strategy">
+        <div class="radio-hd"><span class="radio-dot"></span> PRE-RACE — STRATEGY MODE</div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">GT3 Sprint at Spa. Thirty minutes. You're starting P12. What's the priority?</span></div>
+        <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Clean start. I want a top-ten finish.</span></div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">Understood. Stay patient through Turn 1. We'll target P10 through consistency, not risk.</span></div>
+        <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Keep the radio concise.</span></div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">Confirmed. Critical calls only. Let's build the race.</span></div>
+      </div>
+      <div id="demo-race" style="display:none">
+        <div class="radio-hd"><span class="radio-dot"></span> LIVE — RACE MODE</div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">Personal best. 1:42.3. Gap to P3 is 1.8 and closing. Push now.</span></div>
+        <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Copy. Front left feels loose on exit.</span></div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">Understood. Two more laps in them. We'll adjust pressures at the box.</span></div>
+        <div class="rline drv"><span class="who">DRIVER</span><span class="msg">How many laps to the leader?</span></div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">P1 is 8.4 ahead. Focus on P3. He's yours.</span></div>
+      </div>
+      <div id="demo-debrief" style="display:none">
+        <div class="radio-hd"><span class="radio-dot"></span> POST-RACE — DEBRIEF MODE</div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">P9. Solid recovery from P12. Best lap 1:41.8 — your first sub-42.</span></div>
+        <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Front end went light in the last stint.</span></div>
+        <div class="rline eng"><span class="who">JAMES</span><span class="msg">Noted. We'll check pressures before the next session. Good drive today — same time tomorrow?</span></div>
+      </div>
     </div>
   </div>
 </section>
+
+<script>
+function showDemo(mode){
+  ['strategy','race','debrief'].forEach(function(m){
+    document.getElementById('demo-'+m).style.display = (m===mode) ? 'block' : 'none';
+    document.getElementById('tab-'+m).classList.toggle('active', m===mode);
+  });
+}
+</script>
 
 <!-- ═══ ENGINEERS ═══ -->
 <section class="section" id="engineers">
