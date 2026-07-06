@@ -597,6 +597,7 @@ let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
+let lastCarClass = '', lastTrack = '';   // 1階記憶のキー（コース×車種）用
 let memorySavedThisSession = false, sessionBestLapStr = '';
 
 // ── Character config ──
@@ -974,7 +975,7 @@ async function callAPI(){
   document.getElementById('busy-ind').classList.add('show');
   const telemetry = iracingLive?'live':(bridgeConnected?'bridge':'off');
   const profile = loadProfile()||{};
-  const profileNote = buildProfileNote(profile);
+  const profileNote = buildProfileNote(profile) + buildCarTrackMemory();  // 1階記憶（コース×車種）を先回りで注入
   const raceHistory = buildRaceHistoryContext();
   try{
     const isJP = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
@@ -1289,7 +1290,7 @@ function connectBridge(){
       if(data.type==='iracing_connected'){ iracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live'); return; }
       if(data.type==='iracing_disconnected'){ iracingLive=false; updateBridgeStatus(); bridgeVoice('iracing_lost'); return; }
       if(data.type==='radio') injectRadio(data);
-      if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; }
+      if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; if(data.data){ if(data.data.player_car_class) lastCarClass=data.data.player_car_class; if(data.data.track) lastTrack=data.data.track; } }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state') driverState=data.state;
@@ -1585,6 +1586,45 @@ function saveSessionSummary(data){
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
+  // ── 1階記憶：コース×車種ごとのベスト・平均燃料を蓄積（全キャラ共有＝走行データは事実）──
+  try{
+    const track=data.track||lastTrack||'', car=data.car_class||lastCarClass||'';
+    if(track){
+      const key=(car||'car')+'|'+track;
+      const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+      const prev=mem[key]||{sessions:0};
+      const bestLap=parseFloat(data.best_lap)||null;
+      // ベストは「速い方（小さい方）」を残す。燃料は直近値で更新。
+      const newBest=(bestLap&&(!prev.bestLap||bestLap<prev.bestLap))?bestLap:(prev.bestLap||null);
+      mem[key]={
+        car, track,
+        bestLap:newBest,
+        avgFuel:(data.avg_fuel_per_lap!=null?data.avg_fuel_per_lap:(prev.avgFuel!=null?prev.avgFuel:null)),
+        lastDate:new Date().toISOString().slice(0,10),
+        sessions:(prev.sessions||0)+1
+      };
+      localStorage.setItem('pw_ctmem',JSON.stringify(mem));
+    }
+  }catch{}
+}
+// 現在のコース×車種について、過去の記憶があれば文脈テキストを返す（Driver's Briefing/レースで先回り）
+function buildCarTrackMemory(){
+  try{
+    const track=lastTrack||'', car=lastCarClass||'';
+    if(!track) return '';
+    const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    const rec=mem[(car||'car')+'|'+track];
+    if(!rec||!rec.sessions) return '';
+    const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+    const parts=[];
+    if(rec.bestLap) parts.push(isJP?`過去ベスト${rec.bestLap.toFixed(3)}`:`prev best ${rec.bestLap.toFixed(3)}`);
+    if(rec.avgFuel!=null) parts.push(isJP?`平均燃料${rec.avgFuel}L/周`:`avg fuel ${rec.avgFuel}L/lap`);
+    parts.push(isJP?`このコース×車種で${rec.sessions}回目`:`session #${rec.sessions} on this car+track`);
+    if(!parts.length) return '';
+    return isJP
+      ?`\n\n━━ このコース×車種の記憶（${car||'車'} @ ${track}）━━\n`+parts.join(' / ')+'\nこの数字を先回りして活かせ（例「富士のGT3なら前回3.8L/周だった、今日も同じ想定で作戦組もう」）。ただし今日の実測が届いたら実測を優先しろ。'
+      :`\n\n━━ MEMORY FOR THIS CAR+TRACK (${car||'car'} @ ${track}) ━━\n`+parts.join(' / ')+'\nUse this proactively (e.g. "you ran 3.8L/lap here last time, let\'s plan the same"). But once live data arrives today, prefer the live numbers.';
+  }catch{return '';}
 }
 function buildRaceHistoryContext(){
   try{

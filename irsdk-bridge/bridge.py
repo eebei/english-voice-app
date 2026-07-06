@@ -536,6 +536,7 @@ def parse_session_info(yaml_str):
         player = next((d for d in drivers if d.get('car_idx') == player_car_idx), None)
         if player:
             result['player_irating'] = player.get('irating', 0)
+            result['player_car_class'] = player.get('class_name', '')  # 例"GT3"。記憶のキー(コース×車種)に使う
             lic_level = player.get('lic_level', 0)
             lic_sublevel = player.get('lic_sublevel', 0)
             # Convert to SR display (e.g., B 4.50)
@@ -635,6 +636,7 @@ def poll_iracing():
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
     session_track = ''
+    session_car_class = ''
     session_event_type = ''
     session_num_in_class = 0
     summary_sent = False        # チェッカー後に1回だけ送る
@@ -728,6 +730,7 @@ def poll_iracing():
                     if info.get('sessions'):
                         sessions_map = info['sessions']   # {SessionNum: SessionType}
                     session_track = info.get('track', '')
+                    session_car_class = info.get('player_car_class', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
                     session_info_sent = True
@@ -806,15 +809,18 @@ def poll_iracing():
                 times = [r['time'] for r in session_laps if r['time'] > 0]
                 if times:
                     best_t = min(times)
+                    avg_fuel_summary = round(sum(fuel_per_lap_hist)/len(fuel_per_lap_hist), 2) if fuel_per_lap_hist else None
                     broadcast({
                         'type': 'session_summary',
                         'track': session_track,
+                        'car_class': session_car_class,   # 記憶キー(コース×車種)用
                         'event_type': session_event_type,
                         'total_laps': len(session_laps),
                         'finish_pos': class_pos,
                         'best_lap': round(best_t, 3),
                         'worst_lap': round(max(times), 3),
                         'avg_lap': round(sum(times)/len(times), 3),
+                        'avg_fuel_per_lap': avg_fuel_summary,  # 平均燃料消費(L/周)。1階記憶に保存
                         'incidents': prev_incidents or 0,
                         'laps': session_laps,
                     })
