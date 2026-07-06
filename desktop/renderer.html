@@ -943,6 +943,14 @@ function addMsg(type, text){
   div.textContent = text;
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
+  // 会話をbridgeデバッグログにも転送（AI返答含む全会話が後から追える＝スクショ不要）。
+  // user/ai/driver のみ（sysの内部通知は除外）。bridge未接続なら黙ってスキップ。
+  try {
+    if ((type==='user'||type==='ai'||type==='driver') && irBridge && irBridge.readyState===1) {
+      const tag = type==='ai' ? (sel||'AI') : (type==='driver' ? 'DRIVER' : 'USER');
+      irBridge.send(JSON.stringify({cmd:'log_line', text:'['+tag+'] '+text}));
+    }
+  } catch(e){}
 }
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }
 function setHint(t){ document.getElementById('hint-text').textContent=t; }

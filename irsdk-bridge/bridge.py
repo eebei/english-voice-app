@@ -1473,6 +1473,11 @@ async def handler(websocket):
             except Exception:
                 continue
             cmd = msg.get('cmd')
+            # log_line = rendererからの会話ログ転送。デバッグログに会話(AI返答含む)を残す。
+            # スクショ無しで後から会話を追えるように(Yuji時短)。CMDノイズは出さない。
+            if cmd == 'log_line':
+                log("CONVO " + str(msg.get('text', '')))
+                continue
             log("CMD received: " + str(cmd))
             if cmd == "ptt_start":
                 lang = msg.get('lang')
