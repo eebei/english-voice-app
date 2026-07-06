@@ -639,6 +639,8 @@ def poll_iracing():
     session_car_class = ''
     session_event_type = ''
     session_num_in_class = 0
+    pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
+    pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
     summary_sent = False        # チェッカー後に1回だけ送る
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
@@ -1172,12 +1174,27 @@ def poll_iracing():
 
         # Pit in/out
         if onPit and not prev['onPit']:
+            pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
+            pit_enter_pos = class_pos
             broadcast({'type': 'radio', 'trigger': 'pit_entry',
                 'message': 'Box confirmed. Limiter.'})
 
         if prev['onPit'] and not onPit and onTrack:
+            # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
+            # 耐久のピットウィンドウ予測(復帰順位・トラフィック回避)の土台。1階記憶に残す。
+            pit_lane_sec = None
+            if pit_enter_time is not None:
+                _now = reader.read_double('SessionTime')
+                if _now is not None:
+                    pit_lane_sec = round(_now - pit_enter_time, 1)
+                pit_enter_time = None
             broadcast({'type': 'radio', 'trigger': 'pit_exit', 'pos': pos,
                 'message': 'Out. P' + str(pos) + '. Tyres one lap.'})
+            if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
+                broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
+                           'track': session_track, 'car_class': session_car_class,
+                           'pos_in': pit_enter_pos, 'pos_out': class_pos})
+                log('PIT timing: lane ' + str(pit_lane_sec) + 's  P' + str(pit_enter_pos) + '->P' + str(class_pos))
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）

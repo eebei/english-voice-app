@@ -1295,6 +1295,7 @@ function connectBridge(){
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state') driverState=data.state;
       if(data.type==='session_summary'){ saveSessionSummary(data); scheduleAutoDebrief(data); }
+      if(data.type==='pit_timing'){ savePitTiming(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
@@ -1607,6 +1608,21 @@ function saveSessionSummary(data){
     }
   }catch{}
 }
+// ピットレーン所要時間を実測値として記憶（コース×車種）。耐久ピットウィンドウ予測の土台。
+function savePitTiming(data){
+  try{
+    const track=data.track||lastTrack||'', car=data.car_class||lastCarClass||'';
+    const sec=parseFloat(data.pit_lane_sec); if(!track||!(sec>0)) return;
+    const key=(car||'car')+'|'+track;
+    const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    const rec=mem[key]||{sessions:0};
+    // 直近の実測値を保存（複数回入ればならして安定。ここでは直近優先＋回数を持つ）
+    rec.car=car; rec.track=track;
+    rec.pitLaneSec = (rec.pitLaneSec!=null) ? Math.round(((rec.pitLaneSec+sec)/2)*10)/10 : sec; // 過去との平均
+    mem[key]=rec;
+    localStorage.setItem('pw_ctmem',JSON.stringify(mem));
+  }catch{}
+}
 // 現在のコース×車種について、過去の記憶があれば文脈テキストを返す（Driver's Briefing/レースで先回り）
 function buildCarTrackMemory(){
   try{
@@ -1619,6 +1635,7 @@ function buildCarTrackMemory(){
     const parts=[];
     if(rec.bestLap) parts.push(isJP?`過去ベスト${rec.bestLap.toFixed(3)}`:`prev best ${rec.bestLap.toFixed(3)}`);
     if(rec.avgFuel!=null) parts.push(isJP?`平均燃料${rec.avgFuel}L/周`:`avg fuel ${rec.avgFuel}L/lap`);
+    if(rec.pitLaneSec!=null) parts.push(isJP?`ピットレーン所要${rec.pitLaneSec}秒`:`pit lane ${rec.pitLaneSec}s`);
     parts.push(isJP?`このコース×車種で${rec.sessions}回目`:`session #${rec.sessions} on this car+track`);
     if(!parts.length) return '';
     return isJP
