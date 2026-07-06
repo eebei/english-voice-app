@@ -621,20 +621,28 @@ const CHARS = {
 
 const GREETINGS = {
   James:  (n,m) => m==='race' ? `${n||'Driver'}, James here. Radio check. Once iRacing connects I'll pull your numbers and set the strategy. Stand by.`
+                 : m==='strategy' ? `${n||'Driver'}, James here. Race or test drive today? I'll read the data — tell me what we're working with.`
                               : `${n||'Driver'}, James Mitchell. Good session? Give me iRating, SOF, Safety Rating and we'll set your targets.`,
   Luna:   (n,m) => m==='race' ? `${n||'Driver'}, Luna here. Radio check. The moment iRacing connects I'll have your numbers. Stay relaxed, breathe, stand by.`
+                 : m==='strategy' ? `${n||'Driver'}, Luna here. Race, or a test drive? I'll handle the data — tell me what you're thinking.`
                               : `${n||'Driver'}, Luna. Let's debrief. Tell me how the car felt out there — I'll read the data, you tell me the story behind it.`,
   Hajime: (n,m) => m==='race' ? `${n||'Driver'}, Hajime. Radio check. Waiting for iRacing data. Stand by.`
+                 : m==='strategy' ? `${n||'Driver'}, Hajime. Race or test drive today? I've got the data — tell me the plan.`
                               : `${n||'Driver'}, Hajime. Let's go through the session. Walk me through what you felt — I've got the data, you bring the feel.`,
   Kanbe:  (n,m) => m==='race' ? `${n||'ドライバー'}、官兵衛じゃ。ラジオチェック。iRacingに繋がったらデータを読み上げて作戦を立てるけぇ、そのまま待っときい。`
+                 : m==='strategy' ? `${n||'ドライバー'}、官兵衛じゃ。今日はレースか？テストドライブか？データは儂が見るけぇ、お前の考えを聞かせえ。`
                               : `${n||'ドライバー'}、官兵衛じゃ。今日はどのコースを走ったんじゃ？まずコースとコンディションを話してみい。`,
   Oishi:  (n,m) => m==='race' ? `${n||'ドライバー'}、大石だ。無線チェック。iRacingに繋がれば君のデータを読み上げ、作戦を立てる。落ち着いて待っていてくれ。`
+                 : m==='strategy' ? `${n||'ドライバー'}、大石だ。今日はレースか？テストドライブか？データは私が見る。君の考えを聞かせてくれ。`
                               : `${n||'ドライバー'}、大石だ。今日はどのコースを走った？まずコースとコンディションを聞かせてくれ。`,
   HajimeJP: (n,m) => m==='race' ? `${n||'ドライバー'}、大松だ。ラジオチェック。iRacingに繋がったらデータを読み上げる。そのまま待っていてくれ。`
+                 : m==='strategy' ? `${n||'ドライバー'}、大松だ。今日はレースか、テストドライブか。データは私が見る。君の考えを聞かせてくれ。`
                               : `${n||'ドライバー'}、大松だ。今日はどのコースを走った。コースとコンディションから聞かせてくれ。`,
   LunaJP: (n,m) => m==='race' ? `${n||'ドライバー'}、Lunaよ。ラジオチェック。iRacingに繋がったらすぐデータが届くわ。リラックスして、深呼吸して、待ってて。`
+                 : m==='strategy' ? `${n||'ドライバー'}、Luna。今日はレース？それともテストドライブ？データはわたしが見るから、あなたの考えを聞かせて。`
                               : `${n||'ドライバー'}、Luna。デブリーフしましょう。車の感触を教えて——データは私が見るから、あなたは物語を聞かせて。`,
   Matthias: (n,m) => m==='race' ? `${n||'Fahrer'}, hier ist Matthias. Funkcheck. Sobald iRacing verbunden ist, habe ich deine Daten. Warte.`
+                 : m==='strategy' ? `${n||'Fahrer'}, Matthias hier. Rennen oder Testfahrt heute? Ich lese die Daten — sag mir, was wir vorhaben.`
                               : `${n||'Fahrer'}, Matthias hier. Lass uns die Session durchgehen. Wie hat sich das Auto angefühlt — ich habe die Daten, du bringst das Gefühl.`
 };
 
