@@ -18,7 +18,11 @@ if (!process.env.ANTHROPIC_API_KEY) {
   process.exit(1);
 }
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 25000,  // 25秒でタイムアウト（exe fetch timeout: 30秒より短く）
+  httpClient: require('@anthropic-ai/sdk').defaultHttpClient,
+});
 
 // ── Stripe（課金）──未設定でもサイトは動く ──
 let stripe = null;

@@ -987,11 +987,15 @@ async function callAPI(){
         max_tokens:maxTok
     };
     if(authToken){ chatHeaders['Authorization']='Bearer '+authToken; chatBody.product='pitwall'; }
+    const ctrl = new AbortController();
+    const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);  // Chat API 30秒でタイムアウト
     const res = await fetch(API_BASE+'/api/chat',{
       method:'POST',
       headers:chatHeaders,
-      body:JSON.stringify(chatBody)
+      body:JSON.stringify(chatBody),
+      signal:ctrl.signal
     });
+    clearTimeout(fetchTimer);
     const data = await res.json();
     const reply = data.content?.[0]?.text||'';
     if(!reply) throw new Error('empty');
@@ -1471,7 +1475,10 @@ async function checkPaceJudgment(data){
   };
   if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
   try{
-    const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});
+    const ctrl = new AbortController();
+    const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);  // Chat API 30秒でタイムアウト
+    const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
+    clearTimeout(fetchTimer);
     const resData = await res.json();
     const reply = (resData.content?.[0]?.text||'').trim();
     if(!reply || reply==='NO_CALL' || reply.includes('NO_CALL')) return;  // 喋る価値なしと判断＝無音
