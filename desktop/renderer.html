@@ -1011,11 +1011,11 @@ async function callAPI(){
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
     addMsg('sys','⚠ Connection error. Try again.');
     const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
-    // 通信エラーは正直に伝える。「聞こえなかった」は嘘になる
-    const errMsg = (sel==='Kanbe') ? 'すまん、接続エラー発生中。もう一回言うてくれ。'
-                 : (sel==='LunaJP') ? 'ごめん、接続エラー。もう一回お願い。'
-                 : isJP2 ? '申し訳ない、接続エラーです。もう一度お願いします。'
-                 : "Connection error — say again.";
+    // 通信エラーは正直に伝える。「聞こえなかった」は嘘。期待させず「後日直す」と伝える方が誠実。
+    const errMsg = (sel==='Kanbe') ? 'すまん、接続エラーじゃ。後日アップデートするけぇ。'
+                 : (sel==='LunaJP') ? 'ごめん、接続エラー。後日アップデートするね。'
+                 : isJP2 ? '申し訳ない、接続エラーです。後日アップデートいたします。'
+                 : "Connection error. We'll fix it in an update.";
     speak(errMsg, true);
     // ★重要：ここでmessagesにassistant側を積まないと、次のユーザー発言と合わせて
     // user/userが連続してしまいClaude APIのrole交互ルールに反し続け、
