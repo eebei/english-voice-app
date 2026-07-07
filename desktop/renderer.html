@@ -599,6 +599,7 @@ let bridgeConnected = false, iracingLive = false;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
 let lastCarClass = '', lastTrack = '';   // 1階記憶のキー（コース×車種）用
 let memorySavedThisSession = false, sessionBestLapStr = '';
+let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 
 // ── Character config ──
 const CHARS = {
@@ -902,7 +903,7 @@ function startSession(){
   document.getElementById('chat-area').innerHTML='';
   showScreen('screen-chat');
   // Profile update
-  memorySavedThisSession=false; sessionBestLapStr='';
+  memorySavedThisSession=false; sessionBestLapStr=''; briefingKicked=false;
   const profile = loadProfile()||{};
   saveProfile({ name:userName, sessions:(profile.sessions||0)+1, lastDate:new Date().toISOString().slice(0,10), notes:profile.notes||[], trackMemory:profile.trackMemory||{} });
   // Greeting
@@ -925,6 +926,32 @@ function startSession(){
   }
   // Bridge
   connectBridge();
+}
+
+// ── 自動モード遷移（A案）──
+// エンジニア選択後は、選んだモードを"スタート地点"として、driver_stateで自動遷移する。
+// ガレージ=Briefing(戦略) → コースイン=Race(ラップ読み上げON・短い無線) → チェッカー=Debrief。
+// 会話履歴(messages)は保持されるので、ブリーフィングの内容がそのまま走行に引き継がれる。
+// 一度Raceに入ったらピットで戻さない（ピットストップは通常動作）。Race→戦略への逆戻りはしない。
+function switchMode(newMode){
+  if(newMode===selMode) return;
+  selMode = newMode;   // mode:selMode / injectRadio / maxTok 等の既存ゲートが自動追従
+  jamesAutoMicEnabled = (newMode==='race');
+  const micBtn = document.getElementById('mic-btn');
+  if(newMode==='race'){
+    if(micBtn){ micBtn.onclick = activateAlwaysOnMic; micBtn.title = 'Tap to go LIVE'; }
+    setHint('レース中 — ラップ読み上げON');
+    if(!jamesMuted) setTimeout(startAutoMic, 400);   // 自動ラップ読み上げ＋常時マイク
+  } else {
+    if(micBtn){ micBtn.onclick = toggleMic; micBtn.title = 'Hold to speak'; }
+    setHint('');
+  }
+}
+// コースイン検知＝Briefing/Debrief から Race へ自動遷移（走り出したら即レース挙動）
+function maybeAutoRace(state){
+  if(state==='track' && (selMode==='strategy' || selMode==='debrief')){
+    switchMode('race');
+  }
 }
 
 function endSession(){
@@ -1293,7 +1320,7 @@ function connectBridge(){
       if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; if(data.data){ if(data.data.player_car_class) lastCarClass=data.data.player_car_class; if(data.data.track) lastTrack=data.data.track; } }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
-      if(data.type==='driver_state') driverState=data.state;
+      if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
       if(data.type==='session_summary'){ saveSessionSummary(data); scheduleAutoDebrief(data); }
       if(data.type==='pit_timing'){ savePitTiming(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
@@ -1507,6 +1534,15 @@ async function checkPaceJudgment(data){
 
 function injectBriefing(data){
   if(!data) return;
+  // 戦略モードでiRacing接続時＝ここが「適切なタイミング」。データ羅列でなく、Lunaが自分から
+  // 能動的にブリーフィングを切り出す（コース/車種を踏まえ「レース？テスト？」を今聞く）。
+  // アプリ起動直後の挨拶はiRacing接続前で流れてしまうので、接続時のこの一声が本命。
+  if(selMode==='strategy' && !briefingKicked){
+    briefingKicked = true;
+    scheduleAutoBriefing();
+    return;
+  }
+  // レース/デブリーフ等では従来通り短いセッション情報サマリー
   const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   const parts=[];
   if(data.track) parts.push(isJP?`コース：${data.track}`:`Track: ${data.track}`);
@@ -1514,10 +1550,45 @@ function injectBriefing(data){
   if(data.irating) parts.push(isJP?`iRating ${data.irating}`:`iRating ${data.irating}`);
   if(data.sr)    parts.push(isJP?`SR ${data.sr}`:`SR ${data.sr}`);
   const summary = parts.join(' · ');
+  if(!summary) return;
   const msg = isJP?`セッション情報受信：${summary}`:`Session briefing: ${summary}`;
   addMsg('ai',msg);
   messages.push({role:'assistant',content:msg});
   speak(msg);
+}
+// 戦略モード：iRacing接続の数秒後に、AIが自分からブリーフィングを切り出す（一回限りの独立リクエスト）。
+// messages配列には触れない（role交互破損の再発防止・checkPaceJudgmentと同方式）。
+async function scheduleAutoBriefing(){
+  setTimeout(async ()=>{
+    if(selMode!=='strategy') return;  // その間に走り出してレースへ遷移してたら不要
+    const authToken = localStorage.getItem('pw_auth_token');
+    const headers = {'Content-Type':'application/json'};
+    const profile = loadProfile()||{};
+    const body = {
+      messages:[{role:'user', content:'[BRIEFING_KICKOFF] iRacingに接続した。今わかっているコース・車種・セッション種別を踏まえ、ドライバーに戦略ブリーフィングを自分から短く切り出せ。まずレースかテストか、目標を一問だけ聞け。'}],
+      character:sel, mode:'strategy', level:'C2', userName,
+      telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
+      liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+      profileNote: buildProfileNote(profile)+buildCarTrackMemory(),
+      max_tokens: 150
+    };
+    if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+    try{
+      const ctrl = new AbortController();
+      const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);
+      const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
+      clearTimeout(fetchTimer);
+      const resData = await res.json();
+      const reply = (resData.content?.[0]?.text||'').trim();
+      if(!reply) return;
+      const display = reply.replace(/\[JA:[\s\S]*\]$/,'').trim();
+      addMsg('ai',display);
+      // ⚠️messages配列には積まない（起動時greetingが既にassistantで入っており、続けて積むと
+      //   assistant連続→Claude APIのrole交互違反リスク。checkPaceJudgmentと同じ独立リクエスト扱い）。
+      //   ドライバーの返答は通常フローでmessagesに入り、そこから会話が継続する。
+      speak(display, true);
+    }catch(e){ /* サイレント失敗（接続不良時は無理に喋らない） */ }
+  }, 6000);  // 接続から6秒（iRacing側UIが落ち着くのを待つ）
 }
 
 // ── Debrief auto-trigger ──
@@ -1549,6 +1620,7 @@ function scheduleAutoDebrief(data){
     const enEnding = pos<=3
         ? `${userName||'Driver'}, that's the ${sessEN}! ${posEN} Great drive out there. ${laps} laps, best ${best}. Ready for the debrief?`
         : `${userName||'Driver'}, that's the ${sessEN}. ${posEN} ${laps} laps, best ${best}. Ready for the debrief?`;
+    switchMode('debrief');   // チェッカー→自動でデブリーフモードへ（ラップ読み上げOFF・じっくり会話）
     const msg=isJP?jpEnding:enEnding;
     addMsg('ai',msg);
     messages.push({role:'assistant',content:msg});
