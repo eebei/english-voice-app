@@ -656,6 +656,7 @@ def poll_iracing():
     fuel_strategy_warned = False
     fuel_at_lap_start = None    # 直近ラップ開始時点の燃料残量（ラップ消費量算出用）
     fuel_per_lap_hist = []      # 直近ラップ毎の消費量（外れ値を均すため直近5周の平均を使う）
+    pit_this_lap = False        # この周でピットを通ったか（アウト/インラップは燃料学習から除外）
     lap_time_hist = []          # 直近ラップタイム履歴（時間制セッションの残り周回推定に使う・瞬間値の異常値対策）
     fuel_strategy = None        # 直近算出した燃料戦略(dict)。telemetry_liveで毎回同送する
     session_check_counter = 0
@@ -784,6 +785,8 @@ def poll_iracing():
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
+        if onPit:
+            pit_this_lap = True   # この周でピットを通った→燃料学習から除外（アウト/インラップ）
         cur_ss      = reader.read_int('SessionState') or 0
         class_pos   = reader.read_int('PlayerCarClassPosition') or pos
 
@@ -931,11 +934,14 @@ def poll_iracing():
         if lap_time_changed and onTrack and fuel is not None:
             if fuel_at_lap_start is not None:
                 used = fuel_at_lap_start - fuel
-                if 0 < used < 20:  # ピット給油等の異常値（増加/急減）は学習データから除外
+                # アウト/インラップ(ピット通過周)はピットレーン低速でクリーンラップより消費が
+                # 少なく、平均を過小評価する(2026/7/7実走で2.5L誤表示・実3.8Lの主因)。除外する。
+                if 0 < used < 20 and not pit_this_lap:
                     fuel_per_lap_hist.append(used)
                     if len(fuel_per_lap_hist) > 5:
                         fuel_per_lap_hist.pop(0)
             fuel_at_lap_start = fuel
+            pit_this_lap = False  # 次の周の判定用にリセット
 
             # ⚠️2026/7/5判明バグ：ラップ切り替わり直後の瞬間的なlapTime単発値をそのまま使うと、
             # 稀に異常に小さい値を拾って「20分で78周」のような物理的にありえない残り周回数を
@@ -1216,6 +1222,26 @@ def poll_iracing():
             car_on_track   = reader.read_int_array('CarIdxTrackSurface', 64)
             # CarIdxTrackSurface: -1=NotInWorld, 0=OffTrack, 1=InPitStall, 2=ApproachingPits, 3=OnTrack
 
+            # ── 前後ギャップは CarIdxEstTime（コース上位置を時間で表す）で計算する ──
+            # ⚠️旧実装はCarIdxF2Timeの差で計算してたが、F2Timeは「レースはリーダー差・練習/予選は
+            #   自己ベストラップ」というiRacing仕様。練習だと"ベストラップの近い車との差"になり、
+            #   実際のコース上車間と無関係な値(例0.02秒)が出るバグだった(2026/7/7 実走ログで判明)。
+            #   EstTime差なら全セッション種別で"物理的にコース上で一番近い車"との時間差になる。
+            car_est_times = reader.read_float_array('CarIdxEstTime', 64)
+            if car_est_times and player_car_idx < len(car_est_times):
+                p_et = car_est_times[player_car_idx]
+                if p_et and p_et > 0:
+                    for _ei, _et in enumerate(car_est_times):
+                        if _ei == player_car_idx or not _et or _et <= 0:
+                            continue
+                        if car_on_track and car_on_track[_ei] not in (2, 3):  # コース上/ピット接近のみ
+                            continue
+                        _gd = _et - p_et  # 負=前方(est_timeが小さい), 正=後方
+                        if _gd < 0 and -_gd < 30 and (nearest_ahead_gap is None or -_gd < nearest_ahead_gap):
+                            nearest_ahead_gap = -_gd
+                        elif _gd > 0 and _gd < 30 and (nearest_behind_gap is None or _gd < nearest_behind_gap):
+                            nearest_behind_gap = _gd
+
             # ── 停止/クラッシュ車両検知（コース上・オフトラックで動きが止まってる車）──
             # 1秒おきにLapDistPctの変化をサンプリングし、ほぼ動いてなければ「停止」とみなす。
             car_dist_pct = reader.read_float_array('CarIdxLapDistPct', 64)
@@ -1249,13 +1275,9 @@ def poll_iracing():
                 for idx, f2_time in enumerate(car_f2_times):
                     if idx == player_car_idx or f2_time <= 0:
                         continue
-
-                    # 前後の最近接ギャップを更新（テレメトリスナップショット用・全クラス対象）
+                    # ※前後ギャップ(nearest_ahead/behind_gap)は上のCarIdxEstTimeブロックで計算済み。
+                    #   このF2Timeループはバトル/接近/停止車検知に使う。
                     _d = player_time - f2_time
-                    if _d > 0 and (nearest_behind_gap is None or _d < nearest_behind_gap):
-                        nearest_behind_gap = _d
-                    elif _d < 0 and (nearest_ahead_gap is None or -_d < nearest_ahead_gap):
-                        nearest_ahead_gap = -_d
 
                     # ── 停止/クラッシュ車両の警告（前方のみ・コース上/オフトラック問わず、2秒以上停止確定）──
                     # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
