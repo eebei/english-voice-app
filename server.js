@@ -318,6 +318,32 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Race mode: Haiku (2-3x faster, sufficient for short radio calls)
     const model = (mode === 'race') ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5';
 
+    // ── ストリーミング：文字が生成された端からクライアントへ流す（体感レスポンス短縮）──
+    // クライアントが stream:true を送った時のみ。生成量＝同じなのでコストは増えない。
+    // renderer側は文が完成するたびTTS再生するので「流れるような会話」になる。
+    if (req.body.stream) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('X-Accel-Buffering', 'no');  // プロキシのバッファリング無効化（即時flush）
+      try {
+        const stream = await client.messages.create({
+          model, max_tokens: safeMaxTokens, system, messages, stream: true,
+        });
+        for await (const event of stream) {
+          if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta') {
+            res.write(event.delta.text);
+            if (typeof res.flush === 'function') res.flush();
+          }
+        }
+        res.end();
+      } catch (streamErr) {
+        console.error('[/api/chat stream ERROR]', streamErr.message);
+        // 既にヘッダ送出済みなら本文を終えるだけ（クライアントは受信済み分で処理）
+        try { res.end(); } catch (e) {}
+      }
+      return;
+    }
+
     const response = await client.messages.create({
       model,
       max_tokens: safeMaxTokens,

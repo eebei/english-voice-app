@@ -971,10 +971,14 @@ function addMsg(type, text){
   div.textContent = text;
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
-  // 会話をbridgeデバッグログにも転送（AI返答含む全会話が後から追える＝スクショ不要）。
-  // user/ai/driver のみ（sysの内部通知は除外）。bridge未接続なら黙ってスキップ。
+  if(text) convoLog(type, text);   // 空吹き出し(ストリーミング初期)はログしない
+  return div;   // ストリーミングで中身を更新できるよう要素を返す
+}
+// 会話をbridgeデバッグログに転送（AI返答含む全会話が後から追える＝スクショ不要）。
+// user/ai/driver のみ。bridge未接続なら黙ってスキップ。
+function convoLog(type, text){
   try {
-    if ((type==='user'||type==='ai'||type==='driver') && irBridge && irBridge.readyState===1) {
+    if ((type==='user'||type==='ai'||type==='driver') && text && irBridge && irBridge.readyState===1) {
       const tag = type==='ai' ? (sel||'AI') : (type==='driver' ? 'DRIVER' : 'USER');
       irBridge.send(JSON.stringify({cmd:'log_line', text:'['+tag+'] '+text}));
     }
@@ -1031,6 +1035,7 @@ async function callAPI(){
         max_tokens:maxTok
     };
     if(authToken){ chatHeaders['Authorization']='Bearer '+authToken; chatBody.product='pitwall'; }
+    chatBody.stream = true;   // ストリーミング要求（文が出来た端から喋る＝流れるような会話）
     const ctrl = new AbortController();
     const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);  // Chat API 30秒でタイムアウト
     const res = await fetch(API_BASE+'/api/chat',{
@@ -1039,16 +1044,50 @@ async function callAPI(){
       body:JSON.stringify(chatBody),
       signal:ctrl.signal
     });
+    if(!res.ok){ clearTimeout(fetchTimer); throw new Error('http '+res.status); }
+    // ── ストリーミング受信：チャンクを溜め、文が完成するたびに順次TTS再生 ──
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let full = '';          // これまでに受信した全文
+    let spokenLen = 0;      // 既に喋った文字位置
+    let firstSpoken = false;
+    const bubble = addMsg('ai','');   // 空の吹き出しを作り、届いた分で更新していく
+    const SENT_RE = /[。．！？!?\n]/;  // 文の区切り
+    const flushSentences = (isFinal)=>{
+      let pending = full.slice(spokenLen);
+      // [JA:...]（初級者向け翻訳）は喋らない。C2では通常出ないが保険。
+      const jaIdx = pending.indexOf('[JA:');
+      if(jaIdx >= 0) pending = pending.slice(0, jaIdx);
+      while(true){
+        const m = pending.search(SENT_RE);
+        if(m < 0) break;
+        const sentence = pending.slice(0, m+1).trim();
+        pending = pending.slice(m+1);
+        spokenLen = full.length - pending.length;
+        // 最初の一文だけ最優先（溜まったラジオを割り込んで会話へ）。2文目以降は捨てずに順次キュー。
+        if(sentence){ if(firstSpoken){ speakReplyChunk(sentence); } else { speak(sentence, true); } firstSpoken = true; }
+      }
+      if(isFinal){
+        const tail = pending.trim();
+        if(tail){ if(firstSpoken){ speakReplyChunk(tail); } else { speak(tail, true); } firstSpoken = true; }
+        spokenLen = full.length;
+      }
+    };
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      full += decoder.decode(value, {stream:true});
+      if(bubble) bubble.textContent = full.replace(/\[JA:[\s\S]*\]$/,'').trim();
+      flushSentences(false);
+    }
     clearTimeout(fetchTimer);
-    const data = await res.json();
-    const reply = data.content?.[0]?.text||'';
+    flushSentences(true);
+    const reply = full.trim();
     if(!reply) throw new Error('empty');
-    let display = reply;
-    // Strip [JA:...] if present
-    display = display.replace(/\[JA:[\s\S]*\]$/,'').trim();
-    addMsg('ai',display);
+    const display = reply.replace(/\[JA:[\s\S]*\]$/,'').trim();
+    if(bubble) bubble.textContent = display;
+    convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     messages.push({role:'assistant',content:reply});
-    speak(display, true);   // 会話返答は最優先（溜まったラジオより先に喋る）
     if(sessionMsgCount>0&&sessionMsgCount%15===0) saveMemory();
   } catch(e){
     // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
@@ -1135,6 +1174,12 @@ function speak(text, priority){
   } else if(speakQueue.length >= MAX_RADIO_QUEUE){
     speakQueue.shift();              // 古いラジオを1件捨てる
   }
+  speakQueue.push(text);
+  drainQueue();
+}
+// ストリーミング返答の2文目以降＝一つの返答の続きなので絶対に捨てない（MAX_RADIO_QUEUE対象外）。
+function speakReplyChunk(text){
+  if(!voiceOn || !text) return;
   speakQueue.push(text);
   drainQueue();
 }
