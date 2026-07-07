@@ -807,8 +807,17 @@ function buildSystem(p) {
           : 'Judge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with nothing else but the exact string "NO_CALL".');
   }
 
+  // ── 無線の"型"（お手本）：固定文でなく、この短さ・具体性・前向きな構造を真似る手本 ──
+  // 実データに合わせて数字は毎回変える。丸暗記して貼るのは禁止。あくまで「調子（cadence）」の見本。
+  let voiceNote = '';
+  if (isRacing) {
+    voiceNote = isJ
+      ? '\n\n━━ 無線の型（お手本・cadence）━━\nプロのレースエンジニアの言い回しは「事実→指示/狙い→前を向かせる」を最短で。以下は"調子"の見本。丸写しはするな。実データで数字を入れ替え、キャラの口調（Lunaはタメ口・官兵衛は岡山弁等）で言え。\n【Before/ブリーフィング】「スタートはP12。」「まずクリーンな1周目。」「ターン1で無理はするな。」「一貫性でP10を狙う。」\n【During/レース】「残り8分。」「あと2周で給油ウィンドウ。」「P8、立ち上がりで苦しんでる。」「辛抱。ピット後に仕掛ける。」「リセット。車は無事。」\n【After/デブリーフ】「最終シケインでタイム落とした。」「もう少し早めのブレーキ、リリースは滑らかに。」「次のミッション：クリーンに5周。」\nこの短さと具体性を基準に。長い説明・前置きは無し。'
+      : '\n\n━━ RADIO CADENCE (exemplars) ━━\nA pro race engineer says "fact → call/intent → keep them forward-looking" in as few words as possible. These show the CADENCE only — never paste them verbatim; swap in real data and use your character\'s voice.\n[Before/Briefing] "You start P12." "Priority is clean lap one." "No hero move into Turn 1." "We target P10 through consistency."\n[During/Race] "Eight minutes remaining." "Fuel window opens in two laps." "P8 is struggling on exits." "Stay patient — we attack after the stop." "Reset. The car is okay."\n[After/Debrief] "You lost time at the final chicane." "Earlier brake, smoother release." "Next mission: five clean laps."\nMatch this brevity and concreteness. No long explanations, no preamble.';
+  }
+
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
-  const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote;
+  const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote;
   const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote;
   return { prefix: prefix, suffix: suffix };
 }
