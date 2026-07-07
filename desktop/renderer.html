@@ -1093,6 +1093,8 @@ async function callAPI(){
     // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
     addMsg('sys','⚠ Connection error. Try again.');
+    // ★接続エラーの実態をbridgeログにも残す（今まで見えず診断できなかった）。原因(名前/HTTP等)込みで。
+    convoLog('driver', '[CLIENT ERROR] /api/chat failed: '+(e && (e.name+': '+e.message) || String(e)));
     const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     // 通信エラーは正直に伝える。「聞こえなかった」は嘘。期待させず「後日直す」と伝える方が誠実。
     const errMsg = (sel==='Kanbe') ? 'すまん、接続エラーじゃ。後日アップデートするけぇ。'

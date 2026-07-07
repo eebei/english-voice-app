@@ -21,6 +21,16 @@ from datetime import datetime
 import threading
 import websockets
 
+# ⚠️標準出力/エラーをutf-8に。Windowsコンソールはcp932で、Lunaの返答に含まれる — や · 等を
+#   printするとUnicodeEncodeErrorで落ちていた（2026/7/7の接続断の主因）。またmain.js(Electron)は
+#   bridgeのstdoutをそのままデバッグログに書くため、cp932化けが「?」としてログに残る問題もあった。
+#   utf-8に固定すれば print が落ちず、ログにも正しい日本語が残る（errors=replaceで最後の保険）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 IRSDK_MEMMAPFILE = "Local\\IRSDKMemMapFileName"
 MEM_SIZE = 1164 * 1024
 FILE_MAP_READ = 0x0004
