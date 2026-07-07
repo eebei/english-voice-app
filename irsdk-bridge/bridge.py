@@ -107,7 +107,17 @@ RAILWAY_URL = "https://english-voice-app-production.up.railway.app"
 
 def log(msg):
     line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg
-    print(line, flush=True)
+    # ⚠️Windowsコンソールはcp932。会話ログ(Lunaの返答)に含まれる — や · 等cp932に無い文字を
+    #   printするとUnicodeEncodeErrorが発生し、呼び出し元のWS接続ハンドラごとクラッシュ→
+    #   ブラウザ切断→「Connection error」の主因だった(2026/7/7判明)。printを絶対に例外で
+    #   落とさないよう保護する。ファイル(utf-8)には完全な文字列を残す。
+    try:
+        print(line, flush=True)
+    except Exception:
+        try:
+            print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+        except Exception:
+            pass
     try:
         with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(line + "\n")

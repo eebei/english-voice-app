@@ -714,8 +714,8 @@ function buildSystem(p) {
     }
     if (jp.length) {
       liveNote = isJ
-        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。'
-        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.';
+        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。\n【ラップタイムの言い方・厳守】タイムは「秒」の生数値で届く（例：ベスト100.493 = 1分40.493秒のこと）。60以上の値を「100秒493」などと絶対に言うな（大間違い）。60を超えたら分に直し、モータースポーツ流に秒だけ言え＝100.493なら「40.5」（1分40秒5の下段だけ）。59以下ならそのまま「49.6」。分は言わない。ベスト/直近を聞かれたら、届いてる最新の値で答えろ（古い周のタイムを言うな）。'
+        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.\n[How to say lap times] Times arrive as raw SECONDS (e.g. best 100.493 = a 1:40.493 lap). NEVER say "100 seconds" for a value over 60. Convert: over 60 → say just the seconds within the minute (100.493 → "forty point five"); under 60 → say it directly ("49.6"). Answer with the latest value you have, not an older lap.';
     }
     // ── タイヤ詳細＆損傷（項目7）：聞かれた時だけ答える。走行中は自分から言うな ──
     const tr = live.tires;
@@ -730,8 +730,8 @@ function buildSystem(p) {
       const rows = [fmtC('LF', tr.lf), fmtC('RF', tr.rf), fmtC('LR', tr.lr), fmtC('RR', tr.rr)].filter(Boolean);
       if (rows.length) {
         liveNote += isJ
-          ? '\n\n【タイヤ詳細（各輪：内/中/外の温度℃・残トレッド%）】\n' + rows.join('\n') + '\nタイヤの状態を聞かれた時だけこの実値で答えろ。左右・内外の偏り、摩耗の進んだ輪を指摘できる（例「右フロントの外側だけ温度高い、荷重かかりすぎ」）。走行中に自分から読み上げるな。'
-          : '\n\n[TYRE DETAIL (per corner: inner/mid/outer temp C, tread remaining %)]\n' + rows.join('\n') + '\nAnswer with these real values ONLY when asked about tyres. You may point out left/right or inner/outer imbalance and the most worn corner. Do not volunteer this while driving.';
+          ? '\n\n【タイヤ詳細（各輪：内/中/外の温度℃・残トレッド%）※これは内部データ。そのまま読み上げるな】\n' + rows.join('\n') + '\n【読み上げ方の鉄則】4輪の数字を機械的に全部羅列するな（「エルエフ24.3、アールエフ24.4…」は最悪）。聞かれたら、要点を人間の言葉で一言に要約しろ。①コーナー名は日本語で（LF→「左フロント」or「フロント左」、RF→「右フロント」、LR→「左リア」、RR→「右リア」）。②アルファベット記号（LF/RF）は絶対に使うな。③単位を必ず添えろ（温度なら「℃」「度」）。④一番気になる1輪だけ指摘するのが基本（例「右フロントが一番熱い、88度。荷重かかりすぎかも」）。全部の数字が欲しいと明示的に言われた時だけ、順に区切って言え。走行中は自分から言うな。'
+          : '\n\n[TYRE DETAIL (per corner: inner/mid/outer temp C, tread remaining %) — internal data, do NOT read verbatim]\n' + rows.join('\n') + '\n[How to report] NEVER robotically list all four corners\' raw numbers. When asked, summarise in one human sentence. Name the worst/most relevant corner (e.g. "right front is hottest, 88 degrees — sounds like too much load"), always include the unit. Give all four numbers only if explicitly asked, and then space them out. Do not volunteer while driving.';
       }
     }
     if (live.damage_s != null && live.damage_s > 0) {
