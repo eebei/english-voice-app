@@ -1291,13 +1291,20 @@ def poll_iracing():
                 player_time     = car_f2_times[player_car_idx]
                 player_last_lap = car_last_laps[player_car_idx] if car_last_laps else 0
                 now = time.time()
+                # ⚠️接近判定(バトル/危険/停止車)は EstTime(コース上位置)で車間を測る。
+                #   F2Timeは練習/予選だと各車の自己ベスト差になり、実際の車間と無関係(8秒/15秒等の
+                #   デタラメ警告の原因・2026/7/7 Yuji指摘)。EstTime差なら全セッションで正しい車間。
+                player_est = car_est_times[player_car_idx] if (car_est_times and player_car_idx < len(car_est_times)) else None
 
                 for idx, f2_time in enumerate(car_f2_times):
                     if idx == player_car_idx or f2_time <= 0:
                         continue
                     # ※前後ギャップ(nearest_ahead/behind_gap)は上のCarIdxEstTimeブロックで計算済み。
-                    #   このF2Timeループはバトル/接近/停止車検知に使う。
-                    _d = player_time - f2_time
+                    #   このループはバトル/接近/停止車検知に使う。車間はEstTime差で測る。
+                    other_est = car_est_times[idx] if (car_est_times and idx < len(car_est_times)) else None
+                    if not player_est or player_est <= 0 or not other_est or other_est <= 0:
+                        continue  # コース上位置が不明な車は接近判定しない（誤警告防止）
+                    _d = other_est - player_est  # 負=前方, 正=後方
 
                     # ── 停止/クラッシュ車両の警告（前方のみ・コース上/オフトラック問わず、2秒以上停止確定）──
                     # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
@@ -1325,10 +1332,9 @@ def poll_iracing():
                         if surf not in (2, 3):  # 2=ApproachingPits, 3=OnTrack のみ対象
                             continue
 
-                    # タイム差（F2Time差 = ダッシュボードと同じ値）
-                    # プラス=相手が後方、マイナス=相手が前方
-                    delta = player_time - f2_time
-                    est_time = f2_time  # 後続コードの互換性のため
+                    # コース上の車間（EstTime差）。プラス=相手が後方、マイナス=相手が前方。
+                    delta = _d
+                    est_time = f2_time  # 後続コードの互換性のため（未使用でも残す）
 
                     other_class = car_class_map.get(idx, -1)
                     other_rel   = car_relspeed_map.get(idx, 0)
