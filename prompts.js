@@ -705,12 +705,20 @@ function buildSystem(p) {
     if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
     if (live.on_track === false) { jp.push('現在ピット/ガレージ内（走行データはさっきまでの値）'); en.push('Currently in pit/garage (data is from moments ago)'); }
     if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
-    // 燃料to-フィニッシュ戦略（bridgeが直近ラップの実消費量から計算済み・Claudeは計算せず転記するだけ）
+    // 燃料戦略（bridgeが直近クリーンラップの実消費量から計算済み・Claudeは計算せず転記するだけ）
+    // ①消費量＋あと何周走れるかは、クリーンラップ1本からでも届く（短いレース/序盤でも把握できる）。
+    // ②レース長が分かる時だけ margin_laps 等の to-フィニッシュ判定が付く。
     const fs = live.fuel_strategy;
-    if (fs) {
-      const marginTxt = fs.margin_laps >= 0 ? '約' + fs.margin_laps + '周分の余裕' : fs.margin_laps + '周分不足（給油必須）';
-      jp.push('燃料戦略: 平均消費' + fs.avg_fuel_per_lap + 'L/周・残り推定' + fs.laps_remaining_est + '周・' + marginTxt);
-      en.push('Fuel strategy: avg ' + fs.avg_fuel_per_lap + 'L/lap, ~' + fs.laps_remaining_est + ' laps remaining, margin ' + fs.margin_laps + ' laps' + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
+    if (fs && fs.avg_fuel_per_lap != null) {
+      const conf = fs.clean_laps_sampled ? '（' + fs.clean_laps_sampled + '周の実測）' : '';
+      const confEn = fs.clean_laps_sampled ? ' (from ' + fs.clean_laps_sampled + ' clean lap' + (fs.clean_laps_sampled>1?'s':'') + ')' : '';
+      jp.push('燃料: 平均消費' + fs.avg_fuel_per_lap + 'L/周' + conf + (fs.laps_of_fuel_left != null ? '・現燃料であと約' + fs.laps_of_fuel_left + '周' : ''));
+      en.push('Fuel: avg ' + fs.avg_fuel_per_lap + 'L/lap' + confEn + (fs.laps_of_fuel_left != null ? ', ~' + fs.laps_of_fuel_left + ' laps left on current fuel' : ''));
+      if (fs.margin_laps != null) {
+        const marginTxt = fs.margin_laps >= 0 ? '約' + fs.margin_laps + '周分の余裕' : fs.margin_laps + '周分不足（給油必須）';
+        jp.push('to-フィニッシュ: 残り推定' + fs.laps_remaining_est + '周・' + marginTxt);
+        en.push('To finish: ~' + fs.laps_remaining_est + ' laps remaining, margin ' + fs.margin_laps + ' laps' + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
+      }
     }
     if (jp.length) {
       liveNote = isJ

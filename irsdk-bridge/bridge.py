@@ -954,8 +954,16 @@ def poll_iracing():
 
             if fuel_per_lap_hist:
                 avg_fuel_lap = sum(fuel_per_lap_hist) / len(fuel_per_lap_hist)
-                # 残り周回数の推定：周回制セッションはlapsTot-lap、時間制(IMSA等)はSessionTimeRemainと
-                # 直近ラップタイム"平均"から逆算。lapsTotが異常値(周回制でない/未確定)の場合は時間制側を使う。
+                # ── ①消費量は「クリーンラップ1本でも」即Lunaへ送る（短いレース対応・2-4周で読めるように）──
+                # レース長(残り周回)が分からなくても、燃料残量÷消費量で「あと何周走れるか」は出せる。
+                # これを常に持たせることで、練習/テストドライブや序盤でも燃料を把握できる（捏造防止）。
+                laps_of_fuel_left = round(fuel / avg_fuel_lap, 1) if avg_fuel_lap > 0 else None
+                fuel_strategy = {
+                    'avg_fuel_per_lap': round(avg_fuel_lap, 2),
+                    'laps_of_fuel_left': laps_of_fuel_left,   # 現燃料であと何周走れるか（レース長不要）
+                    'clean_laps_sampled': len(fuel_per_lap_hist),  # 何周分の実測から出したか（信頼度の目安）
+                }
+                # ── ②レース長が分かる時だけ、to-フィニッシュの余裕/不足も足す ──
                 laps_remaining_est = None
                 if lapsTot and 0 < lapsTot < 3000:
                     laps_remaining_est = max(0, lapsTot - lap)
@@ -966,13 +974,10 @@ def poll_iracing():
                 if laps_remaining_est is not None and avg_fuel_lap > 0:
                     fuel_needed = avg_fuel_lap * (laps_remaining_est + 1)  # +1周分の安全マージン込み
                     margin_laps = round((fuel - fuel_needed) / avg_fuel_lap, 1)
-                    fuel_strategy = {
-                        'avg_fuel_per_lap': round(avg_fuel_lap, 2),
-                        'laps_remaining_est': laps_remaining_est,
-                        'fuel_needed': round(fuel_needed, 1),
-                        'margin_laps': margin_laps,
-                        'pit_required': margin_laps < 0,
-                    }
+                    fuel_strategy['laps_remaining_est'] = laps_remaining_est
+                    fuel_strategy['fuel_needed'] = round(fuel_needed, 1)
+                    fuel_strategy['margin_laps'] = margin_laps
+                    fuel_strategy['pit_required'] = margin_laps < 0
                     if margin_laps < 0 and not fuel_strategy_warned:
                         broadcast({'type': 'radio', 'trigger': 'fuel_strategy_warning',
                             'margin_laps': margin_laps,
