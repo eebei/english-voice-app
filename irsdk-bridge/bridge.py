@@ -35,6 +35,9 @@ try:
     _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 except Exception:
     _k32 = None
+
+# ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
+BUILD_VERSION = "2026-07-07-B (gap/fuel/autoflow/stream)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -870,7 +873,9 @@ def poll_iracing():
             spd = reader.read_float('Speed')
             log("DATA CHECK -> Lap:" + str(lap) + " Pos:" + str(pos) +
                 " LastLap:" + str(lapTime) + " Speed:" + str(round(spd,1) if spd else None) +
-                " OnTrack:" + str(onTrack))
+                " OnTrack:" + str(onTrack) +
+                " CarIdx:" + str(player_car_idx) +   # 担当車の把握確認用
+                " gapAhead:" + str(nearest_ahead_gap) + " gapBehind:" + str(nearest_behind_gap))
 
 
         # ── ラップ完了検知：LapLastLapTime の「値が変わった瞬間」で発火 ──
@@ -1586,7 +1591,7 @@ async def main():
     # 追記＋セッション区切りマークに変更し、複数起動をまたいで履歴を残す。
     try:
         with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.write("\n=== OMORAY PITWALL Bridge session start (BUILD 2026-07-04-039) ===\n")
+            f.write("\n=== OMORAY PITWALL Bridge session start (BUILD " + BUILD_VERSION + ") ===\n")
     except Exception:
         pass
     load_ptt_config()
@@ -1599,7 +1604,7 @@ async def main():
     init_mic()
     tm = threading.Thread(target=record_ptt_audio, daemon=True)
     tm.start()
-    print("OMORAY PITWALL Bridge  BUILD 2026-07-04-039  started")
+    print("OMORAY PITWALL Bridge  BUILD " + BUILD_VERSION + "  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
     async with websockets.serve(handler, "localhost", PORT):
