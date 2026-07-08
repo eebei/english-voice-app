@@ -99,9 +99,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-more-btn{font-family:'Oxanium';font-size:13px;letter-spacing:1px;color:#e2e8f0;background:transparent;border:1px solid var(--blue);padding:11px 26px;border-radius:99px;cursor:pointer;transition:all .15s}
 .eng-more-btn:hover{background:var(--blue-dim)}
 .eng-footer-note{text-align:center;color:var(--silver);font-size:13px;margin-top:26px}
-.eng-card.v2{flex-direction:column;gap:14px}
-.eng-card.v2 .ec-head{display:flex;gap:16px;align-items:flex-start}
-.eng-card.v2 img{width:64px;height:64px}
+/* v2 card = portrait photo up top (full-bleed), content below in a padded body */
+.eng-card.v2{flex-direction:column;align-items:stretch;padding:0;overflow:hidden;gap:0}
+.eng-card.v2 .ec-photo{width:100%;height:300px;overflow:hidden;background:var(--panel2);flex-shrink:0}
+.eng-card.v2 .ec-photo img{width:100%;height:100%;object-fit:cover;object-position:center 18%;display:block;border-radius:0;border:0}
+.eng-card.v2 .ec-body{padding:20px 22px 22px;display:flex;flex-direction:column}
 
 /* Pricing */
 .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
@@ -276,104 +278,92 @@ function showDemo(mode){
 
       <!-- James -->
       <div class="eng-card v2">
-        <div class="ec-head">
-          <img src="/James.png" alt="James Mitchell">
-          <div>
-            <div class="nm">James Mitchell</div>
-            <div class="subrole">Chief AI Race Engineer</div>
-            <div class="persona-tag">AI Engineer Persona</div>
-            <div class="eng-langs"><span class="eng-lang">ENGLISH · UK</span></div>
-            <div class="eng-styles">Direct · Strategic · Dry Wit</div>
-          </div>
+        <div class="ec-photo"><img src="/James.png" alt="James Mitchell"></div>
+        <div class="ec-body">
+          <div class="nm">James Mitchell</div>
+          <div class="subrole">Chief AI Race Engineer</div>
+          <div class="persona-tag">AI Engineer Persona</div>
+          <div class="eng-langs"><span class="eng-lang">ENGLISH · UK</span></div>
+          <div class="eng-styles">Direct · Strategic · Dry Wit</div>
+          <div class="bio2">Clear priorities, concise calls, no wasted words. James keeps pressure from becoming panic.</div>
+          <div class="eng-sig">“Reset. One target at a time.”</div>
+          <button class="preview-btn" onclick="previewVoice('James',this)">▶ Preview Voice</button>
         </div>
-        <div class="bio2">Clear priorities, concise calls, no wasted words. James keeps pressure from becoming panic.</div>
-        <div class="eng-sig">“Reset. One target at a time.”</div>
-        <button class="preview-btn" onclick="previewVoice('James',this)">▶ Preview Voice</button>
       </div>
 
       <!-- Luna -->
       <div class="eng-card v2">
-        <div class="ec-head">
-          <img src="/Luna.png" alt="Luna">
-          <div>
-            <div class="nm">Luna</div>
-            <div class="subrole">AI Race Engineer</div>
-            <div class="persona-tag">AI Engineer Persona</div>
-            <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
-            <div class="eng-styles">Calm · Perceptive · Supportive</div>
-          </div>
+        <div class="ec-photo"><img src="/Luna.png" alt="Luna"></div>
+        <div class="ec-body">
+          <div class="nm">Luna</div>
+          <div class="subrole">AI Race Engineer</div>
+          <div class="persona-tag">AI Engineer Persona</div>
+          <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
+          <div class="eng-styles">Calm · Perceptive · Supportive</div>
+          <div class="bio2">Calm under pressure and attentive to changes in your pace. Luna helps you reset without losing focus.</div>
+          <div class="eng-sig">“I’ve got the data. You’ve got the car.”</div>
+          <button class="preview-btn" onclick="previewVoice('Luna',this)">▶ Preview Voice</button>
         </div>
-        <div class="bio2">Calm under pressure and attentive to changes in your pace. Luna helps you reset without losing focus.</div>
-        <div class="eng-sig">“I’ve got the data. You’ve got the car.”</div>
-        <button class="preview-btn" onclick="previewVoice('Luna',this)">▶ Preview Voice</button>
       </div>
 
       <!-- Hajime -->
       <div class="eng-card v2">
-        <div class="ec-head">
-          <img src="/Hajime.png" alt="Hajime Omatsu">
-          <div>
-            <div class="nm">Hajime Omatsu</div>
-            <div class="subrole">AI Race Engineer</div>
-            <div class="persona-tag">AI Engineer Persona</div>
-            <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
-            <div class="eng-styles">Bilingual · Precise · Motivating</div>
-          </div>
+        <div class="ec-photo"><img src="/Hajime.png" alt="Hajime Omatsu"></div>
+        <div class="ec-body">
+          <div class="nm">Hajime Omatsu</div>
+          <div class="subrole">AI Race Engineer</div>
+          <div class="persona-tag">AI Engineer Persona</div>
+          <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
+          <div class="eng-styles">Bilingual · Precise · Motivating</div>
+          <div class="bio2">Clear explanations with disciplined race communication. Hajime gives you the decision, then lets you drive.</div>
+          <div class="eng-sig">“Keep it clean. The pace will come.”</div>
+          <button class="preview-btn" onclick="previewVoice('Hajime',this)">▶ Preview Voice</button>
         </div>
-        <div class="bio2">Clear explanations with disciplined race communication. Hajime gives you the decision, then lets you drive.</div>
-        <div class="eng-sig">“Keep it clean. The pace will come.”</div>
-        <button class="preview-btn" onclick="previewVoice('Hajime',this)">▶ Preview Voice</button>
       </div>
 
       <!-- Kanbe (hidden until View All) -->
       <div class="eng-card v2 hidden-eng">
-        <div class="ec-head">
-          <img src="/Kanbe.png" alt="Kanbei Ukita">
-          <div>
-            <div class="nm">宇喜多 官兵衛 <span style="font-size:12px;color:var(--muted)">/ Kanbei Ukita</span></div>
-            <div class="subrole">AI Race Engineer</div>
-            <div class="persona-tag">AI Engineer Persona</div>
-            <div class="eng-langs"><span class="eng-lang">JAPANESE · OKAYAMA DIALECT</span></div>
-            <div class="eng-styles">Passionate · Assertive · Loyal</div>
-          </div>
+        <div class="ec-photo"><img src="/Kanbe.png" alt="Kanbei Ukita"></div>
+        <div class="ec-body">
+          <div class="nm">宇喜多 官兵衛 <span style="font-size:12px;color:var(--muted)">/ Kanbei Ukita</span></div>
+          <div class="subrole">AI Race Engineer</div>
+          <div class="persona-tag">AI Engineer Persona</div>
+          <div class="eng-langs"><span class="eng-lang">JAPANESE · OKAYAMA DIALECT</span></div>
+          <div class="eng-styles">Passionate · Assertive · Loyal</div>
+          <div class="bio2">Warm, energetic radio with firm calls when the race gets difficult. Kanbei keeps the fighting spirit alive.</div>
+          <div class="eng-sig">「おもれえ走りしとったで。次、取り返そうや。」</div>
+          <button class="preview-btn" onclick="previewVoice('Kanbe',this)">▶ Preview Voice</button>
         </div>
-        <div class="bio2">Warm, energetic radio with firm calls when the race gets difficult. Kanbei keeps the fighting spirit alive.</div>
-        <div class="eng-sig">「おもれえ走りしとったで。次、取り返そうや。」</div>
-        <button class="preview-btn" onclick="previewVoice('Kanbe',this)">▶ Preview Voice</button>
       </div>
 
       <!-- Oishi (hidden until View All) -->
       <div class="eng-card v2 hidden-eng">
-        <div class="ec-head">
-          <img src="/Oishi.png" alt="Kuranosuke Oishi">
-          <div>
-            <div class="nm">大石 蔵之助 <span style="font-size:12px;color:var(--muted)">/ Kuranosuke Oishi</span></div>
-            <div class="subrole">Chief Strategist</div>
-            <div class="persona-tag">AI Engineer Persona</div>
-            <div class="eng-langs"><span class="eng-lang">JAPANESE</span></div>
-            <div class="eng-styles">Patient · Analytical · Composed</div>
-          </div>
+        <div class="ec-photo"><img src="/Oishi.png" alt="Kuranosuke Oishi"></div>
+        <div class="ec-body">
+          <div class="nm">大石 蔵之助 <span style="font-size:12px;color:var(--muted)">/ Kuranosuke Oishi</span></div>
+          <div class="subrole">Chief Strategist</div>
+          <div class="persona-tag">AI Engineer Persona</div>
+          <div class="eng-langs"><span class="eng-lang">JAPANESE</span></div>
+          <div class="eng-styles">Patient · Analytical · Composed</div>
+          <div class="bio2">Patient, observant, and never rushed. Oishi waits for the right moment and calls it with purpose.</div>
+          <div class="eng-sig">「焦らなくていい。次の一周を整えよう。」</div>
+          <button class="preview-btn" onclick="previewVoice('Oishi',this)">▶ Preview Voice</button>
         </div>
-        <div class="bio2">Patient, observant, and never rushed. Oishi waits for the right moment and calls it with purpose.</div>
-        <div class="eng-sig">「焦らなくていい。次の一周を整えよう。」</div>
-        <button class="preview-btn" onclick="previewVoice('Oishi',this)">▶ Preview Voice</button>
       </div>
 
       <!-- Matthias (hidden until View All) -->
       <div class="eng-card v2 hidden-eng">
-        <div class="ec-head">
-          <img src="/Matthias.png" alt="Matthias Richter">
-          <div>
-            <div class="nm">Matthias Richter</div>
-            <div class="subrole">AI Race Engineer</div>
-            <div class="persona-tag">AI Engineer Persona</div>
-            <div class="eng-langs"><span class="eng-lang soon">GERMAN · COMING SOON</span><span class="eng-lang">ENGLISH</span></div>
-            <div class="eng-styles">Precise · Methodical · Technical</div>
-          </div>
+        <div class="ec-photo"><img src="/Matthias.png" alt="Matthias Richter"></div>
+        <div class="ec-body">
+          <div class="nm">Matthias Richter</div>
+          <div class="subrole">AI Race Engineer</div>
+          <div class="persona-tag">AI Engineer Persona</div>
+          <div class="eng-langs"><span class="eng-lang soon">GERMAN · COMING SOON</span><span class="eng-lang">ENGLISH</span></div>
+          <div class="eng-styles">Precise · Methodical · Technical</div>
+          <div class="bio2">Structured, disciplined, and exact. Matthias turns race data into clear decisions.</div>
+          <div class="eng-sig">“Ruhig bleiben. Wir bleiben beim Plan.”<span class="tr">Stay calm. We stick to the plan.</span></div>
+          <button class="preview-btn" onclick="previewVoice('Matthias',this)">▶ Preview Voice</button>
         </div>
-        <div class="bio2">Structured, disciplined, and exact. Matthias turns race data into clear decisions.</div>
-        <div class="eng-sig">“Ruhig bleiben. Wir bleiben beim Plan.”<span class="tr">Stay calm. We stick to the plan.</span></div>
-        <button class="preview-btn" onclick="previewVoice('Matthias',this)">▶ Preview Voice</button>
       </div>
 
     </div>
