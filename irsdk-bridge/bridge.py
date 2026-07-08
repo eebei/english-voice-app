@@ -1128,12 +1128,11 @@ def poll_iracing():
                     broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
                         'message': msg})
                 elif delta >= 4:
-                    msg = random.choice([
-                        'Contact. Breathe. No more risks now.',
-                        'That is contact. Stay calm. Protect what we have.',
-                        'Big one. Reset. Clean laps from here.'])
-                    broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
-                        'message': msg})
+                    # 大クラッシュ＝まず身体を気遣う「Are you OK?」を最優先で。ダイレクトドライブの
+                    # 強力なモーターはクラッシュ時にハンドルを持っていき、手首の捻挫/怪我が実際に起きる。
+                    # 順位やレース運びより先に、ドライバーの安否を確認するのが本物のエンジニア(Yuji方針)。
+                    broadcast({'type': 'radio', 'trigger': 'crash_check', 'delta': delta, 'recent': recent,
+                        'message': 'Are you okay? Any injury to your hands? Breathe — we will bring it back.'})
                 elif delta >= 2:
                     msg = random.choice([
                         'Watch it. Bring it back.',

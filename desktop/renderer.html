@@ -1429,6 +1429,10 @@ function oishiRadio(d){
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
     case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しろ。焦るな、まだ戦える。確実に持ち帰ろう。`;
+    case 'crash_check':
+      if(sel==='LunaJP') return ['大丈夫！？手、痛めてない？…深呼吸して。焦らなくていい、一緒に立て直そう。','今の大きかった…身体は無事？…ゆっくりでいいよ、わたしがついてる。','大丈夫？ケガしてない？…落ち着いて。まだいけるよ。'][Math.floor(Math.random()*3)];
+      if(sel==='HajimeJP') return ['無事か。手は大丈夫か。…深呼吸。まだいける。','でかいのを食らったな。身体は。…落ち着け、戻すぞ。','大丈夫か。ケガはないか。…慌てるな。一台持ち帰る。'][Math.floor(Math.random()*3)];
+      return ['大丈夫か。ケガはないか。…落ち着いて、ゆっくり戻そう。','今のは大きかった。身体は無事か。…深呼吸だ。まだ戦える。','手は痛めていないか。…焦るな。確実に持ち帰ろう。'][Math.floor(Math.random()*3)];
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['インシデントが多い。落ち着け。順位より完走だ。','もう十分だ。頭を冷やせ。確実に持ち帰ろう。','これ以上リスクを取るな。まず一台、無事に戻す。'][Math.floor(Math.random()*3)];
@@ -1468,6 +1472,7 @@ function kanbeRadio(d){
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
     case 'pace_unstable':  return `2周続けて落ちとる。一回深呼吸せえ。慌てんでええ、まだ戦えとる。確実に持って帰るで。`;
+    case 'crash_check':    return ['おい、大丈夫か！？手ぇ痛めとらんか？…落ち着け、まだ戦えるで。','でかいの食らったな。身体は無事か？…深呼吸せえ、ゆっくり戻すで。','大丈夫か！ケガはないか？…慌てんでええ、一台持って帰ろうで。'][Math.floor(Math.random()*3)];
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['インシデント多すぎる。落ち着け、順位より完走じゃ。','もうええ。頭冷やせ。確実に持って帰るで。','これ以上リスク取るな。一台持って帰るんが先じゃ。'][Math.floor(Math.random()*3)];
@@ -1507,6 +1512,7 @@ function matthiasRadio(d){
     case 'lap_time':       return `${t}. Minus ${diff}.`;
     case 'lap_slow':       return `${t}. Tempo runter. Status?`;
     case 'pace_unstable':  return `Zwei Runden in Folge langsamer. Kurz durchatmen. Kein Stress, wir sind noch dabei.`;
+    case 'crash_check':    return ['Alles okay? Sind deine Hände unverletzt? Durchatmen — wir holen das Auto zurück.','Das war heftig. Bist du unverletzt? Ruhig atmen, wir bringen es zurück.','Alles in Ordnung? Keine Verletzung? Bleib ruhig — wir machen weiter.'][Math.floor(Math.random()*3)];
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['Zu viele Incidents. Ruhig bleiben. Ankommen vor Position.','Genug jetzt. Kopf freimachen. Sicher nach Hause.','Kein Risiko mehr. Erst mal ein Auto sicher zurückbringen.'][Math.floor(Math.random()*3)];
@@ -1546,7 +1552,8 @@ function injectRadio(data){
   if(data.trigger==='personal_best'&&data.time) sessionBestLapStr=data.time;
   addMsg('ai',text);
   messages.push({role:'assistant',content:text});
-  speak(text);
+  // クラッシュ時の安否確認は最優先で割り込む（溜まったラジオより先に、即座に）。
+  speak(text, data.trigger==='crash_check');
 }
 // ── ペースチェック（AI文脈判断・2026/7/5設計）──
 // bridgeが「2周連続でセッションベストより1秒以上遅い」という生データを送ってくる。
