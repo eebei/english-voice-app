@@ -1132,7 +1132,7 @@ def poll_iracing():
                     # 強力なモーターはクラッシュ時にハンドルを持っていき、手首の捻挫/怪我が実際に起きる。
                     # 順位やレース運びより先に、ドライバーの安否を確認するのが本物のエンジニア(Yuji方針)。
                     broadcast({'type': 'radio', 'trigger': 'crash_check', 'delta': delta, 'recent': recent,
-                        'message': 'Are you okay? Any injury to your hands? Breathe — we will bring it back.'})
+                        'message': 'Are you okay? Any injury to your hands? Can the car still drive? If not, take the tow back and we will regroup from there.'})
                 elif delta >= 2:
                     msg = random.choice([
                         'Watch it. Bring it back.',
