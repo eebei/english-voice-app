@@ -678,6 +678,7 @@ def poll_iracing():
     consistent_lap_count = 0   # lap_consistentを3周に1回だけ発話するためのカウンター
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
+    tow_active = False         # トーイング中フラグ（開始時に1回だけ声かけ・終了でリセット）
     prev_incidents = None
     incident_times = []
     prev_driver_state = None
@@ -1142,6 +1143,18 @@ def poll_iracing():
                         'message': msg})
                 # delta==1（コースオフ）は基本黙る。連発時のみ上のrecent>=3で拾う
             prev_incidents = incidents
+
+        # ── トーイング検知（走行不能でiRacingが牽引→ピットワープ）──
+        # PlayerCarTowTime>0＝牽引中。事故地点からタイム積算＋ペナルティで、時間経過まで
+        # ピット作業も始まらないiRacite独自ルール。牽引が始まったら1回だけ「焦らず待とう」と声かけ。
+        tow_time = reader.read_float('PlayerCarTowTime')
+        if tow_time is not None and tow_time > 0:
+            if not tow_active:
+                tow_active = True
+                broadcast({'type': 'radio', 'trigger': 'towing', 'tow_time': round(tow_time, 1),
+                    'message': 'Being towed back. Time counts against us until it clears, no pit work yet. Nothing you can do — breathe, we regroup when you are in.'})
+        else:
+            tow_active = False
 
         # Position change（クラス内順位ベース。レースセッション＆コース走行中のみ。
         #   グリッド整列中(OnTrack:False)は順位がシャッフルするので黙る）

@@ -1433,6 +1433,10 @@ function oishiRadio(d){
       if(sel==='LunaJP') return ['大丈夫！？手、痛めてない？…深呼吸して。車は動きそう？無理ならトーイングで戻ってきて、そこから立て直そう。','今の大きかった…身体は無事？…ゆっくりでいい。マシン走れる？ダメならトーイングで帰ってきて、わたしがついてる。','大丈夫？ケガしてない？…落ち着いて。走れるならピットまで、無理ならトーイングでいいよ。'][Math.floor(Math.random()*3)];
       if(sel==='HajimeJP') return ['無事か。手は大丈夫か。…車は動くか？ダメならトーイングで戻せ。状況はそれから見る。','でかいのを食らったな。身体は。…マシンは走れるか？無理ならトーイング。まず戻ることだ。','大丈夫か。ケガはないか。…走れるならピットへ、動かないならトーイングで戻せ。'][Math.floor(Math.random()*3)];
       return ['大丈夫か。ケガはないか。…落ち着け。車は走れそうか？動かないならトーイングで戻ろう。まずは無事に戻ることだ。','今のは大きかった。身体は無事か。…深呼吸だ。マシンは動くか？無理ならトーイングで帰ってこい。','手は痛めていないか。…焦るな。走れるならピットまで、不能ならトーイングだ。それから立て直す。'][Math.floor(Math.random()*3)];
+    case 'towing':
+      if(sel==='LunaJP') return ['トーイング中だね。時間が過ぎるまでピット作業もできないんだ。今はどうしようもないから、深呼吸して待とう。戻ったら一緒に立て直そ。','牽引で戻ってるとこ。焦っても仕方ないよ、時間が過ぎるのを待つだけ。気持ち切り替えていこ。'][Math.floor(Math.random()*2)];
+      if(sel==='HajimeJP') return ['トーイング中だ。時間が過ぎるまでピット作業もできない。今は打つ手がない。深呼吸して待て。戻ったら立て直す。','牽引で戻っている。焦るな。時間の経過を待つしかない。頭を切り替えろ。'][Math.floor(Math.random()*2)];
+      return ['トーイング中だ。時間が過ぎるまではピット作業もできない。今は打つ手がない、深呼吸して待とう。戻ってから立て直す。','牽引で戻っている。焦らなくていい。時間が過ぎるのを待つだけだ。気持ちを整えておけ。'][Math.floor(Math.random()*2)];
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['インシデントが多い。落ち着け。順位より完走だ。','もう十分だ。頭を冷やせ。確実に持ち帰ろう。','これ以上リスクを取るな。まず一台、無事に戻す。'][Math.floor(Math.random()*3)];
@@ -1473,6 +1477,7 @@ function kanbeRadio(d){
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
     case 'pace_unstable':  return `2周続けて落ちとる。一回深呼吸せえ。慌てんでええ、まだ戦えとる。確実に持って帰るで。`;
     case 'crash_check':    return ['おい、大丈夫か！？手ぇ痛めとらんか？…落ち着け。車は走れるか？無理ならトーイングで帰ってええで。それから状況見るで。','でかいの食らったな。身体は無事か？…深呼吸せえ。マシンは動くか？ダメならトーイングじゃ、まず戻ろうや。','大丈夫か！ケガはないか？…慌てんでええ。走れるならピットまで、無理ならトーイングで帰ってこい。'][Math.floor(Math.random()*3)];
+    case 'towing':         return ['トーイング中じゃ。時間が過ぎるまでピット作業もできん。今はどうしようもない、深呼吸して待っとけ。戻ったら立て直すで。','牽引で戻りよる。焦ってもおえん、時間が過ぎるまで待つしかないんじゃ。気持ち切り替えとけ。'][Math.floor(Math.random()*2)];
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['インシデント多すぎる。落ち着け、順位より完走じゃ。','もうええ。頭冷やせ。確実に持って帰るで。','これ以上リスク取るな。一台持って帰るんが先じゃ。'][Math.floor(Math.random()*3)];
@@ -1513,6 +1518,7 @@ function matthiasRadio(d){
     case 'lap_slow':       return `${t}. Tempo runter. Status?`;
     case 'pace_unstable':  return `Zwei Runden in Folge langsamer. Kurz durchatmen. Kein Stress, wir sind noch dabei.`;
     case 'crash_check':    return ['Alles okay? Sind deine Hände unverletzt? Kann das Auto noch fahren? Wenn nicht, lass abschleppen — wir sehen dann weiter.','Das war heftig. Bist du unverletzt? Fährt der Wagen noch? Sonst per Abschleppen zurück, wir sammeln uns neu.','Alles in Ordnung? Keine Verletzung? Wenn das Auto nicht mehr fährt, nimm das Abschleppen — erst sicher zurück.'][Math.floor(Math.random()*3)];
+    case 'towing':         return ['Wir werden abgeschleppt. Die Zeit läuft gegen uns, bis es vorbei ist — vorher kein Boxenstopp. Du kannst nichts tun, durchatmen. Wir sammeln uns, wenn du drin bist.','Abschleppen läuft. Kein Stress, wir müssen nur warten, bis die Zeit durch ist. Kopf frei machen.'][Math.floor(Math.random()*2)];
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['Zu viele Incidents. Ruhig bleiben. Ankommen vor Position.','Genug jetzt. Kopf freimachen. Sicher nach Hause.','Kein Risiko mehr. Erst mal ein Auto sicher zurückbringen.'][Math.floor(Math.random()*3)];
