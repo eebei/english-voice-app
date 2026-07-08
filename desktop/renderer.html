@@ -598,6 +598,7 @@ let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
 let lastCarClass = '', lastTrack = '';   // 1階記憶のキー（コース×車種）用
+let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, sessionBestLapStr = '';
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 
@@ -1364,7 +1365,7 @@ function connectBridge(){
       if(data.type==='iracing_connected'){ iracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live'); return; }
       if(data.type==='iracing_disconnected'){ iracingLive=false; updateBridgeStatus(); bridgeVoice('iracing_lost'); return; }
       if(data.type==='radio') injectRadio(data);
-      if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; if(data.data){ if(data.data.player_car_class) lastCarClass=data.data.player_car_class; if(data.data.track) lastTrack=data.data.track; } }
+      if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; if(data.data){ if(data.data.player_car_class) lastCarClass=data.data.player_car_class; if(data.data.track) lastTrack=data.data.track; if(data.data.player_irating) lastIrating=data.data.player_irating; if(data.data.safety_rating) lastSr=data.data.safety_rating; } }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
@@ -1594,8 +1595,8 @@ function injectBriefing(data){
   const parts=[];
   if(data.track) parts.push(isJP?`コース：${data.track}`:`Track: ${data.track}`);
   if(data.sof)   parts.push(isJP?`SOF ${data.sof}`:`SOF ${data.sof}`);
-  if(data.irating) parts.push(isJP?`iRating ${data.irating}`:`iRating ${data.irating}`);
-  if(data.sr)    parts.push(isJP?`SR ${data.sr}`:`SR ${data.sr}`);
+  if(data.player_irating) parts.push(`iRating ${data.player_irating}`);
+  if(data.safety_rating)  parts.push(`SR ${data.safety_rating}`);
   const summary = parts.join(' · ');
   if(!summary) return;
   const msg = isJP?`セッション情報受信：${summary}`:`Session briefing: ${summary}`;
@@ -1617,6 +1618,7 @@ async function scheduleAutoBriefing(){
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
       liveData:lastTelemetry, sessionType:lastSessionType, driverState,
       profileNote: buildProfileNote(profile)+buildCarTrackMemory(),
+      raceHistory: buildRaceHistoryContext(),   // カルテ（過去セッション・全キャラ共有）を能動ブリーフィングにも渡す
       max_tokens: 150
     };
     if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
@@ -1702,7 +1704,7 @@ function saveMemory(){
 function saveSessionSummary(data){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0});
+    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',car:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:data.finish_pos||null,irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -1767,10 +1769,16 @@ function buildRaceHistoryContext(){
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
     if(!history.length) return '';
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
-    return history.slice(-5).map(s=>isJP
-      ?`${s.date} ${s.track} ベスト${s.bestLap} 平均${s.avgLap} ${s.totalLaps}周 インシデント${s.incidents}`
-      :`${s.date} ${s.track} best ${s.bestLap} avg ${s.avgLap} ${s.totalLaps} laps inc ${s.incidents}`
-    ).join('\n');
+    const rows = history.slice(-5).map(s=>{
+      const car = s.car?(s.car+' '):'';
+      const pos = s.finishPos?(isJP?` P${s.finishPos}`:` P${s.finishPos}`):'';
+      const ir = s.irating?(isJP?` iR${s.irating}`:` iR${s.irating}`):'';
+      const sr = s.sr?(isJP?` SR${s.sr}`:` SR${s.sr}`):'';
+      return isJP
+        ?`${s.date} ${car}${s.track}${pos} ベスト${s.bestLap} ${s.totalLaps}周 インシデント${s.incidents}${ir}${sr}`
+        :`${s.date} ${car}${s.track}${pos} best ${s.bestLap} ${s.totalLaps}laps inc ${s.incidents}${ir}${sr}`;
+    });
+    return rows.join('\n');
   }catch{return '';}
 }
 

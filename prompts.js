@@ -775,12 +775,22 @@ function buildSystem(p) {
     }
   }
 
-  // デブリーフ時のレース履歴注入（動的・非キャッシュ）
+  // ── ドライバーのカルテ（全キャラ共有・過去セッション記録）──
+  // Yuji核心思想：全エンジニアが同じカルテを見る「大病院」方式。どのキャラに替わっても
+  // ドライバーの病歴(走行歴・iRating推移・事故歴)を知っていて、最善の一手を出せる。
+  // ブリーフィング(戦略)と デブリーフ 両方で注入（レース中は情報過多になるので出さない）。
   let historyNote = '';
-  if (isRacing && mode === 'debrief' && raceHistory) {
+  if (isRacing && (mode === 'debrief' || mode === 'strategy') && raceHistory) {
+    const brief = mode === 'strategy';
     historyNote = isJ
-      ? '\n\n━━ ドライバーの過去セッション記録 ━━\n' + raceHistory + '\nこの記録を頭に入れてデブリーフを進めろ。前回からの改善・悪化を自然に指摘し、傾向を見つけろ。数字が揃っていれば自分から触れてよい。'
-      : '\n\n━━ DRIVER SESSION HISTORY ━━\n' + raceHistory + '\nUse this data to frame the debrief. Note improvements or regressions from previous sessions. Spot trends (pace fade, incident patterns). Reference the numbers naturally — you have this data, use it.';
+      ? '\n\n━━ ドライバーのカルテ（過去セッション・全エンジニア共有）━━\n' + raceHistory
+        + (brief
+            ? '\nこれは前任のエンジニアも含めた、このドライバーの全走行記録だ。ブリーフィングで自然に活かせ。特に推移を読め——iRatingが上がってる（調子いい）、急に下がってる（何か事故でもあったか）、前回インシデントが多かった（今日は落ち着いていこう）、等。カルテを持つ主治医のように、先回りして一言添えると信頼される。ただし毎回全部読み上げるな。今日に関係する1点だけ。'
+            : '\nこの記録を頭に入れてデブリーフを進めろ。前回からの改善・悪化を自然に指摘し、傾向（ペース・インシデント・iRating推移）を見つけろ。自分が担当してなかった過去のセッションも、カルテとして知っている前提で触れてよい。')
+      : '\n\n━━ DRIVER CHART (session history — shared across all engineers) ━━\n' + raceHistory
+        + (brief
+            ? '\nThis is the driver\'s full record, including sessions run with other engineers. Use it naturally in the briefing. Read the TRENDS — iRating climbing (in form), a sudden drop (a big incident?), lots of incidents last time (let\'s keep it clean today). Like a doctor holding the chart, a proactive word builds trust. Do not recite it all — one relevant point for today.'
+            : '\nUse this to frame the debrief. Note improvements/regressions and spot trends (pace, incidents, iRating). You may reference past sessions even ones you did not personally run — you hold the shared chart.');
   }
 
   // ── ペースチェック(内部トリガー)：固定閾値でなくAIに文脈判断させる(2026/7/5設計) ──
