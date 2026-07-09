@@ -105,6 +105,9 @@ app.use((req, res, next) => {
   if (req.path === '/api/stt') return next();
   return express.json({ limit: '128kb' })(req, res, next);
 });
+// ルート直打ち（ .../ ）は PITWALL LP を見せる。Founding客がドメイン直打ちで来ても
+// 旧RaceVoiceページでなくPITWALLが出る。RaceVoiceは /index.html で引き続きアクセス可。
+app.get('/', (_req, res) => res.redirect(302, '/pitwall.html'));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Founding 枠の残り（サイトの「参加」ボタンの出し分けに使う）
