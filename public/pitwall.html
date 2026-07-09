@@ -107,6 +107,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 /* Pricing */
 .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
+.price-grid.single{grid-template-columns:1fr;max-width:420px;margin-left:auto;margin-right:auto}
 @media(max-width:760px){.price-grid{grid-template-columns:1fr}}
 .price-card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:28px}
 .price-card.featured{border-color:var(--blue);background:linear-gradient(135deg,rgba(157,78,221,.08),var(--panel))}
@@ -377,43 +378,22 @@ function showDemo(mode){
 <!-- ═══ PRICING ═══ -->
 <section class="section" id="pricing">
   <div class="wrap-lg">
-    <div class="eyebrow">Founding Access</div>
+    <div class="eyebrow">Founding Season</div>
     <h2 class="sec-title">Simple Pricing</h2>
-    <p class="sec-lead">First 50 drivers lock in the Founding rate — forever.</p>
-    <div class="price-grid">
-      <div class="price-card">
-        <div class="plan">Standard</div>
+    <p class="sec-lead">Join during the Founding Season and lock in this rate — forever.</p>
+    <div class="price-grid single">
+      <div class="price-card featured">
+        <div class="plan">Founding Season <span class="price-tag">LOCKED FOREVER</span></div>
         <div class="price">$29<span>.99/mo</span></div>
-        <div class="desc">Race Mode only</div>
+        <div class="desc">Full engineer partnership · 5-day free trial</div>
         <ul>
           <li>Live radio during races</li>
           <li>Gap alerts & strategy calls</li>
+          <li>Post-race debrief</li>
+          <li>Session memory (course & car)</li>
           <li>All 4 engineers</li>
           <li>iRacing telemetry</li>
-        </ul>
-      </div>
-      <div class="price-card featured">
-        <div class="plan">Founding 50 <span class="price-tag">LOCKED FOREVER</span></div>
-        <div class="price">$29<span>.99/mo</span></div>
-        <div class="desc">Pro features at Standard price</div>
-        <ul>
-          <li>Race Mode + Debrief</li>
-          <li>Session memory</li>
-          <li>All 4 engineers</li>
-          <li>iRacing telemetry</li>
-          <li>Priority access to new engineers</li>
-        </ul>
-      </div>
-      <div class="price-card">
-        <div class="plan">Pro</div>
-        <div class="price">$49<span>.99/mo</span></div>
-        <div class="desc">Full engineer partnership</div>
-        <ul>
-          <li>Race Mode + Debrief</li>
-          <li>Session memory & history</li>
-          <li>All 4 engineers</li>
-          <li>iRacing telemetry</li>
-          <li>Endurance / Team PITWALL</li>
+          <li>Priority access to new engineers & features</li>
         </ul>
       </div>
     </div>
