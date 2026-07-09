@@ -315,6 +315,20 @@ async function sendWelcomeEmail(rawEmail) {
   return { sent: true };
 }
 
+// 管理者による強制遮断／復帰（Stripe解約を待たず即座にis_memberを操作。悪質ユーザー対応用）
+async function setMemberActive(rawEmail, active) {
+  if (!ready) throw new Error('auth_not_ready');
+  const email = normalizeEmail(rawEmail);
+  if (!email) throw new Error('no_email');
+  const { rows } = await pool.query(
+    'UPDATE users SET is_member = $2 WHERE email = $1 RETURNING email, is_member',
+    [email, !!active]
+  );
+  if (!rows[0]) return { ok: false, reason: 'user_not_found' };
+  log('member ' + (active ? 'restored' : 'revoked') + ' (admin): ' + email);
+  return { ok: true, email: rows[0].email, is_member: rows[0].is_member };
+}
+
 // 解約 → 会員フラグを落とす（Stripe customer id で特定）
 async function unsetMemberByCustomer(stripeCustomerId, status) {
   if (!ready || !stripeCustomerId) return;
@@ -402,7 +416,7 @@ module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
-  setMemberByEmail, sendWelcomeEmail, unsetMemberByCustomer, foundingStatus,
+  setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, foundingStatus,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   FOUNDING_CAP,
   _pool: () => pool,

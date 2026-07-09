@@ -183,6 +183,17 @@ app.post('/api/beta/admin/revoke', requireAdmin, express.json(), async (req, res
   } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
 
+// ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
+//   POST /api/admin/member/revoke {email}            → 即座にis_member=false
+//   POST /api/admin/member/revoke {email,active:true} → 復帰
+app.post('/api/admin/member/revoke', requireAdmin, express.json(), async (req, res) => {
+  try {
+    const { email, active } = req.body || {};
+    const r = await auth.setMemberActive(email, active === true);
+    res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+
 // ── 会員基盤（マジックリンク認証） ───────────────────────────────────────────
 // 現在ユーザーをreqに付与（未ログイン/未設定ならreq.user=null。既存機能は不変）。
 app.use(auth.attachUser);
