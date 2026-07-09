@@ -73,12 +73,17 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object;
       const email = (s.customer_details && s.customer_details.email) || s.customer_email;
-      await auth.setMemberByEmail(email, {
+      const result = await auth.setMemberByEmail(email, {
         plan: 'founding',
         stripeCustomerId: s.customer,
         subscriptionStatus: 'active',
       });
-      console.log('[stripe] checkout completed → member:', email);
+      console.log('[stripe] checkout completed → member:', email, 'justActivated:', result.justActivated);
+      // ウェルカムメールは新規会員化の時だけ（Stripeのwebhook再送で二重送信しないためのガード）。
+      // 失敗してもwebhook自体は成功扱いにする（会員化は既に完了しているため、Stripeに再送させない）。
+      if (result.justActivated) {
+        auth.sendWelcomeEmail(email).catch((e) => console.error('[stripe] welcome email failed:', e.message));
+      }
     } else if (event.type === 'customer.subscription.deleted') {
       await auth.unsetMemberByCustomer(event.data.object.customer, 'canceled');
     } else if (event.type === 'customer.subscription.updated') {

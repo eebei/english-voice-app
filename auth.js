@@ -263,10 +263,14 @@ async function updateProfile(userId, { displayName, leaderboardOptIn }) {
 const FOUNDING_CAP = parseInt(process.env.FOUNDING_CAP || '50', 10);
 
 // 決済成功 → そのメールのユーザーを会員化（アカウントが無ければ作る）
+// justActivated: 直前まで非会員だった（新規 or 再課金）→ ウェルカムメールを送るべきタイミング。
+// Stripeのwebhookは再送されうる（at-least-once）ので、既に会員だった場合はfalseになり重複送信されない。
 async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscriptionStatus } = {}) {
   if (!ready) throw new Error('auth_not_ready');
   const email = normalizeEmail(rawEmail);
   if (!email) throw new Error('no_email');
+  const before = await pool.query('SELECT is_member FROM users WHERE email = $1', [email]);
+  const wasMember = before.rows[0] && before.rows[0].is_member === true;
   const { rows } = await pool.query(
     `INSERT INTO users (email, is_member, plan, stripe_customer_id, subscription_status)
      VALUES ($1, true, $2, $3, $4)
@@ -279,7 +283,36 @@ async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscription
     [email, plan || 'founding', stripeCustomerId || null, subscriptionStatus || 'active']
   );
   log('member set: ' + email + ' (plan=' + (plan || 'founding') + ')');
-  return rows[0];
+  return { ...rows[0], justActivated: !wasMember };
+}
+
+// 会員化直後のウェルカムメール（justActivated===trueの時だけ呼ぶこと）
+async function sendWelcomeEmail(rawEmail) {
+  const email = normalizeEmail(rawEmail);
+  const welcomeUrl = `${BASE_URL}/welcome.html`;
+  if (!mailer) {
+    console.warn('[auth] (no mailer) welcome email for', email, '->', welcomeUrl);
+    return { sent: false };
+  }
+  await sendEmail({
+    to: email,
+    subject: 'Welcome to OMORAY PITWALL — Founding Season',
+    text:
+      `お支払いありがとうございます。Founding Seasonへようこそ！\n` +
+      `セットアップはこちら: ${welcomeUrl}\n\n` +
+      `Thanks for subscribing — welcome to the Founding Season!\n` +
+      `Get set up here: ${welcomeUrl}`,
+    html:
+      `<div style="font-family:system-ui,sans-serif;max-width:480px">
+        <h2 style="color:#9D4EDD">Welcome to OMORAY PITWALL</h2>
+        <p>お支払いありがとうございます。Founding Seasonへようこそ！<br>
+           Thanks for subscribing — welcome to the Founding Season.</p>
+        <p><a href="${welcomeUrl}" style="display:inline-block;background:#9D4EDD;color:#fff;
+           padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Get Set Up →</a></p>
+        <p style="color:#888;font-size:12px">${welcomeUrl}</p>
+      </div>`,
+  });
+  return { sent: true };
 }
 
 // 解約 → 会員フラグを落とす（Stripe customer id で特定）
@@ -369,7 +402,7 @@ module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
-  setMemberByEmail, unsetMemberByCustomer, foundingStatus,
+  setMemberByEmail, sendWelcomeEmail, unsetMemberByCustomer, foundingStatus,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   FOUNDING_CAP,
   _pool: () => pool,

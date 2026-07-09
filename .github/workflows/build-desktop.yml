@@ -53,6 +53,7 @@ jobs:
         run: |
           $exe = Get-ChildItem desktop/dist/*.exe | Select-Object -First 1
           Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-${{ steps.date.outputs.DATE }}.exe"
+          Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-latest.exe"
         shell: pwsh
 
       - name: Publish to Release
@@ -63,6 +64,9 @@ jobs:
           body: |
             ## OMORAY PITWALL Desktop - Build ${{ steps.date.outputs.DATE }}
             ダウンロードしてダブルクリックするだけ。Node/Python不要。bridge内蔵・自動起動。
+
+            Webサイトのダウンロードリンクは常に `OMORAY-PITWALL-Desktop-latest.exe` を指しています(このビルドで自動上書き)。
           files: |
             desktop/dist/OMORAY-PITWALL-Desktop-${{ steps.date.outputs.DATE }}.exe
+            desktop/dist/OMORAY-PITWALL-Desktop-latest.exe
           prerelease: false
