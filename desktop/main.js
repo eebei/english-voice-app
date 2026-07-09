@@ -145,21 +145,31 @@ async function checkForUpdate() {
     const local = new Date(buildDate);
     const remote = new Date(asset.updated_at);
     if (remote > local) {
-      log('update available: local=' + buildDate + ' remote=' + asset.updated_at);
+      log('update required (blocking): local=' + buildDate + ' remote=' + asset.updated_at);
+      // 閉じるボタンなし＝強制ゲート。理由：PITWALLはテレメトリ解釈がバージョン依存なので、
+      // 古いクライアントのまま使うと燃料/ギャップ等を「静かに」誤読するリスクがある（＝捏造と同じ害）。
+      // iRacing自体が採用してる「更新しないと入れない」方式に合わせる。
       if (win) win.webContents.executeJavaScript(`
         (function(){
-          if (document.getElementById('omoray-update-banner')) return;
-          var b = document.createElement('div');
-          b.id = 'omoray-update-banner';
-          b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#9D4EDD;color:#fff;' +
-            'font-family:system-ui,sans-serif;font-size:13px;padding:9px 16px;text-align:center;cursor:default';
-          b.innerHTML = '新しいバージョンがあります。 <a href="${LATEST_EXE_URL}" target="_blank" ' +
-            'style="color:#fff;text-decoration:underline;font-weight:bold">今すぐダウンロード →</a>' +
-            ' <span id="omoray-update-dismiss" style="margin-left:14px;cursor:pointer;opacity:.7">✕</span>';
-          document.body.prepend(b);
-          document.getElementById('omoray-update-dismiss').onclick = function(){ b.remove(); };
+          if (document.getElementById('omoray-update-gate')) return;
+          var g = document.createElement('div');
+          g.id = 'omoray-update-gate';
+          g.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(7,8,15,.97);color:#eee;' +
+            'font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;' +
+            'justify-content:center;text-align:center;padding:40px';
+          g.innerHTML =
+            '<div style="font-size:15px;letter-spacing:2px;color:#9D4EDD;font-weight:700;margin-bottom:14px">UPDATE REQUIRED</div>' +
+            '<div style="font-size:20px;font-weight:700;margin-bottom:10px">新しいバージョンが必要です</div>' +
+            '<div style="font-size:14px;color:#aaa;max-width:420px;margin-bottom:26px;line-height:1.6">' +
+            '古いバージョンのままだと、燃料やギャップなどのテレメトリを正しく読めない場合があります。' +
+            '更新してから使ってください。</div>' +
+            '<a href="${LATEST_EXE_URL}" target="_blank" style="display:inline-block;background:#9D4EDD;color:#fff;' +
+            'font-weight:700;padding:14px 32px;border-radius:10px;text-decoration:none;font-size:15px">' +
+            '⬇ 最新版をダウンロード</a>' +
+            '<div style="font-size:12px;color:#666;margin-top:20px">ダウンロード後、このアプリを閉じて新しいexeを起動してください。</div>';
+          document.body.appendChild(g);
         })();
-      `).catch((e) => log('banner inject failed: ' + e.message));
+      `).catch((e) => log('update gate inject failed: ' + e.message));
     } else {
       log('up to date (local=' + buildDate + ')');
     }
