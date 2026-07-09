@@ -25,6 +25,10 @@ const EMAIL_FROM = process.env.EMAIL_FROM || GMAIL_USER || 'omoraypitwall@gmail.
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'OMORAY PITWALL';
 const BASE_URL = (process.env.BASE_URL || 'https://english-voice-app-production.up.railway.app').replace(/\/$/, '');
 
+// 軽量ログヘルパー。以前 setMemberByEmail / unsetMemberByCustomer 等が未定義の log() を呼び、
+// INSERT/UPDATE後にReferenceErrorでwebhookが500クラッシュ→welcomeメール未送信＆Stripeリトライ地獄になっていた。
+function log(msg) { console.log('[auth] ' + msg); }
+
 const MAGIC_TTL_MIN = 20;        // マジックリンクの有効期限（分）
 const SESSION_TTL_DAYS = 60;     // ログインセッション（JWT）の有効期限（日）
 
