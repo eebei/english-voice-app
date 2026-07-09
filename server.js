@@ -321,7 +321,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // 実測コストログ（Railwayログで確認可能。粗利率の実測に使う）
     const logUsage = (usage) => {
       if (!usage) return;
-      console.log(`[USAGE] user=${userName || '?'} mode=${mode || '?'} model=${model} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
+      console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
     };
 
     // ── ストリーミング：文字が生成された端からクライアントへ流す（体感レスポンス短縮）──
