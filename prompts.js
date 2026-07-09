@@ -747,6 +747,18 @@ function buildSystem(p) {
         ? '\n\n【損傷状況】現在マシンに損傷あり＝ピットでの修理に約' + live.damage_s + '秒必要な状態。ドライバーに損傷やボディの状態を聞かれたら、この修理所要時間を損傷の目安として正直に伝えろ（例「損傷あり、修理に' + live.damage_s + '秒。走行に影響が出てるはずだ、感触どう？」）。iRacingは個別パーツ名までは出さないので、パーツ名を捏造するな。'
         : '\n\n[DAMAGE] The car currently has damage — about ' + live.damage_s + 's of pit repair needed. If the driver asks about damage or bodywork, report this repair time honestly as the damage gauge (e.g. "you have damage, ~' + live.damage_s + 's of repairs — it should be affecting the car, how does it feel?"). iRacing does not expose individual part names, so never invent a part name.';
     }
+    // 気象データ（八木さん実走で「路面温度データ来てない」判明→追加。聞かれた時のみ答える・数値記憶は薄い）
+    if (live.weather && (live.weather.track_temp_c != null || live.weather.air_temp_c != null)) {
+      const w = live.weather;
+      const parts = [];
+      if (w.track_temp_c != null) parts.push(isJ ? '路面' + w.track_temp_c + '℃' : 'track ' + w.track_temp_c + 'C');
+      if (w.air_temp_c   != null) parts.push(isJ ? '気温' + w.air_temp_c   + '℃' : 'air '   + w.air_temp_c   + 'C');
+      if (w.humidity     != null) parts.push(isJ ? '湿度' + w.humidity     + '%' : 'humidity ' + w.humidity + '%');
+      if (w.track_wetness != null && w.track_wetness > 0.05) parts.push(isJ ? 'ウェット率' + Math.round(w.track_wetness * 100) + '%' : 'wetness ' + Math.round(w.track_wetness * 100) + '%');
+      liveNote += isJ
+        ? '\n\n【気象・路面】' + parts.join(' / ') + '\n聞かれたら実値で答えろ。単位を必ず添える（℃）。走行中は自分から羅列するな。ただしタイヤの垂れ・グリップ低下を語る時に「路面が上がってきてる／下がってきてる」といった文脈で自然に混ぜるのは可。'
+        : '\n\n[WEATHER / TRACK] ' + parts.join(' / ') + '\nReport with real numbers when asked, always include the unit (C). Do not volunteer weather while driving, but you can naturally weave it into tyre / grip commentary (e.g. "track\'s coming up, tyres will suffer").';
+    }
   }
 
   // レースエンジニア共通の鉄則（静的・キャッシュ対象）

@@ -863,6 +863,20 @@ def poll_iracing():
         lrTemp      = reader.read_float('LRtempCM')
         rrTemp      = reader.read_float('RRtempCM')
 
+        # ── 気象データ（八木さん実走で「路面温度データ来てない」が判明→追加） ──
+        # iRacing SDKは摂氏で返す。ドライバーは華氏派も多いが、まず数字を渡してAI側でどちら派にも対応。
+        # None判定はvalue is not None で厳密に（0℃も有効値なので truthy判定はダメ）。
+        track_temp_c = reader.read_float('TrackTempCrew')   # 路面温度（クルーが報告する路面表面温度・耐久で刻々変わる主要変数）
+        air_temp_c   = reader.read_float('AirTemp')         # 気温
+        rel_humidity = reader.read_float('RelativeHumidity') # 湿度 0..1
+        track_wet    = reader.read_float('TrackWetness')     # 路面ウェット度 0..1(乾) - iRacing 2024+
+        weather = {
+            'track_temp_c': round(track_temp_c, 1) if track_temp_c is not None else None,
+            'air_temp_c':   round(air_temp_c, 1)   if air_temp_c is not None   else None,
+            'humidity':     round(rel_humidity * 100, 0) if rel_humidity is not None else None,
+            'track_wetness': round(track_wet, 2) if track_wet is not None else None,
+        }
+
         # ── タイヤ詳細（4輪×内中外温度＋摩耗）と損傷代理(修理所要秒) ──
         # 項目7：「右フロント垂れてる」「損傷は？」に実データで答えるため。聞かれた時だけ使う。
         def _tire(corner):
@@ -1455,6 +1469,7 @@ def poll_iracing():
                 'fuel_strategy': fuel_strategy,
                 'tires': tires,
                 'damage_s': damage_s,
+                'weather': weather,
             })
             last_telem_ts = _tnow
 
