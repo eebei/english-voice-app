@@ -593,6 +593,14 @@ function buildSystem(p) {
   const userName = p.userName || '';
   const telemetry = p.telemetry || 'off'; // 'live' | 'bridge' | 'off'
   const sectors = Array.isArray(p.sectors) ? p.sectors : null;
+  // ラップタイム整形（生の秒→"M:SS.mmm"）＝Claudeが「84.567」と誤読するのを構造的に根絶
+  const fmtLap = (v) => {
+    const n = (typeof v === 'number') ? v : parseFloat(v);
+    if (!isFinite(n) || n <= 0) return v;
+    const m = Math.floor(n / 60);
+    const s = n - m * 60;
+    return m > 0 ? (m + ':' + s.toFixed(3).padStart(6, '0')) : s.toFixed(3);
+  };
   const live = (p.liveData && typeof p.liveData === 'object') ? p.liveData : null; // ライブテレメトリ実値
   const sessionType = typeof p.sessionType === 'string' ? p.sessionType : ''; // iRacing実際のセッション種別(Practice/Qualify/Race)
   const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
@@ -699,8 +707,8 @@ function buildSystem(p) {
     if (live.pos != null)        { jp.push('総合 ' + live.pos + '番手'); en.push('Overall P' + live.pos); }
     if (live.fuel != null)       { jp.push('燃料 ' + live.fuel + 'L'); en.push('Fuel ' + live.fuel + ' L'); }
     if (live.lap != null)        { jp.push('周回 ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); }
-    if (live.best != null)       { jp.push('自己ベスト ' + live.best); en.push('Best ' + live.best); }
-    if (live.last != null)       { jp.push('直近ラップ ' + live.last); en.push('Last ' + live.last); }
+    if (live.best != null)       { const b = fmtLap(live.best); jp.push('自己ベスト ' + b); en.push('Best ' + b); }
+    if (live.last != null)       { const l = fmtLap(live.last); jp.push('直近ラップ ' + l); en.push('Last ' + l); }
     if (live.gap_ahead != null)  { jp.push('前とのギャップ ' + live.gap_ahead + '秒'); en.push('Gap ahead ' + live.gap_ahead + 's'); }
     if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
     if (live.on_track === false) { jp.push('現在ピット/ガレージ内（走行データはさっきまでの値）'); en.push('Currently in pit/garage (data is from moments ago)'); }
@@ -722,8 +730,8 @@ function buildSystem(p) {
     }
     if (jp.length) {
       liveNote = isJ
-        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。\n【ラップタイムの言い方・厳守】タイムは「秒」の生数値で届く（例：ベスト100.493 = 1分40.493秒のこと）。60以上の値を「100秒493」などと絶対に言うな（大間違い）。60を超えたら分に直し、モータースポーツ流に秒だけ言え＝100.493なら「40.5」（1分40秒5の下段だけ）。59以下ならそのまま「49.6」。分は言わない。ベスト/直近を聞かれたら、届いてる最新の値で答えろ（古い周のタイムを言うな）。'
-        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.\n[How to say lap times] Times arrive as raw SECONDS (e.g. best 100.493 = a 1:40.493 lap). NEVER say "100 seconds" for a value over 60. Convert: over 60 → say just the seconds within the minute (100.493 → "forty point five"); under 60 → say it directly ("49.6"). Answer with the latest value you have, not an older lap.';
+        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。\n【ラップタイムの言い方・厳守】タイムは既に「分:秒.ミリ秒」形式で届く（例：ベスト1:40.493）。モータースポーツ流に秒だけ言え＝1:40.493なら「40.5」（下段だけ）。59秒台以下（分表記なし）ならそのまま「49.6」。ベスト/直近を聞かれたら、届いてる最新の値で答えろ（古い周のタイムを言うな）。'
+        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.\n[How to say lap times] Times already arrive formatted as M:SS.mmm (e.g. best 1:40.493). Say motorsport-style — just the seconds within the minute (1:40.493 → "forty point five"); if under a minute (no colon), say it directly ("49.6"). Answer with the latest value you have, not an older lap.';
     }
     // ── タイヤ詳細＆損傷（項目7）：聞かれた時だけ答える。走行中は自分から言うな ──
     const tr = live.tires;

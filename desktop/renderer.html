@@ -1653,13 +1653,24 @@ async function scheduleAutoBriefing(){
   }, 6000);  // 接続から6秒（iRacing側UIが落ち着くのを待つ）
 }
 
+// ── ラップタイム整形（生の秒→"M:SS.mmm"）＝「84.567」誤読の根絶 ──
+// 60秒以上は必ず分に直す（1:24.567）。60未満はそのまま（24.567）。
+// 数字でない値（'?'、fmt_radio済みの文字列等）はそのまま返す。
+function fmtLap(v){
+  const n = (typeof v === 'number') ? v : parseFloat(v);
+  if(!isFinite(n) || n <= 0) return (v==null ? '' : v);
+  const m = Math.floor(n/60);
+  const s = n - m*60;
+  return m>0 ? (m + ':' + s.toFixed(3).padStart(6,'0')) : s.toFixed(3);
+}
+
 // ── Debrief auto-trigger ──
 function scheduleAutoDebrief(data){
   if(selMode!=='race') return;
   setTimeout(()=>{
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const laps=data.total_laps||'?';
-    const best=data.best_lap||sessionBestLapStr||'?';
+    const best=fmtLap(data.best_lap||sessionBestLapStr||'?');
     const pos=data.finish_pos;
     // 実セッション種別が分かればそれで呼ぶ（予選/練習をレースと決め打ちしない）
     const st=(lastSessionType||'').toLowerCase();
@@ -1767,7 +1778,7 @@ function buildCarTrackMemory(){
     if(!rec||!rec.sessions) return '';
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const parts=[];
-    if(rec.bestLap) parts.push(isJP?`過去ベスト${rec.bestLap.toFixed(3)}`:`prev best ${rec.bestLap.toFixed(3)}`);
+    if(rec.bestLap) parts.push(isJP?`過去ベスト${fmtLap(rec.bestLap)}`:`prev best ${fmtLap(rec.bestLap)}`);
     if(rec.avgFuel!=null) parts.push(isJP?`平均燃料${rec.avgFuel}L/周`:`avg fuel ${rec.avgFuel}L/lap`);
     if(rec.pitLaneSec!=null) parts.push(isJP?`ピットレーン所要${rec.pitLaneSec}秒`:`pit lane ${rec.pitLaneSec}s`);
     parts.push(isJP?`このコース×車種で${rec.sessions}回目`:`session #${rec.sessions} on this car+track`);
@@ -1788,8 +1799,8 @@ function buildRaceHistoryContext(){
       const ir = s.irating?(isJP?` iR${s.irating}`:` iR${s.irating}`):'';
       const sr = s.sr?(isJP?` SR${s.sr}`:` SR${s.sr}`):'';
       return isJP
-        ?`${s.date} ${car}${s.track}${pos} ベスト${s.bestLap} ${s.totalLaps}周 インシデント${s.incidents}${ir}${sr}`
-        :`${s.date} ${car}${s.track}${pos} best ${s.bestLap} ${s.totalLaps}laps inc ${s.incidents}${ir}${sr}`;
+        ?`${s.date} ${car}${s.track}${pos} ベスト${fmtLap(s.bestLap)} ${s.totalLaps}周 インシデント${s.incidents}${ir}${sr}`
+        :`${s.date} ${car}${s.track}${pos} best ${fmtLap(s.bestLap)} ${s.totalLaps}laps inc ${s.incidents}${ir}${sr}`;
     });
     return rows.join('\n');
   }catch{return '';}
