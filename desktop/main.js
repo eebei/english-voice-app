@@ -2,11 +2,15 @@
 // 最重要設定：backgroundThrottling:false
 //   → iRacingがフルスクリーンで前面に来てウィンドウが裏に回っても、
 //     タイマー・音声・JSが絞られず動き続ける（=ブラウザの「裏で死ぬ」問題の解決）
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, session, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
+const https = require('https');
 const { spawn } = require('child_process');
+
+const LATEST_EXE_URL = 'https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Desktop-latest.exe';
+const RELEASE_API_URL = 'https://api.github.com/repos/eebei/english-voice-app/releases/tags/desktop-latest';
 
 // ★音声の自動再生を常に許可：TTSはfetch後の非同期コールバックで鳴らすため、
 //   デフォルト（ユーザー操作直後のみ許可）だとブロックされ無音になる。
@@ -100,10 +104,68 @@ function createWindow() {
     },
   });
 
+  // 外部リンク（更新通知バナー等）はOSの既定ブラウザで開く。アプリ内に新ウィンドウを作らない。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http')) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
   win.loadFile(path.join(__dirname, 'renderer.html'));
 
   // 開発中はDevToolsを開く（あとで消す）
   // win.webContents.openDevTools();
+}
+
+// ── 軽量アップデート通知（自動インストールはしない。CIが焼き込むbuild-info.jsonの日時 vs GitHub最新版）──
+// electron-updaterのような裏側での自動差し替えではなく、「新しいのがあるよ」とバナーで知らせるだけ。
+// ダウンロード・再起動はユーザーの手動操作（今の配布形式=portableではここが現実的な落とし所）。
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'omoray-pitwall-updatecheck' } }, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function checkForUpdate() {
+  try {
+    const infoPath = path.join(__dirname, 'build-info.json');
+    if (!fs.existsSync(infoPath)) return;
+    const { buildDate } = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
+    if (!buildDate || buildDate === 'dev') return log('update check skipped (dev build)');
+
+    const release = await fetchJson(RELEASE_API_URL);
+    const asset = (release.assets || []).find(a => a.name === 'OMORAY-PITWALL-Desktop-latest.exe');
+    if (!asset || !asset.updated_at) return;
+
+    const local = new Date(buildDate);
+    const remote = new Date(asset.updated_at);
+    if (remote > local) {
+      log('update available: local=' + buildDate + ' remote=' + asset.updated_at);
+      if (win) win.webContents.executeJavaScript(`
+        (function(){
+          if (document.getElementById('omoray-update-banner')) return;
+          var b = document.createElement('div');
+          b.id = 'omoray-update-banner';
+          b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#9D4EDD;color:#fff;' +
+            'font-family:system-ui,sans-serif;font-size:13px;padding:9px 16px;text-align:center;cursor:default';
+          b.innerHTML = '新しいバージョンがあります。 <a href="${LATEST_EXE_URL}" target="_blank" ' +
+            'style="color:#fff;text-decoration:underline;font-weight:bold">今すぐダウンロード →</a>' +
+            ' <span id="omoray-update-dismiss" style="margin-left:14px;cursor:pointer;opacity:.7">✕</span>';
+          document.body.prepend(b);
+          document.getElementById('omoray-update-dismiss').onclick = function(){ b.remove(); };
+        })();
+      `).catch((e) => log('banner inject failed: ' + e.message));
+    } else {
+      log('up to date (local=' + buildDate + ')');
+    }
+  } catch (e) {
+    log('checkForUpdate failed: ' + e.message);
+  }
 }
 
 app.whenReady().then(() => {
@@ -118,6 +180,7 @@ app.whenReady().then(() => {
   } catch (e) {}
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
+  setTimeout(checkForUpdate, 4000);   // 起動直後の輻輳を避けて少し待ってからチェック
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
