@@ -318,6 +318,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Race mode: Haiku (2-3x faster, sufficient for short radio calls)
     const model = (mode === 'race') ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5';
 
+    // 実測コストログ（Railwayログで確認可能。粗利率の実測に使う）
+    const logUsage = (usage) => {
+      if (!usage) return;
+      console.log(`[USAGE] user=${userName || '?'} mode=${mode || '?'} model=${model} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
+    };
+
     // ── ストリーミング：文字が生成された端からクライアントへ流す（体感レスポンス短縮）──
     // クライアントが stream:true を送った時のみ。生成量＝同じなのでコストは増えない。
     // renderer側は文が完成するたびTTS再生するので「流れるような会話」になる。
@@ -325,6 +331,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('X-Accel-Buffering', 'no');  // プロキシのバッファリング無効化（即時flush）
+      let streamUsage = null;
       try {
         const stream = await client.messages.create({
           model, max_tokens: safeMaxTokens, system, messages, stream: true,
@@ -333,8 +340,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta') {
             res.write(event.delta.text);
             if (typeof res.flush === 'function') res.flush();
+          } else if (event.type === 'message_start') {
+            streamUsage = { ...event.message.usage };
+          } else if (event.type === 'message_delta' && event.usage) {
+            streamUsage = { ...streamUsage, output_tokens: event.usage.output_tokens };
           }
         }
+        logUsage(streamUsage);
         res.end();
       } catch (streamErr) {
         console.error('[/api/chat stream ERROR]', streamErr.message);
@@ -351,6 +363,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       messages,
     });
 
+    logUsage(response.usage);
     res.json(response);
   } catch (err) {
     console.error(`[/api/chat ERROR] char=${character}, mode=${mode}`);
