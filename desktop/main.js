@@ -135,17 +135,26 @@ async function checkForUpdate() {
   try {
     const infoPath = path.join(__dirname, 'build-info.json');
     if (!fs.existsSync(infoPath)) return;
-    const { buildDate } = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
-    if (!buildDate || buildDate === 'dev') return log('update check skipped (dev build)');
+    const info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
+    const buildTag = info.buildTag;
+    if (!buildTag || buildTag === 'dev') return log('update check skipped (dev build)');
 
     const release = await fetchJson(RELEASE_API_URL);
-    const asset = (release.assets || []).find(a => a.name === 'OMORAY-PITWALL-Desktop-latest.exe');
-    if (!asset || !asset.updated_at) return;
+    // 最新ビルドのタグを「バージョン付きexe名 (…-YYYYMMDD-HHmm.exe)」から取得して、自分のタグと比較する。
+    // ⚠️latest.exe の updated_at(アップロード時刻)はビルド時刻より必ず後になるため、時刻比較だと
+    //    最新版exeでも毎回「古い」と誤判定して無限ループになる。だから“タグ同士”で厳密比較する。
+    const re = /OMORAY-PITWALL-Desktop-(\d{8}-\d{4})\.exe$/;
+    let latestTag = null;
+    for (const a of (release.assets || [])) {
+      const m = a && a.name && a.name.match(re);
+      if (m && (!latestTag || m[1] > latestTag)) latestTag = m[1];
+    }
+    if (!latestTag) return log('update check: no versioned asset found');
 
-    const local = new Date(buildDate);
-    const remote = new Date(asset.updated_at);
-    if (remote > local) {
-      log('update required (blocking): local=' + buildDate + ' remote=' + asset.updated_at);
+    const localN = parseInt(buildTag.replace('-', ''), 10);
+    const remoteN = parseInt(latestTag.replace('-', ''), 10);
+    if (remoteN > localN) {
+      log('update required (blocking): local=' + buildTag + ' remote=' + latestTag);
       // 閉じるボタンなし＝強制ゲート。理由：PITWALLはテレメトリ解釈がバージョン依存なので、
       // 古いクライアントのまま使うと燃料/ギャップ等を「静かに」誤読するリスクがある（＝捏造と同じ害）。
       // iRacing自体が採用してる「更新しないと入れない」方式に合わせる。
@@ -171,7 +180,7 @@ async function checkForUpdate() {
         })();
       `).catch((e) => log('update gate inject failed: ' + e.message));
     } else {
-      log('up to date (local=' + buildDate + ')');
+      log('up to date (local=' + buildTag + ')');
     }
   } catch (e) {
     log('checkForUpdate failed: ' + e.message);

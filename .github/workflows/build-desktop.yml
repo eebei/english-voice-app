@@ -38,10 +38,15 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Set build date
+        id: date
+        run: echo "DATE=$(Get-Date -Format 'yyyyMMdd-HHmm')" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
       - name: Write build-info.json (for in-app update check)
         run: |
           $iso = Get-Date -Format 'o'
-          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`"}"
+          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"${{ steps.date.outputs.DATE }}`"}"
         shell: pwsh
 
       - name: Install & build Electron app
@@ -49,11 +54,6 @@ jobs:
         run: |
           npm install
           npm run dist
-
-      - name: Set build date
-        id: date
-        run: echo "DATE=$(Get-Date -Format 'yyyyMMdd-HHmm')" >> $env:GITHUB_OUTPUT
-        shell: pwsh
 
       - name: Rename for release
         run: |
