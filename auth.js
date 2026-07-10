@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 const crypto = require('crypto');
 
-let Pool, nodemailer, jwt;
+let Pool, nodemailer, jwt, stripe;
 try {
   ({ Pool } = require('pg'));
   nodemailer = require('nodemailer');
@@ -14,6 +14,12 @@ try {
 } catch (e) {
   console.warn('[auth] optional deps not installed yet:', e.message);
 }
+try {
+  const StripeLib = require('stripe');
+  if (process.env.STRIPE_SECRET_KEY) stripe = new StripeLib(process.env.STRIPE_SECRET_KEY);
+} catch (e) { console.warn('[auth] stripe lib not installed:', e.message); }
+// Founding会員の個人紹介コードが指す先の共通クーポン（100% off・1回のみ・Stripeダッシュボードで事前作成）。
+const REFERRAL_BASE_COUPON = process.env.REFERRAL_BASE_COUPON || 'REFERRED_1MONTH_FREE';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -63,9 +69,12 @@ async function init() {
       stripe_customer_id TEXT,
       subscription_status TEXT,                       -- 'active' | 'canceled' | null
       display_name  TEXT,
-      leaderboard_opt_in BOOLEAN NOT NULL DEFAULT false  -- 将来のランキング/速報ページにニックネーム表示を許可するか（明示同意）
+      leaderboard_opt_in BOOLEAN NOT NULL DEFAULT false,  -- 将来のランキング/速報ページにニックネーム表示を許可するか（明示同意）
+      referral_code TEXT UNIQUE                          -- Founding会員専用の個人紹介コード（Stripe Promotion Codeと1:1）
     );
   `);
+  // 既存DBへの追加カラム（テーブルは既に存在するため IF NOT EXISTS の CREATE TABLE では追加されない）
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS login_tokens (
       token       TEXT PRIMARY KEY,
@@ -290,14 +299,68 @@ async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscription
   return { ...rows[0], justActivated: !wasMember };
 }
 
+// Founding会員だけの個人紹介コードを発行（例: REF-A1B2C3）し、DB保存＋Stripeの
+// Promotion Codeを作成する。既に発行済みならそれを再利用する（べき等・再送/再実行対応）。
+// 失敗してもwelcomeメール自体は止めない（ベストエフォート＝紹介特典はおまけ機能）。
+async function ensureReferralCode(email) {
+  if (!ready) return null;
+  const { rows } = await pool.query('SELECT id, referral_code FROM users WHERE email = $1', [email]);
+  const user = rows[0];
+  if (!user) return null;
+  if (user.referral_code) return user.referral_code;
+  if (!stripe) { log('referral code skipped (Stripe not configured) for ' + email); return null; }
+
+  // 短く読みやすいコード（紛らわしい文字0/O/1/Iは除外）。衝突したら数回だけ振り直す。
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const genCode = () => 'REF-' + Array.from({ length: 6 }, () => ALPHABET[crypto.randomInt(ALPHABET.length)]).join('');
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = genCode();
+    try {
+      await stripe.promotionCodes.create({ coupon: REFERRAL_BASE_COUPON, code });
+      await pool.query('UPDATE users SET referral_code = $1 WHERE id = $2', [code, user.id]);
+      log('referral code created: ' + email + ' -> ' + code);
+      return code;
+    } catch (e) {
+      // resource_already_exists = コード重複（激レア）→ 振り直す。それ以外（クーポン未作成等）は諦める。
+      if (e && e.code === 'resource_already_exists') continue;
+      log('referral code creation failed for ' + email + ': ' + (e && e.message || e));
+      return null;
+    }
+  }
+  log('referral code creation gave up after retries for ' + email);
+  return null;
+}
+
 // 会員化直後のウェルカムメール（justActivated===trueの時だけ呼ぶこと）
-async function sendWelcomeEmail(rawEmail) {
+// plan==='founding' の時だけ、Founding限定の個人紹介コードを発行してメールに添える。
+async function sendWelcomeEmail(rawEmail, plan) {
   const email = normalizeEmail(rawEmail);
   const welcomeUrl = `${BASE_URL}/welcome.html`;
   if (!mailer) {
     console.warn('[auth] (no mailer) welcome email for', email, '->', welcomeUrl);
     return { sent: false };
   }
+
+  let referralCode = null;
+  if (plan === 'founding') {
+    try { referralCode = await ensureReferralCode(email); }
+    catch (e) { log('ensureReferralCode threw for ' + email + ': ' + e.message); }
+  }
+
+  const referralText = referralCode
+    ? `\n\nあなただけの紹介コード（Founding限定・永続特典）: ${referralCode}\n` +
+      `友達に渡すと初月無料。あなたは1人紹介ごとに翌月33% OFF、3人で1ヶ月無料になります。\n\n` +
+      `Your personal referral code (Founding-only, yours to keep): ${referralCode}\n` +
+      `Give it to friends — their first month is free. You get 33% off your next month per friend, 100% off at 3.\n`
+    : '';
+  const referralHtml = referralCode
+    ? `<div style="margin-top:20px;padding:16px 18px;border:1px dashed #9D4EDD;border-radius:10px;background:#f9f5ff">
+        <p style="margin:0 0 8px;font-weight:bold;color:#333">Your referral code (Founding-only perk): <span style="color:#9D4EDD">${referralCode}</span></p>
+        <p style="margin:0;font-size:13px;color:#666">Give it to friends — their first month is free. You get 33% off your next month per friend (100% off at 3). あなたの紹介コード（Founding限定）。友達に渡すと初月無料、あなたも1人ごとに翌月33%OFF。</p>
+      </div>`
+    : '';
+
   await sendEmail({
     to: email,
     subject: 'Welcome to OMORAY PITWALL — Founding Season',
@@ -305,7 +368,8 @@ async function sendWelcomeEmail(rawEmail) {
       `お支払いありがとうございます。Founding Seasonへようこそ！\n` +
       `セットアップはこちら: ${welcomeUrl}\n\n` +
       `Thanks for subscribing — welcome to the Founding Season!\n` +
-      `Get set up here: ${welcomeUrl}`,
+      `Get set up here: ${welcomeUrl}` +
+      referralText,
     html:
       `<div style="font-family:system-ui,sans-serif;max-width:480px">
         <h2 style="color:#9D4EDD">Welcome to OMORAY PITWALL</h2>
@@ -314,9 +378,10 @@ async function sendWelcomeEmail(rawEmail) {
         <p><a href="${welcomeUrl}" style="display:inline-block;background:#9D4EDD;color:#fff;
            padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Get Set Up →</a></p>
         <p style="color:#888;font-size:12px">${welcomeUrl}</p>
+        ${referralHtml}
       </div>`,
   });
-  return { sent: true };
+  return { sent: true, referralCode };
 }
 
 // 管理者による強制遮断／復帰（Stripe解約を待たず即座にis_memberを操作。悪質ユーザー対応用）

@@ -82,7 +82,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       // ウェルカムメールは新規会員化の時だけ（Stripeのwebhook再送で二重送信しないためのガード）。
       // 失敗してもwebhook自体は成功扱いにする（会員化は既に完了しているため、Stripeに再送させない）。
       if (result.justActivated) {
-        auth.sendWelcomeEmail(email).catch((e) => console.error('[stripe] welcome email failed:', e.message));
+        auth.sendWelcomeEmail(email, result.plan).catch((e) => console.error('[stripe] welcome email failed:', e.message));
       }
     } else if (event.type === 'customer.subscription.deleted') {
       await auth.unsetMemberByCustomer(event.data.object.customer, 'canceled');
