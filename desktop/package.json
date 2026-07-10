@@ -33,7 +33,7 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "OP-icon.png"
+      "icon": "app-icon.png"
     },
     "portable": {
       "artifactName": "OMORAY-PITWALL-Desktop-${version}.exe"
