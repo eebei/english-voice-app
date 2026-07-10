@@ -168,14 +168,14 @@ async function checkForUpdate() {
             'justify-content:center;text-align:center;padding:40px';
           g.innerHTML =
             '<div style="font-size:15px;letter-spacing:2px;color:#9D4EDD;font-weight:700;margin-bottom:14px">UPDATE REQUIRED</div>' +
-            '<div style="font-size:20px;font-weight:700;margin-bottom:10px">新しいバージョンが必要です</div>' +
-            '<div style="font-size:14px;color:#aaa;max-width:420px;margin-bottom:26px;line-height:1.6">' +
-            '古いバージョンのままだと、燃料やギャップなどのテレメトリを正しく読めない場合があります。' +
-            '更新してから使ってください。</div>' +
+            '<div style="font-size:20px;font-weight:700;margin-bottom:10px">A new version is required</div>' +
+            '<div style="font-size:14px;color:#aaa;max-width:440px;margin-bottom:26px;line-height:1.6">' +
+            'An older build may misread telemetry like fuel and gaps. Please update before you drive.' +
+            '<br><span style="color:#777;font-size:13px">古いバージョンのままだと燃料・ギャップ等を正しく読めない場合があります。更新してからご利用ください。</span></div>' +
             '<a href="${LATEST_EXE_URL}" target="_blank" style="display:inline-block;background:#9D4EDD;color:#fff;' +
             'font-weight:700;padding:14px 32px;border-radius:10px;text-decoration:none;font-size:15px">' +
-            '⬇ 最新版をダウンロード</a>' +
-            '<div style="font-size:12px;color:#666;margin-top:20px">ダウンロード後、このアプリを閉じて新しいexeを起動してください。</div>';
+            '⬇ Download the latest version</a>' +
+            '<div style="font-size:12px;color:#666;margin-top:20px">After downloading, close this app and launch the new .exe. ／ DL後、このアプリを閉じて新しいexeを起動してください。</div>';
           document.body.appendChild(g);
         })();
       `).catch((e) => log('update gate inject failed: ' + e.message));

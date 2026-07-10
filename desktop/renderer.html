@@ -196,43 +196,47 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 </head>
 <body>
 
+<!-- ═══ UI言語トグル（右上・英日切替。他言語の国旗を表示） ═══ -->
+<button id="lang-toggle-btn" onclick="toggleLang()" title="Language / 言語"
+  style="position:fixed;top:12px;right:12px;z-index:100000;width:40px;height:40px;border-radius:10px;border:1px solid #333;background:rgba(20,20,28,.85);color:#fff;font-size:19px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0">🇯🇵</button>
+
 <!-- ═══ ベータ・アクセスコード ゲート（八木さん・Tobi等の限定配布） ═══ -->
 <div id="beta-gate" style="position:fixed;inset:0;z-index:99999;background:#0a0a0f;display:none;align-items:center;justify-content:center;padding:24px">
   <div style="max-width:420px;width:100%;text-align:center">
     <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:56px;margin-bottom:28px">
-    <div style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">アクセスコード</div>
-    <div id="beta-gate-sub" style="font-size:14px;color:#9aa;margin-bottom:24px;line-height:1.6">
-      Yujiから受け取ったコードを入力してください。<br>このコードはあなた専用です。
+    <div data-i18n="gate_title" style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">アクセスコード</div>
+    <div id="beta-gate-sub" data-i18n="gate_sub" style="font-size:14px;color:#9aa;margin-bottom:24px;line-height:1.6">
+      Yujiから受け取ったコードを入力してください。このコードはあなた専用です。
     </div>
     <input id="beta-code-input" type="text" placeholder="PITWALL-XXXX-XXXX" autocomplete="off"
       style="width:100%;padding:14px 16px;font-size:16px;text-align:center;letter-spacing:1px;border-radius:12px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:16px;text-transform:uppercase"
       onkeydown="if(event.key==='Enter')submitBetaCode()">
-    <button id="beta-code-btn" onclick="submitBetaCode()"
+    <button id="beta-code-btn" data-i18n="gate_verify_btn" onclick="submitBetaCode()"
       style="width:100%;padding:14px;font-size:16px;font-weight:700;border:none;border-radius:12px;background:linear-gradient(135deg,#9D4EDD,#6a2fb5);color:#fff;cursor:pointer">
       認証する
     </button>
     <div id="beta-gate-msg" style="font-size:13px;margin-top:16px;min-height:18px;color:#f66"></div>
 
     <div style="margin-top:24px;padding-top:20px;border-top:1px solid #222">
-      <a href="#" onclick="toggleLoginPanel();return false" id="login-toggle-link" style="font-size:13px;color:#9aa">アクセスコードをお持ちでない方はこちら（会員ログイン）</a>
+      <a href="#" onclick="toggleLoginPanel();return false" id="login-toggle-link" data-i18n="gate_no_code_link" style="font-size:13px;color:#9aa">アクセスコードをお持ちでない方はこちら（会員ログイン）</a>
     </div>
 
     <div id="login-panel" style="display:none;margin-top:16px;text-align:left">
       <div id="login-step-email">
-        <div style="font-size:13px;color:#9aa;margin-bottom:10px">メールアドレスを入力してください。ログインリンクを送ります。</div>
+        <div data-i18n="login_email_prompt" style="font-size:13px;color:#9aa;margin-bottom:10px">メールアドレスを入力してください。ログインリンクを送ります。</div>
         <input id="login-email-input" type="email" placeholder="you@example.com" autocomplete="off"
           style="width:100%;padding:12px 14px;font-size:14px;border-radius:10px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:10px">
-        <button id="login-send-btn" onclick="sendLoginLink()"
+        <button id="login-send-btn" data-i18n="login_send_btn" onclick="sendLoginLink()"
           style="width:100%;padding:12px;font-size:14px;font-weight:700;border:none;border-radius:10px;background:#2a2a35;color:#fff;cursor:pointer">
           ログインリンクを送信
         </button>
         <div id="login-email-msg" style="font-size:12px;margin-top:10px;min-height:16px;color:#f66"></div>
       </div>
       <div id="login-step-token" style="display:none">
-        <div style="font-size:13px;color:#9aa;margin-bottom:10px">メール内のリンクを開くと、貼り付け用のコードが表示されます。ここに貼り付けてください。</div>
-        <textarea id="login-token-input" placeholder="ここにコードを貼り付け"
+        <div data-i18n="login_token_prompt" style="font-size:13px;color:#9aa;margin-bottom:10px">メール内のリンクを開くと、貼り付け用のコードが表示されます。ここに貼り付けてください。</div>
+        <textarea id="login-token-input" data-i18n-ph="ph_login_token" placeholder="ここにコードを貼り付け"
           style="width:100%;height:70px;padding:12px 14px;font-size:12px;border-radius:10px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:10px"></textarea>
-        <button id="login-verify-btn" onclick="verifyLoginToken()"
+        <button id="login-verify-btn" data-i18n="login_verify_btn" onclick="verifyLoginToken()"
           style="width:100%;padding:12px;font-size:14px;font-weight:700;border:none;border-radius:10px;background:linear-gradient(135deg,#9D4EDD,#6a2fb5);color:#fff;cursor:pointer">
           ログイン
         </button>
@@ -246,17 +250,17 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <div id="nickname-gate" style="position:fixed;inset:0;z-index:99999;background:#0a0a0f;display:none;align-items:center;justify-content:center;padding:24px">
   <div style="max-width:420px;width:100%;text-align:center">
     <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:56px;margin-bottom:28px">
-    <div style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">呼び名を教えてください</div>
-    <div style="font-size:13px;color:#9aa;margin-bottom:24px;line-height:1.6">
-      エンジニアがあなたを呼ぶ時の名前です（本名でなくてOK）。<br>アカウントの識別には使われません。
+    <div data-i18n="nick_title" style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">呼び名を教えてください</div>
+    <div data-i18n="nick_sub" style="font-size:13px;color:#9aa;margin-bottom:24px;line-height:1.6">
+      エンジニアがあなたを呼ぶ時の名前です（本名でなくてOK）。アカウントの識別には使われません。
     </div>
     <input id="nickname-input" type="text" placeholder="Yuji" autocomplete="off"
       style="width:100%;padding:14px 16px;font-size:16px;text-align:center;border-radius:12px;border:1px solid #333;background:#15151c;color:#fff;margin-bottom:16px">
     <label style="display:flex;align-items:flex-start;gap:10px;text-align:left;font-size:12px;color:#9aa;margin-bottom:20px;cursor:pointer">
       <input id="leaderboard-optin" type="checkbox" style="margin-top:2px">
-      <span>将来PITWALLでランキングやレース速報の公開ページを作る際、このニックネームを表示することを許可します（いつでも変更可能）</span>
+      <span data-i18n="nick_optin">将来PITWALLでランキングやレース速報の公開ページを作る際、このニックネームを表示することを許可します（いつでも変更可能）</span>
     </label>
-    <button id="nickname-save-btn" onclick="saveNickname()"
+    <button id="nickname-save-btn" data-i18n="nick_save_btn" onclick="saveNickname()"
       style="width:100%;padding:14px;font-size:16px;font-weight:700;border:none;border-radius:12px;background:linear-gradient(135deg,#9D4EDD,#6a2fb5);color:#fff;cursor:pointer">
       始める
     </button>
@@ -437,53 +441,53 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         <img src="PITWALL_logo_mark.png" alt="OMORAY" style="width:auto;height:48px;border-radius:0">
         <span>OMORAY <span class="blue">PITWALL</span></span>
       </div>
-      <button class="btn-close" onclick="closeApp()">← Back</button>
+      <button class="btn-close" data-i18n="back_btn" onclick="closeApp()">← Back</button>
     </div>
 
     <!-- SCREEN ①: Setup（走行前の設定・確実に先に） -->
     <div id="screen-setup" class="app-screen active">
-      <div class="field-label" style="color:var(--blue)">① 走行前の設定</div>
-      <div class="field-label" style="margin-top:14px">ドライバー名</div>
-      <input class="field-input" id="user-name-input" type="text" placeholder="Your name" oninput="onNameInput()" maxlength="30" style="margin-bottom:20px">
-      <div class="field-label">コントローラー設定</div>
+      <div class="field-label" data-i18n="setup_step1" style="color:var(--blue)">① 走行前の設定</div>
+      <div class="field-label" data-i18n="setup_driver_name" style="margin-top:14px">ドライバー名</div>
+      <input class="field-input" id="user-name-input" type="text" data-i18n-ph="ph_user_name" placeholder="Your name" oninput="onNameInput()" maxlength="30" style="margin-bottom:20px">
+      <div class="field-label" data-i18n="setup_controller">コントローラー設定</div>
       <div class="setup-row">
-        <div class="setup-lbl">PTT（話すボタン）</div>
-        <button class="voice-tog flash" id="ptt-btn" onclick="setupPTT()" title="ステアリングのボタン/スイッチをPTTに割り当て">スイッチ設定</button>
+        <div class="setup-lbl" data-i18n="setup_ptt_label">PTT（話すボタン）</div>
+        <button class="voice-tog flash" id="ptt-btn" onclick="setupPTT()" data-i18n-title="tip_ptt" title="ステアリングのボタン/スイッチをPTTに割り当て">スイッチ設定</button>
       </div>
       <div class="setup-row">
-        <div class="setup-lbl">音量ダイヤル（任意）</div>
+        <div class="setup-lbl" data-i18n="setup_vol_label">音量ダイヤル（任意）</div>
         <div style="display:flex;gap:8px">
-          <button class="voice-tog" id="vol-dn-btn" onclick="setupVol('down')" title="ステアリングのボタン/ダイヤルを音量↓に割当">小 設定</button>
-          <button class="voice-tog" id="vol-up-btn" onclick="setupVol('up')" title="ステアリングのボタン/ダイヤルを音量↑に割当">大 設定</button>
+          <button class="voice-tog" id="vol-dn-btn" onclick="setupVol('down')" data-i18n-title="tip_vol_dn" title="ステアリングのボタン/ダイヤルを音量↓に割当">小 設定</button>
+          <button class="voice-tog" id="vol-up-btn" onclick="setupVol('up')" data-i18n-title="tip_vol_up" title="ステアリングのボタン/ダイヤルを音量↑に割当">大 設定</button>
         </div>
       </div>
-      <div class="setup-hint">紫に光ってたらステアリングのボタンを1回押して割当。「PTT: B〇」と番号が出れば設定済み。音量ダイヤルは任意。</div>
-      <button class="start-btn" id="btn-setup-next" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
+      <div class="setup-hint" data-i18n="setup_hint">紫に光ってたらステアリングのボタンを1回押して割当。「PTT: B〇」と番号が出れば設定済み。音量ダイヤルは任意。</div>
+      <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
     </div>
 
     <!-- SCREEN ④: Select Engineer（楽しみは最後） -->
     <div id="screen-select" class="app-screen">
       <div id="profile-banner" class="profile-banner" style="display:none;margin-bottom:16px"></div>
-      <div class="field-label">エンジニアを選ぶ</div>
+      <div class="field-label" data-i18n="select_title">エンジニアを選ぶ</div>
       <div class="eng-select-grid">
         <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
           <img src="James.png" alt="James">
           <div class="einfo">
             <div class="ename">James</div>
-            <div class="erole">Chief Engineer</div>
-            <div class="elang">🇬🇧 English</div>
-            <div class="etrait">冷静・データ重視のチーフ。ブレない司令塔。</div>
+            <div class="erole" data-i18n="role_chief_engineer">Chief Engineer</div>
+            <div class="elang" data-i18n="lang_james">🇬🇧 English</div>
+            <div class="etrait" data-i18n="trait_james">冷静・データ重視のチーフ。ブレない司令塔。</div>
           </div>
         </div>
         <div class="eng-sel-card" id="card-Luna" onclick="selectEng('Luna')">
           <img src="Luna.png" alt="Luna">
           <div class="einfo">
             <div class="ename">Luna</div>
-            <div class="erole">Race Engineer</div>
-            <div class="elang">静かな観察眼。心理とデータ、両方を読む。</div>
+            <div class="erole" data-i18n="role_race_engineer">Race Engineer</div>
+            <div class="elang" data-i18n="trait_luna">静かな観察眼。心理とデータ、両方を読む。</div>
             <div class="lang-toggle">
-              <button class="lang-pill" id="langpill-Luna-en" onclick="event.stopPropagation();selectEng('Luna')">🇬🇧 English</button>
-              <button class="lang-pill" id="langpill-Luna-jp" onclick="event.stopPropagation();selectEng('LunaJP')">🇯🇵 日本語</button>
+              <button class="lang-pill" id="langpill-Luna-en" data-i18n="pill_en" onclick="event.stopPropagation();selectEng('Luna')">🇬🇧 English</button>
+              <button class="lang-pill" id="langpill-Luna-jp" data-i18n="pill_jp" onclick="event.stopPropagation();selectEng('LunaJP')">🇯🇵 日本語</button>
             </div>
           </div>
         </div>
@@ -491,11 +495,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <img src="Hajime.png" alt="Hajime">
           <div class="einfo">
             <div class="ename">Hajime</div>
-            <div class="erole">Race Engineer</div>
-            <div class="elang">氷と炎。要点だけを、鋭く。単身で結果を出してきた侍。</div>
+            <div class="erole" data-i18n="role_race_engineer">Race Engineer</div>
+            <div class="elang" data-i18n="trait_hajime">氷と炎。要点だけを、鋭く。単身で結果を出してきた侍。</div>
             <div class="lang-toggle">
-              <button class="lang-pill" id="langpill-Hajime-en" onclick="event.stopPropagation();selectEng('Hajime')">🇬🇧 English</button>
-              <button class="lang-pill" id="langpill-Hajime-jp" onclick="event.stopPropagation();selectEng('HajimeJP')">🇯🇵 日本語</button>
+              <button class="lang-pill" id="langpill-Hajime-en" data-i18n="pill_en" onclick="event.stopPropagation();selectEng('Hajime')">🇬🇧 English</button>
+              <button class="lang-pill" id="langpill-Hajime-jp" data-i18n="pill_jp" onclick="event.stopPropagation();selectEng('HajimeJP')">🇯🇵 日本語</button>
             </div>
           </div>
         </div>
@@ -503,56 +507,56 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <img src="Kanbe.png" alt="Kanbe">
           <div class="einfo">
             <div class="ename">官兵衛</div>
-            <div class="erole">チーフエンジニア</div>
-            <div class="elang">🇯🇵 岡山弁</div>
-            <div class="etrait">熱と知略。岡山弁の軍師。</div>
+            <div class="erole" data-i18n="role_chief_engineer">チーフエンジニア</div>
+            <div class="elang" data-i18n="lang_kanbe">🇯🇵 岡山弁</div>
+            <div class="etrait" data-i18n="trait_kanbe">熱と知略。岡山弁の軍師。</div>
           </div>
         </div>
         <div class="eng-sel-card" id="card-Oishi" onclick="selectEng('Oishi')">
           <img src="Oishi.png" alt="Oishi">
           <div class="einfo">
             <div class="ename">大石</div>
-            <div class="erole">チーフストラテジスト</div>
-            <div class="elang">🇯🇵 標準語</div>
-            <div class="etrait">静かな策士。大局を見る武士。</div>
+            <div class="erole" data-i18n="role_chief_strategist">チーフストラテジスト</div>
+            <div class="elang" data-i18n="lang_oishi">🇯🇵 標準語</div>
+            <div class="etrait" data-i18n="trait_oishi">静かな策士。大局を見る武士。</div>
           </div>
         </div>
         <div class="eng-sel-card" id="card-Matthias" onclick="selectEng('Matthias')">
           <img src="Matthias.png" alt="Matthias">
           <div class="einfo">
             <div class="ename">Matthias</div>
-            <div class="erole">Race Engineer</div>
-            <div class="elang">🇩🇪 Deutsch</div>
-            <div class="etrait">直接的・プロセス重視。ドイツ流の精密さ。</div>
+            <div class="erole" data-i18n="role_race_engineer">Race Engineer</div>
+            <div class="elang" data-i18n="lang_matthias">🇩🇪 Deutsch</div>
+            <div class="etrait" data-i18n="trait_matthias">直接的・プロセス重視。ドイツ流の精密さ。</div>
           </div>
         </div>
       </div>
-      <button class="start-btn" id="btn-next" disabled onclick="startSession()">セッション開始 →</button>
-      <button class="btn-close" onclick="showScreen('screen-mode')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
+      <button class="start-btn" id="btn-next" data-i18n="session_start_btn" disabled onclick="startSession()">セッション開始 →</button>
+      <button class="btn-close" data-i18n="back_btn" onclick="showScreen('screen-mode')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
     </div>
 
     <!-- SCREEN ③: Mode Select -->
     <div id="screen-mode" class="app-screen">
-      <div class="field-label" id="mode-label">モードを選択</div>
+      <div class="field-label" id="mode-label" data-i18n="mode_select_label">モードを選択</div>
       <div class="mode-grid">
         <div class="mode-btn" id="mode-strategy" onclick="selectMode('strategy')">
           <div class="micon">🗺️</div>
-          <div class="mtitle" id="mode-strategy-title">Strategy / 戦略</div>
-          <div class="mdesc" id="mode-strategy-desc">レース前の作戦相談</div>
+          <div class="mtitle" id="mode-strategy-title" data-i18n="mode_strategy_title">Strategy</div>
+          <div class="mdesc" id="mode-strategy-desc" data-i18n="mode_strategy_desc">レース前の作戦相談</div>
         </div>
         <div class="mode-btn" id="mode-race" onclick="selectMode('race')">
           <div class="micon">🏎️</div>
-          <div class="mtitle" id="mode-race-title">Race Mode / レース</div>
-          <div class="mdesc" id="mode-race-desc">走行中のリアルタイム無線</div>
+          <div class="mtitle" id="mode-race-title" data-i18n="mode_race_title">Race Mode</div>
+          <div class="mdesc" id="mode-race-desc" data-i18n="mode_race_desc">走行中のリアルタイム無線</div>
         </div>
         <div class="mode-btn" id="mode-debrief" onclick="selectMode('debrief')">
           <div class="micon">📋</div>
-          <div class="mtitle" id="mode-debrief-title">Debrief / デブリーフ</div>
-          <div class="mdesc" id="mode-debrief-desc">セッション後の分析</div>
+          <div class="mtitle" id="mode-debrief-title" data-i18n="mode_debrief_title">Debrief</div>
+          <div class="mdesc" id="mode-debrief-desc" data-i18n="mode_debrief_desc">セッション後の分析</div>
         </div>
       </div>
-      <button class="start-btn" id="btn-start-session" disabled onclick="goToEngineer()">次へ →</button>
-      <button class="btn-close" onclick="showScreen('screen-setup')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
+      <button class="start-btn" id="btn-start-session" data-i18n="next_btn" disabled onclick="goToEngineer()">次へ →</button>
+      <button class="btn-close" data-i18n="back_btn" onclick="showScreen('screen-setup')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
     </div>
 
     <!-- SCREEN: Chat -->
@@ -563,10 +567,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="chat-name" id="chat-name"></div>
           <div class="chat-desc" id="chat-desc"></div>
           <div class="chat-header-top">
-            <button class="back-btn" onclick="endSession()">End Session</button>
+            <button class="back-btn" data-i18n="end_session_btn" onclick="endSession()">End Session</button>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="voice-tog on" id="voice-tog" onclick="toggleVoice()">🔊 Voice</button>
-              <div style="display:flex;align-items:center;gap:6px" title="エンジニアの音量">
+              <button class="voice-tog on" id="voice-tog" data-i18n="voice_on" onclick="toggleVoice()">🔊 Voice</button>
+              <div style="display:flex;align-items:center;gap:6px" data-i18n-title="tip_engine_vol" title="エンジニアの音量">
                 <span id="vol-icon" style="font-size:14px">🔊</span>
                 <input type="range" id="vol-slider" min="0" max="100" value="100" oninput="onVolume(this.value)"
                   style="width:90px;accent-color:#9D4EDD;cursor:pointer">
@@ -576,10 +580,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         </div>
       </div>
       <div class="chat-area" id="chat-area"></div>
-      <div class="busy-indicator" id="busy-ind">Engineer thinking…</div>
+      <div class="busy-indicator" id="busy-ind" data-i18n="busy">Engineer thinking…</div>
       <div class="input-row">
-        <textarea class="chat-input" id="chat-input" placeholder="Talk to your engineer…" rows="1" onkeydown="onKey(event)" oninput="autoResize(this)"></textarea>
-        <button class="mic-btn" id="mic-btn" onclick="toggleMic()" title="クリックで話す（マイク）">🎤</button>
+        <textarea class="chat-input" id="chat-input" data-i18n-ph="ph_chat_input" placeholder="Talk to your engineer…" rows="1" onkeydown="onKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="mic-btn" id="mic-btn" onclick="toggleMic()" data-i18n-title="tip_mic" title="クリックで話す（マイク）">🎤</button>
         <button class="send-btn" onclick="sendMsg()">↑</button>
       </div>
       <div class="hint-text" id="hint-text"></div>
@@ -590,6 +594,257 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 const API_BASE = 'https://english-voice-app-production.up.railway.app';
+
+// ══════════════════════════════════════════════════════════════
+// UI i18n（UIクロームの英日切替。デフォルト=英語。エンジニアの発話は別軸で不変）
+//   ※エンジニアの無線/デブリーフ等の"喋る"テキストはここでは扱わない（選んだエンジニアの言語で動く）。
+// ══════════════════════════════════════════════════════════════
+const I18N = {
+  en: {
+    // ── Beta / access-code gate ──
+    gate_title:'Access Code',
+    gate_sub:"Enter the code Yuji gave you. It's tied to your account.",
+    gate_verify_btn:'Verify',
+    gate_no_code_link:'No access code? Sign in as a member',
+    login_email_prompt:"Enter your email and we'll send you a login link.",
+    login_send_btn:'Send login link',
+    login_token_prompt:'Open the link in the email to get a paste code, then paste it here.',
+    login_verify_btn:'Log in',
+    ph_login_token:'Paste your code here',
+    // ── Nickname gate ──
+    nick_title:'What should we call you?',
+    nick_sub:"This is what your engineer calls you (a nickname is fine). It isn't used to identify your account.",
+    nick_optin:'Allow PITWALL to show this nickname if we later add public leaderboards or race-results pages (changeable anytime).',
+    nick_save_btn:'Get started',
+    // ── Setup screen ──
+    setup_step1:'① Pre-Session Setup',
+    setup_driver_name:'Driver name',
+    ph_user_name:'Your name',
+    setup_controller:'Controller Setup',
+    setup_ptt_label:'PTT (Push-to-Talk)',
+    setup_ptt_btn:'Set switch',
+    setup_vol_label:'Volume dial (optional)',
+    vol_up_set:'Vol + set',
+    vol_down_set:'Vol − set',
+    vol_up_label:'Vol+',
+    vol_down_label:'Vol−',
+    setup_hint:'When it glows purple, press a wheel button once to bind it. "PTT: B○" with a number means it\'s set. The volume dial is optional.',
+    next_btn:'Next →',
+    // ── Engineer select ──
+    select_title:'Choose Your Engineer',
+    role_chief_engineer:'Chief Engineer',
+    role_race_engineer:'Race Engineer',
+    role_chief_strategist:'Chief Strategist',
+    trait_james:'Cool, data-driven chief. An unshakable command center.',
+    trait_luna:'A quiet eye. Reads both the driver and the data.',
+    trait_hajime:'Ice and fire. Just the essentials, sharp. A samurai who delivered on his own.',
+    trait_kanbe:'Heat and cunning. A strategist who talks in Okayama dialect.',
+    trait_oishi:'A quiet tactician. A samurai who reads the big picture.',
+    trait_matthias:'Direct and process-driven. German precision.',
+    lang_james:'🇬🇧 English',
+    lang_kanbe:'🇯🇵 Okayama dialect',
+    lang_oishi:'🇯🇵 Japanese',
+    lang_matthias:'🇩🇪 German',
+    pill_en:'🇬🇧 English',
+    pill_jp:'🇯🇵 Japanese',
+    session_start_btn:'Start Session →',
+    back_btn:'← Back',
+    end_session_btn:'End Session',
+    // ── Mode select ──
+    mode_select_label:'Select Mode',
+    mode_strategy_title:'Strategy',
+    mode_strategy_desc:'Pre-race strategy briefing',
+    mode_race_title:'Race Mode',
+    mode_race_desc:'Live radio during your race',
+    mode_debrief_title:'Debrief',
+    mode_debrief_desc:'Post-session analysis',
+    // ── Chat ──
+    voice_on:'🔊 Voice',
+    voice_off:'🔇 Muted',
+    ph_chat_input:'Talk to your engineer…',
+    busy:'Engineer thinking…',
+    // ── Tooltips ──
+    tip_ptt:'Bind a wheel button/switch to PTT',
+    tip_vol_dn:'Bind a wheel button/dial to volume down',
+    tip_vol_up:'Bind a wheel button/dial to volume up',
+    tip_engine_vol:'Engineer volume',
+    tip_mic:'Click to talk (mic)',
+    // ── JS: transient button labels ──
+    verifying:'Verifying…',
+    sending:'Sending…',
+    saving:'Saving…',
+    welcome_prefix:'Welcome, ',
+    welcome_suffix:'.',
+    // ── JS: error / status ──
+    err_enter_code:'Please enter a code.',
+    err_not_found:'This code was not found.',
+    err_revoked:'This code is no longer active. Please contact Yuji.',
+    err_network:"Can't reach the server. Check your connection.",
+    err_unavailable:'The auth server is warming up. Please wait and retry.',
+    err_auth_failed:'Authentication failed.',
+    err_valid_email:'Please enter a valid email address.',
+    err_send_failed:'Send failed. Please wait and retry.',
+    err_no_server:"Can't reach the server.",
+    err_paste_code:'Please paste your code.',
+    err_login_failed:'Login failed.',
+    err_code_invalid:'The code is invalid or expired.',
+    err_not_member:'Your account is confirmed, but Founding membership is not set up yet. Please complete the purchase on the website.',
+    err_enter_nick:'Please enter a name.',
+    err_save_failed:'Save failed.',
+    // ── JS: hints ──
+    hint_bridge_off:'⚠ Bridge not connected',
+    hint_bridge_off_retry:'⚠ Bridge not connected. Wait and retry.',
+    hint_vol_bind_up:'🎛 Press the button/dial to bind for volume up…',
+    hint_vol_bind_down:'🎛 Press the button/dial to bind for volume down…',
+    hint_vol_set_up:'✅ Volume up bound: button ',
+    hint_vol_set_down:'✅ Volume down bound: button ',
+    hint_ptt_set_a:'✅ PTT bound: button ',
+    hint_ptt_set_b:' (push to talk)',
+    hint_not_caught:"(didn't catch that)",
+    hint_ptt_press:'🎮 Press the wheel button you want to use now…',
+    hint_ptt_waiting:'⏺ Waiting for button…',
+    hint_recording:'🔴 Recording… (release to send)',
+    sys_ptt_start_fail:'⚠ Bridge PTT start failed: ',
+    hint_transcribing:'… transcribing',
+    sys_ptt_stop_fail:'⚠ Bridge PTT stop failed: ',
+    sys_no_speech:'Speech recognition not supported.',
+    hint_listening:'Listening…',
+    sys_mic_denied:'⚠ Microphone permission denied. Please allow it in your settings.',
+    hint_muted:'🔇 Muted',
+    sys_conn_error:'⚠ Connection error. Try again.',
+    hint_race_on:'Race on — lap readout live',
+    status_live:'🟢 iRacing connected · System live',
+    status_bridge:'🟡 System up · Waiting for iRacing to launch',
+    status_off:'🔴 Connecting… make sure the app is running',
+    hint_go_live:'Tap 🎤 to go LIVE',
+    tip_go_live:'Tap to go LIVE',
+    tip_hold_speak:'Hold to speak',
+    tip_tap_mute:'Tap to mute'
+  },
+  ja: {
+    gate_title:'アクセスコード',
+    gate_sub:'Yujiから受け取ったコードを入力してください。このコードはあなた専用です。',
+    gate_verify_btn:'認証する',
+    gate_no_code_link:'アクセスコードをお持ちでない方はこちら（会員ログイン）',
+    login_email_prompt:'メールアドレスを入力してください。ログインリンクを送ります。',
+    login_send_btn:'ログインリンクを送信',
+    login_token_prompt:'メール内のリンクを開くと、貼り付け用のコードが表示されます。ここに貼り付けてください。',
+    login_verify_btn:'ログイン',
+    ph_login_token:'ここにコードを貼り付け',
+    nick_title:'呼び名を教えてください',
+    nick_sub:'エンジニアがあなたを呼ぶ時の名前です（本名でなくてOK）。アカウントの識別には使われません。',
+    nick_optin:'将来PITWALLでランキングやレース速報の公開ページを作る際、このニックネームを表示することを許可します（いつでも変更可能）',
+    nick_save_btn:'始める',
+    setup_step1:'① 走行前の設定',
+    setup_driver_name:'ドライバー名',
+    ph_user_name:'お名前',
+    setup_controller:'コントローラー設定',
+    setup_ptt_label:'PTT（話すボタン）',
+    setup_ptt_btn:'スイッチ設定',
+    setup_vol_label:'音量ダイヤル（任意）',
+    vol_up_set:'大 設定',
+    vol_down_set:'小 設定',
+    vol_up_label:'大',
+    vol_down_label:'小',
+    setup_hint:'紫に光ってたらステアリングのボタンを1回押して割当。「PTT: B〇」と番号が出れば設定済み。音量ダイヤルは任意。',
+    next_btn:'次へ →',
+    select_title:'エンジニアを選ぶ',
+    role_chief_engineer:'チーフエンジニア',
+    role_race_engineer:'レースエンジニア',
+    role_chief_strategist:'チーフストラテジスト',
+    trait_james:'冷静・データ重視のチーフ。ブレない司令塔。',
+    trait_luna:'静かな観察眼。心理とデータ、両方を読む。',
+    trait_hajime:'氷と炎。要点だけを、鋭く。単身で結果を出してきた侍。',
+    trait_kanbe:'熱と知略。岡山弁の軍師。',
+    trait_oishi:'静かな策士。大局を見る武士。',
+    trait_matthias:'直接的・プロセス重視。ドイツ流の精密さ。',
+    lang_james:'🇬🇧 English',
+    lang_kanbe:'🇯🇵 岡山弁',
+    lang_oishi:'🇯🇵 標準語',
+    lang_matthias:'🇩🇪 Deutsch',
+    pill_en:'🇬🇧 English',
+    pill_jp:'🇯🇵 日本語',
+    session_start_btn:'セッション開始 →',
+    back_btn:'← 戻る',
+    end_session_btn:'セッション終了',
+    mode_select_label:'モードを選択',
+    mode_strategy_title:'戦略',
+    mode_strategy_desc:'レース前の作戦相談',
+    mode_race_title:'レースモード',
+    mode_race_desc:'走行中のリアルタイム無線',
+    mode_debrief_title:'デブリーフ',
+    mode_debrief_desc:'セッション後の分析',
+    voice_on:'🔊 音声',
+    voice_off:'🔇 ミュート',
+    ph_chat_input:'エンジニアに話しかける…',
+    busy:'エンジニアが考え中…',
+    tip_ptt:'ステアリングのボタン/スイッチをPTTに割り当て',
+    tip_vol_dn:'ステアリングのボタン/ダイヤルを音量↓に割当',
+    tip_vol_up:'ステアリングのボタン/ダイヤルを音量↑に割当',
+    tip_engine_vol:'エンジニアの音量',
+    tip_mic:'クリックで話す（マイク）',
+    verifying:'確認中…',
+    sending:'送信中…',
+    saving:'保存中…',
+    welcome_prefix:'ようこそ、',
+    welcome_suffix:' さん。',
+    err_enter_code:'コードを入力してください。',
+    err_not_found:'このコードは見つかりません。',
+    err_revoked:'このコードは現在無効です。Yujiに連絡してください。',
+    err_network:'サーバーに接続できません。ネット接続を確認してください。',
+    err_unavailable:'認証サーバー準備中です。少し待って再試行してください。',
+    err_auth_failed:'認証に失敗しました。',
+    err_valid_email:'正しいメールアドレスを入力してください。',
+    err_send_failed:'送信に失敗しました。少し待って再試行してください。',
+    err_no_server:'サーバーに接続できません。',
+    err_paste_code:'コードを貼り付けてください。',
+    err_login_failed:'ログインに失敗しました。',
+    err_code_invalid:'コードが無効か期限切れです。',
+    err_not_member:'アカウントは確認できましたが、Founding会員登録がまだのようです。Webサイトで購入手続きをお願いします。',
+    err_enter_nick:'呼び名を入力してください。',
+    err_save_failed:'保存に失敗しました。',
+    hint_bridge_off:'⚠ Bridge未接続',
+    hint_bridge_off_retry:'⚠ Bridge未接続。少し待って再試行',
+    hint_vol_bind_up:'🎛 音量＋（大）に割り当てるボタン/ダイヤルを押して…',
+    hint_vol_bind_down:'🎛 音量−（小）に割り当てるボタン/ダイヤルを押して…',
+    hint_vol_set_up:'✅ 音量＋登録：ボタン',
+    hint_vol_set_down:'✅ 音量−登録：ボタン',
+    hint_ptt_set_a:'✅ PTT登録：ボタン',
+    hint_ptt_set_b:'（押して話す）',
+    hint_not_caught:'（聞き取れず）',
+    hint_ptt_press:'🎮 ハンドルの使いたいボタンを今すぐ押してください…',
+    hint_ptt_waiting:'⏺ ボタン待機…',
+    hint_recording:'🔴 録音中…（ボタンを離すと送信）',
+    sys_ptt_start_fail:'⚠ bridge PTT開始失敗: ',
+    hint_transcribing:'… 文字起こし中',
+    sys_ptt_stop_fail:'⚠ bridge PTT停止失敗: ',
+    sys_no_speech:'音声認識に対応していません。',
+    hint_listening:'聞き取り中…',
+    sys_mic_denied:'⚠ マイク権限が拒否されています。設定で許可してください。',
+    hint_muted:'🔇 ミュート',
+    sys_conn_error:'⚠ 接続エラー。もう一度お試しください。',
+    hint_race_on:'レース中 — ラップ読み上げON',
+    status_live:'🟢 iRacing接続 · システム稼働中',
+    status_bridge:'🟡 システム起動 · iRacingの起動を待っています',
+    status_off:'🔴 システム接続中… アプリが起動しているか確認してください',
+    hint_go_live:'🎤 をタップでLIVE開始',
+    tip_go_live:'タップでLIVE開始',
+    tip_hold_speak:'押して話す',
+    tip_tap_mute:'タップでミュート'
+  }
+};
+function t(key){ const L=window.uiLang||'en'; return (I18N[L]&&I18N[L][key]) || I18N.en[key] || key; }
+function applyLang(lang){
+  window.uiLang = (lang==='ja') ? 'ja' : 'en';
+  try{ localStorage.setItem('pw_ui_lang', window.uiLang); }catch(e){}
+  document.querySelectorAll('[data-i18n]').forEach(el=>{ const v=t(el.getAttribute('data-i18n')); if(v!=null) el.textContent=v; });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el=>{ const v=t(el.getAttribute('data-i18n-ph')); if(v!=null) el.setAttribute('placeholder',v); });
+  document.querySelectorAll('[data-i18n-title]').forEach(el=>{ const v=t(el.getAttribute('data-i18n-title')); if(v!=null) el.setAttribute('title',v); });
+  const b=document.getElementById('lang-toggle-btn'); if(b) b.textContent = (window.uiLang==='en') ? '🇯🇵' : '🇬🇧';
+  try{ updatePTTLabel(); }catch(e){}
+  try{ updateVolLabel(); }catch(e){}
+}
+function toggleLang(){ applyLang((window.uiLang==='en') ? 'ja' : 'en'); }
 // ── State ──
 let sel = null, selMode = null, userName = '', messages = [], turns = 0, sessionMsgCount = 0;
 let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
@@ -684,18 +939,18 @@ async function submitBetaCode(){
   const btn=document.getElementById('beta-code-btn');
   const msg=document.getElementById('beta-gate-msg');
   const code=(inp.value||'').trim().toUpperCase();
-  if(!code){ msg.textContent='コードを入力してください。'; return; }
-  btn.disabled=true; btn.textContent='確認中…'; msg.textContent='';
+  if(!code){ msg.textContent=t('err_enter_code'); return; }
+  btn.disabled=true; btn.textContent=t('verifying'); msg.textContent='';
   const res=await verifyBeta(code);
-  btn.disabled=false; btn.textContent='認証する';
+  btn.disabled=false; btn.textContent=t('gate_verify_btn');
   if(res.ok){
     localStorage.setItem('pw_beta_code', code);
-    msg.style.color='#6f6'; msg.textContent='ようこそ、'+(res.name||'')+' さん。';
+    msg.style.color='#6f6'; msg.textContent=t('welcome_prefix')+(res.name||'')+t('welcome_suffix');
     setTimeout(()=>{ hideBetaGate(); },700);
   }else{
-    const reasons={not_found:'このコードは見つかりません。',revoked:'このコードは現在無効です。Yujiに連絡してください。',
-      network:'サーバーに接続できません。ネット接続を確認してください。',unavailable:'認証サーバー準備中です。少し待って再試行してください。'};
-    msg.style.color='#f66'; msg.textContent=reasons[res.reason]||'認証に失敗しました。';
+    const reasons={not_found:t('err_not_found'),revoked:t('err_revoked'),
+      network:t('err_network'),unavailable:t('err_unavailable')};
+    msg.style.color='#f66'; msg.textContent=reasons[res.reason]||t('err_auth_failed');
   }
 }
 
@@ -711,22 +966,22 @@ async function sendLoginLink(){
   const btn=document.getElementById('login-send-btn');
   const msg=document.getElementById('login-email-msg');
   const email=(inp.value||'').trim();
-  if(!email || !email.includes('@')){ msg.textContent='正しいメールアドレスを入力してください。'; return; }
-  btn.disabled=true; btn.textContent='送信中…'; msg.textContent='';
+  if(!email || !email.includes('@')){ msg.textContent=t('err_valid_email'); return; }
+  btn.disabled=true; btn.textContent=t('sending'); msg.textContent='';
   try{
     const r=await fetch(API_BASE+'/api/auth/request',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({email, product:'pitwall'})});
     const data=await r.json();
-    btn.disabled=false; btn.textContent='ログインリンクを送信';
+    btn.disabled=false; btn.textContent=t('login_send_btn');
     if(data.ok){
       document.getElementById('login-step-email').style.display='none';
       document.getElementById('login-step-token').style.display='block';
     }else{
-      msg.style.color='#f66'; msg.textContent='送信に失敗しました。少し待って再試行してください。';
+      msg.style.color='#f66'; msg.textContent=t('err_send_failed');
     }
   }catch(e){
-    btn.disabled=false; btn.textContent='ログインリンクを送信';
-    msg.style.color='#f66'; msg.textContent='サーバーに接続できません。';
+    btn.disabled=false; btn.textContent=t('login_send_btn');
+    msg.style.color='#f66'; msg.textContent=t('err_no_server');
   }
 }
 
@@ -735,11 +990,11 @@ async function verifyLoginToken(){
   const btn=document.getElementById('login-verify-btn');
   const msg=document.getElementById('login-token-msg');
   const token=(inp.value||'').trim();
-  if(!token){ msg.textContent='コードを貼り付けてください。'; return; }
-  btn.disabled=true; btn.textContent='確認中…'; msg.textContent='';
+  if(!token){ msg.textContent=t('err_paste_code'); return; }
+  btn.disabled=true; btn.textContent=t('verifying'); msg.textContent='';
   const result = await verifyAndEnterWithToken(token);
-  btn.disabled=false; btn.textContent='ログイン';
-  if(!result.ok){ msg.style.color='#f66'; msg.textContent=result.reason||'ログインに失敗しました。'; }
+  btn.disabled=false; btn.textContent=t('login_verify_btn');
+  if(!result.ok){ msg.style.color='#f66'; msg.textContent=result.reason||t('err_login_failed'); }
 }
 
 // トークンを検証し、会員なら保存してゲートを閉じる。ニックネーム未登録なら登録画面へ。
@@ -747,14 +1002,14 @@ async function verifyAndEnterWithToken(token){
   try{
     const r=await fetch(API_BASE+'/api/auth/me',{headers:{'Authorization':'Bearer '+token}});
     const data=await r.json();
-    if(!data.user) return {ok:false, reason:'コードが無効か期限切れです。'};
-    if(!data.user.isMember) return {ok:false, reason:'アカウントは確認できましたが、Founding会員登録がまだのようです。Webサイトで購入手続きをお願いします。'};
+    if(!data.user) return {ok:false, reason:t('err_code_invalid')};
+    if(!data.user.isMember) return {ok:false, reason:t('err_not_member')};
     localStorage.setItem('pw_auth_token', token);
     localStorage.setItem('pw_auth_user', JSON.stringify(data.user));
     hideBetaGate();
     if(!data.user.displayName){ showNicknameGate(); }
     return {ok:true};
-  }catch(e){ return {ok:false, reason:'サーバーに接続できません。'}; }
+  }catch(e){ return {ok:false, reason:t('err_no_server')}; }
 }
 
 function showNicknameGate(){ document.getElementById('nickname-gate').style.display='flex'; }
@@ -765,10 +1020,10 @@ async function saveNickname(){
   const btn=document.getElementById('nickname-save-btn');
   const msg=document.getElementById('nickname-msg');
   const name=(inp.value||'').trim();
-  if(!name){ msg.textContent='呼び名を入力してください。'; return; }
+  if(!name){ msg.textContent=t('err_enter_nick'); return; }
   const optIn=document.getElementById('leaderboard-optin').checked;
   const token=localStorage.getItem('pw_auth_token');
-  btn.disabled=true; btn.textContent='保存中…';
+  btn.disabled=true; btn.textContent=t('saving');
   try{
     const r=await fetch(API_BASE+'/api/auth/profile',{method:'PATCH',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
@@ -778,12 +1033,12 @@ async function saveNickname(){
       localStorage.setItem('pw_auth_user', JSON.stringify(data.user));
       hideNicknameGate();
     }else{
-      msg.style.color='#f66'; msg.textContent='保存に失敗しました。';
-      btn.disabled=false; btn.textContent='始める';
+      msg.style.color='#f66'; msg.textContent=t('err_save_failed');
+      btn.disabled=false; btn.textContent=t('nick_save_btn');
     }
   }catch(e){
-    msg.style.color='#f66'; msg.textContent='サーバーに接続できません。';
-    btn.disabled=false; btn.textContent='始める';
+    msg.style.color='#f66'; msg.textContent=t('err_no_server');
+    btn.disabled=false; btn.textContent=t('nick_save_btn');
   }
 }
 
@@ -918,11 +1173,11 @@ function startSession(){
   const micBtn = document.getElementById('mic-btn');
   if(selMode==='race'){
     micBtn.onclick = activateAlwaysOnMic;
-    micBtn.title = 'Tap to go LIVE';
-    setHint('Tap 🎤 to go LIVE');
+    micBtn.title = t('tip_go_live');
+    setHint(t('hint_go_live'));
   } else {
     micBtn.onclick = toggleMic;
-    micBtn.title = 'Hold to speak';
+    micBtn.title = t('tip_hold_speak');
     setHint('');
   }
   // Bridge
@@ -940,11 +1195,11 @@ function switchMode(newMode){
   jamesAutoMicEnabled = (newMode==='race');
   const micBtn = document.getElementById('mic-btn');
   if(newMode==='race'){
-    if(micBtn){ micBtn.onclick = activateAlwaysOnMic; micBtn.title = 'Tap to go LIVE'; }
-    setHint('レース中 — ラップ読み上げON');
+    if(micBtn){ micBtn.onclick = activateAlwaysOnMic; micBtn.title = t('tip_go_live'); }
+    setHint(t('hint_race_on'));
     if(!jamesMuted) setTimeout(startAutoMic, 400);   // 自動ラップ読み上げ＋常時マイク
   } else {
-    if(micBtn){ micBtn.onclick = toggleMic; micBtn.title = 'Hold to speak'; }
+    if(micBtn){ micBtn.onclick = toggleMic; micBtn.title = t('tip_hold_speak'); }
     setHint('');
   }
 }
@@ -1093,7 +1348,7 @@ async function callAPI(){
   } catch(e){
     // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
-    addMsg('sys','⚠ Connection error. Try again.');
+    addMsg('sys',t('sys_conn_error'));
     // ★接続エラーの実態をbridgeログにも残す（今まで見えず診断できなかった）。原因(名前/HTTP等)込みで。
     convoLog('driver', '[CLIENT ERROR] /api/chat failed: '+(e && (e.name+': '+e.message) || String(e)));
     const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
@@ -1149,14 +1404,14 @@ function stepVolume(dir){
 // 音量ボタン割当（PTTと同じ：bridgeに設定モードを頼む→次に押したボタンを登録）
 let volBinding = {up:null, down:null};
 function setupVol(dir){
-  if(!irBridge || irBridge.readyState!==1){ setHint('⚠ Bridge未接続'); return; }
+  if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off')); return; }
   irBridge.send(JSON.stringify({cmd:'vol_setup', dir}));
-  setHint('🎛 音量'+(dir==='up'?'＋（大）':'−（小）')+'に割り当てるボタン/ダイヤルを押して…');
+  setHint(t(dir==='up'?'hint_vol_bind_up':'hint_vol_bind_down'));
 }
 function updateVolLabel(){
   const up=document.getElementById('vol-up-btn'), dn=document.getElementById('vol-dn-btn');
-  if(up) up.textContent = volBinding.up ? '大:B'+volBinding.up.button : '大 設定';
-  if(dn) dn.textContent = volBinding.down ? '小:B'+volBinding.down.button : '小 設定';
+  if(up) up.textContent = volBinding.up ? t('vol_up_label')+':B'+volBinding.up.button : t('vol_up_set');
+  if(dn) dn.textContent = volBinding.down ? t('vol_down_label')+':B'+volBinding.down.button : t('vol_down_set');
 }
 
 // ── 発話キュー（二重音声防止：常に1つずつ順番に再生）──
@@ -1260,7 +1515,7 @@ function playWebSpeech(text, c){
 function toggleVoice(){
   voiceOn=!voiceOn;
   const btn=document.getElementById('voice-tog');
-  btn.textContent=voiceOn?'🔊 Voice':'🔇 Muted';
+  btn.textContent=voiceOn?t('voice_on'):t('voice_off');
   btn.classList.toggle('on',voiceOn);
   if(!voiceOn){ speakQueue=[]; stopCurrentAudio(); }
 }
@@ -1270,12 +1525,12 @@ function toggleMic(){
   if(isRecording){ stopRec(); } else { startRec(); }
 }
 function startRec(){
-  if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){ addMsg('sys','Speech recognition not supported.'); return; }
+  if(!('webkitSpeechRecognition' in window||'SpeechRecognition' in window)){ addMsg('sys',t('sys_no_speech')); return; }
   const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
   recognition = new SR();
   recognition.lang = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja-JP':(sel==='Matthias')?'de-DE':'en-US';
   recognition.continuous=false; recognition.interimResults=false;
-  recognition.onstart=()=>{ isRecording=true; document.getElementById('mic-btn').classList.add('recording'); setHint('Listening…'); };
+  recognition.onstart=()=>{ isRecording=true; document.getElementById('mic-btn').classList.add('recording'); setHint(t('hint_listening')); };
   recognition.onresult=(e)=>{ const t=e.results[0][0].transcript; document.getElementById('chat-input').value=t; };
   recognition.onend=()=>{ isRecording=false; document.getElementById('mic-btn').classList.remove('recording'); setHint('');
     const t=document.getElementById('chat-input').value.trim(); if(t&&!isBusy) sendMsg(); };
@@ -1288,7 +1543,7 @@ function stopRec(){ if(recognition){try{recognition.stop();}catch(e){}} }
 function activateAlwaysOnMic(){
   jamesMuted=false;
   document.getElementById('mic-btn').onclick=toggleMute;
-  document.getElementById('mic-btn').title='Tap to mute';
+  document.getElementById('mic-btn').title=t('tip_tap_mute');
   document.getElementById('mic-btn').classList.add('live');
   startAutoMic();
 }
@@ -1296,7 +1551,7 @@ function toggleMute(){
   jamesMuted=!jamesMuted;
   const btn=document.getElementById('mic-btn');
   btn.classList.toggle('live',!jamesMuted);
-  if(jamesMuted){ setHint('🔇 Muted'); if(recognition)recognition.stop(); }
+  if(jamesMuted){ setHint(t('hint_muted')); if(recognition)recognition.stop(); }
   else{ setHint(''); startAutoMic(); }
 }
 let autoMicActive=false, autoMicRec=null, micPermissionDenied=false;
@@ -1319,7 +1574,7 @@ function startAutoMic(){
   r.onend=()=>{ autoMicActive=false; autoMicRec=null; scheduleMicRestart(400); };  // 終了したら自動で開き直す
   r.onerror=(e)=>{
     autoMicActive=false; autoMicRec=null;
-    if(e && e.error==='not-allowed'){ micPermissionDenied=true; addMsg('sys','⚠ マイク権限が拒否されています。ブラウザの設定で許可してください。'); return; }
+    if(e && e.error==='not-allowed'){ micPermissionDenied=true; addMsg('sys',t('sys_mic_denied')); return; }
     // no-speech / aborted / network 等は黙って開き直す
     scheduleMicRestart(e && e.error==='no-speech' ? 300 : 800);
   };
@@ -1350,9 +1605,9 @@ function updateBridgeStatus(){
   if(!bar){ bar=document.createElement('div'); bar.id='bridge-status-bar';
     bar.style.cssText='position:fixed;bottom:0;left:0;right:0;z-index:99999;text-align:center;padding:5px 10px;font-size:13px;font-weight:700;font-family:sans-serif;transition:all 0.3s;';
     document.body.appendChild(bar); }
-  if(iracingLive){ bar.textContent='🟢 iRacing connected · システム稼働中'; bar.style.background='#0a7d2e'; bar.style.color='#fff'; }
-  else if(bridgeConnected){ bar.textContent='🟡 システム起動 · iRacingの起動を待っています'; bar.style.background='#7a5c00'; bar.style.color='#fff'; }
-  else{ bar.textContent='🔴 システム接続中… アプリが起動しているか確認してください'; bar.style.background='#6b0000'; bar.style.color='#fff'; }
+  if(iracingLive){ bar.textContent=t('status_live'); bar.style.background='#0a7d2e'; bar.style.color='#fff'; }
+  else if(bridgeConnected){ bar.textContent=t('status_bridge'); bar.style.background='#7a5c00'; bar.style.color='#fff'; }
+  else{ bar.textContent=t('status_off'); bar.style.background='#6b0000'; bar.style.color='#fff'; }
 }
 function connectBridge(){
   if(irBridge&&irBridge.readyState<2) return;
@@ -1374,7 +1629,7 @@ function connectBridge(){
       if(data.type==='pace_check') checkPaceJudgment(data);
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
-      if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint('✅ PTT登録：ボタン'+data.button+'（押して話す）'); }
+      if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint(t('hint_ptt_set_a')+data.button+t('hint_ptt_set_b')); }
       // bridge側(実際にジョイスティックを監視してる本体)の設定が正=常に上書きする。
       // bridgeが「未設定」と言ってきたら、localStorageに古い表示が残っていても消して再点滅させる
       // （表示だけ設定済みに見えて実際は無反応、という食い違いを防ぐ）
@@ -1384,7 +1639,7 @@ function connectBridge(){
         updatePTTLabel();
       }
       if(data.type==='volume'){ stepVolume(data.dir); }
-      if(data.type==='vol_set'){ volBinding[data.dir]={joy:data.joy,button:data.button}; updateVolLabel(); setHint('✅ 音量'+(data.dir==='up'?'＋':'−')+'登録：ボタン'+data.button); }
+      if(data.type==='vol_set'){ volBinding[data.dir]={joy:data.joy,button:data.button}; updateVolLabel(); setHint(t(data.dir==='up'?'hint_vol_set_up':'hint_vol_set_down')+data.button); }
       if(data.type==='vol_config'){ if(data.binding){ volBinding=data.binding; updateVolLabel(); } }
       // ── PTT v2：bridge側STT結果受信（ネイティブマイク） ──
       if(data.type==='ptt_text'){
@@ -1395,7 +1650,7 @@ function connectBridge(){
           sendMsg();  // Claude→大石の返答フロー
           addMsg('driver','[PTT] '+text);  // ドライバ発話を表示
         } else {
-          setHint('（聞き取れず）');
+          setHint(t('hint_not_caught'));
         }
       }
     };
@@ -1811,7 +2066,9 @@ if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
 
 // ── Electron native app: LPを飛ばして直接アプリ画面を開く ──
 // （Webブラウザ版ではLPを見せるが、デスクトップアプリ＝本体なので即起動）
-window.addEventListener('DOMContentLoaded', ()=>{ try{ openApp(); }catch(e){} try{ bootGate(); }catch(e){}
+window.addEventListener('DOMContentLoaded', ()=>{
+  try{ applyLang(localStorage.getItem('pw_ui_lang')||'en'); }catch(e){ window.uiLang='en'; }
+  try{ openApp(); }catch(e){} try{ bootGate(); }catch(e){}
   try{ const s=document.getElementById('vol-slider'); if(s){ s.value=Math.round(pwVolume*100); onVolume(s.value); } }catch(e){}
 });
 
@@ -1829,15 +2086,15 @@ const WHEEL_SVG='<svg viewBox="0 0 24 24" width="15" height="15" fill="none" str
 function updatePTTLabel(){
   const b=document.getElementById('ptt-btn'); if(!b) return;
   if(pttBinding){ b.innerHTML=WHEEL_SVG+' PTT: B'+pttBinding.button; b.classList.add('on'); b.classList.remove('flash'); }
-  else { b.innerHTML=WHEEL_SVG+' スイッチ設定'; b.classList.remove('on'); b.classList.add('flash'); }
+  else { b.innerHTML=WHEEL_SVG+' '+t('setup_ptt_btn'); b.classList.remove('on'); b.classList.add('flash'); }
 }
 
 // 設定：bridgeに「次に押されたボタンを登録して」と依頼（ボタン検出はネイティブのbridgeが担当）
 function setupPTT(){
-  if(!irBridge || irBridge.readyState!==1){ setHint('⚠ Bridge未接続。少し待って再試行'); return; }
+  if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off_retry')); return; }
   irBridge.send(JSON.stringify({cmd:'ptt_setup'}));
-  setHint('🎮 ハンドルの使いたいボタンを今すぐ押してください…');
-  const b=document.getElementById('ptt-btn'); if(b) b.textContent='⏺ ボタン待機…';
+  setHint(t('hint_ptt_press'));
+  const b=document.getElementById('ptt-btn'); if(b) b.textContent=t('hint_ptt_waiting');
 }
 
 // マイク準備（初回のみ）
@@ -1845,12 +2102,12 @@ function setupPTT(){
 // ブラウザのマイク制限を回避。ネイティブPythonプロセスでキャプチャ
 async function pttStart(){
   if(pttHeld || isBusy) return;
-  if(!irBridge || irBridge.readyState!==1){ setHint('⚠ Bridge未接続'); return; }
+  if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off')); return; }
   pttHeld = true;
   // 録音中はAI発話を止める（自分の声に被せない）
   speakQueue=[]; stopCurrentAudio();
   document.getElementById('mic-btn').classList.add('recording');
-  setHint('🔴 録音中…（ボタンを離すと送信）');
+  setHint(t('hint_recording'));
   try{
     // 選択キャラの言語でSTTさせる（James/Luna/Hajime=英語, 官兵衛/大石=日本語）。
     // これが無いと英語で喋っても日本語モデルで文字起こしされ崩れる。
@@ -1859,7 +2116,7 @@ async function pttStart(){
     irBridge.send(JSON.stringify({cmd:'ptt_start', lang:sttLang}));
   }catch(e){
     pttHeld=false;
-    addMsg('sys','⚠ bridge PTT開始失敗: '+e.message);
+    addMsg('sys',t('sys_ptt_start_fail')+e.message);
   }
 }
 
@@ -1867,11 +2124,11 @@ function pttStop(){
   if(!pttHeld) return;
   pttHeld = false;
   document.getElementById('mic-btn').classList.remove('recording');
-  setHint('… 文字起こし中');
+  setHint(t('hint_transcribing'));
   try{
     irBridge.send(JSON.stringify({cmd:'ptt_stop'}));
   }catch(e){
-    addMsg('sys','⚠ bridge PTT停止失敗: '+e.message);
+    addMsg('sys',t('sys_ptt_stop_fail')+e.message);
   }
 }
 
