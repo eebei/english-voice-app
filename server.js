@@ -132,34 +132,8 @@ app.post('/api/beta/verify', betaLimiter, express.json(), async (req, res) => {
 //   発行:   POST /api/beta/admin/create {name,tier,billingStart}
 //   一覧:   GET  /api/beta/admin/list
 //   無効化: POST /api/beta/admin/revoke {code}   / 再有効化: {code,active:true}
-// ── 一回だけの初期発行（テーブルが空の時だけ動く＝使ったら自動で閉じる） ──
-//   ADMIN_SECRETがまだ設定できてないための救済。3人分をサーバー側で生成して返す。
-//   コードはランダム生成なので公開リポジトリには残らない。
-app.post('/api/beta/bootstrap', async (_req, res) => {
-  try {
-    const existing = await auth.listBetaTokens();
-    if (existing.length > 0) {
-      return res.status(403).json({ ok: false, reason: 'already_seeded', count: existing.length });
-    }
-    const yuji = await auth.createBetaToken({ name: 'Yuji', tier: 'lifetime', note: 'owner' });
-    const yagi = await auth.createBetaToken({ name: 'Yagi', tier: 'lifetime', note: 'founding tester' });
-    const tobi = await auth.createBetaToken({ name: 'Tobi', tier: 'cost_share', billingStart: '2027-07-03', note: 'DE tester / $9.99 from 2027' });
-    res.json({ ok: true, tokens: [yuji, yagi, tobi] });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err.message || err) });
-  }
-});
-
-// 一時診断：値は出さず「見えているか」だけboolで返す（切り分け用）
-app.get('/api/beta/admin/_debug', (_req, res) => {
-  const s = process.env.ADMIN_SECRET || '';
-  res.json({
-    adminConfigured: !!s,
-    adminLen: s.length,
-    dbConfigured: !!process.env.DATABASE_URL,
-    brevoConfigured: !!process.env.BREVO_API_KEY,
-  });
-});
+// (removed) one-time /api/beta/bootstrap seeder and /api/beta/admin/_debug diagnostic —
+//   beta tokens are already seeded in the DB; these launch-prep helpers are no longer needed.
 function requireAdmin(req, res, next) {
   const secret = process.env.ADMIN_SECRET;
   if (!secret) return res.status(503).json({ error: 'admin_disabled (set ADMIN_SECRET)' });
