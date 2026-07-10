@@ -871,6 +871,8 @@ def poll_iracing():
         # iRacing SDKは摂氏で返す。ドライバーは華氏派も多いが、まず数字を渡してAI側でどちら派にも対応。
         # None判定はvalue is not None で厳密に（0℃も有効値なので truthy判定はダメ）。
         track_temp_c = reader.read_float('TrackTempCrew')   # 路面温度（クルーが報告する路面表面温度・耐久で刻々変わる主要変数）
+        if track_temp_c is None:
+            track_temp_c = reader.read_float('TrackTemp')   # フォールバック（TrackTempCrewが無い/Noneのセッション用）
         air_temp_c   = reader.read_float('AirTemp')         # 気温
         rel_humidity = reader.read_float('RelativeHumidity') # 湿度 0..1
         track_wet    = reader.read_float('TrackWetness')     # 路面ウェット度 0..1(乾) - iRacing 2024+
@@ -904,7 +906,8 @@ def poll_iracing():
                 " LastLap:" + str(lapTime) + " Speed:" + str(round(spd,1) if spd else None) +
                 " OnTrack:" + str(onTrack) +
                 " CarIdx:" + str(player_car_idx) +   # 担当車の把握確認用
-                " gapAhead:" + str(nearest_ahead_gap) + " gapBehind:" + str(nearest_behind_gap))
+                " gapAhead:" + str(nearest_ahead_gap) + " gapBehind:" + str(nearest_behind_gap) +
+                " TrackT:" + str(track_temp_c) + " AirT:" + str(air_temp_c))   # 天候読み取り確認用
 
 
         # ── ラップ完了検知：LapLastLapTime の「値が変わった瞬間」で発火 ──
