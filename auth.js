@@ -303,6 +303,11 @@ async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscription
     [email, plan || 'founding', stripeCustomerId || null, subscriptionStatus || 'active', displayName || null]
   );
   log('member set: ' + email + ' (plan=' + (plan || 'founding') + ')');
+  // 再加入の場合、以前解約時に無効化したexeコードを再有効化する（払ってるのに使えない、を防ぐ）
+  const exeCode = rows[0] && rows[0].exe_code;
+  if (exeCode) {
+    await pool.query('UPDATE beta_tokens SET active = true WHERE code = $1', [exeCode]);
+  }
   return { ...rows[0], justActivated: !wasMember };
 }
 
@@ -480,11 +485,18 @@ async function setMemberActive(rawEmail, active) {
 // 解約 → 会員フラグを落とす（Stripe customer id で特定）
 async function unsetMemberByCustomer(stripeCustomerId, status) {
   if (!ready || !stripeCustomerId) return;
-  await pool.query(
-    `UPDATE users SET is_member = false, subscription_status = $2 WHERE stripe_customer_id = $1`,
+  const { rows } = await pool.query(
+    `UPDATE users SET is_member = false, subscription_status = $2 WHERE stripe_customer_id = $1
+     RETURNING exe_code`,
     [stripeCustomerId, status || 'canceled']
   );
   log('member unset (customer ' + stripeCustomerId + ')');
+  // exe起動コードも同時に無効化（解約後も永久にアプリが使えてしまう穴を塞ぐ）
+  const exeCode = rows[0] && rows[0].exe_code;
+  if (exeCode) {
+    await pool.query('UPDATE beta_tokens SET active = false WHERE code = $1', [exeCode]);
+    log('exe code revoked on cancellation: ' + exeCode);
+  }
 }
 
 // 自己解約用のStripe Billing Portalセッションを作る（メンバー本人が支払い方法変更・解約を自分でできる）。
