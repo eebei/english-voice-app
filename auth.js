@@ -280,22 +280,23 @@ const FOUNDING_CAP = parseInt(process.env.FOUNDING_CAP || '50', 10);
 // 決済成功 → そのメールのユーザーを会員化（アカウントが無ければ作る）
 // justActivated: 直前まで非会員だった（新規 or 再課金）→ ウェルカムメールを送るべきタイミング。
 // Stripeのwebhookは再送されうる（at-least-once）ので、既に会員だった場合はfalseになり重複送信されない。
-async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscriptionStatus } = {}) {
+async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscriptionStatus, displayName } = {}) {
   if (!ready) throw new Error('auth_not_ready');
   const email = normalizeEmail(rawEmail);
   if (!email) throw new Error('no_email');
   const before = await pool.query('SELECT is_member FROM users WHERE email = $1', [email]);
   const wasMember = before.rows[0] && before.rows[0].is_member === true;
   const { rows } = await pool.query(
-    `INSERT INTO users (email, is_member, plan, stripe_customer_id, subscription_status)
-     VALUES ($1, true, $2, $3, $4)
+    `INSERT INTO users (email, is_member, plan, stripe_customer_id, subscription_status, display_name)
+     VALUES ($1, true, $2, $3, $4, $5)
      ON CONFLICT (email) DO UPDATE SET
        is_member = true,
        plan = COALESCE($2, users.plan),
        stripe_customer_id = COALESCE($3, users.stripe_customer_id),
-       subscription_status = COALESCE($4, users.subscription_status)
+       subscription_status = COALESCE($4, users.subscription_status),
+       display_name = COALESCE(users.display_name, $5)
      RETURNING *`,
-    [email, plan || 'founding', stripeCustomerId || null, subscriptionStatus || 'active']
+    [email, plan || 'founding', stripeCustomerId || null, subscriptionStatus || 'active', displayName || null]
   );
   log('member set: ' + email + ' (plan=' + (plan || 'founding') + ')');
   return { ...rows[0], justActivated: !wasMember };
@@ -343,9 +344,12 @@ async function ensureExeCode(email) {
   if (!user) return null;
   if (user.exe_code) return user.exe_code;
 
-  // 名前セグメント：display_name優先、無ければメールのローカル部を英数字のみに正規化。
+  // 名前セグメント：display_name（Stripe決済時の氏名 or exeニックネーム）の名だけ使う。
+  // 「山田太郎」「Yuji Sato」等フルネームでも先頭の単語だけ切り出し、読みやすいコードにする
+  // （例: PITWALL-YUJI-XXXXXX）。重複は6桁ランダムサフィックスで担保するので同名衝突は問題ない。
   const rawName = (user.display_name || email.split('@')[0] || 'DRIVER');
-  const nameSeg = rawName.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'DRIVER';
+  const firstWord = rawName.trim().split(/\s+/)[0] || rawName;
+  const nameSeg = firstWord.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'DRIVER';
   const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const genCode = () => `PITWALL-${nameSeg}-` + Array.from({ length: 6 }, () => ALPHABET[crypto.randomInt(ALPHABET.length)]).join('');
 

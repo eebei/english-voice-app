@@ -73,10 +73,12 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     if (event.type === 'checkout.session.completed') {
       const s = event.data.object;
       const email = (s.customer_details && s.customer_details.email) || s.customer_email;
+      const displayName = s.customer_details && s.customer_details.name;
       const result = await auth.setMemberByEmail(email, {
         plan: 'founding',
         stripeCustomerId: s.customer,
         subscriptionStatus: 'active',
+        displayName,
       });
       console.log('[stripe] checkout completed → member:', email, 'justActivated:', result.justActivated);
       // ウェルカムメールは新規会員化の時だけ（Stripeのwebhook再送で二重送信しないためのガード）。
