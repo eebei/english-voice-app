@@ -482,6 +482,21 @@ async function unsetMemberByCustomer(stripeCustomerId, status) {
   log('member unset (customer ' + stripeCustomerId + ')');
 }
 
+// 自己解約用のStripe Billing Portalセッションを作る（メンバー本人が支払い方法変更・解約を自分でできる）。
+// Stripeダッシュボード側で一度だけ「顧客ポータル」を有効化しておく必要あり（設定 → 課金 → 顧客ポータル）。
+async function createBillingPortalSession(rawEmail) {
+  if (!ready || !stripe) throw new Error('unavailable');
+  const email = normalizeEmail(rawEmail);
+  const { rows } = await pool.query('SELECT stripe_customer_id FROM users WHERE email = $1', [email]);
+  const customerId = rows[0] && rows[0].stripe_customer_id;
+  if (!customerId) throw new Error('no_subscription');
+  const session = await stripe.billingPortal.sessions.create({
+    customer: customerId,
+    return_url: `${BASE_URL}/pitwall.html`,
+  });
+  return session.url;
+}
+
 // 現在の会員数と Founding 枠の残り
 async function foundingStatus() {
   if (!ready) return { members: 0, cap: FOUNDING_CAP, spotsLeft: FOUNDING_CAP, soldOut: false };
@@ -560,6 +575,7 @@ module.exports = {
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
   setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, foundingStatus,
+  createBillingPortalSession,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   FOUNDING_CAP,
   _pool: () => pool,

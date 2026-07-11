@@ -196,6 +196,20 @@ app.get('/api/auth/verify', async (req, res) => {
   try {
     if (!auth.isReady()) return res.status(503).send('auth unavailable');
     const { user, token } = await auth.verifyMagicToken(req.query.token);
+    // 自己解約リンク（manage.html発）：ログイン確認後そのままStripe Billing Portalへ飛ばす。
+    if (req.query.product === 'portal') {
+      try {
+        const portalUrl = await auth.createBillingPortalSession(user.email);
+        return res.redirect(302, portalUrl);
+      } catch (e) {
+        return res.status(400).set('Content-Type', 'text/html; charset=utf-8')
+          .send('<body style="font-family:sans-serif;padding:40px">' +
+            (e.message === 'no_subscription'
+              ? 'アクティブなサブスクリプションが見つかりませんでした。 / No active subscription found for this email.'
+              : '解約ページを開けませんでした。しばらくして再度お試しください。 / Could not open the billing portal — please try again shortly.') +
+            '</body>');
+      }
+    }
     const product = req.query.product === 'pitwall' ? 'pitwall' : 'racevoice';
     // トークンをフロントに渡すため、簡易な完了ページを返す（localStorageに保存→アプリへ）
     res.set('Content-Type', 'text/html; charset=utf-8').send(`<!doctype html><meta charset="utf-8">
