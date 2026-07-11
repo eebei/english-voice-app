@@ -162,6 +162,20 @@ app.post('/api/beta/admin/revoke', requireAdmin, express.json(), async (req, res
   } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
 
+// TEMP 2026-07-11: ADMIN_SECRETがRailwayに未設定のため、test4/5/6の古いexeコードを
+// 一回限り確認・無効化するための臨時エンドポイント。実行後すぐこのブロックごと削除する。
+app.get('/api/_tmp_cleanup', async (_req, res) => {
+  try {
+    const codes = ['PITWALL-SBYYJ080711T-6ACBK3', 'PITWALL-YUJI-X3WAN8', 'PITWALL-MARBO-PCLJ7N'];
+    const results = [];
+    for (const code of codes) {
+      const r = await auth.setBetaActive(code, false);
+      results.push({ code, ...r });
+    }
+    res.json({ ok: true, results });
+  } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+
 // ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
 //   POST /api/admin/member/revoke {email}            → 即座にis_member=false
 //   POST /api/admin/member/revoke {email,active:true} → 復帰
