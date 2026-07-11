@@ -18,8 +18,6 @@ try {
   const StripeLib = require('stripe');
   if (process.env.STRIPE_SECRET_KEY) stripe = new StripeLib(process.env.STRIPE_SECRET_KEY);
 } catch (e) { console.warn('[auth] stripe lib not installed:', e.message); }
-// Founding会員の個人紹介コードが指す先の共通クーポン（100% off・1回のみ・Stripeダッシュボードで事前作成）。
-const REFERRAL_BASE_COUPON = process.env.REFERRAL_BASE_COUPON || 'REFERRED_1MONTH_FREE';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -311,16 +309,19 @@ async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscription
   return { ...rows[0], justActivated: !wasMember };
 }
 
-// Founding会員だけの個人紹介コードを発行（例: REF-A1B2C3）し、DB保存＋Stripeの
-// Promotion Codeを作成する。既に発行済みならそれを再利用する（べき等・再送/再実行対応）。
-// 失敗してもwelcomeメール自体は止めない（ベストエフォート＝紹介特典はおまけ機能）。
+// Founding会員だけの個人紹介コード（例: REF-A1B2C3）を発行する。
+// ★2026-07-11修正：以前はStripeのPromotion Code（REFERRED_1MONTH_FREEクーポン紐付き・利用回数無制限）を
+//   同時に作っていたため、このコードを友達がチェックアウトで入力すると誰でも無制限に初月無料になれる
+//   状態だった（当初は「紹介された側も初月無料」という設計だったが、7/11に「紹介された側には特典なし・
+//   5日トライアルのみ」に変更した際、このバックエンド実装の追従を忘れていた）。
+//   Marboの実購入で実際に発行された穴（REF-WPHDC5）が見つかり、手動でアーカイブして対処。
+//   今後はStripeに一切触れない、DBだけの識別コードにする（紹介の帰属確認・手動報告用の文字列のみ）。
 async function ensureReferralCode(email) {
   if (!ready) return null;
   const { rows } = await pool.query('SELECT id, referral_code FROM users WHERE email = $1', [email]);
   const user = rows[0];
   if (!user) return null;
   if (user.referral_code) return user.referral_code;
-  if (!stripe) { log('referral code skipped (Stripe not configured) for ' + email); return null; }
 
   // 短く読みやすいコード（紛らわしい文字0/O/1/Iは除外）。衝突したら数回だけ振り直す。
   const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -329,13 +330,12 @@ async function ensureReferralCode(email) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = genCode();
     try {
-      await stripe.promotionCodes.create({ coupon: REFERRAL_BASE_COUPON, code });
       await pool.query('UPDATE users SET referral_code = $1 WHERE id = $2', [code, user.id]);
-      log('referral code created: ' + email + ' -> ' + code);
+      log('referral code created (DB-only, no Stripe coupon): ' + email + ' -> ' + code);
       return code;
     } catch (e) {
-      // resource_already_exists = コード重複（激レア）→ 振り直す。それ以外（クーポン未作成等）は諦める。
-      if (e && e.code === 'resource_already_exists') continue;
+      // unique_violation = コード重複（激レア）→ 振り直す。
+      if (e && e.code === '23505') continue;
       log('referral code creation failed for ' + email + ': ' + (e && e.message || e));
       return null;
     }
@@ -403,14 +403,14 @@ async function sendWelcomeEmail(rawEmail, plan) {
 
   const referralText = referralCode
     ? `\n\nあなただけの紹介コード（Founding限定・永続特典）: ${referralCode}\n` +
-      `友達に渡すと初月無料。あなたは1人紹介ごとに翌月33% OFF、3人で1ヶ月無料になります。\n\n` +
+      `友達があなたのリンク経由で加入し実際に課金開始したら、あなたは1人ごとに翌月33% OFF、3人で1ヶ月無料になります。\n\n` +
       `Your personal referral code (Founding-only, yours to keep): ${referralCode}\n` +
-      `Give it to friends — their first month is free. You get 33% off your next month per friend, 100% off at 3.\n`
+      `Bring 3 paid drivers to the grid — you get 33% off your next month per friend (100% off at 3), once their trial converts to a paid month.\n`
     : '';
   const referralHtml = referralCode
     ? `<div style="margin-top:20px;padding:16px 18px;border:1px dashed #9D4EDD;border-radius:10px;background:#f9f5ff">
         <p style="margin:0 0 8px;font-weight:bold;color:#333">Your referral code (Founding-only perk): <span style="color:#9D4EDD">${referralCode}</span></p>
-        <p style="margin:0;font-size:13px;color:#666">Give it to friends — their first month is free. You get 33% off your next month per friend (100% off at 3). あなたの紹介コード（Founding限定）。友達に渡すと初月無料、あなたも1人ごとに翌月33%OFF。</p>
+        <p style="margin:0;font-size:13px;color:#666">Bring 3 paid drivers to the grid — you get 33% off your next month per friend (100% off at 3), once their trial converts to a paid month. あなたの紹介コード（Founding限定）。友達が実際に課金開始したら、あなたも1人ごとに翌月33%OFF。</p>
       </div>`
     : '';
 
