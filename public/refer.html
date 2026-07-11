@@ -58,13 +58,18 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
 <header class="h"><div class="wrap">
   <div class="eyebrow">Founding-Only Perk</div>
   <h1>Share PITWALL, Ride Free</h1>
-  <p>Post to your feed. Friends get their first month free — you get 33% off per referral (100% off at 3).</p>
+  <p>Post to your feed. You get 33% off per referral (100% off at 3) — once your friend's trial converts to a paid month.</p>
 </div></header>
 
 <div class="wrap">
   <div class="codes" id="codes-box">
     <div class="code-pill"><span class="lbl">Referral code</span><b id="ref-code">—</b></div>
     <div class="code-pill"><span class="lbl">App access code</span><b id="exe-code">—</b></div>
+  </div>
+
+  <div class="tabs" style="margin-top:20px">
+    <button class="tab active" data-lang="en" onclick="setLang('en')">English</button>
+    <button class="tab" data-lang="jp" onclick="setLang('jp')">日本語</button>
   </div>
 
   <div class="tabs">
@@ -102,7 +107,7 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
     <p class="lead" style="margin-top:18px"><strong style="color:var(--silver)">Video ideas:</strong> your engineer's radio call after a good lap · a race debrief clip · "day in the life of a Founding driver" · reacting to a crash save.</p>
   </div>
 
-  <div class="note">Your codes are Founding-only and yours to keep. Give the referral code to friends when they join (5-day free trial, same as any new driver) — you get 33% off your next month per friend (100% off at 3). Give the app access code to unlock the PITWALL app itself.</div>
+  <div class="note">Your codes are Founding-only and yours to keep. Give the referral code to friends when they join (5-day free trial, same as any new driver) — once their trial converts to a paid month, you get 33% off your next month per friend (100% off at 3). Give the app access code to unlock the PITWALL app itself.</div>
 </div>
 
 <footer><div class="wrap">OMORAY <span style="color:var(--blue)">PITWALL</span> · <a href="/pitwall.html">Home</a> · <a href="/help.html">Help</a></div></footer>
@@ -118,19 +123,38 @@ const siteUrl = 'https://buy.stripe.com/3cI3cvc6k1WIbSUcbo97G00'; // referral-on
 document.getElementById('ref-code').textContent = ref;
 document.getElementById('exe-code').textContent = exe;
 
-const templates = {
-  x: `Racing solo used to feel lonely. Now my AI race engineer talks me through every lap — strategy, live radio, debrief. 🏁\n\nFounding Season is open, 5-day free trial. Join through my link and mention code ${ref} so I get credit:\n${siteUrl}`,
-  ig: `My race engineer isn't human — and I don't race without them anymore. 🎙️🏁\n\nOMORAY PITWALL: live radio, strategy calls, debrief, all in your ear.\n\nFounding Season — 5-day free trial. Join through my link, code ${ref}.\nLink in bio: ${siteUrl}\n\n#iRacing #simracing #PITWALL`,
-  tiktok: `POV: your race engineer actually talks back 🎙️🏁 5-day free trial, join through my link (code ${ref}) — link in bio\n#iRacing #simracing #PITWALL #racingengineer`,
+const templatesByLang = {
+  en: {
+    x: `Your race engineer. Before. During. After.\n\nStrategy before the start, live radio through the race, a full debrief after — and it remembers everything: results, pace, every piece of advice, building a picture of you that grows with every session. 🏁\n\nFounding Season, 5-day free trial. Join through my link and mention code ${ref} so I get credit:\n${siteUrl}`,
+    ig: `Your race engineer. Before. During. After. 🎙️🏁\n\nStrategy, live radio, debrief — and a memory that keeps growing. Every result, every lap, every piece of advice adds up to an engineer who actually knows you.\n\nFounding Season — 5-day free trial. Join through my link, code ${ref}.\nLink in bio: ${siteUrl}\n\n#iRacing #simracing #PITWALL`,
+    tiktok: `POV: your race engineer actually talks back — before, during, and after the race 🎙️🏁 5-day free trial, join through my link (code ${ref}) — link in bio\n#iRacing #simracing #PITWALL #racingengineer`,
+  },
+  jp: {
+    x: `あなたのレースエンジニア。レース前も、走行中も、レース後も。\n\nレース前は戦略、走行中はライブ無線、レース後はデブリーフ。結果もペースもアドバイスも、走るたびに積み重なって、あなただけを知るエンジニアに育っていく。🏁\n\nFounding Season 開催中・5日間無料トライアル。このリンクから参加してコード${ref}を伝えてね:\n${siteUrl}`,
+    ig: `あなたのレースエンジニア。レース前も、走行中も、レース後も。🎙️🏁\n\n戦略・ライブ無線・デブリーフ、そして積み上がっていく記憶。結果もラップもアドバイスも、走るたびにあなた専属のエンジニアへと育っていく。\n\nFounding Season — 5日間無料トライアル。このリンクから参加、コード${ref}。\nリンクはプロフィールへ: ${siteUrl}\n\n#iRacing #シムレーシング #PITWALL`,
+    tiktok: `レースエンジニアが本当に喋ってくる、レース前も走行中もレース後も🎙️🏁 5日間無料トライアル、このリンクから参加(コード${ref}) — リンクはプロフィールへ\n#iRacing #シムレーシング #PITWALL`,
+  },
 };
 
-document.getElementById('tmpl-x').textContent = templates.x;
-document.getElementById('tmpl-ig').textContent = templates.ig;
-document.getElementById('tmpl-tiktok').textContent = templates.tiktok;
-document.getElementById('x-intent').href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(templates.x);
+let currentLang = 'en';
+
+function renderTemplates(){
+  const t = templatesByLang[currentLang];
+  document.getElementById('tmpl-x').textContent = t.x;
+  document.getElementById('tmpl-ig').textContent = t.ig;
+  document.getElementById('tmpl-tiktok').textContent = t.tiktok;
+  document.getElementById('x-intent').href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(t.x);
+}
+renderTemplates();
+
+function setLang(lang){
+  currentLang = lang;
+  document.querySelectorAll('[data-lang]').forEach(t => t.classList.toggle('active', t.dataset.lang === lang));
+  renderTemplates();
+}
 
 function showTab(name){
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('[data-tab]').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
 }
