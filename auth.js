@@ -418,6 +418,19 @@ async function sendWelcomeEmail(rawEmail, plan) {
       </div>`
     : '';
 
+  const shareUrl = (referralCode && exeCode)
+    ? `${BASE_URL}/refer.html?ref=${encodeURIComponent(referralCode)}&exe=${encodeURIComponent(exeCode)}`
+    : null;
+  const shareText = shareUrl
+    ? `\n\n投稿用テンプレート（X/Instagram/TikTok・コピペOK）: ${shareUrl}\n` +
+      `Ready-made posts for X/Instagram/TikTok, your codes pre-filled: ${shareUrl}\n`
+    : '';
+  const shareHtml = shareUrl
+    ? `<p style="margin-top:14px"><a href="${shareUrl}" style="display:inline-block;background:#9D4EDD;color:#fff;
+         padding:11px 22px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px">Share PITWALL →</a></p>
+       <p style="margin:6px 0 0;font-size:12px;color:#888">Ready-made posts for X/Instagram/TikTok, your codes pre-filled.</p>`
+    : '';
+
   await sendEmail({
     to: email,
     subject: 'Welcome to OMORAY PITWALL — Founding Season',
@@ -427,7 +440,8 @@ async function sendWelcomeEmail(rawEmail, plan) {
       `Thanks for subscribing — welcome to the Founding Season!\n` +
       `Get set up here: ${welcomeUrl}` +
       referralText +
-      exeText,
+      exeText +
+      shareText,
     html:
       `<div style="font-family:system-ui,sans-serif;max-width:480px">
         <h2 style="color:#9D4EDD">Welcome to OMORAY PITWALL</h2>
@@ -438,6 +452,7 @@ async function sendWelcomeEmail(rawEmail, plan) {
         <p style="color:#888;font-size:12px">${welcomeUrl}</p>
         ${referralHtml}
         ${exeHtml}
+        ${shareHtml}
       </div>`,
   });
   return { sent: true, referralCode, exeCode };

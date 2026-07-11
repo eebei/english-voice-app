@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Share PITWALL — OMORAY PITWALL</title>
+<link rel="icon" type="image/png" href="/OP-icon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#07080f;--panel:#0d0e1a;--panel2:#11121f;--blue:#9D4EDD;--blue-dim:rgba(157,78,221,.15);--text:#f0f4ff;--muted:#64748b;--silver:#94a3b8;--border:#1e2235;--green:#19d36b}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,.oxanium{font-family:'Oxanium',sans-serif}
+.wrap{max-width:680px;margin:0 auto;padding:0 24px}
+nav{border-bottom:1px solid var(--border)}
+.nav-in{display:flex;align-items:center;height:76px}
+.logo img{width:auto;height:64px}
+header.h{padding:48px 0 8px;text-align:center}
+header.h .eyebrow{font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--blue);text-transform:uppercase}
+header.h h1{font-size:clamp(26px,5vw,38px);font-weight:800;margin:10px 0 8px}
+header.h p{color:var(--silver);font-size:15px;max-width:480px;margin:0 auto}
+
+.codes{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin:28px 0}
+.code-pill{background:var(--panel);border:1px dashed var(--blue);border-radius:10px;padding:10px 16px;font-family:'Oxanium';font-size:13px}
+.code-pill b{color:var(--blue);letter-spacing:.5px}
+.code-pill .lbl{display:block;font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}
+
+.tabs{display:flex;gap:8px;justify-content:center;margin:36px 0 0}
+.tab{font-family:'Oxanium';font-size:13px;font-weight:700;letter-spacing:.5px;padding:10px 20px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer}
+.tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+.panel{display:none;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:24px;margin-top:16px}
+.panel.active{display:block}
+.panel .lead{font-size:13px;color:var(--muted);margin-bottom:14px}
+.tmpl{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:16px 18px;font-size:14.5px;color:#dde1ec;line-height:1.7;white-space:pre-wrap}
+.copy-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.btn{font-family:'Oxanium';font-size:13px;font-weight:700;padding:11px 20px;border-radius:9px;border:none;cursor:pointer;transition:opacity .15s}
+.btn:hover{opacity:.85}
+.btn-primary{background:var(--blue);color:#fff}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--silver)}
+.btn-ghost:hover{border-color:var(--blue);color:var(--blue)}
+
+.img-preview{margin-top:16px;border-radius:12px;overflow:hidden;border:1px solid var(--border);background:#000;text-align:center}
+.img-preview img{max-width:100%;max-height:220px;display:inline-block}
+
+.note{font-size:12.5px;color:var(--muted);text-align:center;margin:28px auto 0;max-width:520px;line-height:1.7}
+footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font-size:13px;text-align:center;margin-top:50px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--blue);color:#fff;font-family:'Oxanium';font-size:13px;font-weight:700;padding:10px 20px;border-radius:99px;opacity:0;pointer-events:none;transition:all .2s}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav-in">
+  <a href="/pitwall.html" class="logo"><img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL"></a>
+</div></nav>
+
+<header class="h"><div class="wrap">
+  <div class="eyebrow">Founding-Only Perk</div>
+  <h1>Share PITWALL, Ride Free</h1>
+  <p>Post to your feed. Friends get their first month free — you get 33% off per referral (100% off at 3).</p>
+</div></header>
+
+<div class="wrap">
+  <div class="codes" id="codes-box">
+    <div class="code-pill"><span class="lbl">Referral code</span><b id="ref-code">—</b></div>
+    <div class="code-pill"><span class="lbl">App access code</span><b id="exe-code">—</b></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="x" onclick="showTab('x')">X</button>
+    <button class="tab" data-tab="ig" onclick="showTab('ig')">Instagram</button>
+    <button class="tab" data-tab="tiktok" onclick="showTab('tiktok')">TikTok</button>
+  </div>
+
+  <!-- X -->
+  <div class="panel active" id="panel-x">
+    <p class="lead">Posts straight to X with the text pre-filled — just attach the image below before you post.</p>
+    <div class="tmpl" id="tmpl-x"></div>
+    <div class="copy-row">
+      <button class="btn btn-primary" onclick="copyText('tmpl-x')">Copy Text</button>
+      <a class="btn btn-ghost" id="x-intent" href="#" target="_blank" rel="noopener">Open on X →</a>
+    </div>
+    <div class="img-preview"><img src="/logo-pack/03_OMORAY-PITWALL-full-logo.png" alt="OMORAY PITWALL"></div>
+    <div class="copy-row"><a class="btn btn-ghost" href="/logo-pack/03_OMORAY-PITWALL-full-logo.png" download>⬇ Download image</a></div>
+  </div>
+
+  <!-- Instagram -->
+  <div class="panel" id="panel-ig">
+    <p class="lead">Instagram doesn't support pre-filled posts — copy the caption, download the image, and post from the app.</p>
+    <div class="tmpl" id="tmpl-ig"></div>
+    <div class="copy-row"><button class="btn btn-primary" onclick="copyText('tmpl-ig')">Copy Caption</button></div>
+    <div class="img-preview"><img src="/logo-pack/02_OMORAY-PITWALL-mark-transparent.png" alt="OMORAY PITWALL"></div>
+    <div class="copy-row"><a class="btn btn-ghost" href="/logo-pack/02_OMORAY-PITWALL-mark-transparent.png" download>⬇ Download image (square)</a></div>
+  </div>
+
+  <!-- TikTok -->
+  <div class="panel" id="panel-tiktok">
+    <p class="lead">TikTok is video-first — record a clip of a PITWALL session (radio call, debrief, a good lap) and use this caption.</p>
+    <div class="tmpl" id="tmpl-tiktok"></div>
+    <div class="copy-row"><button class="btn btn-primary" onclick="copyText('tmpl-tiktok')">Copy Caption</button></div>
+    <p class="lead" style="margin-top:18px"><strong style="color:var(--silver)">Video ideas:</strong> your engineer's radio call after a good lap · a race debrief clip · "day in the life of a Founding driver" · reacting to a crash save.</p>
+  </div>
+
+  <div class="note">Your codes are Founding-only and yours to keep. Give the referral code to friends — their first month is free. Give the app access code to unlock the PITWALL app itself.</div>
+</div>
+
+<footer><div class="wrap">OMORAY <span style="color:var(--blue)">PITWALL</span> · <a href="/pitwall.html">Home</a> · <a href="/help.html">Help</a></div></footer>
+
+<div class="toast" id="toast">Copied!</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const ref = params.get('ref') || 'YOUR-REF-CODE';
+const exe = params.get('exe') || 'YOUR-APP-CODE';
+const siteUrl = 'https://pitwall.app'; // update if custom domain differs
+
+document.getElementById('ref-code').textContent = ref;
+document.getElementById('exe-code').textContent = exe;
+
+const templates = {
+  x: `Racing solo used to feel lonely. Now my AI race engineer talks me through every lap — strategy, live radio, debrief. 🏁\n\nFounding Season is open: first month free with my code ${ref}.\n${siteUrl}`,
+  ig: `My race engineer isn't human — and I don't race without them anymore. 🎙️🏁\n\nOMORAY PITWALL: live radio, strategy calls, debrief, all in your ear.\n\nFounding Season — first month free with code ${ref}.\nLink in bio: ${siteUrl}\n\n#iRacing #simracing #PITWALL`,
+  tiktok: `POV: your race engineer actually talks back 🎙️🏁 first month free with code ${ref} — link in bio\n#iRacing #simracing #PITWALL #racingengineer`,
+};
+
+document.getElementById('tmpl-x').textContent = templates.x;
+document.getElementById('tmpl-ig').textContent = templates.ig;
+document.getElementById('tmpl-tiktok').textContent = templates.tiktok;
+document.getElementById('x-intent').href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(templates.x);
+
+function showTab(name){
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+function copyText(id){
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const toast = document.getElementById('toast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1600);
+  });
+}
+</script>
+</body>
+</html>
