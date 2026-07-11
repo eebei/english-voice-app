@@ -687,6 +687,8 @@ def poll_iracing():
     prev_incidents = None
     incident_times = []
     prev_driver_state = None
+    leader_lap_time_hist = []       # 1位の直近ラップタイム履歴（タイムサーティン耐久の終了予測用）
+    leader_last_laptime_seen = None # 同じラップタイム値を重複して履歴に積まないための直前値
     sector_bounds = []          # 例 [0.0, 0.333, 0.667]
     cur_sector = None
     sector_entry_time = None
@@ -909,6 +911,32 @@ def poll_iracing():
         repair_opt  = reader.read_float('PitOptRepairLeft')   # 任意修理の残り秒
         damage_s = round((repair_mand or 0) + (repair_opt or 0), 1)
 
+        # ── 1位のペース追跡（タイムサーティン耐久レースの終了予測用・2026-07-12 Yujiと設計合意） ──
+        # 時間制レース（3時間耐久等）は、1位が残り時間内にあと何周走ってチェッカーを受けるかで
+        # 初めて最終周回数が決まる。自分がピット中で戦略判断している時こそ知りたい数字なので、
+        # 自分のonTrack状態に関係なく毎周期更新する（下のfuel_strategy計算で使う）。
+        car_positions = reader.read_int_array('CarIdxPosition', 64)
+        car_laps_all  = reader.read_int_array('CarIdxLap', 64)
+        leader_idx = None
+        if car_positions:
+            for _pidx, _ppos in enumerate(car_positions):
+                if _ppos == 1:
+                    leader_idx = _pidx
+                    break
+        leader_lap = None
+        if leader_idx is not None and car_laps_all and leader_idx < len(car_laps_all):
+            leader_lap = car_laps_all[leader_idx]
+        if leader_idx is not None:
+            _leader_llt = reader.read_float_array('CarIdxLastLapTime', 64)
+            if _leader_llt and leader_idx < len(_leader_llt):
+                _llt = _leader_llt[leader_idx]
+                # 20〜600秒の妥当範囲のみ・同じ値の重複積み上げ防止（他の履歴と同じ異常値対策）
+                if _llt and 20 < _llt < 600 and _llt != leader_last_laptime_seen:
+                    leader_lap_time_hist.append(_llt)
+                    if len(leader_lap_time_hist) > 5:
+                        leader_lap_time_hist.pop(0)
+                    leader_last_laptime_seen = _llt
+
         # ── 診断ログ：データが実際に読めているか5秒ごとに表示 ──
         debug_counter += 1
         if debug_counter >= 50:
@@ -1018,17 +1046,42 @@ def poll_iracing():
                     'clean_laps_sampled': len(fuel_per_lap_hist),  # 何周分の実測から出したか（信頼度の目安）
                 }
                 # ── ②レース長が分かる時だけ、to-フィニッシュの余裕/不足も足す ──
+                # 周回制はシンプル（総周回-現在周回）。時間制（タイムサーティン）は1位のペースで
+                # 最終ラップ番号を予測し、自分が同一周回（lead lap）ならそれに準ずる。ラップダウン
+                # している場合は1位のフィニッシュと自分の周回数が一致しないので、自分のペース×
+                # 残り時間で計算する（2026-07-12 Yujiと設計合意・詳細はコメント末尾）。
                 laps_remaining_est = None
+                finish_basis = None   # プロンプト側で「1位基準」「ラップダウン中」等を言い分けるため
+                laps_down = None
                 if lapsTot and 0 < lapsTot < 3000:
                     laps_remaining_est = max(0, lapsTot - lap)
-                elif timeRemain and 0 < timeRemain < 100000 and lap_time_hist:
-                    avg_lap_time = sum(lap_time_hist[-3:]) / len(lap_time_hist[-3:])
-                    laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
+                    finish_basis = 'laps_total'
+                elif timeRemain and 0 < timeRemain < 100000:
+                    if leader_lap is not None and len(leader_lap_time_hist) >= 2:
+                        leader_avg_lap = sum(leader_lap_time_hist) / len(leader_lap_time_hist)
+                        leader_laps_left = math.ceil(timeRemain / leader_avg_lap)
+                        predicted_leader_final_lap = leader_lap + leader_laps_left
+                        laps_down = max(0, leader_lap - lap)  # 0=同一周回、正=ラップダウン周回数
+                        if laps_down == 0:
+                            laps_remaining_est = max(0, predicted_leader_final_lap - lap)
+                            finish_basis = 'leader_pace'
+                        elif lap_time_hist:
+                            avg_lap_time = sum(lap_time_hist[-3:]) / len(lap_time_hist[-3:])
+                            laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
+                            finish_basis = 'own_pace_lapped'
+                    elif lap_time_hist:
+                        # 1位のデータがまだ不十分（レース序盤・1位不明等）→ 自分のペースだけで暫定計算
+                        avg_lap_time = sum(lap_time_hist[-3:]) / len(lap_time_hist[-3:])
+                        laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
+                        finish_basis = 'own_pace_no_leader_data'
 
                 if laps_remaining_est is not None and avg_fuel_lap > 0:
                     fuel_needed = avg_fuel_lap * (laps_remaining_est + 1)  # +1周分の安全マージン込み
                     margin_laps = round((fuel - fuel_needed) / avg_fuel_lap, 1)
                     fuel_strategy['laps_remaining_est'] = laps_remaining_est
+                    fuel_strategy['finish_basis'] = finish_basis
+                    if laps_down is not None:
+                        fuel_strategy['laps_down'] = laps_down
                     fuel_strategy['fuel_needed'] = round(fuel_needed, 1)
                     fuel_strategy['margin_laps'] = margin_laps
                     fuel_strategy['pit_required'] = margin_laps < 0

@@ -724,8 +724,18 @@ function buildSystem(p) {
       en.push('Fuel: avg ' + fs.avg_fuel_per_lap + 'L/lap' + confEn + (fs.laps_of_fuel_left != null ? ', ~' + fs.laps_of_fuel_left + ' laps left on current fuel' : ''));
       if (fs.margin_laps != null) {
         const marginTxt = fs.margin_laps >= 0 ? '約' + fs.margin_laps + '周分の余裕' : fs.margin_laps + '周分不足（給油必須）';
-        jp.push('to-フィニッシュ: 残り推定' + fs.laps_remaining_est + '周・' + marginTxt);
-        en.push('To finish: ~' + fs.laps_remaining_est + ' laps remaining, margin ' + fs.margin_laps + ' laps' + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
+        // finish_basis: タイムサーティン（時間制）耐久レースは総周回数が走行中には確定しないため、
+        //   残り推定周回の"根拠"を必ず言い添えさせる（1位のペース基準/自分がラップダウンで自ペース基準等）。
+        //   根拠を隠して数字だけ伝えると、リーダーがペースを上げ下げした瞬間に外れて不信感を生む。
+        const basisJp = { leader_pace: '1位のペース基準', own_pace_lapped: 'ラップダウン中のため自分のペース基準',
+          own_pace_no_leader_data: '1位のデータ不足のため自分のペース基準（暫定）', laps_total: null };
+        const basisEn = { leader_pace: 'based on leader pace', own_pace_lapped: 'you\'re lapped, based on your own pace',
+          own_pace_no_leader_data: 'leader data thin yet, provisional own-pace estimate', laps_total: null };
+        const bj = basisJp[fs.finish_basis]; const be = basisEn[fs.finish_basis];
+        jp.push('to-フィニッシュ: 残り推定' + fs.laps_remaining_est + '周' + (bj ? '（' + bj + '）' : '') + '・' + marginTxt
+          + (fs.laps_down ? '・現在' + fs.laps_down + '周ラップダウン' : ''));
+        en.push('To finish: ~' + fs.laps_remaining_est + ' laps remaining' + (be ? ' (' + be + ')' : '') + ', margin ' + fs.margin_laps + ' laps'
+          + (fs.pit_required ? ' (PIT REQUIRED)' : '') + (fs.laps_down ? ', currently ' + fs.laps_down + ' lap(s) down' : ''));
       }
     }
     if (jp.length) {
