@@ -1609,7 +1609,9 @@ function bridgeVoice(key){
     bridge_up:{ James:"System's up. Waiting for iRacing.", Luna:"System's ready. Waiting for iRacing.", Hajime:"System online. Waiting for iRacing.", Kanbe:"システム起動。iRacing待ちじゃ。", Oishi:"システム起動完了。iRacingを待つ。", HajimeJP:"システム起動。iRacing待ち。", LunaJP:"システム起動完了。iRacing待ってるわ。", Matthias:"System online. Warte auf iRacing." },
     bridge_down:{ James:"System offline. Make sure the app is running — I'll reconnect automatically.", Luna:"System's offline. Keep the app open — I'll reconnect automatically.", Hajime:"System offline. Keep the app running. I'll reconnect automatically.", Kanbe:"システムが切れとる。アプリが起動しとるか確認してくれ。自動で繋ぎ直す。", Oishi:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。", HajimeJP:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。", LunaJP:"システムが切れちゃった。アプリが起動してるか確認して。自動で繋ぎ直すわ。", Matthias:"System offline. Bitte App-Start prüfen — automatische Wiederverbindung." },
     iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Luna:"iRacing connected. Data coming in. Stand by for your briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。", HajimeJP:"iRacing接続。データ受信開始。", LunaJP:"iRacing繋がったわ。データ受信開始。", Matthias:"iRacing verbunden. Daten kommen an." },
-    iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。", HajimeJP:"iRacing切断。", LunaJP:"iRacingが切れちゃった。", Matthias:"iRacing-Signal verloren." }
+    iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。", HajimeJP:"iRacing切断。", LunaJP:"iRacingが切れちゃった。", Matthias:"iRacing-Signal verloren." },
+    // PTTに割り当てたボタンのデバイスが見つからない＝押しても永久に無反応になる状態。無言の故障を防ぐため音声で必ず知らせる。
+    ptt_mismatch:{ James:"Your push-to-talk button isn't responding. Please rebind it in Setup.", Luna:"Your push-to-talk isn't responding — rebind it in Setup when you get a chance.", Hajime:"PTT not responding. Rebind in Setup.", Kanbe:"PTTのボタンが反応しとらんで。設定画面で登録し直してくれ。", Oishi:"PTTが反応していない。設定画面で登録し直してほしい。", HajimeJP:"PTTが反応していない。設定画面で登録し直してくれ。", LunaJP:"PTTが反応してないわ。設定画面で登録し直して。", Matthias:"Push-to-talk reagiert nicht. Bitte in den Einstellungen neu zuweisen." }
   };
   const msg=(lines[key]||{})[sel];
   if(msg){ addMsg('ai',msg); speak(msg); }
@@ -1652,6 +1654,9 @@ function connectBridge(){
         else { pttBinding=null; localStorage.removeItem('pw_ptt'); }
         updatePTTLabel();
       }
+      // 登録したPTTデバイスが見つからない（機材構成が変わった等）＝押しても永久に無反応。
+      // 画面を見ていなくても気づけるよう、bridgeVoiceで音声でも警告する。
+      if(data.type==='ptt_mismatch'){ bridgeVoice('ptt_mismatch'); }
       if(data.type==='volume'){ stepVolume(data.dir); }
       if(data.type==='vol_set'){ volBinding[data.dir]={joy:data.joy,button:data.button}; updateVolLabel(); setHint(t(data.dir==='up'?'hint_vol_set_up':'hint_vol_set_down')+data.button); }
       if(data.type==='vol_config'){ if(data.binding){ volBinding=data.binding; updateVolLabel(); } }

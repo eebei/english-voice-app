@@ -72,10 +72,11 @@ PTT_CONFIG_PATH = os.path.join(_config_dir, "ptt_config.json")
 VOL_CONFIG_PATH = os.path.join(_config_dir, "vol_config.json")
 
 # ── PTT（プッシュ・トゥ・トーク）状態 ──
-ptt_binding = None        # {"joy": int, "button": int}
+ptt_binding = None        # {"joy": int, "button": int, "name": str}
 ptt_capturing = False     # 設定モード（次に押されたボタンを登録）
 ptt_pressed = False       # 現在押下中か
 ptt_lang = "ja-JP"        # STT言語（選択キャラに追従。English勢=en-GB/en-US、日本語勢=ja-JP）
+ptt_mismatch_warned = False  # 登録デバイスが見つからない事を通知済みか（毎スキャンで連呼しない）
 
 # ── 音量ボタン（ステアリングのダイヤル/ボタンで走行中に音量上下）──
 vol_binding = {"up": None, "down": None}   # 各 {"joy": int, "button": int}
@@ -837,6 +838,17 @@ def poll_iracing():
             driver_state = 'garage'
         if driver_state != prev_driver_state:
             broadcast({'type': 'driver_state', 'state': driver_state})
+            # ガレージから復帰＝新しいスティント開始（耐久レースのドライバー交代・給油の可能性が高い）。
+            #   古いスティントの燃料消費履歴（fuel_per_lap_hist）を持ち越すと、交代直後に「あと何周」を
+            #   聞かれた時、前任ドライバーの消費率×今のスティントの残燃料で計算してしまい数字が破綻する
+            #   （2026-07-11の耐久レースログで実際に発生：交代直後に燃料0/聞き返しが起きた）。
+            #   ここでリセットすれば、以後はこのスティントの実測だけで再計算が始まる
+            #   （clean_laps_sampledが2-3周の時点でも平均は出るので、5周貯まるのを待たず答えられる）。
+            if prev_driver_state == 'garage' and driver_state in ('track', 'pit'):
+                fuel_at_lap_start = None
+                fuel_per_lap_hist = []
+                fuel_strategy = None
+                log('new stint detected (garage -> ' + driver_state + ') — fuel history reset')
             # ガレージ戻り＝セッション終了 → Practice/Qualifyでも1回サマリー送信
             if driver_state == 'garage' and not summary_sent and session_laps and session_racing_started:
                 times = [r['time'] for r in session_laps if r['time'] > 0]
@@ -902,9 +914,14 @@ def poll_iracing():
         if debug_counter >= 50:
             debug_counter = 0
             spd = reader.read_float('Speed')
+            # ★2026-07-12追加（耐久データログ）：OnTrack:Falseのまま実は走行中だった謎の固着
+            #   （八木さんの耐久ログで発覚・約56分間Speed/Pos/LapTimeは動いてるのにOnTrack/Lapだけ
+            #   固着）を次回再現時に切り分けられるよう、生のOnPit/SessionState/driver_state/燃料も出す。
             log("DATA CHECK -> Lap:" + str(lap) + " Pos:" + str(pos) +
                 " LastLap:" + str(lapTime) + " Speed:" + str(round(spd,1) if spd else None) +
-                " OnTrack:" + str(onTrack) +
+                " OnTrack:" + str(onTrack) + " OnPit:" + str(onPit) +
+                " SessState:" + str(cur_ss) + " DriverState:" + str(driver_state) +
+                " Fuel:" + str(round(fuel,1) if fuel is not None else None) +
                 " CarIdx:" + str(player_car_idx) +   # 担当車の把握確認用
                 " gapAhead:" + str(nearest_ahead_gap) + " gapBehind:" + str(nearest_behind_gap) +
                 " TrackT:" + str(track_temp_c) + " AirT:" + str(air_temp_c))   # 天候読み取り確認用
@@ -1485,10 +1502,29 @@ def poll_iracing():
         time.sleep(0.1)  # 0.1秒ポーリング = コントロールライン通過を0.1秒以内に検知
 
 
+# 保存済みのボタン割当を「今接続されているジョイスティック」から解決する。
+#   index（接続順）だけで照合すると、機材を増やしたりUSB挿し直しで順番が変わった時に
+#   別デバイスのボタンを静かに監視し続けてしまい、押しても何も起きない“無言の故障”になる
+#   （2026-07-11の耐久レースで実際に発生：4時間PTTが一度も発火せず気づかれなかった）。
+#   デバイス名が保存されていれば名前で優先照合し、順番が変わっても壊れないようにする。
+#   旧形式（nameフィールドが無い設定ファイル）は今まで通りindexを信頼（後方互換）。
+def _resolve_bound_joy(binding, sticks):
+    if not binding:
+        return None
+    bname = binding.get("name")
+    if bname:
+        for idx, js in sticks.items():
+            if js.get_name() == bname:
+                return idx
+        return None
+    bjoy = binding.get("joy")
+    return bjoy if bjoy in sticks else None
+
+
 # ── ジョイスティック/ハンドル監視（PTT用・フルスクリーン裏でも動く）──
 # pygameでボタンを直接読む。フォーカス不要＝iRacingがフルスクリーンでも検出できる。
 def poll_joystick():
-    global ptt_capturing, ptt_pressed, ptt_binding, vol_capturing
+    global ptt_capturing, ptt_pressed, ptt_binding, vol_capturing, ptt_mismatch_warned
     try:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")  # 画面不要
         # フォーカスが無く（iRacingがフルスクリーン前面）てもジョイスティック入力を受け取る
@@ -1540,22 +1576,33 @@ def poll_joystick():
                         continue
                     # 設定モード：押された最初のボタンを登録
                     if ptt_capturing:
-                        ptt_binding = {"joy": i, "button": b}
+                        ptt_binding = {"joy": i, "button": b, "name": js.get_name()}
                         save_ptt_config()
                         ptt_capturing = False
+                        ptt_mismatch_warned = False
                         broadcast({'type': 'ptt_set', 'joy': i, 'button': b})
-                        log("PTT bound: joystick %d button %d" % (i, b))
+                        log("PTT bound: joystick %d button %d (%s)" % (i, b, js.get_name()))
                     # 音量ボタン設定モード（up/down）：押されたボタンをその方向に登録
                     elif vol_capturing in ("up", "down"):
-                        vol_binding[vol_capturing] = {"joy": i, "button": b}
+                        vol_binding[vol_capturing] = {"joy": i, "button": b, "name": js.get_name()}
                         save_vol_config()
                         broadcast({'type': 'vol_set', 'dir': vol_capturing, 'joy': i, 'button': b})
-                        log("VOL bound: %s -> joystick %d button %d" % (vol_capturing, i, b))
+                        log("VOL bound: %s -> joystick %d button %d (%s)" % (vol_capturing, i, b, js.get_name()))
                         vol_capturing = None
 
-            # 登録済みボタンの押下/離しを監視 → PTTイベント送信
-            if ptt_binding and ptt_binding.get("joy") in sticks:
-                js = sticks[ptt_binding["joy"]]
+            # 登録済みボタンの押下/離しを監視 → PTTイベント送信（デバイス名優先で解決）
+            resolved_joy = _resolve_bound_joy(ptt_binding, sticks)
+            if ptt_binding:
+                if resolved_joy is not None:
+                    ptt_mismatch_warned = False
+                elif ptt_binding.get("name") and not ptt_mismatch_warned:
+                    # 登録した名前のデバイスが見つからない＝押しても永久に無反応になる状態。
+                    # ここで黙らず必ず知らせる（無言の故障が一番怖い）。
+                    broadcast({'type': 'ptt_mismatch', 'expected_name': ptt_binding.get("name")})
+                    log("PTT: bound device not found (" + ptt_binding.get("name") + ") — rebind needed")
+                    ptt_mismatch_warned = True
+            if resolved_joy is not None:
+                js = sticks[resolved_joy]
                 try:
                     cur = js.get_button(ptt_binding["button"]) == 1
                 except Exception:
@@ -1571,8 +1618,9 @@ def poll_joystick():
             # ダイヤル（ロータリー）は1クリック=1パルスなので、回すたびに1段動く。
             for d in ("up", "down"):
                 bind = vol_binding.get(d)
-                if bind and bind.get("joy") in sticks:
-                    js = sticks[bind["joy"]]
+                rj = _resolve_bound_joy(bind, sticks)
+                if rj is not None:
+                    js = sticks[rj]
                     try:
                         cur = js.get_button(bind["button"]) == 1
                     except Exception:
