@@ -926,10 +926,24 @@ function showBetaGate(){ document.getElementById('beta-gate').style.display='fle
   setTimeout(()=>{ try{document.getElementById('beta-code-input').focus();}catch(e){} },100); }
 function hideBetaGate(){ document.getElementById('beta-gate').style.display='none'; }
 
+// この端末を識別するID（初回起動時に生成してlocalStorageに保存・以後使い回す）。
+// サーバー側でexeコード1つにつき使える端末数を絞るために使う（詳しくはauth.js verifyBetaToken）。
+function getDeviceId(){
+  try{
+    let id = localStorage.getItem('pw_device_id');
+    if(!id){
+      id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+        : ('dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+      localStorage.setItem('pw_device_id', id);
+    }
+    return id;
+  }catch(e){ return ''; }
+}
+
 async function verifyBeta(code){
   try{
     const r = await fetch(API_BASE+'/api/beta/verify',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({code})});
+      body:JSON.stringify({code, deviceId:getDeviceId()})});
     return await r.json();
   }catch(e){ return {ok:false, reason:'network'}; }
 }

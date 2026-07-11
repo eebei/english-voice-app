@@ -122,7 +122,8 @@ app.get('/api/founding/status', async (_req, res) => {
 const betaLimiter = rateLimit({ windowMs: 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false });
 app.post('/api/beta/verify', betaLimiter, express.json(), async (req, res) => {
   try {
-    const r = await auth.verifyBetaToken((req.body || {}).code);
+    const { code, deviceId } = req.body || {};
+    const r = await auth.verifyBetaToken(code, deviceId);
     if (r.ok) return res.json({ ok: true, name: r.name, tier: r.tier });
     return res.status(403).json({ ok: false, reason: r.reason || 'denied' });
   } catch (err) {

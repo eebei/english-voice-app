@@ -101,6 +101,19 @@ async function init() {
       last_seen     TIMESTAMPTZ
     );
   `);
+  // exe起動コードのデバイス紐付け（2026-07-11深夜追加）。
+  //   従来はactiveフラグのみでゲートしていたため、1コードを友達に配ると無制限に無課金で使い放題になる
+  //   穴があった。ここで「1コードにつき使える端末はMAX_DEVICES_PER_CODE台まで」に制限する。
+  //   deviceIdを送らない旧exe（アップデート前）はこれまで通り無制限のまま＝後方互換のための経過措置。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS beta_token_devices (
+      code        TEXT NOT NULL REFERENCES beta_tokens(code) ON DELETE CASCADE,
+      device_id   TEXT NOT NULL,
+      first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (code, device_id)
+    );
+  `);
   // 大石との会話・成長記録（アカウントに紐付く永続メモリ）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS memories (
@@ -278,6 +291,11 @@ async function updateProfile(userId, { displayName, leaderboardOptIn }) {
 
 // ── 課金／会員管理（Stripe Webhookから呼ぶ） ──
 const FOUNDING_CAP = parseInt(process.env.FOUNDING_CAP || '50', 10);
+// 1つのexeコードで「現在有効」な端末の上限。iRacingと同じPCで動かす前提のアプリなので1に設定。
+// 上限を超えたら締め出すのではなく、一番古い（last_seenが最も過去の）端末を追い出して新しい端末を通す
+// 「椅子取りゲーム」方式（詳しくはverifyBetaToken）。再インストールや機種変更は自然に通り、
+// 友達に貸すと次に本人が起動した瞬間に本人が席を奪い返す＝どちらか一方しか使えない状態になる。
+const MAX_DEVICES_PER_CODE = parseInt(process.env.MAX_DEVICES_PER_CODE || '1', 10);
 
 // 決済成功 → そのメールのユーザーを会員化（アカウントが無ければ作る）
 // justActivated: 直前まで非会員だった（新規 or 再課金）→ ウェルカムメールを送るべきタイミング。
@@ -345,7 +363,10 @@ async function ensureReferralCode(email) {
 }
 
 // exe起動用の個人コード（PITWALL-<名前>-<6桁英数字>）。beta_tokensに直接登録するので
-// 発行した瞬間からverifyBetaTokenで通る。Founding購入者のみ・SNSシェアして友人が使う想定。
+// 発行した瞬間からverifyBetaTokenで通る。Founding購入者本人専用（最大MAX_DEVICES_PER_CODE台の端末まで）。
+// ★2026-07-11深夜修正：以前は「SNSシェアして友人が使う想定」でactiveフラグのみのゲートだったため、
+//   1コードを配るだけで無制限に無課金の同時利用が可能になっていた（サブスクモデルが無意味になる穴）。
+//   今後はデバイス台数で絞る。友人に本アプリを勧める導線は紹介コード（5日間トライアル）に一本化する。
 async function ensureExeCode(email) {
   if (!ready) return null;
   const { rows } = await pool.query('SELECT id, exe_code, display_name FROM users WHERE email = $1', [email]);
@@ -415,20 +436,20 @@ async function sendWelcomeEmail(rawEmail, plan) {
     : '';
 
   const exeText = exeCode
-    ? `\n\nアプリのアクセスコード（友達にシェアしてOK・SNS投稿にも使えます）: ${exeCode}\n` +
-      `友達がこのコードでPITWALLアプリを起動できます。上の紹介コードとセットで使ってください。\n\n` +
-      `Your app access code (safe to share on social media): ${exeCode}\n` +
-      `Friends use this to unlock the PITWALL app. Pair it with your referral code above.\n`
+    ? `\n\nアプリのアクセスコード（あなた専用・他人と共有しないでください）: ${exeCode}\n` +
+      `このコードは1台の端末で使う前提です（新しい端末で認証すると、その端末に切り替わります）。友達を招待したい場合は、上の紹介コード（5日間無料トライアル）を渡してください。\n\n` +
+      `Your app access code (personal — please don't share it): ${exeCode}\n` +
+      `This code works on one device at a time — verifying on a new device switches access to it. To invite a friend, send them your referral code above (5-day free trial) instead.\n`
     : '';
   const exeHtml = exeCode
     ? `<div style="margin-top:12px;padding:16px 18px;border:1px dashed #9D4EDD;border-radius:10px;background:#f9f5ff">
-        <p style="margin:0 0 8px;font-weight:bold;color:#333">Your app access code (share freely): <span style="color:#9D4EDD">${exeCode}</span></p>
-        <p style="margin:0;font-size:13px;color:#666">Friends use this to unlock the PITWALL app — safe to post on social media. Pair it with your referral code above. アプリ起動用コード（SNS投稿OK）。上の紹介コードとセットで友達に渡してください。</p>
+        <p style="margin:0 0 8px;font-weight:bold;color:#333">Your app access code (personal — please don't share it): <span style="color:#9D4EDD">${exeCode}</span></p>
+        <p style="margin:0;font-size:13px;color:#666">Works on one device at a time — verifying on a new device switches access to it. To invite a friend, send them your referral code above (5-day free trial) instead. アプリ起動用コード（あなた専用・1台の端末で使う前提）。友達には代わりに上の紹介コードを渡してください。</p>
       </div>`
     : '';
 
-  const shareUrl = (referralCode && exeCode)
-    ? `${BASE_URL}/refer.html?ref=${encodeURIComponent(referralCode)}&exe=${encodeURIComponent(exeCode)}`
+  const shareUrl = referralCode
+    ? `${BASE_URL}/refer.html?ref=${encodeURIComponent(referralCode)}`
     : null;
   const shareText = shareUrl
     ? `\n\n投稿用テンプレート（X/Instagram/TikTok・コピペOK）: ${shareUrl}\n` +
@@ -528,7 +549,7 @@ function normalizeCode(code) {
   return String(code || '').trim().toUpperCase();
 }
 
-async function verifyBetaToken(rawCode) {
+async function verifyBetaToken(rawCode, rawDeviceId) {
   const code = normalizeCode(rawCode);
   if (!code) return { ok: false, reason: 'empty' };
   if (!ready) return { ok: false, reason: 'unavailable' };
@@ -536,6 +557,32 @@ async function verifyBetaToken(rawCode) {
   const row = rows[0];
   if (!row) return { ok: false, reason: 'not_found' };
   if (!row.active) return { ok: false, reason: 'revoked' };
+
+  // デバイス「椅子取りゲーム」（deviceIdを送ってくる新exeのみ対象・旧exeは後方互換で従来通り無制限）。
+  //   上限に達している状態で未知の端末が来たら、一番last_seenが古い端末を追い出して席を空ける。
+  //   締め出す＝ブロックするのではなく「奪い合う」ことで、再インストールは通し、貸し借りには
+  //   毎回どちらかが使えなくなる摩擦を作る。
+  const deviceId = String(rawDeviceId || '').trim().slice(0, 128);
+  if (deviceId) {
+    const known = await pool.query(
+      'SELECT device_id FROM beta_token_devices WHERE code = $1 ORDER BY last_seen ASC', [code]
+    );
+    const knownIds = known.rows.map(r => r.device_id);
+    if (!knownIds.includes(deviceId) && knownIds.length >= MAX_DEVICES_PER_CODE) {
+      const evictCount = knownIds.length - MAX_DEVICES_PER_CODE + 1;
+      const toEvict = knownIds.slice(0, evictCount);
+      await pool.query(
+        'DELETE FROM beta_token_devices WHERE code = $1 AND device_id = ANY($2)',
+        [code, toEvict]
+      );
+    }
+    await pool.query(
+      `INSERT INTO beta_token_devices (code, device_id) VALUES ($1, $2)
+       ON CONFLICT (code, device_id) DO UPDATE SET last_seen = now()`,
+      [code, deviceId]
+    );
+  }
+
   // 最終接続時刻を更新（Yujiが「最後にいつ使ったか」を見られる）
   pool.query('UPDATE beta_tokens SET last_seen = now() WHERE code = $1', [code]).catch(() => {});
   return { ok: true, name: row.name, tier: row.tier };
