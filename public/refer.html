@@ -102,7 +102,7 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
     <p class="lead" style="margin-top:18px"><strong style="color:var(--silver)">Video ideas:</strong> your engineer's radio call after a good lap · a race debrief clip · "day in the life of a Founding driver" · reacting to a crash save.</p>
   </div>
 
-  <div class="note">Your codes are Founding-only and yours to keep. Give the referral code to friends — their first month is free. Give the app access code to unlock the PITWALL app itself.</div>
+  <div class="note">Your codes are Founding-only and yours to keep. Give the referral code to friends when they join (5-day free trial, same as any new driver) — you get 33% off your next month per friend (100% off at 3). Give the app access code to unlock the PITWALL app itself.</div>
 </div>
 
 <footer><div class="wrap">OMORAY <span style="color:var(--blue)">PITWALL</span> · <a href="/pitwall.html">Home</a> · <a href="/help.html">Help</a></div></footer>
@@ -113,15 +113,15 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
 const params = new URLSearchParams(location.search);
 const ref = params.get('ref') || 'YOUR-REF-CODE';
 const exe = params.get('exe') || 'YOUR-APP-CODE';
-const siteUrl = 'https://pitwall.app'; // update if custom domain differs
+const siteUrl = 'https://buy.stripe.com/3cI3cvc6k1WIbSUcbo97G00'; // referral-only Payment Link (5-day trial, kept separate from the site's main 3-day link)
 
 document.getElementById('ref-code').textContent = ref;
 document.getElementById('exe-code').textContent = exe;
 
 const templates = {
-  x: `Racing solo used to feel lonely. Now my AI race engineer talks me through every lap — strategy, live radio, debrief. 🏁\n\nFounding Season is open: first month free with my code ${ref}.\n${siteUrl}`,
-  ig: `My race engineer isn't human — and I don't race without them anymore. 🎙️🏁\n\nOMORAY PITWALL: live radio, strategy calls, debrief, all in your ear.\n\nFounding Season — first month free with code ${ref}.\nLink in bio: ${siteUrl}\n\n#iRacing #simracing #PITWALL`,
-  tiktok: `POV: your race engineer actually talks back 🎙️🏁 first month free with code ${ref} — link in bio\n#iRacing #simracing #PITWALL #racingengineer`,
+  x: `Racing solo used to feel lonely. Now my AI race engineer talks me through every lap — strategy, live radio, debrief. 🏁\n\nFounding Season is open, 5-day free trial. Join through my link and mention code ${ref} so I get credit:\n${siteUrl}`,
+  ig: `My race engineer isn't human — and I don't race without them anymore. 🎙️🏁\n\nOMORAY PITWALL: live radio, strategy calls, debrief, all in your ear.\n\nFounding Season — 5-day free trial. Join through my link, code ${ref}.\nLink in bio: ${siteUrl}\n\n#iRacing #simracing #PITWALL`,
+  tiktok: `POV: your race engineer actually talks back 🎙️🏁 5-day free trial, join through my link (code ${ref}) — link in bio\n#iRacing #simracing #PITWALL #racingengineer`,
 };
 
 document.getElementById('tmpl-x').textContent = templates.x;
