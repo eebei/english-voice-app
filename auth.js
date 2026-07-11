@@ -29,6 +29,8 @@ const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD; // （旧SMTP用・Ra
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || GMAIL_USER || 'omoraypitwall@gmail.com'; // Brevoで認証済みの送信元
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'OMORAY PITWALL';
+// 購入時のwelcomeメールをYujiにもBCCする（新規会員をリアルタイムで把握するため）
+const ADMIN_NOTIFY_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || 'sbyyj.080711@gmail.com';
 const BASE_URL = (process.env.BASE_URL || 'https://english-voice-app-production.up.railway.app').replace(/\/$/, '');
 
 // 軽量ログヘルパー。以前 setMemberByEmail / unsetMemberByCustomer 等が未定義の log() を呼び、
@@ -142,16 +144,18 @@ function normalizeEmail(email) {
 }
 
 // ── メール送信（Brevo HTTP APIを優先。無ければnodemailerフォールバック） ──
-async function sendEmail({ to, subject, text, html }) {
+async function sendEmail({ to, subject, text, html, bcc }) {
   if (mailer === 'brevo') {
+    const payload = {
+      sender: { email: EMAIL_FROM, name: EMAIL_FROM_NAME },
+      to: [{ email: to }],
+      subject, textContent: text, htmlContent: html,
+    };
+    if (bcc) payload.bcc = [{ email: bcc }];
     const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json', 'accept': 'application/json' },
-      body: JSON.stringify({
-        sender: { email: EMAIL_FROM, name: EMAIL_FROM_NAME },
-        to: [{ email: to }],
-        subject, textContent: text, htmlContent: html,
-      }),
+      body: JSON.stringify(payload),
     });
     if (!resp.ok) {
       const detail = await resp.text();
@@ -160,7 +164,7 @@ async function sendEmail({ to, subject, text, html }) {
     return;
   }
   if (mailer && mailer.sendMail) {
-    await mailer.sendMail({ from: `${EMAIL_FROM_NAME} <${EMAIL_FROM}>`, to, subject, text, html });
+    await mailer.sendMail({ from: `${EMAIL_FROM_NAME} <${EMAIL_FROM}>`, to, subject, text, html, bcc });
     return;
   }
   throw new Error('no_mailer');
@@ -433,6 +437,7 @@ async function sendWelcomeEmail(rawEmail, plan) {
 
   await sendEmail({
     to: email,
+    bcc: ADMIN_NOTIFY_EMAIL,
     subject: 'Welcome to OMORAY PITWALL — Founding Season',
     text:
       `お支払いありがとうございます。Founding Seasonへようこそ！\n` +
