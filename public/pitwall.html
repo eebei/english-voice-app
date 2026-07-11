@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OMORAY PITWALL — AI Race Engineer for iRacing</title>
 <meta name="description" content="Your AI race engineer in your ear. Lap times, strategy, debrief — all session long. For iRacing drivers worldwide.">
+<meta property="og:title" content="OMORAY PITWALL — AI Race Engineer for iRacing">
+<meta property="og:description" content="Your AI race engineer in your ear. Lap times, strategy, debrief — all session long. For iRacing drivers worldwide.">
+<meta property="og:image" content="https://pitwall.app/PITWALL_logo_mark.png">
+<meta property="og:type" content="website">
 <link rel="icon" type="image/png" href="/PITWALL_logo_mark.png">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -212,7 +216,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <nav>
   <div class="nav-in">
     <div class="logo">
-      <img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:108px;border-radius:0">
+      <img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL" style="width:auto;height:80px;border-radius:0">
     </div>
     <button class="nav-cta" onclick="openApp()">Launch PITWALL</button>
   </div>
@@ -404,7 +408,7 @@ function showDemo(mode){
         <a href="https://discord.gg/3R3ssGmhdm" class="btn-ghost" style="display:block;text-align:center;text-decoration:none">Join on Discord →</a>
       </div>
     </div>
-    <p style="max-width:640px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--silver);line-height:1.75"><strong style="color:var(--text)">Built for road racing.</strong> PITWALL is developed on GT3 and road-course cars, and runs across other road classes — Formula, Prototype — though its class-specific expertise there is still growing. Racing ovals? PITWALL isn't built for that yet — for now, tools like Crew Chief have you covered. This is a road-racing engineer — but if enough oval drivers ask, we'll look at it.</p>
+    <p style="max-width:640px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--silver);line-height:1.75"><strong style="color:var(--text)">Built for road racing.</strong> PITWALL is developed primarily on GT3 and road-course cars (our core expertise). It runs across other road classes — Formula, Prototype — though class-specific advice there is still growing. <strong style="color:var(--blue)">Testing ovals, dirt ovals, and dirt road racing?</strong> We're looking for drivers to help shape PITWALL for your categories. <a href="https://discord.gg/3R3ssGmhdm" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">Join our Discord</a> to get involved.</p>
   </div>
 </section>
 
@@ -438,8 +442,8 @@ function showDemo(mode){
 <section class="section" id="pricing">
   <div class="wrap-lg">
     <div class="eyebrow">Founding Season</div>
-    <h2 class="sec-title">Simple Pricing</h2>
-    <p class="sec-lead">Join during the Founding Season and lock in this rate — forever.</p>
+    <h2 class="sec-title">Be a Founding Driver</h2>
+    <p class="sec-lead">Early drivers lock in lifetime pricing and shape what PITWALL becomes. Limited to the first 100. <a href="#founder" style="color:var(--blue);text-decoration:underline">Built by an iRacing driver</a> who wanted a calmer pit wall in his ear.</p>
     <div class="price-grid single">
       <div class="price-card featured">
         <div class="plan">Founding Season <span class="price-tag">LOCKED FOREVER</span></div>
@@ -554,6 +558,7 @@ function showDemo(mode){
           <div class="mdesc" id="mode-debrief-desc">Post-session analysis</div>
         </div>
       </div>
+      <div style="font-size:12px;color:var(--muted);margin:18px 0 14px;padding:10px 12px;background:var(--panel);border-radius:8px;border-left:2px solid var(--blue)"><strong style="color:var(--silver)">Local bridge required for live iRacing telemetry:</strong> Download the <a href="https://github.com/omoray-lab/pitwall-bridge" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">PITWALL Bridge</a> app to send your live data (speeds, gaps, tyre temps) to your engineer. Debrief mode works without it.</div>
       <button class="start-btn" id="btn-start-session" disabled onclick="startSession()">Start Session →</button>
       <button class="btn-close" onclick="showScreen('screen-select')" style="margin-top:12px;width:100%;text-align:center">← Back</button>
     </div>

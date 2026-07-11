@@ -70,11 +70,13 @@ async function init() {
       subscription_status TEXT,                       -- 'active' | 'canceled' | null
       display_name  TEXT,
       leaderboard_opt_in BOOLEAN NOT NULL DEFAULT false,  -- 将来のランキング/速報ページにニックネーム表示を許可するか（明示同意）
-      referral_code TEXT UNIQUE                          -- Founding会員専用の個人紹介コード（Stripe Promotion Codeと1:1）
+      referral_code TEXT UNIQUE,                         -- Founding会員専用の個人紹介コード（Stripe Promotion Codeと1:1）
+      exe_code      TEXT UNIQUE                          -- Founding会員専用のexe起動コード（beta_tokensと1:1・SNSシェア用）
     );
   `);
   // 既存DBへの追加カラム（テーブルは既に存在するため IF NOT EXISTS の CREATE TABLE では追加されない）
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS exe_code TEXT UNIQUE;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS login_tokens (
       token       TEXT PRIMARY KEY,
@@ -332,6 +334,41 @@ async function ensureReferralCode(email) {
   return null;
 }
 
+// exe起動用の個人コード（PITWALL-<名前>-<6桁英数字>）。beta_tokensに直接登録するので
+// 発行した瞬間からverifyBetaTokenで通る。Founding購入者のみ・SNSシェアして友人が使う想定。
+async function ensureExeCode(email) {
+  if (!ready) return null;
+  const { rows } = await pool.query('SELECT id, exe_code, display_name FROM users WHERE email = $1', [email]);
+  const user = rows[0];
+  if (!user) return null;
+  if (user.exe_code) return user.exe_code;
+
+  // 名前セグメント：display_name優先、無ければメールのローカル部を英数字のみに正規化。
+  const rawName = (user.display_name || email.split('@')[0] || 'DRIVER');
+  const nameSeg = rawName.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'DRIVER';
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const genCode = () => `PITWALL-${nameSeg}-` + Array.from({ length: 6 }, () => ALPHABET[crypto.randomInt(ALPHABET.length)]).join('');
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = genCode();
+    try {
+      await pool.query(
+        `INSERT INTO beta_tokens (code, name, tier, note) VALUES ($1,$2,$3,$4)`,
+        [code, rawName, 'founding', 'auto-generated at Founding purchase (SNS referral share)']
+      );
+      await pool.query('UPDATE users SET exe_code = $1 WHERE id = $2', [code, user.id]);
+      log('exe code created: ' + email + ' -> ' + code);
+      return code;
+    } catch (e) {
+      if (e && e.code === '23505') continue; // unique_violation（コード重複）→ 振り直す
+      log('exe code creation failed for ' + email + ': ' + (e && e.message || e));
+      return null;
+    }
+  }
+  log('exe code creation gave up after retries for ' + email);
+  return null;
+}
+
 // 会員化直後のウェルカムメール（justActivated===trueの時だけ呼ぶこと）
 // plan==='founding' の時だけ、Founding限定の個人紹介コードを発行してメールに添える。
 async function sendWelcomeEmail(rawEmail, plan) {
@@ -343,9 +380,12 @@ async function sendWelcomeEmail(rawEmail, plan) {
   }
 
   let referralCode = null;
+  let exeCode = null;
   if (plan === 'founding') {
     try { referralCode = await ensureReferralCode(email); }
     catch (e) { log('ensureReferralCode threw for ' + email + ': ' + e.message); }
+    try { exeCode = await ensureExeCode(email); }
+    catch (e) { log('ensureExeCode threw for ' + email + ': ' + e.message); }
   }
 
   const referralText = referralCode
@@ -361,6 +401,19 @@ async function sendWelcomeEmail(rawEmail, plan) {
       </div>`
     : '';
 
+  const exeText = exeCode
+    ? `\n\nアプリのアクセスコード（友達にシェアしてOK・SNS投稿にも使えます）: ${exeCode}\n` +
+      `友達がこのコードでPITWALLアプリを起動できます。上の紹介コードとセットで使ってください。\n\n` +
+      `Your app access code (safe to share on social media): ${exeCode}\n` +
+      `Friends use this to unlock the PITWALL app. Pair it with your referral code above.\n`
+    : '';
+  const exeHtml = exeCode
+    ? `<div style="margin-top:12px;padding:16px 18px;border:1px dashed #9D4EDD;border-radius:10px;background:#f9f5ff">
+        <p style="margin:0 0 8px;font-weight:bold;color:#333">Your app access code (share freely): <span style="color:#9D4EDD">${exeCode}</span></p>
+        <p style="margin:0;font-size:13px;color:#666">Friends use this to unlock the PITWALL app — safe to post on social media. Pair it with your referral code above. アプリ起動用コード（SNS投稿OK）。上の紹介コードとセットで友達に渡してください。</p>
+      </div>`
+    : '';
+
   await sendEmail({
     to: email,
     subject: 'Welcome to OMORAY PITWALL — Founding Season',
@@ -369,7 +422,8 @@ async function sendWelcomeEmail(rawEmail, plan) {
       `セットアップはこちら: ${welcomeUrl}\n\n` +
       `Thanks for subscribing — welcome to the Founding Season!\n` +
       `Get set up here: ${welcomeUrl}` +
-      referralText,
+      referralText +
+      exeText,
     html:
       `<div style="font-family:system-ui,sans-serif;max-width:480px">
         <h2 style="color:#9D4EDD">Welcome to OMORAY PITWALL</h2>
@@ -379,9 +433,10 @@ async function sendWelcomeEmail(rawEmail, plan) {
            padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold">Get Set Up →</a></p>
         <p style="color:#888;font-size:12px">${welcomeUrl}</p>
         ${referralHtml}
+        ${exeHtml}
       </div>`,
   });
-  return { sent: true, referralCode };
+  return { sent: true, referralCode, exeCode };
 }
 
 // 管理者による強制遮断／復帰（Stripe解約を待たず即座にis_memberを操作。悪質ユーザー対応用）
