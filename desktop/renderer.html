@@ -847,6 +847,14 @@ function applyLang(lang){
 function toggleLang(){ applyLang((window.uiLang==='en') ? 'ja' : 'en'); }
 // ── State ──
 let sel = null, selMode = null, userName = '', messages = [], turns = 0, sessionMsgCount = 0;
+// サーバー側の上限(server.js MAX_MESSAGES=100)を超えると/api/chatが400で拒否し、以後の会話が
+// 全部失敗し続ける無言故障になる（2026-07-12の実走で発覚：自動ラジオコールも全部この配列に
+// 積まれるので、長いレースだと確実に上限に達する）。上限手前で古い方から間引く。
+const MAX_CLIENT_MESSAGES = 60;
+function pushMsg(m){
+  messages.push(m);
+  if(messages.length > MAX_CLIENT_MESSAGES) messages.splice(0, messages.length - MAX_CLIENT_MESSAGES);
+}
 let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
@@ -1179,7 +1187,7 @@ function startSession(){
   // Greeting
   const greeting = GREETINGS[sel](userName, selMode);
   addMsg('ai', greeting);
-  messages.push({role:'assistant',content:greeting});
+  pushMsg({role:'assistant',content:greeting});
   speak(greeting);
   // Mic setup
   jamesAutoMicEnabled = (selMode==='race');
@@ -1266,7 +1274,7 @@ async function sendMsg(){
   if(!text||isBusy) return;
   inp.value=''; inp.style.height='auto';
   addMsg('user',text);
-  messages.push({role:'user',content:text});
+  pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
   await callAPI();
 }
@@ -1357,7 +1365,7 @@ async function callAPI(){
     const display = reply.replace(/\[JA:[\s\S]*\]$/,'').trim();
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
-    messages.push({role:'assistant',content:reply});
+    pushMsg({role:'assistant',content:reply});
     if(sessionMsgCount>0&&sessionMsgCount%15===0) saveMemory();
   } catch(e){
     // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
@@ -1375,7 +1383,7 @@ async function callAPI(){
     // ★重要：ここでmessagesにassistant側を積まないと、次のユーザー発言と合わせて
     // user/userが連続してしまいClaude APIのrole交互ルールに反し続け、
     // 以降の質問が全部このエラーメッセージを繰り返すだけになる（履歴が永久に壊れる）。
-    messages.push({role:'assistant',content:errMsg});
+    pushMsg({role:'assistant',content:errMsg});
   }
   isBusy=false;
   document.getElementById('busy-ind').classList.remove('show');
@@ -1859,7 +1867,7 @@ function injectRadio(data){
   if(!text) return;
   if(data.trigger==='personal_best'&&data.time) sessionBestLapStr=data.time;
   addMsg('ai',text);
-  messages.push({role:'assistant',content:text});
+  pushMsg({role:'assistant',content:text});
   // クラッシュ時の安否確認は最優先で割り込む（溜まったラジオより先に、即座に）。
   speak(text, data.trigger==='crash_check');
 }
@@ -1916,7 +1924,7 @@ function injectBriefing(data){
   if(!summary) return;
   const msg = isJP?`セッション情報受信：${summary}`:`Session briefing: ${summary}`;
   addMsg('ai',msg);
-  messages.push({role:'assistant',content:msg});
+  pushMsg({role:'assistant',content:msg});
   speak(msg);
 }
 // 戦略モード：iRacing接続の数秒後に、AIが自分からブリーフィングを切り出す（一回限りの独立リクエスト）。
@@ -1998,7 +2006,7 @@ function scheduleAutoDebrief(data){
     switchMode('debrief');   // チェッカー→自動でデブリーフモードへ（ラップ読み上げOFF・じっくり会話）
     const msg=isJP?jpEnding:enEnding;
     addMsg('ai',msg);
-    messages.push({role:'assistant',content:msg});
+    pushMsg({role:'assistant',content:msg});
     speak(msg);
   },20000);  // チェッカー後20秒でデブリーフ発出（Yuji実走の体感で調整予定）
 }

@@ -1085,7 +1085,12 @@ def poll_iracing():
                     fuel_strategy['fuel_needed'] = round(fuel_needed, 1)
                     fuel_strategy['margin_laps'] = margin_laps
                     fuel_strategy['pit_required'] = margin_laps < 0
-                    if margin_laps < 0 and not fuel_strategy_warned:
+                    # ★2026-07-12実走で発覚：ラップ完了(=このブロック発火)がピットロード進入直後に
+                    #   重なると、「ピット必須だ」という警告が実際にピットロードを走行中に届いてしまう
+                    #   （既にピットに向かっているのに今更「ピットしろ」と言う矛盾した無線になる）。
+                    #   onPit中は新規の警告を出さない。ピットを出て、まだ margin が負のままなら
+                    #   次のラップ完了時に正しく再警告される。
+                    if margin_laps < 0 and not fuel_strategy_warned and not onPit:
                         broadcast({'type': 'radio', 'trigger': 'fuel_strategy_warning',
                             'margin_laps': margin_laps,
                             'message': 'Fuel will not last to the finish at this pace. Pit required.'})
@@ -1359,6 +1364,12 @@ def poll_iracing():
                             continue
                         if car_on_track and car_on_track[_ei] not in (2, 3):  # コース上/ピット接近のみ
                             continue
+                        # ★2026-07-12実走で発覚：CarIdxEstTimeは「今の周回内の経過時間」で周回ごとに
+                        #   リセットされる値。周回数が違う(ラップダウン)車同士でも、たまたま周回内の
+                        #   同じような位置にいると差が小さく出て「0.3秒差」等の誤検知になる
+                        #   （実測：15.5秒離れた車が1秒後に0.0秒と誤警告）。同一周回の車同士でしか使わない。
+                        if car_laps_all and lap is not None and _ei < len(car_laps_all) and car_laps_all[_ei] != lap:
+                            continue
                         _gd = _et - p_et  # 負=前方(est_timeが小さい), 正=後方
                         if _gd < 0 and -_gd < 30 and (nearest_ahead_gap is None or -_gd < nearest_ahead_gap):
                             nearest_ahead_gap = -_gd
@@ -1401,6 +1412,10 @@ def poll_iracing():
 
                 for idx, f2_time in enumerate(car_f2_times):
                     if idx == player_car_idx or f2_time <= 0:
+                        continue
+                    # ★同一周回の車同士でしか接近判定しない（上のnearest_gapブロックと同じ理由・
+                    #   2026-07-12実走で発覚したEstTimeの周回またぎ誤検知対策）。
+                    if car_laps_all and lap is not None and idx < len(car_laps_all) and car_laps_all[idx] != lap:
                         continue
                     # ※前後ギャップ(nearest_ahead/behind_gap)は上のCarIdxEstTimeブロックで計算済み。
                     #   このループはバトル/接近/停止車検知に使う。車間はEstTime差で測る。
