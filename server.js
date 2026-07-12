@@ -468,7 +468,7 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
         encoding: encoding || 'WEBM_OPUS',
         languageCode: lang,
         enableAutomaticPunctuation: true,
-        model: 'latest_short',
+        model: 'latest_long',
         speechContexts: [{ phrases: racingPhrases, boost: 15 }],
       },
       audio: { content: audio },

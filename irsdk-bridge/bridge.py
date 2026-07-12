@@ -684,6 +684,7 @@ def poll_iracing():
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
     tow_active = False         # トーイング中フラグ（開始時に1回だけ声かけ・終了でリセット）
+    prev_damage_s = 0.0        # 前回計測のdamage_s（義務+任意修理秒）。増えたら1回だけダメージ報告
     prev_incidents = None
     incident_times = []
     prev_driver_state = None
@@ -1251,6 +1252,25 @@ def poll_iracing():
                     'message': 'Being towed back. Time counts against us until it clears, no pit work yet. Nothing you can do — breathe, we regroup when you are in.'})
         else:
             tow_active = False
+
+        # ── ダメージレポート（2026-07-12マーボー要望：損傷度合い・走行継続可否を知りたい）──
+        # crash_checkは「大丈夫か・車は動くか」という安否確認の問いかけであって実データではない。
+        # ここではdamage_s(=PitRepairLeft+PitOptRepairLeft、義務+任意修理の残り秒)の増分を見て、
+        # 実際に損傷が発生した時だけ1回報告する。義務修理あり=要ピットの本物の損傷、
+        # 義務修理なしで任意修理のみ=見た目だけの軽微な損傷、と区別して伝える。
+        # ※IRSDKに「どのパーツが脱落したか」を示す変数は無いため、部品単位の特定はできない
+        #   （修理所要秒からの重大度推定のみ）。
+        if damage_s > prev_damage_s + 0.5:
+            mandatory = (repair_mand or 0) > 0
+            if mandatory:
+                dmg_msg = ('Damage confirmed — mandatory repair, about ' +
+                    str(round(repair_mand)) + ' seconds. Box next lap.')
+            else:
+                dmg_msg = 'Cosmetic damage only. Car is still solid, keep pushing.'
+            broadcast({'type': 'radio', 'trigger': 'damage_report', 'mandatory': mandatory,
+                'repair_mand': round(repair_mand or 0, 1), 'repair_opt': round(repair_opt or 0, 1),
+                'message': dmg_msg})
+        prev_damage_s = damage_s
 
         # Position change（クラス内順位ベース。レースセッション＆コース走行中のみ。
         #   グリッド整列中(OnTrack:False)は順位がシャッフルするので黙る）

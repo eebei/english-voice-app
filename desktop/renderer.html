@@ -1771,6 +1771,9 @@ function oishiRadio(d){
     case 'danger_ahead':  return `抜く時気をつけろ。前、危ないドライバーだ（${d.reason}）。`;
     case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
     case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意しろ。`;
+    case 'damage_report':
+      return d.mandatory ? `ダメージ確認。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そう。`
+                          : `見た目だけの軽い損傷だ。車は問題ない、そのまま行こう。`;
     default: return null;
   }
 }
@@ -1812,6 +1815,9 @@ function kanbeRadio(d){
     case 'danger_ahead':  return `抜く時気を付けえ。前、危ないドライバーじゃ（${d.reason}）。`;
     case 'stopped_behind': return `後ろに停止車両じゃ。${d.delta}秒。`;
     case 'stopped_ahead':  return `前方に停止車両じゃ。${d.delta}秒。気を付けえ。`;
+    case 'damage_report':
+      return d.mandatory ? `ダメージ確認じゃ。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そうや。`
+                          : `見た目だけの軽い損傷じゃ。車は大丈夫、そのまま行けえ。`;
     default: return null;
   }
 }
@@ -1853,6 +1859,9 @@ function matthiasRadio(d){
     case 'danger_ahead':  return `Vorsicht beim Überholen. Gefährlicher Fahrer vorne (${d.reason}).`;
     case 'stopped_behind': return `Stehendes Auto hinten. ${d.delta} Sekunden.`;
     case 'stopped_ahead':  return `Stehendes Auto vorne. ${d.delta} Sekunden. Vorsicht.`;
+    case 'damage_report':
+      return d.mandatory ? `Schaden bestätigt — Pflichtreparatur, etwa ${Math.round(d.repair_mand)} Sekunden. Nächste Box.`
+                          : `Nur kosmetischer Schaden. Auto ist noch stabil, weiter pushen.`;
     default: return null;
   }
 }
