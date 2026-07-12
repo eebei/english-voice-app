@@ -439,12 +439,14 @@ async function sendWelcomeEmail(rawEmail, plan) {
     ? `\n\nアプリのアクセスコード（あなた専用）: ${exeCode}\n` +
       `他人に教えないでください——このコードは1台の端末でしか使えないので、誰かがこれで起動すると、あなた自身が使えなくなります。友達を誘いたい時は、代わりに上の紹介コード（5日間無料トライアル）を渡してください。\n\n` +
       `Your app access code (personal): ${exeCode}\n` +
-      `Don't give this to anyone — it only works on one device at a time, so if someone else uses it, you get locked out. To invite a friend, send them your referral code above (5-day free trial) instead.\n`
+      `Don't give this to anyone — it only works on one device at a time, so if someone else uses it, you get locked out. To invite a friend, send them your referral code above (5-day free trial) instead.\n\n` +
+      `起動時にWindowsの警告が出た方はこちら / If Windows shows a warning when you open it: ${BASE_URL}/help.html#first-launch\n`
     : '';
   const exeHtml = exeCode
     ? `<div style="margin-top:12px;padding:16px 18px;border:1px dashed #9D4EDD;border-radius:10px;background:#f9f5ff">
         <p style="margin:0 0 8px;font-weight:bold;color:#333">Your app access code (personal): <span style="color:#9D4EDD">${exeCode}</span></p>
         <p style="margin:0;font-size:13px;color:#666">Don't give this to anyone — it only works on one device at a time, so if someone else uses it, you get locked out. To invite a friend, send them your referral code above (5-day free trial) instead. アプリ起動用コード（あなた専用）。他人に教えないでください——1台の端末でしか使えないので、誰かが使うとあなた自身が使えなくなります。友達には代わりに上の紹介コードを渡してください。</p>
+        <p style="margin:10px 0 0"><a href="${BASE_URL}/help.html#first-launch" style="color:#9D4EDD;font-size:13px;font-weight:bold">起動時にWindowsの警告が出た方はこちら → / If Windows shows a warning when you open it, click here →</a></p>
       </div>`
     : '';
 

@@ -23,6 +23,14 @@
   .q h3::before{content:'▸ ';color:var(--red)}
   .q p{color:#cfd3da;margin:6px 0}
   code{background:#06060a;border:1px solid #23252c;border-radius:7px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:13px;color:var(--green)}
+  .steps{list-style:none;margin:10px 0 0}
+  .steps li{display:flex;gap:12px;align-items:flex-start;margin:12px 0;padding-bottom:12px;border-bottom:1px solid #1c1d22}
+  .steps li:last-child{border-bottom:none;padding-bottom:0}
+  .steps .num{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:var(--red);color:#fff;font-family:'Oxanium';font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center}
+  .steps .txt{color:#cfd3da}
+  .steps .btn{display:inline-block;background:#23252c;border:1px solid #34363f;border-radius:6px;padding:2px 9px;font-size:12.5px;color:#fff;font-weight:600}
+  .lang-lbl{font-family:'Oxanium';font-size:11px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin:16px 0 4px}
+  .lang-lbl:first-of-type{margin-top:6px}
   .cmd{display:block;background:#06060a;border:1px solid #23252c;border-radius:9px;padding:12px 14px;font-family:ui-monospace,monospace;font-size:12.5px;color:var(--green);overflow-x:auto;white-space:nowrap;margin:8px 0}
   footer{border-top:1px solid #16171c;padding:30px 0;color:var(--muted);font-size:13px;text-align:center;margin-top:40px}
   .sec{font-family:'Oxanium';font-size:13px;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin:34px 0 6px}
@@ -41,6 +49,32 @@
 
 <div class="wrap">
   <div class="sec">Founding members — getting started</div>
+
+  <div class="q" id="first-launch"><h3>初めて起動する時の流れ（Windowsの警告が出ても大丈夫）／ First time opening the app (Windows warnings are normal)</h3>
+  <p>下から順番に、1つずつゆっくり進めてください。全部そのままで大丈夫です。<br>Follow these one at a time, in order. Everything below is expected — nothing is broken.</p>
+  <div class="lang-lbl">日本語</div>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="txt">welcomeメールの<span class="btn">Get Set Up</span>ボタン、またはこのページの<a href="/setup.html">Setup</a>から<code>.exe</code>ファイルをダウンロードして開く。</span></li>
+    <li><span class="num">2</span><span class="txt">「WindowsによってPCが保護されました」という青い画面が出る → <b>これは正常です、怖がらないでください</b>（PITWALLは個人開発アプリなのでWindowsが一旦警告を出すだけです）。</span></li>
+    <li><span class="num">3</span><span class="txt">その青い画面の中の、小さい文字<span class="btn">詳細情報</span>をクリック。</span></li>
+    <li><span class="num">4</span><span class="txt">出てきた<span class="btn">実行</span>ボタンをクリック → アプリが開き、アクセスコードの入力画面が一瞬見える。</span></li>
+    <li><span class="num">5</span><span class="txt">頻繁にアップデートしているため、紫色の「アップデートが必要です」という画面が出ることがあります → <span class="btn">⬇ Download the latest version</span>ボタンをクリック。</span></li>
+    <li><span class="num">6</span><span class="txt">新しい<code>.exe</code>がダウンロードされる → 今開いているアプリを閉じて、<b>今ダウンロードした新しい方</b>のexeを実行する。</span></li>
+    <li><span class="num">7</span><span class="txt">もう一度アプリが開く → welcomeメールに書いてある<b>アクセスコード</b>（<code>PITWALL-〇〇〇-XXXXXX</code>の形）をコピーして貼り付け。</span></li>
+    <li><span class="num">8</span><span class="txt"><span class="btn">認証する</span>ボタンをクリック → PITWALLに入れます！</span></li>
+  </ol>
+  <div class="lang-lbl">English</div>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="txt">Download the <code>.exe</code> from the <span class="btn">Get Set Up</span> button in your welcome email, or from <a href="/setup.html">Setup</a> on this site, and open it.</span></li>
+    <li><span class="num">2</span><span class="txt">A blue screen says "Windows protected your PC" → <b>this is completely normal, don't worry</b>. It's just Windows being cautious about a small indie app.</span></li>
+    <li><span class="num">3</span><span class="txt">On that blue screen, click the small text link <span class="btn">More info</span>.</span></li>
+    <li><span class="num">4</span><span class="txt">A <span class="btn">Run anyway</span> button appears — click it. The app opens and you'll briefly see the access code screen.</span></li>
+    <li><span class="num">5</span><span class="txt">Because we ship updates often, a purple "Update Required" screen may appear → click <span class="btn">⬇ Download the latest version</span>.</span></li>
+    <li><span class="num">6</span><span class="txt">A new <code>.exe</code> downloads → close the app you have open now, and run the <b>newly downloaded one</b> instead.</span></li>
+    <li><span class="num">7</span><span class="txt">The app opens again → copy your <b>access code</b> (looks like <code>PITWALL-NAME-XXXXXX</code>) from your welcome email and paste it in.</span></li>
+    <li><span class="num">8</span><span class="txt">Click <span class="btn">Verify</span> → you're in!</span></li>
+  </ol>
+  <p style="margin-top:14px">8ステップやっても進まない場合はご連絡ください。<br>Still stuck after all 8 steps? Email <a href="mailto:omoraypitwall@gmail.com">omoraypitwall@gmail.com</a>.</p></div>
 
   <div class="q"><h3>How do I download and install PITWALL?</h3>
   <p>After you subscribe, your welcome email has a download link — or grab it anytime from your <a href="/welcome.html">welcome page</a>. It's a single Windows app: just run the <code>.exe</code>, nothing else to install. Then see <a href="/setup.html">Setup</a> for push-to-talk and choosing your engineer.</p></div>
