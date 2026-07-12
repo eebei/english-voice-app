@@ -436,15 +436,15 @@ async function sendWelcomeEmail(rawEmail, plan) {
     : '';
 
   const exeText = exeCode
-    ? `\n\nアプリのアクセスコード（あなた専用・他人と共有しないでください）: ${exeCode}\n` +
-      `このコードは1台の端末で使う前提です（新しい端末で認証すると、その端末に切り替わります）。友達を招待したい場合は、上の紹介コード（5日間無料トライアル）を渡してください。\n\n` +
-      `Your app access code (personal — please don't share it): ${exeCode}\n` +
-      `This code works on one device at a time — verifying on a new device switches access to it. To invite a friend, send them your referral code above (5-day free trial) instead.\n`
+    ? `\n\nアプリのアクセスコード（あなた専用）: ${exeCode}\n` +
+      `他人に教えないでください——このコードは1台の端末でしか使えないので、誰かがこれで起動すると、あなた自身が使えなくなります。友達を誘いたい時は、代わりに上の紹介コード（5日間無料トライアル）を渡してください。\n\n` +
+      `Your app access code (personal): ${exeCode}\n` +
+      `Don't give this to anyone — it only works on one device at a time, so if someone else uses it, you get locked out. To invite a friend, send them your referral code above (5-day free trial) instead.\n`
     : '';
   const exeHtml = exeCode
     ? `<div style="margin-top:12px;padding:16px 18px;border:1px dashed #9D4EDD;border-radius:10px;background:#f9f5ff">
-        <p style="margin:0 0 8px;font-weight:bold;color:#333">Your app access code (personal — please don't share it): <span style="color:#9D4EDD">${exeCode}</span></p>
-        <p style="margin:0;font-size:13px;color:#666">Works on one device at a time — verifying on a new device switches access to it. To invite a friend, send them your referral code above (5-day free trial) instead. アプリ起動用コード（あなた専用・1台の端末で使う前提）。友達には代わりに上の紹介コードを渡してください。</p>
+        <p style="margin:0 0 8px;font-weight:bold;color:#333">Your app access code (personal): <span style="color:#9D4EDD">${exeCode}</span></p>
+        <p style="margin:0;font-size:13px;color:#666">Don't give this to anyone — it only works on one device at a time, so if someone else uses it, you get locked out. To invite a friend, send them your referral code above (5-day free trial) instead. アプリ起動用コード（あなた専用）。他人に教えないでください——1台の端末でしか使えないので、誰かが使うとあなた自身が使えなくなります。友達には代わりに上の紹介コードを渡してください。</p>
       </div>`
     : '';
 
