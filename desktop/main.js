@@ -192,10 +192,16 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => {
     cb(permission === 'media' ? true : true);
   });
-  // ログファイルを準備（毎回新規）
+  // ログファイルを準備（起動ごとに新規ファイル・タイムスタンプ付き）。
+  // ★2026-07-12改修：以前は固定ファイル名で毎回上書きしていたため、問題が起きたセッションの
+  //   ログを退避する前にアプリを開き直すと証拠が消えてしまっていた（テスター報告の実害）。
+  //   起動時刻をファイル名に入れることで、過去のログが自然に残るようにする。
   try {
-    LOG_FILE = path.join(app.getPath('desktop'), 'OMORAY-bridge-debug.log');
-    fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + new Date().toISOString() + ' ===\n');
+    const now = new Date();
+    const stamp = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0')
+      + '-' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
+    LOG_FILE = path.join(app.getPath('desktop'), 'OMORAY-bridge-debug-' + stamp + '.log');
+    fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + now.toISOString() + ' ===\n');
   } catch (e) {}
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
