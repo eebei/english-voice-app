@@ -773,7 +773,10 @@ def poll_iracing():
                     # ── 本当に新しいセッションの時だけ：briefing送信＋状態リセット ──
                     if sig != last_session_sig:
                         broadcast({'type': 'session_info', 'data': info})
-                        log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof')))
+                        log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof'))
+                            + " class:" + str(info.get('player_car_class')) + " drivers:" + str(info.get('num_drivers'))
+                            + " track:" + str(info.get('track')) + " iR:" + str(info.get('player_irating'))
+                            + " SR:" + str(info.get('safety_rating')))
                         last_session_sig = sig
                         summary_sent = False            # サマリーリセット
                         checkered_pending = False       # チェッカー待機フラグもリセット
