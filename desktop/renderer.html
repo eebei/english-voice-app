@@ -1445,30 +1445,6 @@ let draining = false;         // キュー処理中フラグ
 let speakWatchdog = null;     // 発話が完了イベントを返さず固まるのを防ぐ見張り番
 const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる（鮮度優先）
 
-// ── 無線チャイム（PTT開通音）── 2026-07-12 Yujiと試聴して確定：
-//   ノイズバースト18ms・バンドパス1800Hz・チャイム開始からセリフ開始まで560ms。
-//   「新しい無線の頭」だけに鳴らす（speakReplyChunkは同じ発話の続きなので鳴らさない）。
-let chimePending = false;
-let radioChimeCtx = null;
-function playRadioChime(){
-  return new Promise((resolve)=>{
-    try{
-      if(!radioChimeCtx) radioChimeCtx = new (window.AudioContext||window.webkitAudioContext)();
-      const c = radioChimeCtx; const now = c.currentTime;
-      const bufSize = Math.floor(c.sampleRate * 0.018);
-      const buf = c.createBuffer(1, bufSize, c.sampleRate);
-      const data = buf.getChannelData(0);
-      for(let i=0;i<bufSize;i++){ data[i] = (Math.random()*2-1) * (1 - i/bufSize); }
-      const src = c.createBufferSource(); src.buffer = buf;
-      const gain = c.createGain(); gain.gain.setValueAtTime(0.25 * pwVolume, now);
-      const filt = c.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = 1800;
-      src.connect(filt).connect(gain).connect(c.destination);
-      src.start(now);
-    }catch(e){}
-    setTimeout(resolve, 560);
-  });
-}
-
 // text を発話キューに積む。priority=true（ドライバーへの会話返答）は古いラジオを捨てて先頭へ。
 function speak(text, priority){
   if(!voiceOn || !text) return;
@@ -1478,12 +1454,10 @@ function speak(text, priority){
   } else if(speakQueue.length >= MAX_RADIO_QUEUE){
     speakQueue.shift();              // 古いラジオを1件捨てる
   }
-  chimePending = true;              // 新しい無線の頭＝次の再生前にチャイムを鳴らす
   speakQueue.push(text);
   drainQueue();
 }
 // ストリーミング返答の2文目以降＝一つの返答の続きなので絶対に捨てない（MAX_RADIO_QUEUE対象外）。
-// chimePendingはいじらない＝同じ無線の続きなのでチャイムを鳴らし直さない。
 function speakReplyChunk(text){
   if(!voiceOn || !text) return;
   speakQueue.push(text);
@@ -1515,8 +1489,6 @@ async function drainQueue(){
 
   const raw = speakQueue.shift();
   const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
-
-  if(chimePending){ chimePending = false; await playRadioChime(); }
 
   // 見張り番：完了イベントが来なくても必ず一定時間で次へ進める（キュー永久固まり防止）
   if(speakWatchdog) clearTimeout(speakWatchdog);
@@ -1676,7 +1648,7 @@ function connectBridge(){
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
-      if(data.type==='session_summary'){ saveSessionSummary(data); scheduleAutoDebrief(data); }
+      if(data.type==='session_summary'){ saveSessionSummary(data); if(data.is_race) scheduleAutoDebrief(data); }
       if(data.type==='pit_timing'){ savePitTiming(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
@@ -1760,7 +1732,7 @@ function oishiRadio(d){
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return `Copy。リミッターチェック。`;
+    case 'pit_entry':      return `リミッターオン。もうすぐ制限ラインだ。`;
     case 'pit_exit':       return `コースイン。コース状況確認とタイヤ熱入れしていこう。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
     case 'multiclass_approaching': return `後方に速いクラス。${d.delta}秒。道を譲れ。`;
@@ -1804,7 +1776,7 @@ function kanbeRadio(d){
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return `Copy。リミッターチェックじゃ。`;
+    case 'pit_entry':      return `リミッターオンにせえ。もうすぐ制限ラインじゃ。`;
     case 'pit_exit':       return `コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
     case 'multiclass_approaching': return `後方速いクラス。${d.delta}秒。譲れ。`;
@@ -1848,7 +1820,7 @@ function matthiasRadio(d){
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
     case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
     case 'final_lap':      return `Letzte Runde. P${pos}.`;
-    case 'pit_entry':      return `Copy. Limiter prüfen.`;
+    case 'pit_entry':      return `Begrenzer jetzt an. Linie kommt gleich.`;
     case 'pit_exit':       return `Auf der Strecke. Reifen und Bremsen aufwärmen.`;
     case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Ranfahren.`;
     case 'multiclass_approaching': return `Schnellere Klasse dahinter. ${d.delta} Sekunden. Platz machen.`;

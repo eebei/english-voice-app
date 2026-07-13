@@ -670,6 +670,7 @@ def poll_iracing():
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
     pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
     summary_sent = False        # チェッカー後に1回だけ送る
+    checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
     fuel_at_lap_start = None    # 直近ラップ開始時点の燃料残量（ラップ消費量算出用）
@@ -775,6 +776,7 @@ def poll_iracing():
                         log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof')))
                         last_session_sig = sig
                         summary_sent = False            # サマリーリセット
+                        checkered_pending = False       # チェッカー待機フラグもリセット
                         session_racing_started = False  # 走行開始フラグもリセット
                         session_laps = []               # 前セッションのラップ記録クリア
                 if 'drivers' in info:
@@ -863,6 +865,7 @@ def poll_iracing():
                         'track': session_track,
                         'car_class': session_car_class,   # 記憶キー(コース×車種)用
                         'event_type': session_event_type,
+                        'is_race': is_race_session,        # クライアント側でデブリーフ自動誘導を出すかの判定に使う
                         'total_laps': len(session_laps),
                         'finish_pos': class_pos,
                         'best_lap': round(best_t, 3),
@@ -874,6 +877,7 @@ def poll_iracing():
                     })
                     log('Session summary sent: ' + str(len(session_laps)) + ' laps, best ' + str(round(best_t, 3)))
                     summary_sent = True
+                    checkered_pending = False
             log('driver state -> ' + driver_state)
             prev_driver_state = driver_state
 
@@ -1186,6 +1190,37 @@ def poll_iracing():
                     lap_record['sectors'] = [round(s, 2) for s in lap_sector_times]
                 session_laps.append(lap_record)
 
+                # ── チェッカー後、自分がこのラップ(S/Fライン通過)を終えた＝本当の完走タイミング ──
+                # checkered_pendingは上で「セッション全体がチェッカーになった」時に立てたフラグ。
+                # ここは自分のLapLastLapTimeが更新された瞬間＝自分が実際にS/Fラインを通過した瞬間なので、
+                # リーダー基準でなく自分基準の完走判定になる。
+                if checkered_pending and not summary_sent and session_laps and session_racing_started:
+                    times = [r['time'] for r in session_laps if r['time'] > 0]
+                    best_t = min(times) if times else 0
+                    worst_t = max(times) if times else 0
+                    avg_t = round(sum(times) / len(times), 3) if times else 0
+                    half = max(1, len(times) // 2)
+                    pace_first = round(sum(times[:half]) / half, 3) if times else 0
+                    pace_last  = round(sum(times[half:]) / max(1, len(times) - half), 3) if times else 0
+                    broadcast({
+                        'type': 'session_summary',
+                        'track': session_track,
+                        'event_type': session_event_type,
+                        'is_race': True,
+                        'total_laps': len(session_laps),
+                        'finish_pos': class_pos,
+                        'best_lap': round(best_t, 3),
+                        'worst_lap': round(worst_t, 3),
+                        'avg_lap': avg_t,
+                        'pace_first_half': pace_first,
+                        'pace_last_half': pace_last,
+                        'incidents': prev_incidents or 0,
+                        'laps': session_laps,
+                    })
+                    log('Session summary sent (post-checkered, own lap complete): ' + str(len(session_laps)) + ' laps, best ' + str(best_t))
+                    summary_sent = True
+                    checkered_pending = False
+
         # ── ローリングスタート中：前走車ギャップが7秒超なら5秒ごとにコール ──
         if in_formation and player_car_idx >= 0:
             car_est_times_roll = reader.read_float_array('CarIdxEstTime', 64)
@@ -1299,49 +1334,22 @@ def poll_iracing():
             broadcast({'type': 'radio', 'trigger': 'final_lap', 'pos': pos,
                 'message': 'Final lap. P' + str(pos) + '.'})
 
-        # ── セッションサマリー（チェッカー/クールダウン時に1回送信）──
-        # SessionState: 5=Checkered, 6=Cooldown　※必ず実際に走行(SS=4)した後のみ
-        # ⚠️既知の課題(Yuji実走指摘・2026/7/5・IMSA等マルチクラス時間制)：SessionStateはセッション
-        # 全体の状態で、上位カテゴリ(リーダー)がチェッカーを受けた瞬間に全員5(Checkered)へ切り替わる。
-        # 自分がまだ半周残っていてもここだけ見ると即発火する。正しい判定には「自分がS/Fラインに対し
-        # リーダーより先か後か」の相対位置判定が要る＝2026/7/5に設計した戦略エンジンのリーダー基準
-        # チェッカーロジック(LapDistPct比較)と同じ実装が必要。単純にonTrack条件を足すと「チェッカー
-        # 直後コース上で停止→即デブリーフ」という評価の高い挙動を壊す(ピットレーンもonTrack扱いの
-        # ため)ため、ここでは修正を保留し、戦略エンジン実装時にまとめて直す。
-        if cur_ss in (5, 6) and not summary_sent and session_laps and session_racing_started:
-            times = [r['time'] for r in session_laps if r['time'] > 0]
-            best_t = min(times) if times else 0
-            worst_t = max(times) if times else 0
-            avg_t = round(sum(times) / len(times), 3) if times else 0
-            fin_pos = class_pos
-            # ペーストレンド：前半/後半平均
-            half = max(1, len(times) // 2)
-            pace_first = round(sum(times[:half]) / half, 3) if times else 0
-            pace_last  = round(sum(times[half:]) / max(1, len(times) - half), 3) if times else 0
-            summary = {
-                'type': 'session_summary',
-                'track': session_track,
-                'event_type': session_event_type,
-                'total_laps': len(session_laps),
-                'finish_pos': fin_pos,
-                'best_lap': round(best_t, 3),
-                'worst_lap': round(worst_t, 3),
-                'avg_lap': avg_t,
-                'pace_first_half': pace_first,
-                'pace_last_half': pace_last,
-                'incidents': prev_incidents or 0,
-                'laps': session_laps,
-            }
-            broadcast(summary)
-            log('Session summary sent: ' + str(len(session_laps)) + ' laps, best ' + str(best_t))
-            summary_sent = True
+        # ── セッションサマリー：チェッカーは「見えた」だけ記録し、送信は自分の完走まで待つ ──
+        # SessionState 5=Checkered/6=Cooldownはセッション全体で共有される値——リーダーがチェッカーを
+        # 受けた瞬間、まだ走行中の自分も含めて全員が同時にこの状態になる(2026-07-05実走+2026-07-13
+        # 再指摘・Yuji確認)。ここで即送信すると自分がまだ周回/半周残っていてもデブリーフに切り替わる。
+        # フラグだけ立てて、実際の送信は下のlap_time_changedブロック（＝自分がS/Fラインを実際に
+        # 通過した瞬間）まで待つ。レースセッションのみ対象（予選/練習は対象外＝上のガレージ帰還時の
+        # 別ルートでサマリーのみ送信、デブリーフ誘導はis_raceフラグでクライアント側が判断する）。
+        if is_race_session and cur_ss in (5, 6) and not summary_sent:
+            checkered_pending = True
 
         # Pit in/out
         if onPit and not prev['onPit']:
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
             broadcast({'type': 'radio', 'trigger': 'pit_entry',
-                'message': 'Box confirmed. Limiter.'})
+                'message': 'Limiter now. Line is close.'})
 
         if prev['onPit'] and not onPit and onTrack:
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
