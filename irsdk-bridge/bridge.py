@@ -117,7 +117,7 @@ def save_vol_config():
 
 TTS_API_KEY = ""  # bridgeはRailway STT proxyを使うので空でもOK（直接Google API呼ばない場合）
 
-RAILWAY_URL = "https://english-voice-app-production.up.railway.app"
+RAILWAY_URL = "https://www.omoraypitwall.com"
 
 def log(msg):
     line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg

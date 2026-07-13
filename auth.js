@@ -29,7 +29,7 @@ const EMAIL_FROM = process.env.EMAIL_FROM || GMAIL_USER || 'omoraypitwall@gmail.
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || 'OMORAY PITWALL';
 // 購入時のwelcomeメールをYujiにもBCCする（新規会員をリアルタイムで把握するため）
 const ADMIN_NOTIFY_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || 'sbyyj.080711@gmail.com';
-const BASE_URL = (process.env.BASE_URL || 'https://english-voice-app-production.up.railway.app').replace(/\/$/, '');
+const BASE_URL = (process.env.BASE_URL || 'https://www.omoraypitwall.com').replace(/\/$/, '');
 
 // 軽量ログヘルパー。以前 setMemberByEmail / unsetMemberByCustomer 等が未定義の log() を呼び、
 // INSERT/UPDATE後にReferenceErrorでwebhookが500クラッシュ→welcomeメール未送信＆Stripeリトライ地獄になっていた。

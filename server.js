@@ -47,7 +47,7 @@ app.use(helmet({
 
 // Only allow the app's own front-end (and local dev) to call the API from a browser.
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
-  'https://english-voice-app-production.up.railway.app,http://localhost:3000')
+  'https://www.omoraypitwall.com,https://omoraypitwall.com,http://localhost:3000')
   .split(',').map(s => s.trim());
 app.use(cors({
   origin(origin, cb) {
