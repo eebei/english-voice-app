@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /manage.html
+Disallow: /setup.html
+Disallow: /welcome.html
+Disallow: /refer.html
+Disallow: /tts-test.html
+Disallow: /api/
+
+Sitemap: https://www.omoraypitwall.com/sitemap.xml
