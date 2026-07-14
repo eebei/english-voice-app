@@ -244,7 +244,11 @@ async def send_stt_request(audio_b64):
         req = urllib.request.Request(
             RAILWAY_URL + "/api/stt",
             data=stt_body,
-            headers={"Content-Type": "application/json"},
+            # ⚠️2026-07-14判明：Cloudflare移行後、urllibのデフォルトUser-Agent("Python-urllib/3.x")が
+            #   ボット判定されて403で弾かれるようになった（旧Railway URLはCloudflare経由じゃなかったので
+            #   起きてなかった）。ブラウザ相当のUser-Agentを名乗ることで回避する。
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
