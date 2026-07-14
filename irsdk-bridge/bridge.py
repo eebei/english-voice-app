@@ -711,8 +711,11 @@ def poll_iracing():
     in_corner = False           # コーナー単位サイドバイサイド検知：今コーナー中か
     corner_over_count = 0       # 舵角がCORNER_ENTRY_RADを超えた連続サンプル数
     corner_under_count = 0      # 舵角がCORNER_EXIT_RADを下回った連続サンプル数
-    corner_sides_announced = set()  # 今のコーナーで既に知らせた側（'left'/'right'/'both'）。コーナーが変わったらリセット
+    corner_sides_announced = set()  # 今のコーナーで既に知らせた側（'left'/'right'/'both'）。コーナー(ゾーン)が変わったらリセット
     straight_sbs_warned = 0.0   # ストレートでの3台以上並走、最終通知時刻（クールダウン用）
+    side_zone_active = False    # ⑤ コーナー or 強ブレーキ中の「サイドカー通知ゾーン」に今いるか（立ち上がりで再武装）
+    prev_limiter_on = False     # ⑥ 直前ループでピットリミッターが作動中だったか（ON→OFF検知用）
+    limiter_off_announced_stop = False  # ⑥ 今回のピットストップで既に「リミッターオフ」を鳴らしたか（二重発火防止）
     # セッションサマリー蓄積
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
@@ -969,6 +972,7 @@ def poll_iracing():
         # ヒステリシスで閾値ギリギリのふらつきによる誤検知/連続発火を防ぐ(3サンプル連続で判定)。
         steering_angle = reader.read_float('SteeringWheelAngle')
         car_left_right = reader.read_int('CarLeftRight')
+        brake_val = reader.read_float('Brake')
         if steering_angle is not None and is_race_session and not in_start_rush:
             _sa = abs(steering_angle)
             if _sa > CORNER_ENTRY_RAD:
@@ -981,26 +985,39 @@ def poll_iracing():
                 corner_over_count = 0
                 corner_under_count = 0
 
-            if not in_corner and corner_over_count >= 3:
+            # ⑤ ラグ対策：進入は即(1サンプル)で確定する。追い抜きはコーナー手前から始まり、以前は
+            # 「舵角が3サンプル(0.3秒)乗るまで待つ」せいで相手が1/4前に出てからのコールになっていた。
+            # 脱出はヒステリシスで3サンプル継続（コーナー中の一瞬の戻し舵での誤脱出を防ぐ）。
+            if not in_corner and corner_over_count >= 1:
                 in_corner = True
-                corner_sides_announced = set()  # 新しいコーナー＝再武装
                 corner_over_count = 0
             elif in_corner and corner_under_count >= 3:
                 in_corner = False
                 corner_under_count = 0
 
+            # ⑤ 「サイドカー通知ゾーン」＝コーナー中 or 強めのブレーキ中。追い抜きはブレーキング勝負で
+            # 始まり、舵角が乗る前にCarLeftRight(公式スポッター)は既に隣を検知している。舵角ロックを
+            # 待たずブレーキ検知で前倒しすることで「相手が並ぶ前」にコールする。ゾーン立ち上がりで再武装。
+            braking = brake_val is not None and brake_val > 0.35
+            in_side_zone = in_corner or braking
+            if in_side_zone and not side_zone_active:
+                side_zone_active = True
+                corner_sides_announced = set()  # 新しいゾーン＝再武装
+            elif not in_side_zone and side_zone_active:
+                side_zone_active = False
+
             _now3 = time.time()
-            if in_corner and car_left_right is not None and car_left_right >= 2:
+            if in_side_zone and car_left_right is not None and car_left_right >= 2:
                 _side = {2: 'left', 5: 'left', 3: 'right', 6: 'right', 4: 'both'}.get(car_left_right)
                 if _side and _side not in corner_sides_announced:
                     corner_sides_announced.add(_side)
-                    if _now3 - last_battle_global > 15:
+                    if _now3 - last_battle_global > 8:  # サイドコールは安全直結＝短めのクールダウン。側ごとにdedup済み。
                         _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
                         broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side, 'message': _side_msg})
                         last_battle_global = _now3
-            # ストレート(コーナー外)で3台以上並走の検知。CarLeftRight=4(両側)/5/6(片側2台)を代用
+            # ストレート(ゾーン外)で3台以上並走の検知。CarLeftRight=4(両側)/5/6(片側2台)を代用
             # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。2台までは自分で見えるのでスルー。
-            elif not in_corner and car_left_right in (4, 5, 6):
+            elif not in_side_zone and car_left_right in (4, 5, 6):
                 if _now3 - straight_sbs_warned > 20 and _now3 - last_battle_global > 15:
                     broadcast({'type': 'radio', 'trigger': 'multi_car_straight', 'message': 'Three wide. Watch the space.'})
                     straight_sbs_warned = _now3
@@ -1450,10 +1467,22 @@ def poll_iracing():
         if is_race_session and cur_ss in (5, 6) and not summary_sent:
             checkered_pending = True
 
+        # ── ⑥ ピットリミッター解除コール（新規・2026-07-14 Yuji要望）──────────────
+        # ピットアウトでスピード制限解除ライン(=リミッターが切れる瞬間)に「リミッターオフ」を知らせる。
+        # EngineWarningsのpitSpeedLimiterビット(0x10)がON→OFFに落ちた瞬間が実際の解除タイミングで、
+        # OnPitRoad判定より正確。ビットが取れない環境でも下のピットアウト転移でフォールバック発火する。
+        engine_warnings = reader.read_int('EngineWarnings')
+        limiter_on = bool(engine_warnings & 0x10) if engine_warnings is not None else False
+        if prev_limiter_on and not limiter_on and onTrack and not limiter_off_announced_stop:
+            broadcast({'type': 'radio', 'trigger': 'limiter_off', 'message': 'Limiter off. Go.'})
+            limiter_off_announced_stop = True
+        prev_limiter_on = limiter_on
+
         # Pit in/out
         if onPit and not prev['onPit']:
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
+            limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
             _pin_msg = random.choice(['Limiter now. Line is close.', 'Pit limiter on, line coming up.', 'Copy, into the box.'])
             broadcast({'type': 'radio', 'trigger': 'pit_entry', 'message': _pin_msg})
 
@@ -1466,6 +1495,11 @@ def poll_iracing():
                 if _now is not None:
                     pit_lane_sec = round(_now - pit_enter_time, 1)
                 pit_enter_time = None
+            # ⑥ フォールバック：EngineWarningsのリミッタービットが未検知でこのストップでまだ鳴らして
+            # いなければ、ピットレーン退出(OnPitRoad False)の瞬間に「リミッターオフ」を鳴らす。
+            if not limiter_off_announced_stop:
+                broadcast({'type': 'radio', 'trigger': 'limiter_off', 'message': 'Limiter off. Go.'})
+                limiter_off_announced_stop = True
             _pex_msg = random.choice(['Out. P' + str(pos) + '. Tyres one lap.', 'Back on track, P' + str(pos) + '. Warm the tyres up.',
                 'Copy, you\'re out. P' + str(pos) + '.'])
             broadcast({'type': 'radio', 'trigger': 'pit_exit', 'pos': pos, 'message': _pex_msg})
