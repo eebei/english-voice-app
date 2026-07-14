@@ -1698,6 +1698,18 @@ function disconnectBridge(){
 }
 
 // ── Radio injection ──
+// クラス名+順位での識別（ゼッケンより文脈的に分かりやすいとのYuji方針・2026-07-14）。
+// 1〜5位ならクラス名+順位、それ以外はクラス名のみ（JP版）。
+function classIdTxtJP(className, classPos){
+  const label = className || '相手';
+  if (classPos && classPos >= 1 && classPos <= 5) return label + ' ' + classPos + '位';
+  return label + 'クラス';
+}
+function classIdTxtDE(className, classPos){
+  const label = className || 'Gegner';
+  if (classPos && classPos >= 1 && classPos <= 5) return label + ' ' + classPos + '.';
+  return label + '-Klasse';
+}
 // bridgeが実際に送る全トリガーに対応（trigger名・フィールド名はbridge.pyと一致させること）
 function oishiRadio(d){
   const t=d.time||'';
@@ -1735,7 +1747,7 @@ function oishiRadio(d){
     case 'pit_entry':      return [`リミッターオン。もうすぐ制限ラインだ。`,`ピットインだな。リミッターオン。`,`了解、ボックスへ。`][Math.floor(Math.random()*3)];
     case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
-    case 'multiclass_approaching': return `後方に速いクラス。${d.delta}秒。道を譲れ。`;
+    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。道を譲れ。`;
     case 'multiclass_imminent':    return `道を空けろ。今だ。`;
     case 'battle_behind': {
       const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
@@ -1753,20 +1765,18 @@ function oishiRadio(d){
       return d.mandatory ? `ダメージ確認。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そう。`
                           : `見た目だけの軽い損傷だ。車は問題ない、そのまま行こう。`;
     case 'catchup_ahead': {
-      const cls = (d.class_name ? d.class_name+'、' : '');
-      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
-      const conf = d.confident ? '安定して詰まってきてる。' : 'まだ何とも言えないが、詰まってる。';
-      const stageTxt = {1:'前のドライバーよりペースが速い、追いつくぞ。',2:'調子いい、あと数ラップで追いつける。',
-                         3:'もうすぐ真後ろまでいけるぞ。',4:'一発で仕留めよう。'}[d.stage] || '';
-      return `${cls}${num}前方${d.delta}。${stageTxt}${conf}`;
+      const id = classIdTxtJP(d.class_name, d.class_pos) + '、';
+      let stageTxt = '';
+      if (d.stage === 3) stageTxt = d.confident ? '詰めてきてる。' : 'まだ読めない。';
+      else if (d.stage === 4) stageTxt = '勝負どころだ。';
+      return `${id}前方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'defend_behind': {
-      const cls = (d.class_name ? d.class_name+'、' : '');
-      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
-      const conf = d.confident ? '安定して詰まってきてる。' : 'まだ何とも言えないが、詰まってる。';
-      const stageTxt = {1:'後ろに速い車がいる、頭に入れとけ。',2:'相手がペース上げてきてる、ミラー見とけ。',
-                         3:'急接近してる、ライン守れ。',4:'すぐ後ろまで来てる、無理せず守れ。'}[d.stage] || '';
-      return `${cls}${num}後方${d.delta}。${stageTxt}${conf}`;
+      const id = classIdTxtJP(d.class_name, d.class_pos) + '、';
+      let stageTxt = '';
+      if (d.stage === 3) stageTxt = d.confident ? '詰められてる。' : 'まだ読めない。';
+      else if (d.stage === 4) stageTxt = 'ミラー確認。';
+      return `${id}後方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'side_by_side': return {left:'左に車。',right:'右に車。',both:'両側に車。'}[d.side] || '横に車。';
     case 'multi_car_straight': return '3台並走。スペース注意。';
@@ -1803,7 +1813,7 @@ function kanbeRadio(d){
     case 'pit_entry':      return [`リミッターオンにせえ。もうすぐ制限ラインじゃ。`,`ピットインじゃな。リミッターオンや。`,`了解、ボックスへ入れ。`][Math.floor(Math.random()*3)];
     case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
     case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
-    case 'multiclass_approaching': return `後方速いクラス。${d.delta}秒。譲れ。`;
+    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。譲れ。`;
     case 'multiclass_imminent':    return `道を空けえ。今じゃ。`;
     case 'battle_behind': {
       const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
@@ -1821,20 +1831,18 @@ function kanbeRadio(d){
       return d.mandatory ? `ダメージ確認じゃ。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そうや。`
                           : `見た目だけの軽い損傷じゃ。車は大丈夫、そのまま行けえ。`;
     case 'catchup_ahead': {
-      const cls = (d.class_name ? d.class_name+'、' : '');
-      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
-      const conf = d.confident ? '安定して詰まってきとる。' : 'まだ何とも言えんが、詰まっとる。';
-      const stageTxt = {1:'前のドライバーよりペース速いで、追いつくで。',2:'調子ええ、あと数ラップで追いつけるで。',
-                         3:'もうすぐ真後ろまでいけるで。',4:'一発で仕留めえ。'}[d.stage] || '';
-      return `${cls}${num}前方${d.delta}。${stageTxt}${conf}`;
+      const id = classIdTxtJP(d.class_name, d.class_pos) + '、';
+      let stageTxt = '';
+      if (d.stage === 3) stageTxt = d.confident ? '詰めてきとる。' : 'まだ読めん。';
+      else if (d.stage === 4) stageTxt = '勝負どころじゃ。';
+      return `${id}前方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'defend_behind': {
-      const cls = (d.class_name ? d.class_name+'、' : '');
-      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
-      const conf = d.confident ? '安定して詰まってきとる。' : 'まだ何とも言えんが、詰まっとる。';
-      const stageTxt = {1:'後ろに速い車おるで、頭に入れとけ。',2:'相手がペース上げてきとる、ミラー見とけ。',
-                         3:'急接近しとる、ライン守れ。',4:'すぐ後ろまで来とる、無理せず守れ。'}[d.stage] || '';
-      return `${cls}${num}後方${d.delta}。${stageTxt}${conf}`;
+      const id = classIdTxtJP(d.class_name, d.class_pos) + '、';
+      let stageTxt = '';
+      if (d.stage === 3) stageTxt = d.confident ? '詰められとる。' : 'まだ読めん。';
+      else if (d.stage === 4) stageTxt = 'ミラー確認。';
+      return `${id}後方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'side_by_side': return {left:'左に車じゃ。',right:'右に車じゃ。',both:'両側に車じゃ。'}[d.side] || '横に車じゃ。';
     case 'multi_car_straight': return '3台並走じゃ。スペース注意。';
@@ -1871,7 +1879,7 @@ function matthiasRadio(d){
     case 'pit_entry':      return [`Begrenzer jetzt an. Linie kommt gleich.`,`Boxenstopp, verstanden. Begrenzer an.`,`Copy, rein in die Box.`][Math.floor(Math.random()*3)];
     case 'pit_exit':       return [`Auf der Strecke. Reifen und Bremsen aufwärmen.`,`Raus. Reifen aufwärmen.`,`Zurück auf der Strecke. Erst eine Runde eingewöhnen.`][Math.floor(Math.random()*3)];
     case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Ranfahren.`;
-    case 'multiclass_approaching': return `Schnellere Klasse dahinter. ${d.delta} Sekunden. Platz machen.`;
+    case 'multiclass_approaching': return `${classIdTxtDE(d.class_name, d.class_pos)} dahinter. ${d.delta} Sekunden. Platz machen.`;
     case 'multiclass_imminent':    return `Platz machen. Jetzt.`;
     case 'battle_behind': {
       const num = d.car_number ? `Nummer ${d.car_number}, ` : '';
@@ -1889,20 +1897,18 @@ function matthiasRadio(d){
       return d.mandatory ? `Schaden bestätigt — Pflichtreparatur, etwa ${Math.round(d.repair_mand)} Sekunden. Nächste Box.`
                           : `Nur kosmetischer Schaden. Auto ist noch stabil, weiter pushen.`;
     case 'catchup_ahead': {
-      const cls = (d.class_name ? d.class_name+', ' : '');
-      const num = (d.car_number ? `Nummer ${d.car_number}, ` : '');
-      const conf = d.confident ? 'Kontinuierlich näher.' : 'Noch zu früh, um sicher zu sein.';
-      const stageTxt = {1:'Du bist schneller, du holst auf.',2:'Gutes Tempo, du kommst ran.',
-                         3:'Gleich direkt dahinter.',4:'Ein Versuch, jetzt zuschlagen.'}[d.stage] || '';
-      return `${cls}${num}Vorne ${d.delta}. ${stageTxt} ${conf}`;
+      const id = classIdTxtDE(d.class_name, d.class_pos) + ', ';
+      let stageTxt = '';
+      if (d.stage === 3) stageTxt = d.confident ? 'Kommt näher.' : 'Noch zu früh.';
+      else if (d.stage === 4) stageTxt = 'Jetzt zuschlagen.';
+      return `${id}Vorne, innerhalb ${d.delta}. ${stageTxt}`;
     }
     case 'defend_behind': {
-      const cls = (d.class_name ? d.class_name+', ' : '');
-      const num = (d.car_number ? `Nummer ${d.car_number}, ` : '');
-      const conf = d.confident ? 'Kontinuierlich näher.' : 'Noch zu früh, um sicher zu sein.';
-      const stageTxt = {1:'Schnelleres Auto dahinter, im Hinterkopf behalten.',2:'Er findet Tempo, Spiegel beobachten.',
-                         3:'Kommt schnell näher, Linie verteidigen.',4:'Er ist direkt da, Stellung halten.'}[d.stage] || '';
-      return `${cls}${num}Hinten ${d.delta}. ${stageTxt} ${conf}`;
+      const id = classIdTxtDE(d.class_name, d.class_pos) + ', ';
+      let stageTxt = '';
+      if (d.stage === 3) stageTxt = d.confident ? 'Kommt näher.' : 'Noch zu früh.';
+      else if (d.stage === 4) stageTxt = 'Spiegel prüfen.';
+      return `${id}Hinten, innerhalb ${d.delta}. ${stageTxt}`;
     }
     case 'side_by_side': return {left:'Auto links.',right:'Auto rechts.',both:'Autos auf beiden Seiten.'}[d.side] || 'Auto daneben.';
     case 'multi_car_straight': return 'Drei nebeneinander. Platz beachten.';

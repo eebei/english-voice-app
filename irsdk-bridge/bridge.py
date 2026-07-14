@@ -125,6 +125,28 @@ RAILWAY_URL = "https://www.omoraypitwall.com"
 CORNER_ENTRY_RAD = 0.10   # 約5.7度。これを超えたら「コーナー進入」候補
 CORNER_EXIT_RAD = 0.04    # 約2.3度。これを下回ったら「コーナー脱出」候補（ヒステリシスで閾値付近のふらつき対策）
 
+# シリーズ固有のクラス略称を、口頭で分かりやすい一般的なカテゴリー名に変換する
+# （例：IMSA23シリーズのGT3規定クラスは"IMSA23"という略称だが、喋る時は"GT3"の方が伝わる）。
+# ⚠️他シリーズで同様に分かりにくい略称が出てきたら随時ここに追加する(Yuji方針・2026-07-14)。
+CLASS_NAME_ALIASES = {'IMSA23': 'GT3'}
+
+def _norm_class_name(name):
+    return CLASS_NAME_ALIASES.get(name, name) if name else name
+
+_ORDINALS_EN = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th', 5: '5th'}
+
+def _class_id_txt_en(class_name, class_pos):
+    label = _norm_class_name(class_name) or 'faster class'
+    if class_pos and 1 <= class_pos <= 5:
+        return label + ' ' + _ORDINALS_EN[class_pos] + ' car'
+    return label + ' class'
+
+def _fmt_gap(g):
+    # 車間秒数の読み上げ用フォーマット。ぴったりの数字(9.0/10.0)は小数点を出さない
+    # （「9秒」でなく「9.0秒」とTTSが律儀に読んでしまう問題への対応・Yuji指摘2026-07-14）。
+    r = round(g, 1)
+    return str(int(r)) if r == int(r) else str(r)
+
 def _catchup_stage_of(g):
     # 段階的キャッチアップ/ディフェンスコールの距離帯判定（10/7/3/1.5秒）
     if g <= 1.5: return 4
@@ -1554,7 +1576,7 @@ def poll_iracing():
                             if _now2 - _lastw > 20 and _now2 - last_battle_global > 15:
                                 broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
                                     'delta': round(_sdist, 1),
-                                    'message': 'Stopped car ahead, ' + str(round(_sdist, 1)) + '.'})
+                                    'message': 'Stopped car ahead, ' + _fmt_gap(_sdist) + '.'})
                                 stopped_armed[idx] = False
                                 stopped_warned[idx] = _now2
                                 last_battle_global = _now2
@@ -1567,6 +1589,8 @@ def poll_iracing():
                 #   F2Timeは練習/予選だと各車の自己ベスト差になり、実際の車間と無関係(8秒/15秒等の
                 #   デタラメ警告の原因・2026/7/7 Yuji指摘)。EstTime差なら全セッションで正しい車間。
                 player_est = car_est_times[player_car_idx] if (car_est_times and player_car_idx < len(car_est_times)) else None
+                # クラス内順位（車の識別をゼッケンでなく「クラス名+順位」で言うため・Yuji方針2026-07-14）
+                car_class_pos_arr = reader.read_int_array('CarIdxClassPosition', 64)
 
                 for idx, f2_time in enumerate(car_f2_times):
                     if idx == player_car_idx or f2_time <= 0:
@@ -1614,9 +1638,11 @@ def poll_iracing():
                         elif 2.0 < delta <= 5.0 and multiclass_armed.get(idx, False):  # 5秒前：第1コール
                             last_warn = multiclass_warned.get(idx, 0)
                             if now - last_warn > 15:
+                                other_cls_pos = car_class_pos_arr[idx] if car_class_pos_arr and idx < len(car_class_pos_arr) else None
+                                other_cls_name = car_class_name_map.get(idx)
                                 broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
-                                    'delta': round(delta, 1),
-                                    'message': 'Faster class. ' + str(round(delta, 1)) + ' back. Prepare.'})
+                                    'delta': round(delta, 1), 'class_name': _norm_class_name(other_cls_name), 'class_pos': other_cls_pos,
+                                    'message': _class_id_txt_en(other_cls_name, other_cls_pos) + ' back, ' + _fmt_gap(delta) + '. Prepare.'})
                                 multiclass_warned[idx] = now
                         elif 0 < delta <= 2.0 and multiclass_armed.get(idx, False):  # 2秒前：第2コール（緊急・1回のみ）
                             broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
@@ -1682,34 +1708,42 @@ def poll_iracing():
                                 if pace_diff < -1.5:  # 相手が明らかに速い → 抑えるより先に行かせる
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
                                         'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
-                                        'message': 'Behind' + car_tag + again_tag + '. ' + str(round(delta, 1)) + '. Faster pace. Let him go.'})
+                                        'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '. Faster pace. Let him go.'})
                                 else:
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind',
                                         'delta': round(delta, 1), 'repeat': is_repeat,
-                                        'message': 'Behind' + car_tag + again_tag + '. ' + str(round(delta, 1)) + '. Closing.'})
+                                        'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '. Closing.'})
                                 behind_armed[idx] = False   # 1回言ったら再武装まで黙る
                                 battle_ever_warned.add(idx)
                                 last_battle_global = now
 
-                    # ── 段階的キャッチアップ/ディフェンスコール（新規・2026-07-14 Yuji設計）──
+                    # ── 段階的キャッチアップ/ディフェンスコール（2026-07-14 Yuji設計→同日実走で再調整）──
                     # 単純な車間だけでなく「本当に追いつけそうか」をペース差(pace_diff)で判定してから、
-                    # 10→7→3→1.5秒の閾値を跨いだ最初の瞬間だけ1回鳴らす（一方向にしか段階が進まない
-                    # ので多重発火しない。12秒より離れたら仕切り直し）。
-                    # 「追いつける確率70%」のような捏造数値は使わず、直前ラップと今のペース差が同じ
-                    # 方向で揃ってるかどうかだけで「確度高め/低め」を言葉にする（数字を捏造するな、の原則厳守）。
-                    # 上位/下位クラス相手の場合はクラス名を文言に含める(Yuji方針・例「GTP接近中」)。
-                    if is_race_session and not in_start_rush:
+                    # 10→7→3→1.5秒の閾値を跨いだ最初の瞬間だけ1回鳴らす。
+                    # ⚠️実走(IMSA Fixed)で1レース59回発火の大惨事が判明・2点を修正:
+                    #   ①別クラス車も対象にしてたため、既存のmulticlass_approaching/imminentと完全に重複
+                    #     (GTPが専用の仕組みを差し置いてこっちで発火してた)。同クラス限定に変更。
+                    #   ②再武装の閾値(10秒で仕切り直し)が敏感すぎて、パックレースで車間が9〜11秒を
+                    #     うろつくたびに何度も再発火。15秒まで引き離すまで待つよう変更(battle_behindと同じ教訓)。
+                    # あと「後方7.3秒でミラー確認」のような、実際の緊急度と釣り合わないアドバイスも指摘された。
+                    # 遠い段階(10/7秒)は数字だけ、行動の指示(ミラー確認・仕掛けろ)は1.5秒以下でのみ言う。
+                    # ⚠️③自分のクラス内順位から見て「隣の順位」の車だけを対象にする(Yuji方針・2026-07-14再調整)。
+                    #   同じクラスで車間閾値内の車全部を追跡すると、パックレースで複数台が同時に
+                    #   引っかかって「乱れ打ち」になる。隣の順位＝実質的に一番意味のあるライバルなので
+                    #   これ1台に絞れば粒度も自然に落ち着く。識別もゼッケンでなく「クラス名+順位」に統一
+                    #   (例:GT3 1位)——ゼッケンは覚えにくいが順位は文脈的にすぐ分かるとの指摘。
+                    other_cls_pos = car_class_pos_arr[idx] if car_class_pos_arr and idx < len(car_class_pos_arr) else None
+                    is_adjacent_rival = (other_cls_pos is not None and class_pos is not None
+                                          and other_cls_pos in (class_pos - 1, class_pos + 1))
+                    if is_race_session and other_class == player_class_id and not in_start_rush and is_adjacent_rival:
                         other_last_lap2 = car_last_laps[idx] if car_last_laps else 0
                         pace_diff2 = (other_last_lap2 - player_last_lap
                                       if other_last_lap2 > 0 and player_last_lap > 0 else None)
-                        num2 = car_number_map.get(idx)
-                        other_class_name = car_class_name_map.get(idx)
-                        class_tag = (other_class_name + ' ') if (other_class_name and other_class != player_class_id) else ''
-                        car_tag2 = ('car #' + num2 + ' ') if num2 else ''
+                        car_tag2 = _class_id_txt_en(car_class_name_map.get(idx), other_cls_pos) + ', '
 
                         if delta < 0:  # 相手が前方＝キャッチアップ対象
                             gap = abs(delta)
-                            if gap > 10.0:
+                            if gap > 15.0:
                                 catchup_stage[idx] = 0
                             elif pace_diff2 is not None and pace_diff2 > 0.3:
                                 prev_pace = gap_pace_hist.get(('ahead', idx))
@@ -1718,17 +1752,19 @@ def poll_iracing():
                                 stage = _catchup_stage_of(gap)
                                 if stage > catchup_stage.get(idx, 0) and now - last_battle_global > 15:
                                     catchup_stage[idx] = stage
-                                    stage_txt = {1: 'you\'re faster, closing in', 2: 'good pace, catching up',
-                                                 3: 'right behind soon', 4: 'one shot, go for it'}[stage]
-                                    conf_txt = ' Steady close.' if confident else ' Still early to tell.'
+                                    if stage <= 2:
+                                        stage_txt = ''
+                                    elif stage == 3:
+                                        stage_txt = ' Closing in.' if confident else ' Early to tell.'
+                                    else:
+                                        stage_txt = ' Go for it.'
                                     broadcast({'type': 'radio', 'trigger': 'catchup_ahead', 'stage': stage,
-                                        'delta': round(gap, 1), 'car_number': num2, 'class_name': other_class_name,
-                                        'confident': confident,
-                                        'message': 'Catching ' + class_tag + car_tag2 + 'ahead. ' + str(round(gap, 1)) + '. ' + stage_txt + '.' + conf_txt})
+                                        'delta': round(gap, 1), 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                        'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
                                     last_battle_global = now
                         else:  # 相手が後方＝ディフェンス対象
                             gap = delta
-                            if gap > 10.0:
+                            if gap > 15.0:
                                 defend_stage[idx] = 0
                             elif pace_diff2 is not None and pace_diff2 < -0.3:
                                 prev_pace = gap_pace_hist.get(('behind', idx))
@@ -1737,13 +1773,15 @@ def poll_iracing():
                                 stage = _catchup_stage_of(gap)
                                 if stage > defend_stage.get(idx, 0) and now - last_battle_global > 15:
                                     defend_stage[idx] = stage
-                                    stage_txt = {1: 'faster car behind, heads up', 2: 'he\'s finding pace, watch your mirrors',
-                                                 3: 'closing fast, defend your line', 4: 'he\'s right there, hold your ground'}[stage]
-                                    conf_txt = ' Steady close.' if confident else ' Still early to tell.'
+                                    if stage <= 2:
+                                        stage_txt = ''
+                                    elif stage == 3:
+                                        stage_txt = ' Closing.' if confident else ' Early to tell.'
+                                    else:
+                                        stage_txt = ' Check mirrors.'
                                     broadcast({'type': 'radio', 'trigger': 'defend_behind', 'stage': stage,
-                                        'delta': round(gap, 1), 'car_number': num2, 'class_name': other_class_name,
-                                        'confident': confident,
-                                        'message': 'Behind, ' + class_tag + car_tag2 + str(round(gap, 1)) + '. ' + stage_txt + '.' + conf_txt})
+                                        'delta': round(gap, 1), 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                        'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
                                     last_battle_global = now
 
         # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──
