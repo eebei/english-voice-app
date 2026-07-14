@@ -711,6 +711,20 @@ function buildSystem(p) {
     if (live.last != null)       { const l = fmtLap(live.last); jp.push('直近ラップ ' + l); en.push('Last ' + l); }
     if (live.gap_ahead != null)  { jp.push('前とのギャップ ' + live.gap_ahead + '秒'); en.push('Gap ahead ' + live.gap_ahead + 's'); }
     if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
+    // クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）。
+    // gap_ahead/behindは直前直後の車限定だったが、これで離れた順位も実値で答えられる。
+    if (live.standings_gaps) {
+      const sg = live.standings_gaps;
+      const rows = Object.keys(sg).map(p => parseInt(p, 10)).sort((a, b) => a - b).map(p => {
+        const g = sg[String(p)];
+        const dir = g < 0 ? (isJ ? '前' : 'ahead') : (isJ ? '後ろ' : 'behind');
+        return 'P' + p + ' ' + Math.abs(g) + (isJ ? '秒' + dir : 's ' + dir);
+      });
+      if (rows.length) {
+        jp.push('クラス内各順位とのギャップ: ' + rows.join(' / '));
+        en.push('Gap to each class position: ' + rows.join(' / '));
+      }
+    }
     if (live.on_track === false) { jp.push('現在ピット/ガレージ内（走行データはさっきまでの値）'); en.push('Currently in pit/garage (data is from moments ago)'); }
     if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
     // 燃料戦略（bridgeが直近クリーンラップの実消費量から計算済み・Claudeは計算せず転記するだけ）

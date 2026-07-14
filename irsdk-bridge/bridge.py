@@ -119,6 +119,14 @@ TTS_API_KEY = ""  # bridgeはRailway STT proxyを使うので空でもOK（直�
 
 RAILWAY_URL = "https://www.omoraypitwall.com"
 
+def _catchup_stage_of(g):
+    # 段階的キャッチアップ/ディフェンスコールの距離帯判定（10/7/3/1.5秒）
+    if g <= 1.5: return 4
+    if g <= 3.0: return 3
+    if g <= 7.0: return 2
+    if g <= 10.0: return 1
+    return 0
+
 def log(msg):
     line = "[" + datetime.now().strftime("%H:%M:%S") + "] " + msg
     # ⚠️Windowsコンソールはcp932。会話ログ(Lunaの返答)に含まれる — や · 等cp932に無い文字を
@@ -506,6 +514,8 @@ def parse_session_info(yaml_str):
                         pass
                 elif stripped.startswith('UserName:'):
                     current_driver['name'] = stripped.split(':', 1)[1].strip()
+                elif stripped.startswith('CarNumber:'):
+                    current_driver['car_number'] = stripped.split(':', 1)[1].strip().strip('"').strip("'")
                 elif stripped.startswith('IsSpectator:'):
                     try:
                         current_driver['spectator'] = int(stripped.split(':')[1].strip())
@@ -636,6 +646,8 @@ def poll_iracing():
     car_relspeed_map = {}       # car_idx -> rel speed
     car_irating_map = {}        # car_idx -> iRating（危険ドライバー警告用）
     car_sr_map = {}             # car_idx -> Safety Rating値（例 2.34）
+    car_number_map = {}         # car_idx -> ゼッケン（危険ドライバー警告での認識度向上用）
+    car_class_name_map = {}     # car_idx -> クラス名（例"GTP"。マルチクラス接近警告での読み上げ用）
     ahead_armed = {}            # car_idx -> bool（前方の危険ドライバー警告・再武装フラグ）
     danger_warned = {}          # car_idx -> last warned time（前後共通クールダウン）
     danger_ever_warned = set()  # car_idx -> このセッションで既に警告済みか（同じ危険ドライバーへの連呼を根絶。ギャップ往復での再発火を防ぐため再武装方式でなく永久に1回のみ）
@@ -649,6 +661,7 @@ def poll_iracing():
     battle_warned = {}          # car_idx -> last warned time
     last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
     behind_armed = {}           # car_idx -> bool（一度離れて再接近した時だけ1回警告する再武装フラグ）
+    battle_ever_warned = set()  # car_idx -> このセッションで一度でもbattle_behindを鳴らした相手か（2回目以降は"再接近"の言い方にする）
     prev_session_state = 0      # previous SessionState value
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
@@ -660,6 +673,9 @@ def poll_iracing():
     stopped_check_ts = 0.0      # 停止判定の最終サンプリング時刻
     stopped_armed = {}          # car_idx -> bool（7秒圏外まで離れたら再武装）
     stopped_warned = {}         # car_idx -> last warned time
+    catchup_stage = {}          # car_idx -> 前方車両への段階的キャッチアップコール、直近で知らせた段階(0=未・1=7秒・2=4秒・3=3秒・4=1.5秒)
+    defend_stage = {}           # car_idx -> 後方車両への段階的ディフェンスコール、同上
+    gap_pace_hist = {}          # car_idx -> 直前ラップでのpace_diff（トレンド判定・確度の高低に使う）
     # セッションサマリー蓄積
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
@@ -786,6 +802,10 @@ def poll_iracing():
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
                             car_class_map[d['car_idx']] = d['class_id']
+                        if 'car_idx' in d and 'class_name' in d:
+                            car_class_name_map[d['car_idx']] = d['class_name']
+                        if 'car_idx' in d and 'car_number' in d:
+                            car_number_map[d['car_idx']] = d['car_number']
                         if 'car_idx' in d and 'class_rel_speed' in d:
                             car_relspeed_map[d['car_idx']] = d['class_rel_speed']
                         if 'car_idx' in d and 'irating' in d:
@@ -1315,11 +1335,13 @@ def poll_iracing():
         if is_race_session and onTrack and class_pos is not None and prev['class_pos'] is not None and class_pos != prev['class_pos']:
             gained = prev['class_pos'] - class_pos
             if gained > 0:
-                broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos,
-                    'message': 'P' + str(class_pos) + '.'})
+                _pu_msg = random.choice(['P' + str(class_pos) + '.', 'P' + str(class_pos) + ', good pass.',
+                    'Position gained. P' + str(class_pos) + '.'])
+                broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos, 'message': _pu_msg})
             else:
-                broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos,
-                    'message': 'P' + str(class_pos) + '. Lost one.'})
+                _pd_msg = random.choice(['P' + str(class_pos) + '. Lost one.', 'P' + str(class_pos) + '. He got you, get it back.',
+                    'Down to P' + str(class_pos) + '. Stay calm.'])
+                broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos, 'message': _pd_msg})
 
         # Fuel warning
         # ※実際にトラック走行中＆燃料が有効な数値の時だけ警告する。
@@ -1351,8 +1373,8 @@ def poll_iracing():
         if onPit and not prev['onPit']:
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
-            broadcast({'type': 'radio', 'trigger': 'pit_entry',
-                'message': 'Limiter now. Line is close.'})
+            _pin_msg = random.choice(['Limiter now. Line is close.', 'Pit limiter on, line coming up.', 'Copy, into the box.'])
+            broadcast({'type': 'radio', 'trigger': 'pit_entry', 'message': _pin_msg})
 
         if prev['onPit'] and not onPit and onTrack:
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
@@ -1363,8 +1385,9 @@ def poll_iracing():
                 if _now is not None:
                     pit_lane_sec = round(_now - pit_enter_time, 1)
                 pit_enter_time = None
-            broadcast({'type': 'radio', 'trigger': 'pit_exit', 'pos': pos,
-                'message': 'Out. P' + str(pos) + '. Tyres one lap.'})
+            _pex_msg = random.choice(['Out. P' + str(pos) + '. Tyres one lap.', 'Back on track, P' + str(pos) + '. Warm the tyres up.',
+                'Copy, you\'re out. P' + str(pos) + '.'])
+            broadcast({'type': 'radio', 'trigger': 'pit_exit', 'pos': pos, 'message': _pex_msg})
             if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
@@ -1432,6 +1455,51 @@ def poll_iracing():
                     car_pos_hist[_i] = (_dist, _snow)
                 stopped_check_ts = _snow
 
+            # ── 停止/クラッシュ車両の警告（前方のみ、2秒以上停止確定）──
+            # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
+            # ⚠️2026-07-13実走で一度も発火しないバグが発覚：上のバトル検知ループは
+            #   「同一周回の車同士でしか判定しない」フィルターが掛かっており（EstTimeが
+            #   周回ごとにリセットされる値のため、異なる周回の車を比較すると誤検知するのが理由）、
+            #   前方でスピン/クラッシュした車は高確率で周回数がズレるため、まさに検知したい瞬間に
+            #   そのフィルターで弾かれて黙っていた。停止車検知はEstTimeでなくLapDistPct（周回内の
+            #   位置%、周回数と無関係）の差で距離を測ることで、周回フィルターを使わずに済む形に分離した。
+            # ⚠️後方(stopped_behind)は2026/7/5に廃止。元々はドライバーの心理的プレッシャーを
+            # 和らげる目的だったが、武装/解除方式の検知漏れリスクがある機能を安全上クリティカル
+            # でない用途に使うのはリスクに見合わない判断。前方(衝突リスクに直結)のみ残す。
+            if car_stopped_since and car_dist_pct and player_car_idx < len(car_dist_pct):
+                player_pct = car_dist_pct[player_car_idx]
+                _car_last_laps_stopped = reader.read_float_array('CarIdxLastLapTime', 64)
+                player_last_lap_stopped = (_car_last_laps_stopped[player_car_idx]
+                                            if _car_last_laps_stopped and player_car_idx < len(_car_last_laps_stopped) else 0) or 0
+                if player_pct is not None and player_pct >= 0 and player_last_lap_stopped > 0:
+                    _now2 = time.time()
+                    for idx in list(car_stopped_since.keys()):
+                        if idx == player_car_idx or idx >= len(car_dist_pct):
+                            continue
+                        other_pct = car_dist_pct[idx]
+                        if other_pct is None or other_pct < 0:
+                            continue
+                        _stopped_dur = _now2 - car_stopped_since.get(idx, _now2)
+                        if _stopped_dur < 2.0:
+                            continue
+                        pct_diff = other_pct - player_pct  # 正=相手が前方（周回内の位置で判定、周回数は無視）
+                        if pct_diff > 0.5: pct_diff -= 1.0
+                        elif pct_diff < -0.5: pct_diff += 1.0
+                        if pct_diff <= 0:  # 前方でなければ対象外
+                            continue
+                        _sdist = pct_diff * player_last_lap_stopped
+                        if _sdist > 6.0:
+                            stopped_armed[idx] = True
+                        elif _sdist <= 5.0 and stopped_armed.get(idx, False):
+                            _lastw = stopped_warned.get(idx, 0)
+                            if _now2 - _lastw > 20 and _now2 - last_battle_global > 15:
+                                broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
+                                    'delta': round(_sdist, 1),
+                                    'message': 'Stopped car ahead, ' + str(round(_sdist, 1)) + '.'})
+                                stopped_armed[idx] = False
+                                stopped_warned[idx] = _now2
+                                last_battle_global = _now2
+
             if car_f2_times and player_car_idx < len(car_f2_times):
                 player_time     = car_f2_times[player_car_idx]
                 player_last_lap = car_last_laps[player_car_idx] if car_last_laps else 0
@@ -1454,26 +1522,6 @@ def poll_iracing():
                     if not player_est or player_est <= 0 or not other_est or other_est <= 0:
                         continue  # コース上位置が不明な車は接近判定しない（誤警告防止）
                     _d = other_est - player_est  # 負=前方, 正=後方
-
-                    # ── 停止/クラッシュ車両の警告（前方のみ・コース上/オフトラック問わず、2秒以上停止確定）──
-                    # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
-                    # ⚠️後方(stopped_behind)は2026/7/5に廃止。元々はドライバーの心理的プレッシャーを
-                    # 和らげる目的だったが、武装/解除方式の検知漏れリスクがある機能を安全上クリティカル
-                    # でない用途に使うのはリスクに見合わない判断。前方(衝突リスクに直結)のみ残す。
-                    _stopped_dur = _snow - car_stopped_since.get(idx, _snow) if idx in car_stopped_since else 0
-                    if _stopped_dur >= 2.0 and _d < 0:  # _d<0 = 相手が前方
-                        _sdist = abs(_d)
-                        if _sdist > 6.0:
-                            stopped_armed[idx] = True
-                        elif _sdist <= 5.0 and stopped_armed.get(idx, False):
-                            _lastw = stopped_warned.get(idx, 0)
-                            if now - _lastw > 20 and now - last_battle_global > 15:
-                                broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
-                                    'delta': round(_sdist, 1),
-                                    'message': 'Stopped car ahead, ' + str(round(_sdist, 1)) + '.'})
-                                stopped_armed[idx] = False
-                                stopped_warned[idx] = now
-                                last_battle_global = now
 
                     # ピット/ガレージの車は完全除外（接近警告を出さない）
                     if car_on_track:
@@ -1535,14 +1583,18 @@ def poll_iracing():
                             last_warn = danger_warned.get(idx, 0)
                             if now - last_warn > 20 and now - last_battle_global > 15:
                                 reason = 'SR ' + str(other_sr) if (other_sr is not None and other_sr <= 2.5) else 'iR ' + str(other_irating)
+                                # ゼッケンが取れてれば認識度アップのため文言に含める(Yuji方針・2026/7/14)。
+                                # 無ければ黙って省略(ゼッケン無し表記で捏造しない)。
+                                num = car_number_map.get(idx)
+                                car_tag = (' car #' + num) if num else ''
                                 if delta > 0:  # 相手が後方（delta>0=後方）
                                     broadcast({'type': 'radio', 'trigger': 'danger_behind',
-                                        'delta': round(delta, 1), 'reason': reason,
-                                        'message': 'Careful. Risky driver behind (' + reason + ').'})
+                                        'delta': round(delta, 1), 'reason': reason, 'car_number': num,
+                                        'message': 'Careful.' + car_tag + ' Risky driver behind (' + reason + ').'})
                                 else:  # 相手が前方
                                     broadcast({'type': 'radio', 'trigger': 'danger_ahead',
-                                        'delta': round(abs(delta), 1), 'reason': reason,
-                                        'message': 'Careful passing — risky driver ahead (' + reason + ').'})
+                                        'delta': round(abs(delta), 1), 'reason': reason, 'car_number': num,
+                                        'message': 'Careful passing —' + car_tag + ' risky driver ahead (' + reason + ').'})
                                 ahead_armed[idx] = False
                                 danger_warned[idx] = now
                                 danger_ever_warned.add(idx)
@@ -1550,26 +1602,110 @@ def poll_iracing():
 
                     # ── 同クラス：後ろが"急接近した瞬間"だけ1回警告（連呼しない）──────────
                     # 前方の車は離れても迫っても見えてるので黙る（Yuji方針）。
-                    # 後ろは死角。一度クリア(>0.55)だった車が接近(<=0.3)した最初の1回だけ「後ろ注意」。
-                    # 再武装(behind_armed)方式で、離れて再度迫るまで二度は言わない＝連呼防止。
+                    # 後ろは死角。一度クリア(>3.0=本当に引き離した)だった車が接近(<=0.3)した最初の1回だけ「後ろ注意」。
+                    # ⚠️再武装の閾値は元々0.55秒だったが、同じバトルの中で車間が一瞬開閉するだけで
+                    #   再発火して連呼になる問題が実走で判明(Yuji指摘・2026/7/14)。「本当に引き離した」と
+                    #   言えるレベルまで閾値を上げて、ただの車間の揺らぎでは再武装しないようにした。
+                    #   同じ相手が一度クリアな状態を経て再接近した場合(＝ミスで下がって終盤また来た等)は
+                    #   "再接近"として言い方を変える(battle_ever_warned)。
                     if is_race_session and other_class == player_class_id and not in_start_rush and delta > 0:
-                        if delta > 0.55:
-                            behind_armed[idx] = True  # 十分離れた＝次の接近で警告できる状態に
+                        if delta > 3.0:
+                            behind_armed[idx] = True  # 本当に引き離した＝次の接近で警告できる状態に
                         elif delta <= 0.3 and behind_armed.get(idx, False):
                             if now - last_battle_global > 15:
                                 other_last_lap = car_last_laps[idx] if car_last_laps else 0
                                 pace_diff = (other_last_lap - player_last_lap
                                              if other_last_lap > 0 and player_last_lap > 0 else 0)
+                                is_repeat = idx in battle_ever_warned
+                                num = car_number_map.get(idx)
+                                car_tag = (' car #' + num) if num else ''
+                                again_tag = ' again' if is_repeat else ''
                                 if pace_diff < -1.5:  # 相手が明らかに速い → 抑えるより先に行かせる
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
-                                        'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2),
-                                        'message': 'Behind ' + str(round(delta, 1)) + '. Faster pace. Let him go.'})
+                                        'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
+                                        'message': 'Behind' + car_tag + again_tag + '. ' + str(round(delta, 1)) + '. Faster pace. Let him go.'})
                                 else:
                                     broadcast({'type': 'radio', 'trigger': 'battle_behind',
-                                        'delta': round(delta, 1),
-                                        'message': 'Behind ' + str(round(delta, 1)) + '. Closing.'})
+                                        'delta': round(delta, 1), 'repeat': is_repeat,
+                                        'message': 'Behind' + car_tag + again_tag + '. ' + str(round(delta, 1)) + '. Closing.'})
                                 behind_armed[idx] = False   # 1回言ったら再武装まで黙る
+                                battle_ever_warned.add(idx)
                                 last_battle_global = now
+
+                    # ── 段階的キャッチアップ/ディフェンスコール（新規・2026-07-14 Yuji設計）──
+                    # 単純な車間だけでなく「本当に追いつけそうか」をペース差(pace_diff)で判定してから、
+                    # 10→7→3→1.5秒の閾値を跨いだ最初の瞬間だけ1回鳴らす（一方向にしか段階が進まない
+                    # ので多重発火しない。12秒より離れたら仕切り直し）。
+                    # 「追いつける確率70%」のような捏造数値は使わず、直前ラップと今のペース差が同じ
+                    # 方向で揃ってるかどうかだけで「確度高め/低め」を言葉にする（数字を捏造するな、の原則厳守）。
+                    # 上位/下位クラス相手の場合はクラス名を文言に含める(Yuji方針・例「GTP接近中」)。
+                    if is_race_session and not in_start_rush:
+                        other_last_lap2 = car_last_laps[idx] if car_last_laps else 0
+                        pace_diff2 = (other_last_lap2 - player_last_lap
+                                      if other_last_lap2 > 0 and player_last_lap > 0 else None)
+                        num2 = car_number_map.get(idx)
+                        other_class_name = car_class_name_map.get(idx)
+                        class_tag = (other_class_name + ' ') if (other_class_name and other_class != player_class_id) else ''
+                        car_tag2 = ('car #' + num2 + ' ') if num2 else ''
+
+                        if delta < 0:  # 相手が前方＝キャッチアップ対象
+                            gap = abs(delta)
+                            if gap > 10.0:
+                                catchup_stage[idx] = 0
+                            elif pace_diff2 is not None and pace_diff2 > 0.3:
+                                prev_pace = gap_pace_hist.get(('ahead', idx))
+                                gap_pace_hist[('ahead', idx)] = pace_diff2
+                                confident = prev_pace is not None and prev_pace > 0.3
+                                stage = _catchup_stage_of(gap)
+                                if stage > catchup_stage.get(idx, 0) and now - last_battle_global > 15:
+                                    catchup_stage[idx] = stage
+                                    stage_txt = {1: 'you\'re faster, closing in', 2: 'good pace, catching up',
+                                                 3: 'right behind soon', 4: 'one shot, go for it'}[stage]
+                                    conf_txt = ' Steady close.' if confident else ' Still early to tell.'
+                                    broadcast({'type': 'radio', 'trigger': 'catchup_ahead', 'stage': stage,
+                                        'delta': round(gap, 1), 'car_number': num2, 'class_name': other_class_name,
+                                        'confident': confident,
+                                        'message': 'Catching ' + class_tag + car_tag2 + 'ahead. ' + str(round(gap, 1)) + '. ' + stage_txt + '.' + conf_txt})
+                                    last_battle_global = now
+                        else:  # 相手が後方＝ディフェンス対象
+                            gap = delta
+                            if gap > 10.0:
+                                defend_stage[idx] = 0
+                            elif pace_diff2 is not None and pace_diff2 < -0.3:
+                                prev_pace = gap_pace_hist.get(('behind', idx))
+                                gap_pace_hist[('behind', idx)] = pace_diff2
+                                confident = prev_pace is not None and prev_pace < -0.3
+                                stage = _catchup_stage_of(gap)
+                                if stage > defend_stage.get(idx, 0) and now - last_battle_global > 15:
+                                    defend_stage[idx] = stage
+                                    stage_txt = {1: 'faster car behind, heads up', 2: 'he\'s finding pace, watch your mirrors',
+                                                 3: 'closing fast, defend your line', 4: 'he\'s right there, hold your ground'}[stage]
+                                    conf_txt = ' Steady close.' if confident else ' Still early to tell.'
+                                    broadcast({'type': 'radio', 'trigger': 'defend_behind', 'stage': stage,
+                                        'delta': round(gap, 1), 'car_number': num2, 'class_name': other_class_name,
+                                        'confident': confident,
+                                        'message': 'Behind, ' + class_tag + car_tag2 + str(round(gap, 1)) + '. ' + stage_txt + '.' + conf_txt})
+                                    last_battle_global = now
+
+        # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──
+        # 今までは「直前直後の車」としか比較できず、離れた順位を聞かれると答えられなかった。
+        # CarIdxF2Timeはレースセッション中は「リーダーからの遅れ」を表す値(iRacingダッシュボードと同じ)で、
+        # 周回数が違う車同士でも(EstTimeと違って)そのまま引き算して正しいギャップになる。
+        # なのでレース中のみ、クラス内の全順位について{順位: 自分とのギャップ秒}を作って毎回同送する。
+        standings_gaps = None
+        if is_race_session and player_car_idx >= 0:
+            _cls_pos_arr = reader.read_int_array('CarIdxClassPosition', 64)
+            _f2_arr = reader.read_float_array('CarIdxF2Time', 64)
+            if _cls_pos_arr and _f2_arr and player_car_idx < len(_f2_arr):
+                _player_f2 = _f2_arr[player_car_idx]
+                if _player_f2 is not None and _player_f2 >= 0:
+                    standings_gaps = {}
+                    for _si, _spos in enumerate(_cls_pos_arr):
+                        if not _spos or _spos <= 0 or car_class_map.get(_si, -1) != player_class_id:
+                            continue
+                        if _si >= len(_f2_arr) or _f2_arr[_si] is None or _f2_arr[_si] < 0:
+                            continue
+                        standings_gaps[str(_spos)] = round(_f2_arr[_si] - _player_f2, 1)
 
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
         # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。
@@ -1593,6 +1729,7 @@ def poll_iracing():
                 'tires': tires,
                 'damage_s': damage_s,
                 'weather': weather,
+                'standings_gaps': standings_gaps,
             })
             last_telem_ts = _tnow
 

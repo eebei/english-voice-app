@@ -1725,27 +1725,49 @@ function oishiRadio(d){
       if(d4) return ['接触だ。落ち着け。これ以上リスクを取るな。','大きいのを受けたな。冷静に。今あるものを守ろう。','一度リセットしろ。ここからクリーンにいく。'][Math.floor(Math.random()*3)];
       return ['気をつけろ。立て直せ。','スピンか。落ち着け、まだ大丈夫だ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
     }
-    case 'position_up':    return `P${pos}。`;
-    case 'position_down':  return `P${pos}。1つ後退。`;
+    case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパスだ。`,`順位上げた。P${pos}。`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれた、取り返せ。`,`P${pos}まで下がった。落ち着いていけ。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
     case 'fuel_strategy_warning': return `このペースだと燃料が最後まで持たない。ピット必須だ。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return `リミッターオン。もうすぐ制限ラインだ。`;
-    case 'pit_exit':       return `コースイン。コース状況確認とタイヤ熱入れしていこう。`;
+    case 'pit_entry':      return [`リミッターオン。もうすぐ制限ラインだ。`,`ピットインだな。リミッターオン。`,`了解、ボックスへ。`][Math.floor(Math.random()*3)];
+    case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
     case 'multiclass_approaching': return `後方に速いクラス。${d.delta}秒。道を譲れ。`;
     case 'multiclass_imminent':    return `道を空けろ。今だ。`;
-    case 'battle_behind':  return `後ろ注意。${d.delta}。詰めてきてる。`;
-    case 'battle_behind_faster': return `後ろ注意。${d.delta}。相手が速い、先に行かせろ。`;
-    case 'danger_behind': return `注意しろ。後ろ、危ないドライバーだ（${d.reason}）。`;
-    case 'danger_ahead':  return `抜く時気をつけろ。前、危ないドライバーだ（${d.reason}）。`;
+    case 'battle_behind': {
+      const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
+      return d.repeat ? `また${num}接近だ。${d.delta}。` : `後ろ注意。${num}${d.delta}。詰めてきてる。`;
+    }
+    case 'battle_behind_faster': {
+      const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
+      return d.repeat ? `また${num}来てる。${d.delta}。相手が速い、先に行かせろ。` : `後ろ注意。${num}${d.delta}。相手が速い、先に行かせろ。`;
+    }
+    case 'danger_behind': return `注意しろ。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーだ（${d.reason}）。`;
+    case 'danger_ahead':  return `抜く時気をつけろ。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーだ（${d.reason}）。`;
     case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
     case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意しろ。`;
     case 'damage_report':
       return d.mandatory ? `ダメージ確認。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そう。`
                           : `見た目だけの軽い損傷だ。車は問題ない、そのまま行こう。`;
+    case 'catchup_ahead': {
+      const cls = (d.class_name ? d.class_name+'、' : '');
+      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
+      const conf = d.confident ? '安定して詰まってきてる。' : 'まだ何とも言えないが、詰まってる。';
+      const stageTxt = {1:'前のドライバーよりペースが速い、追いつくぞ。',2:'調子いい、あと数ラップで追いつける。',
+                         3:'もうすぐ真後ろまでいけるぞ。',4:'一発で仕留めよう。'}[d.stage] || '';
+      return `${cls}${num}前方${d.delta}。${stageTxt}${conf}`;
+    }
+    case 'defend_behind': {
+      const cls = (d.class_name ? d.class_name+'、' : '');
+      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
+      const conf = d.confident ? '安定して詰まってきてる。' : 'まだ何とも言えないが、詰まってる。';
+      const stageTxt = {1:'後ろに速い車がいる、頭に入れとけ。',2:'相手がペース上げてきてる、ミラー見とけ。',
+                         3:'急接近してる、ライン守れ。',4:'すぐ後ろまで来てる、無理せず守れ。'}[d.stage] || '';
+      return `${cls}${num}後方${d.delta}。${stageTxt}${conf}`;
+    }
     default: return null;
   }
 }
@@ -1769,27 +1791,49 @@ function kanbeRadio(d){
       if(d4) return ['接触じゃ。落ち着け。これ以上リスク取るな。','でかいの食らったな。冷静になれ。今あるもん守るで。','一回リセットせえ。ここからクリーンに行くで。'][Math.floor(Math.random()*3)];
       return ['気をつけえ。立て直せ。','スピンか。落ち着け、まだ大丈夫じゃ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
     }
-    case 'position_up':    return `P${pos}。`;
-    case 'position_down':  return `P${pos}。1つダウン。`;
+    case 'position_up':    return [`P${pos}。`,`P${pos}。ええパスじゃ。`,`順位上げたで。P${pos}。`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}。1つダウン。`,`P${pos}。抜かれたで、取り返せ。`,`P${pos}まで下がったで。落ち着いていけ。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
     case 'fuel_strategy_warning': return `このペースだと燃料が最後まで持たん。ピット必須じゃ。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return `リミッターオンにせえ。もうすぐ制限ラインじゃ。`;
-    case 'pit_exit':       return `コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`;
+    case 'pit_entry':      return [`リミッターオンにせえ。もうすぐ制限ラインじゃ。`,`ピットインじゃな。リミッターオンや。`,`了解、ボックスへ入れ。`][Math.floor(Math.random()*3)];
+    case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
     case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
     case 'multiclass_approaching': return `後方速いクラス。${d.delta}秒。譲れ。`;
     case 'multiclass_imminent':    return `道を空けえ。今じゃ。`;
-    case 'battle_behind':  return `後ろ注意じゃ。${d.delta}。詰めてきとる。`;
-    case 'battle_behind_faster': return `後ろ注意じゃ。${d.delta}。相手が速い、先に行かせえ。`;
-    case 'danger_behind': return `気を付けえ。後ろ、危ないドライバーじゃ（${d.reason}）。`;
-    case 'danger_ahead':  return `抜く時気を付けえ。前、危ないドライバーじゃ（${d.reason}）。`;
+    case 'battle_behind': {
+      const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
+      return d.repeat ? `また${num}接近じゃ。${d.delta}。` : `後ろ注意じゃ。${num}${d.delta}。詰めてきとる。`;
+    }
+    case 'battle_behind_faster': {
+      const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
+      return d.repeat ? `また${num}来とる。${d.delta}。相手が速い、先に行かせえ。` : `後ろ注意じゃ。${num}${d.delta}。相手が速い、先に行かせえ。`;
+    }
+    case 'danger_behind': return `気を付けえ。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーじゃ（${d.reason}）。`;
+    case 'danger_ahead':  return `抜く時気を付けえ。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーじゃ（${d.reason}）。`;
     case 'stopped_behind': return `後ろに停止車両じゃ。${d.delta}秒。`;
     case 'stopped_ahead':  return `前方に停止車両じゃ。${d.delta}秒。気を付けえ。`;
     case 'damage_report':
       return d.mandatory ? `ダメージ確認じゃ。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そうや。`
                           : `見た目だけの軽い損傷じゃ。車は大丈夫、そのまま行けえ。`;
+    case 'catchup_ahead': {
+      const cls = (d.class_name ? d.class_name+'、' : '');
+      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
+      const conf = d.confident ? '安定して詰まってきとる。' : 'まだ何とも言えんが、詰まっとる。';
+      const stageTxt = {1:'前のドライバーよりペース速いで、追いつくで。',2:'調子ええ、あと数ラップで追いつけるで。',
+                         3:'もうすぐ真後ろまでいけるで。',4:'一発で仕留めえ。'}[d.stage] || '';
+      return `${cls}${num}前方${d.delta}。${stageTxt}${conf}`;
+    }
+    case 'defend_behind': {
+      const cls = (d.class_name ? d.class_name+'、' : '');
+      const num = (d.car_number ? `ゼッケン${d.car_number}、` : '');
+      const conf = d.confident ? '安定して詰まってきとる。' : 'まだ何とも言えんが、詰まっとる。';
+      const stageTxt = {1:'後ろに速い車おるで、頭に入れとけ。',2:'相手がペース上げてきとる、ミラー見とけ。',
+                         3:'急接近しとる、ライン守れ。',4:'すぐ後ろまで来とる、無理せず守れ。'}[d.stage] || '';
+      return `${cls}${num}後方${d.delta}。${stageTxt}${conf}`;
+    }
     default: return null;
   }
 }
@@ -1813,27 +1857,49 @@ function matthiasRadio(d){
       if(d4) return ['Kontakt. Ruhig bleiben. Kein weiteres Risiko.','Das war heftig. Konzentrier dich. Was wir haben, verteidigen.','Reset jetzt. Ab hier sauber fahren.'][Math.floor(Math.random()*3)];
       return ['Vorsicht. Neu ausrichten.','Dreher? Ruhig bleiben, alles gut.','Kein Stress. Sauber weiterfahren.'][Math.floor(Math.random()*3)];
     }
-    case 'position_up':    return `P${pos}.`;
-    case 'position_down':  return `P${pos}. Eine Position verloren.`;
+    case 'position_up':    return [`P${pos}.`,`P${pos}. Guter Move.`,`Position gewonnen. P${pos}.`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}. Eine Position verloren.`,`P${pos}. Er hat dich überholt, hol's zurück.`,`Zurück auf P${pos}. Ruhig bleiben.`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `Resttreibstoff ${d.fuel}. Sparen jetzt.`;
     case 'fuel_strategy_warning': return `Bei diesem Tempo reicht der Sprit nicht bis zum Ziel. Boxenstopp nötig.`;
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
     case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
     case 'final_lap':      return `Letzte Runde. P${pos}.`;
-    case 'pit_entry':      return `Begrenzer jetzt an. Linie kommt gleich.`;
-    case 'pit_exit':       return `Auf der Strecke. Reifen und Bremsen aufwärmen.`;
+    case 'pit_entry':      return [`Begrenzer jetzt an. Linie kommt gleich.`,`Boxenstopp, verstanden. Begrenzer an.`,`Copy, rein in die Box.`][Math.floor(Math.random()*3)];
+    case 'pit_exit':       return [`Auf der Strecke. Reifen und Bremsen aufwärmen.`,`Raus. Reifen aufwärmen.`,`Zurück auf der Strecke. Erst eine Runde eingewöhnen.`][Math.floor(Math.random()*3)];
     case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Ranfahren.`;
     case 'multiclass_approaching': return `Schnellere Klasse dahinter. ${d.delta} Sekunden. Platz machen.`;
     case 'multiclass_imminent':    return `Platz machen. Jetzt.`;
-    case 'battle_behind':  return `Achtung hinten. ${d.delta}. Er kommt näher.`;
-    case 'battle_behind_faster': return `Achtung hinten. ${d.delta}. Er ist schneller, vorbeilassen.`;
-    case 'danger_behind': return `Vorsicht hinten. Gefährlicher Fahrer (${d.reason}).`;
-    case 'danger_ahead':  return `Vorsicht beim Überholen. Gefährlicher Fahrer vorne (${d.reason}).`;
+    case 'battle_behind': {
+      const num = d.car_number ? `Nummer ${d.car_number}, ` : '';
+      return d.repeat ? `Wieder ${num}dahinter. ${d.delta}.` : `Achtung hinten. ${num}${d.delta}. Er kommt näher.`;
+    }
+    case 'battle_behind_faster': {
+      const num = d.car_number ? `Nummer ${d.car_number}, ` : '';
+      return d.repeat ? `Wieder ${num}dahinter. ${d.delta}. Schneller, vorbeilassen.` : `Achtung hinten. ${num}${d.delta}. Er ist schneller, vorbeilassen.`;
+    }
+    case 'danger_behind': return `Vorsicht hinten. ${d.car_number?`Nummer ${d.car_number}, `:''}Gefährlicher Fahrer (${d.reason}).`;
+    case 'danger_ahead':  return `Vorsicht beim Überholen. ${d.car_number?`Nummer ${d.car_number}, `:''}Gefährlicher Fahrer vorne (${d.reason}).`;
     case 'stopped_behind': return `Stehendes Auto hinten. ${d.delta} Sekunden.`;
     case 'stopped_ahead':  return `Stehendes Auto vorne. ${d.delta} Sekunden. Vorsicht.`;
     case 'damage_report':
       return d.mandatory ? `Schaden bestätigt — Pflichtreparatur, etwa ${Math.round(d.repair_mand)} Sekunden. Nächste Box.`
                           : `Nur kosmetischer Schaden. Auto ist noch stabil, weiter pushen.`;
+    case 'catchup_ahead': {
+      const cls = (d.class_name ? d.class_name+', ' : '');
+      const num = (d.car_number ? `Nummer ${d.car_number}, ` : '');
+      const conf = d.confident ? 'Kontinuierlich näher.' : 'Noch zu früh, um sicher zu sein.';
+      const stageTxt = {1:'Du bist schneller, du holst auf.',2:'Gutes Tempo, du kommst ran.',
+                         3:'Gleich direkt dahinter.',4:'Ein Versuch, jetzt zuschlagen.'}[d.stage] || '';
+      return `${cls}${num}Vorne ${d.delta}. ${stageTxt} ${conf}`;
+    }
+    case 'defend_behind': {
+      const cls = (d.class_name ? d.class_name+', ' : '');
+      const num = (d.car_number ? `Nummer ${d.car_number}, ` : '');
+      const conf = d.confident ? 'Kontinuierlich näher.' : 'Noch zu früh, um sicher zu sein.';
+      const stageTxt = {1:'Schnelleres Auto dahinter, im Hinterkopf behalten.',2:'Er findet Tempo, Spiegel beobachten.',
+                         3:'Kommt schnell näher, Linie verteidigen.',4:'Er ist direkt da, Stellung halten.'}[d.stage] || '';
+      return `${cls}${num}Hinten ${d.delta}. ${stageTxt} ${conf}`;
+    }
     default: return null;
   }
 }
