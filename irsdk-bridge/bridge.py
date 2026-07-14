@@ -1759,7 +1759,10 @@ def poll_iracing():
                         other_last_lap2 = car_last_laps[idx] if car_last_laps else 0
                         pace_diff2 = (other_last_lap2 - player_last_lap
                                       if other_last_lap2 > 0 and player_last_lap > 0 else None)
-                        car_tag2 = _class_id_txt_en(car_class_name_map.get(idx), other_cls_pos) + ', '
+                        # 同クラス(GT3同士)の識別は号車=車番号で（Yuji方針2026-07-14夜：クラス名でなく「12号車」）。
+                        # 番号が取れなければクラス+順位にフォールバック(捏造しない)。英語は "car #12"。
+                        _num2 = car_number_map.get(idx)
+                        car_tag2 = ('car #' + _num2 + ', ') if _num2 else (_class_id_txt_en(car_class_name_map.get(idx), other_cls_pos) + ', ')
 
                         if delta < 0:  # 相手が前方＝キャッチアップ対象
                             gap = abs(delta)
@@ -1779,7 +1782,7 @@ def poll_iracing():
                                     else:
                                         stage_txt = ' Go for it.'
                                     broadcast({'type': 'radio', 'trigger': 'catchup_ahead', 'stage': stage,
-                                        'delta': round(gap, 1), 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                        'delta': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                         'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
                                     last_battle_global = now
                         else:  # 相手が後方＝ディフェンス対象
@@ -1800,7 +1803,7 @@ def poll_iracing():
                                     else:
                                         stage_txt = ' Check mirrors.'
                                     broadcast({'type': 'radio', 'trigger': 'defend_behind', 'stage': stage,
-                                        'delta': round(gap, 1), 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                        'delta': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                         'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
                                     last_battle_global = now
 
