@@ -128,7 +128,7 @@ CORNER_EXIT_RAD = 0.04    # 約2.3度。これを下回ったら「コーナー�
 # シリーズ固有のクラス略称を、口頭で分かりやすい一般的なカテゴリー名に変換する
 # （例：IMSA23シリーズのGT3規定クラスは"IMSA23"という略称だが、喋る時は"GT3"の方が伝わる）。
 # ⚠️他シリーズで同様に分かりにくい略称が出てきたら随時ここに追加する(Yuji方針・2026-07-14)。
-CLASS_NAME_ALIASES = {'IMSA23': 'GT3'}
+CLASS_NAME_ALIASES = {'IMSA23': 'GT3', 'Dallara P217': 'P217', 'Dallara P217 LMP2': 'P217'}
 
 def _norm_class_name(name):
     return CLASS_NAME_ALIASES.get(name, name) if name else name
@@ -689,6 +689,7 @@ def poll_iracing():
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
+    multiclass_stage = {}       # car_idx -> 速いクラス接近の直近段階(0=未/1=5秒/2=2秒)。段階を跨いだ時だけ発火＝連呼防止
     last_mc_diag_ts = 0.0       # マルチクラス「コールゼロ」診断ログの最終出力時刻
     battle_warned = {}          # car_idx -> last warned time
     last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
@@ -1664,37 +1665,8 @@ def poll_iracing():
                     other_class = car_class_map.get(idx, -1)
                     other_rel   = car_relspeed_map.get(idx, 0)
 
-                    # ── マルチクラス接近警告（GTP/LMP2等が後方接近）2段階コール ──
-                    # ※車が0-2秒圏内に張り付いたまま(同クラス列走行等)だと単純タイマーでは
-                    #   永遠に再発火してしまうため、再武装(armed)方式に変更＝1回の接近につき
-                    #   approaching→imminentを最大1回ずつ。6秒より離れたら再武装。
-                    is_faster_class = (other_class != -1 and other_class != player_class_id and
-                                       other_rel > player_rel_speed)
-                    # 診断ログ：別クラスの車が5秒以内に近いのに「速いクラス」と判定されなかった
-                    # ケースを記録（Yuji報告「GTP接近でコールゼロ」の原因特定用・10秒に1回まで）
-                    if (other_class != -1 and other_class != player_class_id and not is_faster_class
-                            and abs(delta) <= 5.0 and now - last_mc_diag_ts > 10):
-                        log("MC-DIAG no-call: my_class=%s my_rel=%s other_class=%s other_rel=%s delta=%.1f" %
-                            (player_class_id, player_rel_speed, other_class, other_rel, delta))
-                        last_mc_diag_ts = now
-                    if is_faster_class:
-                        if delta > 6.0:
-                            multiclass_armed[idx] = True
-                        elif 2.0 < delta <= 5.0 and multiclass_armed.get(idx, False):  # 5秒前：第1コール
-                            last_warn = multiclass_warned.get(idx, 0)
-                            if now - last_warn > 15:
-                                other_cls_pos = car_class_pos_arr[idx] if car_class_pos_arr and idx < len(car_class_pos_arr) else None
-                                other_cls_name = car_class_name_map.get(idx)
-                                broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
-                                    'delta': round(delta, 1), 'class_name': _norm_class_name(other_cls_name), 'class_pos': other_cls_pos,
-                                    'message': _class_id_txt_en(other_cls_name, other_cls_pos) + ' back, ' + _fmt_gap(delta) + '. Prepare.'})
-                                multiclass_warned[idx] = now
-                        elif 0 < delta <= 2.0 and multiclass_armed.get(idx, False):  # 2秒前：第2コール（緊急・1回のみ）
-                            broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
-                                'delta': round(delta, 1),
-                                'message': 'Give room. Now.'})
-                            multiclass_2s_warned[idx] = now
-                            multiclass_armed[idx] = False  # 再武装まで両方とも黙る
+                    # ── マルチクラス(速いクラス)接近警告は、このループの外で別ロジックに移設 ──
+                    #   （EstTime差はクロスクラスで狂うため、LapDistPct物理ギャップで測り直す。下記参照）
 
                     # ── 危険ドライバー警告（低iRating/低SR、前後どちらも）──────────
                     # Yuji方針：バトル警告と同じタイミング(0.55→0.3の急接近で1回だけ)に乗せる。
@@ -1831,6 +1803,54 @@ def poll_iracing():
                                         'delta': round(gap, 1), 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                         'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
                                     last_battle_global = now
+
+                # ── マルチクラス(速いクラス)接近警告：クラス非依存のLapDistPct物理ギャップで測る ──
+                # ⚠️2026-07-14 IMSA実走で発覚：旧実装はCarIdxEstTime差でクロスクラス車間を測っていたが、
+                #   EstTimeは各車のクラス想定ラップで位置を秒換算する値。GT3(93秒)とP217(85秒)では同じコース
+                #   位置でも数秒ズレ、「後方P217 4.6秒」と幻を6連呼した(実際の最近接は0.2-0.9秒)。LapDistPct
+                #   (0-1のコース内位置・クラス非依存)差×自分のラップタイムなら物理車間が正しい。周回数も無関係
+                #   なので周回遅れにされる直前の速いクラスも拾える(EstTimeの同一周回フィルターに縛られない)。
+                # 連呼対策：段階(1=5秒/2=2秒)を跨いだ最初の瞬間だけ1回。6秒より離れたら再武装。
+                if car_dist_pct and player_car_idx < len(car_dist_pct) and player_last_lap and player_last_lap > 0:
+                    _ppct = car_dist_pct[player_car_idx]
+                    _cls_pos_mc = reader.read_int_array('CarIdxClassPosition', 64)
+                    if _ppct is not None and _ppct >= 0:
+                        for _mi in range(len(car_dist_pct)):
+                            if _mi == player_car_idx:
+                                continue
+                            _mcls = car_class_map.get(_mi, -1)
+                            _mrel = car_relspeed_map.get(_mi, 0)
+                            if _mcls == -1 or _mcls == player_class_id or _mrel <= player_rel_speed:
+                                continue  # 速いクラス(別クラス かつ 相対速度が自分より速い)のみ対象
+                            if car_on_track and _mi < len(car_on_track) and car_on_track[_mi] not in (2, 3):
+                                multiclass_stage.pop(_mi, None)   # ピット/未使用は再武装扱い
+                                continue
+                            _opct = car_dist_pct[_mi]
+                            if _opct is None or _opct < 0:
+                                continue
+                            _pd = _opct - _ppct
+                            if _pd > 0.5: _pd -= 1.0
+                            elif _pd < -0.5: _pd += 1.0
+                            _mcgap = _pd * player_last_lap  # 正=後方, 負=前方
+                            if _mcgap <= 0:      # 前方の速いクラス=自分が追う相手でない。静観して再武装だけ
+                                multiclass_stage[_mi] = 0
+                                continue
+                            _stg = 2 if _mcgap <= 2.0 else (1 if _mcgap <= 5.0 else 0)
+                            if _mcgap > 6.0:
+                                multiclass_stage[_mi] = 0   # 十分離れた=再武装
+                            elif _stg > multiclass_stage.get(_mi, 0) and now - last_battle_global > 12:
+                                multiclass_stage[_mi] = _stg
+                                _ocpos = _cls_pos_mc[_mi] if (_cls_pos_mc and _mi < len(_cls_pos_mc)) else None
+                                _ocname = car_class_name_map.get(_mi)
+                                if _stg == 1:
+                                    broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
+                                        'delta': round(_mcgap, 1), 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
+                                        'message': _class_id_txt_en(_ocname, _ocpos) + ' back, ' + _fmt_gap(_mcgap) + '. Prepare.'})
+                                else:
+                                    broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
+                                        'delta': round(_mcgap, 1), 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
+                                        'message': 'Give room now — ' + _class_id_txt_en(_ocname, _ocpos) + '.'})
+                                last_battle_global = now
 
         # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──
         # 今までは「直前直後の車」としか比較できず、離れた順位を聞かれると答えられなかった。

@@ -1748,7 +1748,7 @@ function oishiRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。全開でいい。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
-    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。道を譲れ。`;
+    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えろ。`;
     case 'multiclass_imminent':    return `道を空けろ。今だ。`;
     case 'battle_behind': {
       const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
@@ -1815,7 +1815,7 @@ function kanbeRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。踏んでいけぇ。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
-    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。譲れ。`;
+    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えとけ。`;
     case 'multiclass_imminent':    return `道を空けえ。今じゃ。`;
     case 'battle_behind': {
       const num = d.car_number ? `ゼッケン${d.car_number}、` : '';
@@ -1882,7 +1882,7 @@ function matthiasRadio(d){
     case 'pit_exit':       return [`Auf der Strecke. Reifen und Bremsen aufwärmen.`,`Raus. Reifen aufwärmen.`,`Zurück auf der Strecke. Erst eine Runde eingewöhnen.`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `Begrenzer aus. Vollgas.`;
     case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Ranfahren.`;
-    case 'multiclass_approaching': return `${classIdTxtDE(d.class_name, d.class_pos)} dahinter. ${d.delta} Sekunden. Platz machen.`;
+    case 'multiclass_approaching': return `${classIdTxtDE(d.class_name, d.class_pos)} dahinter, ${d.delta} Sekunden. Bereit machen.`;
     case 'multiclass_imminent':    return `Platz machen. Jetzt.`;
     case 'battle_behind': {
       const num = d.car_number ? `Nummer ${d.car_number}, ` : '';
