@@ -833,6 +833,17 @@ def poll_iracing():
                             + " class:" + str(info.get('player_car_class')) + " drivers:" + str(info.get('num_drivers'))
                             + " track:" + str(info.get('track')) + " iR:" + str(info.get('player_irating'))
                             + " SR:" + str(info.get('safety_rating')))
+                        # ── 診断ログ：ゼッケンとSRの不一致調査（2026-07-14 Yuji IMSA実走）──────────
+                        # #28のログSR2.23 vs 結果画面SR1.51の食い違いを次回切り分けるため、iRacingの
+                        # DriverInfoが「セッション開始時点で」各車に何を報告しているかをそのまま吐く。
+                        # ここの値=結果画面の最終値なら我々の紐付けバグ、違えば開始時スナップショット問題。
+                        for _dd in info.get('drivers', []):
+                            if _dd.get('spectator', 0) == 0 and _dd.get('irating', 0) > 0:
+                                _srv = round(_dd.get('lic_sublevel', 0) / 100, 2)
+                                log("  DRIVER idx=" + str(_dd.get('car_idx')) + " #" + str(_dd.get('car_number', '?'))
+                                    + " '" + str(_dd.get('name', '?')) + "' LIC=" + str(_dd.get('lic_level', '?'))
+                                    + "." + str(_dd.get('lic_sublevel', '?')) + "(SR " + str(_srv) + ")"
+                                    + " iR=" + str(_dd.get('irating', '?')) + " class=" + str(_dd.get('class_name', '?')))
                         last_session_sig = sig
                         summary_sent = False            # サマリーリセット
                         checkered_pending = False       # チェッカー待機フラグもリセット
@@ -1706,6 +1717,9 @@ def poll_iracing():
                                 # 無ければ黙って省略(ゼッケン無し表記で捏造しない)。
                                 num = car_number_map.get(idx)
                                 car_tag = (' car #' + num) if num else ''
+                                # 診断：どのidxに、どの番号/SR/iRを紐付けて鳴らしたか（ゼッケンSR不一致調査）
+                                log("DANGER fire idx=" + str(idx) + " #" + str(num) + " SR=" + str(other_sr)
+                                    + " iR=" + str(other_irating) + " -> reason:" + reason)
                                 if delta > 0:  # 相手が後方（delta>0=後方）
                                     broadcast({'type': 'radio', 'trigger': 'danger_behind',
                                         'delta': round(delta, 1), 'reason': reason, 'car_number': num,
