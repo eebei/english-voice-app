@@ -1768,6 +1768,8 @@ function oishiRadio(d){
                          3:'急接近してる、ライン守れ。',4:'すぐ後ろまで来てる、無理せず守れ。'}[d.stage] || '';
       return `${cls}${num}後方${d.delta}。${stageTxt}${conf}`;
     }
+    case 'side_by_side': return {left:'左に車。',right:'右に車。',both:'両側に車。'}[d.side] || '横に車。';
+    case 'multi_car_straight': return '3台並走。スペース注意。';
     default: return null;
   }
 }
@@ -1834,6 +1836,8 @@ function kanbeRadio(d){
                          3:'急接近しとる、ライン守れ。',4:'すぐ後ろまで来とる、無理せず守れ。'}[d.stage] || '';
       return `${cls}${num}後方${d.delta}。${stageTxt}${conf}`;
     }
+    case 'side_by_side': return {left:'左に車じゃ。',right:'右に車じゃ。',both:'両側に車じゃ。'}[d.side] || '横に車じゃ。';
+    case 'multi_car_straight': return '3台並走じゃ。スペース注意。';
     default: return null;
   }
 }
@@ -1900,6 +1904,8 @@ function matthiasRadio(d){
                          3:'Kommt schnell näher, Linie verteidigen.',4:'Er ist direkt da, Stellung halten.'}[d.stage] || '';
       return `${cls}${num}Hinten ${d.delta}. ${stageTxt} ${conf}`;
     }
+    case 'side_by_side': return {left:'Auto links.',right:'Auto rechts.',both:'Autos auf beiden Seiten.'}[d.side] || 'Auto daneben.';
+    case 'multi_car_straight': return 'Drei nebeneinander. Platz beachten.';
     default: return null;
   }
 }

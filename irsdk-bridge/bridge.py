@@ -119,6 +119,12 @@ TTS_API_KEY = ""  # bridgeはRailway STT proxyを使うので空でもOK（直�
 
 RAILWAY_URL = "https://www.omoraypitwall.com"
 
+# コーナー単位サイドバイサイド検知の舵角しきい値（ラジアン）。
+# ⚠️車種でステアリング比が違う(GT3は切れ角大、フォーミュラは小さい)ため固定値の限界あり。
+# 実走テストで誤検知/未検知が出たら、この2値をチューニングする(Yuji方針・2026-07-14)。
+CORNER_ENTRY_RAD = 0.10   # 約5.7度。これを超えたら「コーナー進入」候補
+CORNER_EXIT_RAD = 0.04    # 約2.3度。これを下回ったら「コーナー脱出」候補（ヒステリシスで閾値付近のふらつき対策）
+
 def _catchup_stage_of(g):
     # 段階的キャッチアップ/ディフェンスコールの距離帯判定（10/7/3/1.5秒）
     if g <= 1.5: return 4
@@ -676,6 +682,11 @@ def poll_iracing():
     catchup_stage = {}          # car_idx -> 前方車両への段階的キャッチアップコール、直近で知らせた段階(0=未・1=7秒・2=4秒・3=3秒・4=1.5秒)
     defend_stage = {}           # car_idx -> 後方車両への段階的ディフェンスコール、同上
     gap_pace_hist = {}          # car_idx -> 直前ラップでのpace_diff（トレンド判定・確度の高低に使う）
+    in_corner = False           # コーナー単位サイドバイサイド検知：今コーナー中か
+    corner_over_count = 0       # 舵角がCORNER_ENTRY_RADを超えた連続サンプル数
+    corner_under_count = 0      # 舵角がCORNER_EXIT_RADを下回った連続サンプル数
+    corner_sides_announced = set()  # 今のコーナーで既に知らせた側（'left'/'right'/'both'）。コーナーが変わったらリセット
+    straight_sbs_warned = 0.0   # ストレートでの3台以上並走、最終通知時刻（クールダウン用）
     # セッションサマリー蓄積
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
@@ -924,6 +935,50 @@ def poll_iracing():
             'humidity':     round(rel_humidity * 100, 0) if rel_humidity is not None else None,
             'track_wetness': round(track_wet, 2) if track_wet is not None else None,
         }
+
+        # ── コーナー単位サイドバイサイド検知（新規・2026-07-14 Yuji設計）──
+        # 舵角(SteeringWheelAngle)でコーナー進入/脱出を検知し、その間だけiRacing公式スポッター値
+        # (CarLeftRight)を見て「隣に車がいるか」を判定する。左右の物理位置はiRacing自身が計算済みの
+        # 値をそのまま使う(自前で推定する必要なし・CarLeftRight: 0=off 1=clear 2=左 3=右 4=両側 5=左2台 6=右2台)。
+        # ヒステリシスで閾値ギリギリのふらつきによる誤検知/連続発火を防ぐ(3サンプル連続で判定)。
+        steering_angle = reader.read_float('SteeringWheelAngle')
+        car_left_right = reader.read_int('CarLeftRight')
+        if steering_angle is not None and is_race_session and not in_start_rush:
+            _sa = abs(steering_angle)
+            if _sa > CORNER_ENTRY_RAD:
+                corner_over_count += 1
+                corner_under_count = 0
+            elif _sa < CORNER_EXIT_RAD:
+                corner_under_count += 1
+                corner_over_count = 0
+            else:
+                corner_over_count = 0
+                corner_under_count = 0
+
+            if not in_corner and corner_over_count >= 3:
+                in_corner = True
+                corner_sides_announced = set()  # 新しいコーナー＝再武装
+                corner_over_count = 0
+            elif in_corner and corner_under_count >= 3:
+                in_corner = False
+                corner_under_count = 0
+
+            _now3 = time.time()
+            if in_corner and car_left_right is not None and car_left_right >= 2:
+                _side = {2: 'left', 5: 'left', 3: 'right', 6: 'right', 4: 'both'}.get(car_left_right)
+                if _side and _side not in corner_sides_announced:
+                    corner_sides_announced.add(_side)
+                    if _now3 - last_battle_global > 15:
+                        _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
+                        broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side, 'message': _side_msg})
+                        last_battle_global = _now3
+            # ストレート(コーナー外)で3台以上並走の検知。CarLeftRight=4(両側)/5/6(片側2台)を代用
+            # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。2台までは自分で見えるのでスルー。
+            elif not in_corner and car_left_right in (4, 5, 6):
+                if _now3 - straight_sbs_warned > 20 and _now3 - last_battle_global > 15:
+                    broadcast({'type': 'radio', 'trigger': 'multi_car_straight', 'message': 'Three wide. Watch the space.'})
+                    straight_sbs_warned = _now3
+                    last_battle_global = _now3
 
         # ── タイヤ詳細（4輪×内中外温度＋摩耗）と損傷代理(修理所要秒) ──
         # 項目7：「右フロント垂れてる」「損傷は？」に実データで答えるため。聞かれた時だけ使う。
