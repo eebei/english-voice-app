@@ -96,6 +96,7 @@ function createWindow() {
     height: 900,
     title: 'OMORAY PITWALL',
     backgroundColor: '#07080f',
+    alwaysOnTop: true,   // ★ 走行中もチャット欄を見られるよう常に最前面（Yuji要望2026-07-15）
     webPreferences: {
       backgroundThrottling: false,   // ★ 裏に回っても止めない（このプロジェクトの肝）
       autoplayPolicy: 'no-user-gesture-required',  // ★ TTS音声を確実に再生
@@ -103,6 +104,11 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  // ★ 走行開始や画面操作でiRacingが前面を奪っても、PITWALLの窓が裏に隠れないよう最前面を固定する。
+  //   'screen-saver'は最も高いレベルで、borderless/windowed のiRacingより前に居続ける。
+  //   ⚠️iRacingを"排他的フルスクリーン"で動かしているとWindowsの仕様でどんなオーバーレイも隠れる——
+  //     その場合はiRacingの表示設定を「Borderless(枠なしウィンドウ)」にする必要がある（コードでは回避不可）。
+  try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (e) {}
 
   // 外部リンク（更新通知バナー等）はOSの既定ブラウザで開く。アプリ内に新ウィンドウを作らない。
   win.webContents.setWindowOpenHandler(({ url }) => {
