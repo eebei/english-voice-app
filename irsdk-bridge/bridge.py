@@ -126,13 +126,25 @@ RAILWAY_URL = "https://www.omoraypitwall.com"
 CORNER_ENTRY_RAD = 0.10   # 約5.7度。これを超えたら「コーナー進入」候補
 CORNER_EXIT_RAD = 0.04    # 約2.3度。これを下回ったら「コーナー脱出」候補（ヒステリシスで閾値付近のふらつき対策）
 
-# シリーズ固有のクラス略称を、口頭で分かりやすい一般的なカテゴリー名に変換する
+# シリーズ固有のクラス略称/飾り名を、口頭で分かりやすい一般的なカテゴリー名に変換する
 # （例：IMSA23シリーズのGT3規定クラスは"IMSA23"という略称だが、喋る時は"GT3"の方が伝わる）。
-# ⚠️他シリーズで同様に分かりにくい略称が出てきたら随時ここに追加する(Yuji方針・2026-07-14)。
+# ⚠️iRacingはシリーズ/AIレースごとにクラス名へ独自の飾り名を付ける（例「Crev GT3 2026」）。
+#   ①まず完全一致の別名表、②無ければ名前に標準カテゴリー語(GT3/GTP等)が含まれていればそこへ丸める。
+#   これで新シリーズが「〇〇 GT3 20XX」等でも自動で「GT3」に集約される(Yuji方針・2026-07-14/16)。
 CLASS_NAME_ALIASES = {'IMSA23': 'GT3', 'Dallara P217': 'P217', 'Dallara P217 LMP2': 'P217'}
+# 順序＝より具体的/長いトークンを先に（"GT3"が"GTP"等に誤マッチしないよう単語単位で判定）。
+_CLASS_CATEGORY_TOKENS = ['GTP', 'LMP2', 'LMP3', 'GT3', 'GT4', 'GTE', 'P217', 'TCR']
 
 def _norm_class_name(name):
-    return CLASS_NAME_ALIASES.get(name, name) if name else name
+    if not name:
+        return name
+    if name in CLASS_NAME_ALIASES:
+        return CLASS_NAME_ALIASES[name]
+    _u = name.upper()
+    for _tok in _CLASS_CATEGORY_TOKENS:
+        if _tok in _u:
+            return _tok
+    return name
 
 _ORDINALS_EN = {1: '1st', 2: '2nd', 3: '3rd', 4: '4th', 5: '5th'}
 
