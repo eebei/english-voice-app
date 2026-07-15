@@ -1890,6 +1890,19 @@ def poll_iracing():
                             continue
                         standings_gaps[str(_spos)] = round(_f2_arr[_si] - _player_f2, 1)
 
+                    # ── レース中の前後ギャップは F2Time（iRacingダッシュボードと同じリーダー相対）で
+                    #    「隣の順位」から取り直す。EstTimeの同一周回フィルターだと接近戦でS/Fライン跨ぎに
+                    #    真後ろの車が別周回扱いで弾かれ gap_behind=None が頻発し、値もドライバーのオーバーレイと
+                    #    食い違っていた（Yuji 2026-07-15 Monza実走で「0.4じゃなく1.1-1.2だろ」と指摘）。
+                    #    レース中はこれで上書き。練習/予選はF2Timeが自己ベスト差になるのでEstTimeのまま。
+                    if class_pos and class_pos > 0:
+                        _adj_ahead = standings_gaps.get(str(class_pos - 1))
+                        _adj_behind = standings_gaps.get(str(class_pos + 1))
+                        if _adj_ahead is not None:
+                            nearest_ahead_gap = abs(_adj_ahead)
+                        if _adj_behind is not None:
+                            nearest_behind_gap = abs(_adj_behind)
+
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
         # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。
         # ※onTrack限定にしない：ピット/ガレージでの直後デブリーフでもデータが古くなり
