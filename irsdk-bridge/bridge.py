@@ -1378,7 +1378,7 @@ def poll_iracing():
                         now_r - rolling_gap_warned_time > 5.0):
                     broadcast({'type': 'radio', 'trigger': 'rolling_gap',
                         'gap': round(best_ahead, 1),
-                        'message': 'Gap ' + str(round(best_ahead, 1)) + '. Close up.'})
+                        'message': 'Gap ' + str(round(best_ahead, 1)) + '. Reel them in.'})
                     rolling_gap_warned_time = now_r
 
         # ── インシデント検知（コースオフ/接触/クラッシュ） ──────────────
@@ -1452,8 +1452,8 @@ def poll_iracing():
                     'Position gained. P' + str(class_pos) + '.'])
                 broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos, 'message': _pu_msg})
             else:
-                _pd_msg = random.choice(['P' + str(class_pos) + '. Lost one.', 'P' + str(class_pos) + '. He got you, get it back.',
-                    'Down to P' + str(class_pos) + '. Stay calm.'])
+                _pd_msg = random.choice(['P' + str(class_pos) + '. Lost one.', 'P' + str(class_pos) + '. He got you — still reachable.',
+                    'Down to P' + str(class_pos) + '. You\'re fine, pace is there.'])
                 broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos, 'message': _pd_msg})
 
         # Fuel warning

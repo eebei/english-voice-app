@@ -1741,7 +1741,7 @@ function oishiRadio(d){
       return ['気をつけろ。立て直せ。','スピンか。落ち着け、まだ大丈夫だ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
     }
     case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパスだ。`,`順位上げた。P${pos}。`][Math.floor(Math.random()*3)];
-    case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれた、取り返せ。`,`P${pos}まで下がった。落ち着いていけ。`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれたが、まだ取り返せる。`,`P${pos}。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
     case 'fuel_strategy_warning': return `データ上、このままだと燃料が最後まで持たない。ピット計画を決めよう。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
@@ -1750,7 +1750,7 @@ function oishiRadio(d){
     case 'pit_entry':      return [`リミッターオン。もうすぐ制限ラインだ。`,`ピットインだな。リミッターオン。`,`了解、ボックスへ。`][Math.floor(Math.random()*3)];
     case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。全開でいい。`;
-    case 'rolling_gap':    return `前と${d.gap}秒。詰めろ。`;
+    case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えろ。`;
     case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けろ。`;
     case 'battle_behind': {
@@ -1808,7 +1808,7 @@ function kanbeRadio(d){
       return ['気をつけえ。立て直せ。','スピンか。落ち着け、まだ大丈夫じゃ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
     }
     case 'position_up':    return [`P${pos}。`,`P${pos}。ええパスじゃ。`,`順位上げたのう。P${pos}。`][Math.floor(Math.random()*3)];
-    case 'position_down':  return [`P${pos}。1つダウン。`,`P${pos}。抜かれたけぇ、取り返せ。`,`P${pos}まで下がったのう。落ち着いていけ。`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}。1つダウン。`,`P${pos}。抜かれたが、まだ取り返せるで。`,`P${pos}まで下がったのう。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
     case 'fuel_strategy_warning': return `データ上、このままじゃ燃料が最後まで持たん。ピット計画を決めようや。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
@@ -1817,7 +1817,7 @@ function kanbeRadio(d){
     case 'pit_entry':      return [`リミッターオンにせえ。もうすぐ制限ラインじゃ。`,`ピットインじゃな。リミッターオンや。`,`了解、ボックスへ入れ。`][Math.floor(Math.random()*3)];
     case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。踏んでいけぇ。`;
-    case 'rolling_gap':    return `前と${d.gap}秒。詰めえ。`;
+    case 'rolling_gap':    return `前と${d.gap}秒。じわじわ詰めていこうや。`;
     case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えとけ。`;
     case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けえ。`;
     case 'battle_behind': {
@@ -1875,7 +1875,7 @@ function matthiasRadio(d){
       return ['Vorsicht. Neu ausrichten.','Dreher? Ruhig bleiben, alles gut.','Kein Stress. Sauber weiterfahren.'][Math.floor(Math.random()*3)];
     }
     case 'position_up':    return [`P${pos}.`,`P${pos}. Guter Move.`,`Position gewonnen. P${pos}.`][Math.floor(Math.random()*3)];
-    case 'position_down':  return [`P${pos}. Eine Position verloren.`,`P${pos}. Er hat dich überholt, hol's zurück.`,`Zurück auf P${pos}. Ruhig bleiben.`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}. Eine Position verloren.`,`P${pos}. Überholt worden — noch zu holen.`,`Zurück auf P${pos}. Alles ruhig, die Pace ist da.`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `Resttreibstoff ${d.fuel}. Sparen jetzt.`;
     case 'fuel_strategy_warning': return `Laut Daten reicht der Sprit so nicht bis ins Ziel. Lass uns den Boxenplan festlegen.`;
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
@@ -1884,7 +1884,7 @@ function matthiasRadio(d){
     case 'pit_entry':      return [`Begrenzer jetzt an. Linie kommt gleich.`,`Boxenstopp, verstanden. Begrenzer an.`,`Copy, rein in die Box.`][Math.floor(Math.random()*3)];
     case 'pit_exit':       return [`Auf der Strecke. Reifen und Bremsen aufwärmen.`,`Raus. Reifen aufwärmen.`,`Zurück auf der Strecke. Erst eine Runde eingewöhnen.`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `Begrenzer aus. Vollgas.`;
-    case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Ranfahren.`;
+    case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Stück für Stück ran.`;
     case 'multiclass_approaching': return `${classIdTxtDE(d.class_name, d.class_pos)} dahinter, ${d.delta} Sekunden. Bereit machen.`;
     case 'multiclass_imminent':    return `${classIdTxtDE(d.class_name, d.class_pos)} direkt hinter dir. Platz machen.`;
     case 'battle_behind': {
