@@ -666,6 +666,15 @@ function buildSystem(p) {
     } else if (mode === 'ja-engineering') {
       modeNote += jaEngineeringPrompt();
     }
+    // ── Part2(2026-07-15 B設計)：レースモード共通の燃料・戦略アンカー（全キャラ）──
+    // IMSA実走でHajimeが燃料コールを矛盾させ(「18周目に給油」→1分後「20周以降」)、レース前に合意した
+    // アンダーカット計画を忘れてドライバーに催促された。データは届いていた＝プロンプトが「ライブ数値固定・
+    // 一貫性・合意作戦の維持」を明示していなかったのが原因。全キャラのレースモードに共通で差し込む。
+    if (mode === 'race') {
+      modeNote += isJ
+        ? '\n\n━━ 燃料・ピット戦略の鉄則（レース中・厳守）━━\n【ライブ数値だけで話せ】燃料・ピットの話は必ず【現在のライブテレメトリ】の燃料データ（平均消費・残り走行可能周・to-フィニッシュの余裕/不足・給油要否）から答えろ。届いていない項目は「確認する」と言え。推測で燃料や周回の数字を作るな。\n【自分と矛盾するな】一度ピット目標周やプランを口にしたら、データが変わらん限りブレるな。直前の自分の燃料コールと食い違う数字を出すな（例：「18周目に給油」と言った直後に「20周以降」は厳禁）。\n【合意した作戦は生きている】レース前に決めた作戦（アンダーカット／セーブ／◯周目ピット等）は継続中だ。会話履歴のその作戦を自分から参照し、実行に移せ。忘れて漂流するな。ドライバーに作戦を催促させたら、お前の負けだ。'
+        : '\n\n━━ FUEL & PIT STRATEGY — IRON RULES (during race) ━━\n[LIVE NUMBERS ONLY] Answer fuel/pit questions ONLY from the fuel data in [CURRENT LIVE TELEMETRY] (avg use, laps of fuel left, to-finish margin, whether a stop is needed). Say "let me check" for anything not provided. Never invent fuel or lap numbers.\n[DO NOT CONTRADICT YOURSELF] Once you state a pit-lap target or a plan, do not drift unless the data changes. Never give a number that conflicts with your own last fuel call (e.g. "pit lap 18" then "after lap 20" is forbidden).\n[THE AGREED PLAN STANDS] Any strategy agreed before the race (undercut / save / pit around lap X) is still in force. Reference it from the conversation yourself and execute it. Do not forget or drift. If the driver has to remind you of the plan, you have failed.';
+    }
   }
 
   const skipLevel = isJ || (character === 'Hajime') || (character === 'HajimeJP') || (character === 'Luna') || (character === 'LunaJP') || (character === 'Matthias') || (character === 'James' && (mode === 'race' || mode === 'ja-engineering'));

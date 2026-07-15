@@ -1228,10 +1228,13 @@ def poll_iracing():
                     #   （既にピットに向かっているのに今更「ピットしろ」と言う矛盾した無線になる）。
                     #   onPit中は新規の警告を出さない。ピットを出て、まだ margin が負のままなら
                     #   次のラップ完了時に正しく再警告される。
-                    if margin_laps < 0 and not fuel_strategy_warned and not onPit:
+                    # ⚠️厳格化(2026-07-15 B-Part3)：margin<0だと僅差ノイズや実測不足でも早すぎ発火し、
+                    #   会話中のエンジニアと矛盾する固定文が独立して飛んでいた(IMSA実走で判明)。明確に不足
+                    #   (margin<-0.5)かつ実測が足りてる(クリーン3周以上)時だけ1回鳴らす。文言もデータ根拠型に。
+                    if margin_laps < -0.5 and len(fuel_per_lap_hist) >= 3 and not fuel_strategy_warned and not onPit:
                         broadcast({'type': 'radio', 'trigger': 'fuel_strategy_warning',
                             'margin_laps': margin_laps,
-                            'message': 'Fuel will not last to the finish at this pace. Pit required.'})
+                            'message': 'By the numbers, fuel won\'t reach the finish at this pace. Let\'s lock in the pit plan.'})
                         fuel_strategy_warned = True
                     elif margin_laps >= 0:
                         fuel_strategy_warned = False  # ピット等で給油後、再度不足すれば再警告できるようリセット

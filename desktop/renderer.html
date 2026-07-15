@@ -1743,7 +1743,7 @@ function oishiRadio(d){
     case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパスだ。`,`順位上げた。P${pos}。`][Math.floor(Math.random()*3)];
     case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれた、取り返せ。`,`P${pos}まで下がった。落ち着いていけ。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
-    case 'fuel_strategy_warning': return `このペースだと燃料が最後まで持たない。ピット必須だ。`;
+    case 'fuel_strategy_warning': return `データ上、このままだと燃料が最後まで持たない。ピット計画を決めよう。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -1810,7 +1810,7 @@ function kanbeRadio(d){
     case 'position_up':    return [`P${pos}。`,`P${pos}。ええパスじゃ。`,`順位上げたのう。P${pos}。`][Math.floor(Math.random()*3)];
     case 'position_down':  return [`P${pos}。1つダウン。`,`P${pos}。抜かれたけぇ、取り返せ。`,`P${pos}まで下がったのう。落ち着いていけ。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
-    case 'fuel_strategy_warning': return `このペースだと燃料が最後まで持たん。ピット必須じゃ。`;
+    case 'fuel_strategy_warning': return `データ上、このままじゃ燃料が最後まで持たん。ピット計画を決めようや。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -1877,7 +1877,7 @@ function matthiasRadio(d){
     case 'position_up':    return [`P${pos}.`,`P${pos}. Guter Move.`,`Position gewonnen. P${pos}.`][Math.floor(Math.random()*3)];
     case 'position_down':  return [`P${pos}. Eine Position verloren.`,`P${pos}. Er hat dich überholt, hol's zurück.`,`Zurück auf P${pos}. Ruhig bleiben.`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `Resttreibstoff ${d.fuel}. Sparen jetzt.`;
-    case 'fuel_strategy_warning': return `Bei diesem Tempo reicht der Sprit nicht bis zum Ziel. Boxenstopp nötig.`;
+    case 'fuel_strategy_warning': return `Laut Daten reicht der Sprit so nicht bis ins Ziel. Lass uns den Boxenplan festlegen.`;
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
     case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
     case 'final_lap':      return `Letzte Runde. P${pos}.`;
