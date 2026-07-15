@@ -675,6 +675,15 @@ function buildSystem(p) {
         ? '\n\n━━ 燃料・ピット戦略の鉄則（レース中・厳守）━━\n【ライブ数値だけで話せ】燃料・ピットの話は必ず【現在のライブテレメトリ】の燃料データ（平均消費・残り走行可能周・to-フィニッシュの余裕/不足・給油要否）から答えろ。届いていない項目は「確認する」と言え。推測で燃料や周回の数字を作るな。\n【自分と矛盾するな】一度ピット目標周やプランを口にしたら、データが変わらん限りブレるな。直前の自分の燃料コールと食い違う数字を出すな（例：「18周目に給油」と言った直後に「20周以降」は厳禁）。\n【合意した作戦は生きている】レース前に決めた作戦（アンダーカット／セーブ／◯周目ピット等）は継続中だ。会話履歴のその作戦を自分から参照し、実行に移せ。忘れて漂流するな。ドライバーに作戦を催促させたら、お前の負けだ。'
         : '\n\n━━ FUEL & PIT STRATEGY — IRON RULES (during race) ━━\n[LIVE NUMBERS ONLY] Answer fuel/pit questions ONLY from the fuel data in [CURRENT LIVE TELEMETRY] (avg use, laps of fuel left, to-finish margin, whether a stop is needed). Say "let me check" for anything not provided. Never invent fuel or lap numbers.\n[DO NOT CONTRADICT YOURSELF] Once you state a pit-lap target or a plan, do not drift unless the data changes. Never give a number that conflicts with your own last fuel call (e.g. "pit lap 18" then "after lap 20" is forbidden).\n[THE AGREED PLAN STANDS] Any strategy agreed before the race (undercut / save / pit around lap X) is still in force. Reference it from the conversation yourself and execute it. Do not forget or drift. If the driver has to remind you of the plan, you have failed.';
     }
+    // ── Part1(2026-07-15 B設計)：レース形式は"聞く"前に"データで宣言"（全キャラ・戦略モード）──
+    // Yuji方針：決勝の長さ・セッション種別はテレメトリから分かる。聞かずにエンジニアが宣言しろ。
+    // 給油要否も消費が読めれば燃料データから導ける。SDKに無いシリーズ独自ルールだけ口頭で聞く。
+    // ※上のキャラ別ヒアリング指示より優先＝データにある項目は質問せず先に言い切る。
+    if (mode === 'strategy') {
+      modeNote += isJ
+        ? '\n\n━━ レース形式は"聞く"前に"データで宣言"せよ ━━\n決勝の長さ（周回数）と実セッション種別は【現在のライブテレメトリ】から分かる。そこに周回数があれば、聞かずに自分から「◯周のレースだな」と言い切れ。走って消費が読めていれば、そのタンクで1回給油が要るかは燃料データ（給油要否）から判断し「このタンクだと1回給油が要る計算だ」と先に示せ。ドライバーに口頭で聞くのは、データに出ないシリーズ独自ルール（タイヤ交換義務の有無等）だけに絞れ。データに在る事をわざわざ聞き返すのは「分かっていない」印象を与える——避けろ。'
+        : '\n\n━━ DECLARE THE FORMAT FROM DATA before asking ━━\nRace length (laps) and the real session type come from [CURRENT LIVE TELEMETRY]. If laps are present, state it yourself — "This is an NN-lap race" — do not ask. Once you have consumption, judge from the fuel data whether one stop is needed and say it proactively ("on this tank you\'ll need one stop"). Only ask the driver for series rules NOT in the data (e.g. a mandatory tyre change). Asking about things already in the data reads as not paying attention — avoid it.';
+    }
   }
 
   const skipLevel = isJ || (character === 'Hajime') || (character === 'HajimeJP') || (character === 'Luna') || (character === 'LunaJP') || (character === 'Matthias') || (character === 'James' && (mode === 'race' || mode === 'ja-engineering'));
