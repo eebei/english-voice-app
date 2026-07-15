@@ -181,7 +181,13 @@ async function checkForUpdate() {
             '<a href="${LATEST_EXE_URL}" target="_blank" style="display:inline-block;background:#9D4EDD;color:#fff;' +
             'font-weight:700;padding:14px 32px;border-radius:10px;text-decoration:none;font-size:15px">' +
             '⬇ Download the latest version</a>' +
-            '<div style="font-size:12px;color:#666;margin-top:20px">After downloading, close this app and launch the new .exe. ／ DL後、このアプリを閉じて新しいexeを起動してください。</div>';
+            '<div style="font-size:12.5px;color:#9aa;margin-top:22px;max-width:470px;text-align:left;line-height:1.75">' +
+            '<b style="color:#cbd">After downloading:</b><br>' +
+            '1. Close this app, then run the new .exe.<br>' +
+            '2. If Windows says "protected your PC": click <b>More info → Run anyway</b> (or right-click the file → Properties → tick <b>Unblock</b> → OK).<br>' +
+            '3. Delete older dated .exe files so you don\'t launch an old one by mistake. Your settings are kept.<br>' +
+            '<span style="color:#788;display:block;margin-top:8px">DL後：① このアプリを閉じて新しいexeを起動 ②「WindowsによってPCが保護されました」が出たら<b>詳細情報→実行</b>（または右クリック→プロパティ→<b>「許可する」にチェック</b>→OK） ③ 古い日付のexeは削除して誤起動を防止（設定は引き継がれます）</span>' +
+            '</div>';
           document.body.appendChild(g);
         })();
       `).catch((e) => log('update gate inject failed: ' + e.message));
