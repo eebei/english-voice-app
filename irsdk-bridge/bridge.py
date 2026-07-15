@@ -222,6 +222,28 @@ def init_mic():
         log("PTT: pyaudio init failed - " + str(e))
         return False
 
+def _fix_device_name(raw, idx):
+    """Windowsのマイクデバイス名がPyAudio経由で文字化けする（日本語Windowsでcp932の名前が誤デコード
+    される）ため、安全な範囲で復元する。①正しい名前(ASCII/正しく復号済み)は壊さない ②cp932バイトが
+    latin-1で誤デコードされた典型的な化けはround-tripで日本語に戻す ③空/不明なら番号ラベル。
+    ※PyAudioの復号経路は環境依存で、UTF-8のロス付きデコードで元が失われている場合は復元不可＝ベスト
+      エフォート。どちらにせよ選択はindexで行い、★(既定)とテスト/メーターで確実に選べるようにしてある。"""
+    try:
+        s = raw if isinstance(raw, str) else bytes(raw).decode('cp932', 'replace')
+    except Exception:
+        s = None
+    if not s:
+        return 'Microphone ' + str(idx)
+    if all(ord(c) < 128 for c in s):   # ASCIIのみ＝化けようがない
+        return s
+    try:
+        recovered = s.encode('latin-1').decode('cp932')   # latin-1で誤デコードされたcp932を戻す
+        if recovered and '�' not in recovered:
+            return recovered
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass   # 正しい日本語(latin-1に載らない)や復元不可はそのまま返す
+    return s
+
 def list_input_devices():
     """マイク(入力デバイス)を列挙。[{index,name,is_default}] を返す（UIのマイク選択用）。"""
     devices = []
@@ -238,7 +260,7 @@ def list_input_devices():
                 info = ptt_audio.get_device_info_by_index(i)
                 if int(info.get('maxInputChannels', 0)) > 0:
                     devices.append({'index': i,
-                                    'name': str(info.get('name', 'Device ' + str(i))),
+                                    'name': _fix_device_name(info.get('name'), i),
                                     'is_default': (i == default_idx)})
             except Exception:
                 continue
