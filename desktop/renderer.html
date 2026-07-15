@@ -1751,15 +1751,15 @@ function oishiRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。全開でいい。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
-    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えろ。`;
-    case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けろ。`;
+    case 'multiclass_approaching': return `後方に速いクラス、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。準備しておこう。`;
+    case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン譲ろう。`;
     case 'battle_behind': {
       const num = d.car_number ? `${d.car_number}号車、` : '';
-      return d.repeat ? `また${num}接近だ。${d.delta}。` : `後ろ注意。${num}${d.delta}。詰めてきてる。`;
+      return d.repeat ? `また${num}詰めてきてる。${d.delta}秒。` : `後ろ、${num}${d.delta}秒。詰めてきてるよ。`;
     }
     case 'battle_behind_faster': {
       const num = d.car_number ? `${d.car_number}号車、` : '';
-      return d.repeat ? `また${num}来てる。${d.delta}。相手が速い、先に行かせろ。` : `後ろ注意。${num}${d.delta}。相手が速い、先に行かせろ。`;
+      return d.repeat ? `また${num}来てる。${d.delta}秒。相手の方がペース速い、先に行かせよう。` : `後ろ、${num}${d.delta}秒。相手の方がペース速いよ、先に行かせよう。`;
     }
     case 'danger_behind': return `注意しろ。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーだ（${d.reason}）。`;
     case 'danger_ahead':  return `抜く時気をつけろ。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーだ（${d.reason}）。`;
@@ -1778,8 +1778,8 @@ function oishiRadio(d){
     case 'defend_behind': {
       const id = sameClassIdJP(d) + '、';
       let stageTxt = '';
-      if (d.stage === 3) stageTxt = d.confident ? '詰められてる。' : 'まだ読めない。';
-      else if (d.stage === 4) stageTxt = 'ミラー確認。';
+      if (d.stage === 3) stageTxt = d.confident ? '詰められてきてる。' : 'まだ読めない。';
+      else if (d.stage === 4) stageTxt = 'ミラー見ておこう。';
       return `${id}後方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'side_by_side': return {left:'左に車。',right:'右に車。',both:'両側に車。'}[d.side] || '横に車。';

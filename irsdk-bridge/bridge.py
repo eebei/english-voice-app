@@ -1353,7 +1353,19 @@ def poll_iracing():
                         'incidents': prev_incidents or 0,
                         'laps': session_laps,
                     })
-                    log('Session summary sent (post-checkered, own lap complete): ' + str(len(session_laps)) + ' laps, best ' + str(best_t))
+                    # デバッグログにリザルトを残す（Yujiが後で見返せるよう・2026-07-15）。
+                    # AIレースはiRacing公式リザルトを吐かないので、このログ行が実質の結果票になる。
+                    log('===== RACE RESULT ===== '
+                        + 'track=' + str(session_track)
+                        + ' finish_pos(overall)=' + str(pos)
+                        + ' finish_pos(class)=' + str(class_pos)
+                        + ' laps=' + str(len(session_laps))
+                        + ' best=' + str(round(best_t, 3))
+                        + ' avg=' + str(avg_t)
+                        + ' pace_first_half=' + str(pace_first)
+                        + ' pace_last_half=' + str(pace_last)
+                        + ' incidents=' + str(prev_incidents or 0)
+                        + ' ======================')
                     summary_sent = True
                     checkered_pending = False
 
