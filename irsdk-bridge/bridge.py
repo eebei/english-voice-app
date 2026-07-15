@@ -70,6 +70,7 @@ except Exception:
     _config_dir = _base
 PTT_CONFIG_PATH = os.path.join(_config_dir, "ptt_config.json")
 VOL_CONFIG_PATH = os.path.join(_config_dir, "vol_config.json")
+MIC_CONFIG_PATH = os.path.join(_config_dir, "mic_config.json")
 
 # ── PTT（プッシュ・トゥ・トーク）状態 ──
 ptt_binding = None        # {"joy": int, "button": int, "name": str}
@@ -178,6 +179,25 @@ def log(msg):
 # pyaudioでマイクから直接音声をキャプチャ（フルスクリーン背後でも動作）
 ptt_audio = None
 ptt_recording = False
+ptt_test_active = False       # マイクテストモード（レベルメーターだけ流す・STT送信しない）
+selected_mic_index = None     # 使用する入力デバイスのindex。None=システム既定
+
+def load_mic_config():
+    global selected_mic_index
+    try:
+        with open(MIC_CONFIG_PATH, "r", encoding="utf-8") as f:
+            d = json.load(f)
+            idx = d.get("index")
+            selected_mic_index = idx if isinstance(idx, int) else None
+    except Exception:
+        selected_mic_index = None
+
+def save_mic_config():
+    try:
+        with open(MIC_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump({"index": selected_mic_index}, f)
+    except Exception:
+        pass
 
 def init_mic():
     global ptt_audio
@@ -189,6 +209,47 @@ def init_mic():
     except Exception as e:
         log("PTT: pyaudio init failed - " + str(e))
         return False
+
+def list_input_devices():
+    """マイク(入力デバイス)を列挙。[{index,name,is_default}] を返す（UIのマイク選択用）。"""
+    devices = []
+    if not ptt_audio:
+        return devices
+    try:
+        default_idx = None
+        try:
+            default_idx = ptt_audio.get_default_input_device_info().get('index')
+        except Exception:
+            default_idx = None
+        for i in range(ptt_audio.get_device_count()):
+            try:
+                info = ptt_audio.get_device_info_by_index(i)
+                if int(info.get('maxInputChannels', 0)) > 0:
+                    devices.append({'index': i,
+                                    'name': str(info.get('name', 'Device ' + str(i))),
+                                    'is_default': (i == default_idx)})
+            except Exception:
+                continue
+    except Exception as e:
+        log("mic enumerate error: " + str(e))
+    return devices
+
+def _rms_level(data):
+    """16bit PCMチャンクの音量を0-100で返す（レベルメーター用）。約5000で満タン相当。"""
+    try:
+        import array, math
+        a = array.array('h')
+        a.frombytes(data)
+        n = len(a)
+        if not n:
+            return 0
+        s = 0
+        for v in a:
+            s += v * v
+        rms = math.sqrt(s / n)
+        return max(0, min(100, int(rms / 5000 * 100)))
+    except Exception:
+        return 0
 
 def start_ptt_record():
     global ptt_recording
@@ -205,53 +266,74 @@ def stop_ptt_record():
     log("PTT: recording stopped, sending to STT...")
 
 def record_ptt_audio():
-    """バックグラウンドスレッド：マイク入力をキャプチャ＆STT送信"""
+    """バックグラウンドスレッド：キャプチャ要求(録音 or マイクテスト)ごとにストリームを開き、
+    入力レベルをUIへ流す。録音時はWAV化してSTTへ送る。テスト時はレベルのみ。
+    ⚠️ストリームをキャプチャの都度開き直すことで、UIでマイクを切り替えたら次のキャプチャから
+      即反映される（旧実装は起動時に"システム既定"デバイスで1回だけ開いて固定していた——SIM PCで
+      別デバイスが既定になっていると無音を拾い「didn't catch that」になる根本原因だった）。"""
+    global ptt_recording, ptt_test_active
     if not ptt_audio:
         log("PTT record: pyaudio not initialized, skipping")
         return
-    try:
-        import pyaudio
-        import base64
-        import wave
-
-        CHUNK = 1024
-        FORMAT = pyaudio.paInt16   # LINEAR16 = Google STT互換（Float32ではない）
-        CHANNELS = 1
-        RATE = 16000
-
-        stream = ptt_audio.open(format=FORMAT, channels=CHANNELS, rate=RATE,
-                                input=True, frames_per_buffer=CHUNK)
+    import pyaudio, base64, wave
+    CHUNK = 1024
+    FORMAT = pyaudio.paInt16   # LINEAR16 = Google STT互換（Float32ではない）
+    CHANNELS = 1
+    RATE = 16000
+    while True:
+        if not (ptt_recording or ptt_test_active):
+            time.sleep(0.03)
+            continue
+        dev_idx = selected_mic_index   # このキャプチャで使うデバイス（切替を都度反映）
+        try:
+            stream = ptt_audio.open(format=FORMAT, channels=CHANNELS, rate=RATE,
+                                    input=True, frames_per_buffer=CHUNK,
+                                    input_device_index=dev_idx)
+        except Exception as e:
+            log("PTT: mic open failed (device=%s): %s" % (str(dev_idx), str(e)))
+            broadcast({'type': 'mic_error', 'message': str(e)})
+            ptt_recording = False
+            ptt_test_active = False
+            time.sleep(0.3)
+            continue
+        log("PTT: mic stream open (device=%s)" % str(dev_idx))
         frames = []
-        log("PTT: mic stream open, ready to record")
-
-        while True:
-            if ptt_recording:
+        was_recording = False
+        _tick = 0
+        try:
+            while ptt_recording or ptt_test_active:
                 try:
                     data = stream.read(CHUNK, exception_on_overflow=False)
-                    frames.append(data)
                 except Exception as e:
                     log("PTT read error: " + str(e))
-            else:
-                if frames:
-                    # WAVファイルはWindows対応パスに（/tmpはWindows未対応）
-                    wav_file = os.path.join(_base, "ptt_audio.wav")
-                    try:
-                        with wave.open(wav_file, 'wb') as wf:
-                            wf.setnchannels(CHANNELS)
-                            wf.setsampwidth(ptt_audio.get_sample_size(FORMAT))
-                            wf.setframerate(RATE)
-                            wf.writeframes(b''.join(frames))
-                        with open(wav_file, 'rb') as f:
-                            b64 = base64.b64encode(f.read()).decode()
-                        log("PTT: wav saved (%d bytes), sending to STT" % len(b64))
-                        asyncio.run_coroutine_threadsafe(
-                            send_stt_request(b64), loop)
-                    except Exception as e:
-                        log("PTT wav/stt error: " + str(e))
-                    frames = []
-                time.sleep(0.05)
-    except Exception as e:
-        log("PTT record thread error: " + str(e))
+                    break
+                if ptt_recording:
+                    frames.append(data)
+                    was_recording = True
+                _tick += 1
+                if _tick % 2 == 0:   # 約8回/秒でレベル送信（メーター用・軽量）
+                    broadcast({'type': 'mic_level', 'level': _rms_level(data)})
+        finally:
+            try:
+                stream.stop_stream(); stream.close()
+            except Exception:
+                pass
+        broadcast({'type': 'mic_level', 'level': 0})   # メーターを戻す
+        if was_recording and frames:
+            # WAVファイルはWindows対応パスに（/tmpはWindows未対応）
+            wav_file = os.path.join(_base, "ptt_audio.wav")
+            try:
+                with wave.open(wav_file, 'wb') as wf:
+                    wf.setnchannels(CHANNELS)
+                    wf.setsampwidth(ptt_audio.get_sample_size(FORMAT))
+                    wf.setframerate(RATE)
+                    wf.writeframes(b''.join(frames))
+                with open(wav_file, 'rb') as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                log("PTT: wav saved (%d bytes), sending to STT" % len(b64))
+                asyncio.run_coroutine_threadsafe(send_stt_request(b64), loop)
+            except Exception as e:
+                log("PTT wav/stt error: " + str(e))
 
 async def send_stt_request(audio_b64):
     """RailwayのSTTプロキシにマイク音声を送信 (LINEAR16/16kHz WAV)"""
@@ -2069,7 +2151,7 @@ def poll_joystick():
 
 
 async def handler(websocket):
-    global ptt_capturing, ptt_lang, vol_capturing
+    global ptt_capturing, ptt_lang, vol_capturing, selected_mic_index, ptt_test_active
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
@@ -2077,6 +2159,8 @@ async def handler(websocket):
         # 現在のPTT設定・音量ボタン設定を通知
         await websocket.send(json.dumps({'type': 'ptt_config', 'binding': ptt_binding}))
         await websocket.send(json.dumps({'type': 'vol_config', 'binding': vol_binding}))
+        # マイク一覧＋現在の選択を通知（UIのマイク選択UI初期化用）
+        await websocket.send(json.dumps({'type': 'mic_list', 'devices': list_input_devices(), 'selected': selected_mic_index}))
         # クライアントからのコマンド受信（PTT設定など）
         async for raw in websocket:
             try:
@@ -2110,6 +2194,22 @@ async def handler(websocket):
                     log("VOL setup mode (%s): waiting for button press" % which)
             elif cmd == 'vol_cancel':
                 vol_capturing = None
+            elif cmd == 'mic_list':
+                # マイク一覧を再列挙して返す（USB抜き差し後の更新用）
+                await websocket.send(json.dumps({'type': 'mic_list',
+                    'devices': list_input_devices(), 'selected': selected_mic_index}))
+            elif cmd == 'mic_select':
+                idx = msg.get('index')
+                selected_mic_index = idx if isinstance(idx, int) and idx >= 0 else None
+                save_mic_config()
+                log("mic selected -> " + str(selected_mic_index))
+                await websocket.send(json.dumps({'type': 'mic_config', 'selected': selected_mic_index}))
+            elif cmd == 'mic_test_start':
+                ptt_test_active = True
+                log("mic test start")
+            elif cmd == 'mic_test_stop':
+                ptt_test_active = False
+                log("mic test stop")
     finally:
         connected_clients.discard(websocket)
 
@@ -2126,6 +2226,7 @@ async def main():
         pass
     load_ptt_config()
     load_vol_config()
+    load_mic_config()
     t = threading.Thread(target=poll_iracing, daemon=True)
     t.start()
     tj = threading.Thread(target=poll_joystick, daemon=True)

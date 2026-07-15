@@ -187,6 +187,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .mic-btn.recording{border-color:var(--red);color:var(--red);background:rgba(225,6,0,.1);animation:recpulse 1s infinite}
 .mic-btn.live{border-color:var(--green);color:var(--green);background:rgba(25,211,107,.1)}
 @keyframes recpulse{50%{opacity:.5}}
+.mic-select{width:100%;padding:9px 10px;border-radius:10px;border:1.5px solid var(--border);background:var(--panel);color:var(--text);font-size:13px}
+.mic-meter{width:100%;height:9px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden;border:1px solid var(--border)}
+.mic-meter > i{display:block;height:100%;width:0%;border-radius:99px;background:linear-gradient(90deg,var(--green),#ffd54a 75%,var(--red));transition:width .06s linear}
+.mic-test-btn.on{border-color:var(--green);color:var(--green);background:rgba(25,211,107,.1)}
 .send-btn{width:48px;height:48px;border-radius:12px;border:none;background:var(--blue);color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:opacity .15s;flex-shrink:0}
 .send-btn:hover{opacity:.85}
 .hint-text{font-size:12px;color:var(--muted);text-align:center;margin-top:8px;min-height:18px}
@@ -462,6 +466,15 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         </div>
       </div>
       <div class="setup-hint" data-i18n="setup_hint">紫に光ってたらステアリングのボタンを1回押して割当。「PTT: B〇」と番号が出れば設定済み。音量ダイヤルは任意。</div>
+
+      <div class="field-label" data-i18n="setup_mic_title" style="margin-top:18px">マイク設定</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+        <select class="mic-select" id="mic-select" onchange="selectMic()"></select>
+        <button class="voice-tog mic-test-btn" id="mic-test-btn" onclick="toggleMicTest()" data-i18n="mic_test_btn" style="flex-shrink:0">テスト</button>
+      </div>
+      <div class="mic-meter" style="margin-top:8px"><i id="mic-meter-fill"></i></div>
+      <div class="setup-hint" data-i18n="setup_mic_hint">「テスト」を押して喋る→緑のバーが動けばそのマイクで聞こえてる。動かなければ上のリストから別のマイクを選ぶ。SIM PCは複数マイクが繋がっていて既定が違うことが多い。</div>
+
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
     </div>
 
@@ -629,6 +642,12 @@ const I18N = {
     vol_up_label:'Vol+',
     vol_down_label:'Vol−',
     setup_hint:'When it glows purple, press a wheel button once to bind it. "PTT: B○" with a number means it\'s set. The volume dial is optional.',
+    setup_mic_title:'Microphone',
+    mic_test_btn:'Test',
+    mic_test_stop:'Stop',
+    mic_default:'System default microphone',
+    setup_mic_hint:'Press "Test" and speak — if the green bar moves, that mic is being heard. If it doesn\'t move, pick a different mic above. Sim PCs often have several mics connected and the default is the wrong one.',
+    mic_err:'Could not open that microphone: ',
     next_btn:'Next →',
     // ── Engineer select ──
     select_title:'Choose Your Engineer',
@@ -747,6 +766,12 @@ const I18N = {
     vol_up_label:'大',
     vol_down_label:'小',
     setup_hint:'紫に光ってたらステアリングのボタンを1回押して割当。「PTT: B〇」と番号が出れば設定済み。音量ダイヤルは任意。',
+    setup_mic_title:'マイク設定',
+    mic_test_btn:'テスト',
+    mic_test_stop:'停止',
+    mic_default:'システム既定のマイク',
+    setup_mic_hint:'「テスト」を押して喋る→緑のバーが動けばそのマイクで聞こえてる。動かなければ上のリストから別のマイクを選ぶ。SIM PCは複数マイクが繋がっていて既定が違うことが多い。',
+    mic_err:'そのマイクを開けませんでした: ',
     next_btn:'次へ →',
     select_title:'エンジニアを選ぶ',
     role_chief_engineer:'チーフエンジニア',
@@ -1123,6 +1148,7 @@ function onNameInput(){
 // ①設定 → ③モードへ
 function goToModeStep(){
   if(!userName) return;
+  if(micTesting) toggleMicTest();   // 設定画面を離れる時はマイクテストを止める（無駄な常時キャプチャ防止）
   selMode = null;
   document.getElementById('mode-race').classList.remove('selected');
   document.getElementById('mode-debrief').classList.remove('selected');
@@ -1654,6 +1680,11 @@ function connectBridge(){
       if(data.type==='session_summary'){ saveSessionSummary(data); if(data.is_race) scheduleAutoDebrief(data); }
       if(data.type==='pit_timing'){ savePitTiming(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
+      // ── マイク選択＋レベルメーター（bridge側デバイスの受け皿）──
+      if(data.type==='mic_list'){ populateMicList(data.devices, data.selected); return; }
+      if(data.type==='mic_config'){ const s=document.getElementById('mic-select'); if(s) s.value=(data.selected==null)?'':String(data.selected); return; }
+      if(data.type==='mic_level'){ setMicMeter(data.level||0); return; }
+      if(data.type==='mic_error'){ setHint((t('mic_err'))+(data.message||'')); micTesting=false; const b=document.getElementById('mic-test-btn'); if(b){ b.classList.remove('on'); b.textContent=t('mic_test_btn'); } setMicMeter(0); return; }
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
       if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
       if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint(t('hint_ptt_set_a')+data.button+t('hint_ptt_set_b')); }
@@ -2210,6 +2241,39 @@ function updatePTTLabel(){
   const b=document.getElementById('ptt-btn'); if(!b) return;
   if(pttBinding){ b.innerHTML=WHEEL_SVG+' PTT: B'+pttBinding.button; b.classList.add('on'); b.classList.remove('flash'); }
   else { b.innerHTML=WHEEL_SVG+' '+t('setup_ptt_btn'); b.classList.remove('on'); b.classList.add('flash'); }
+}
+
+// ── マイク選択＋テスト＋レベルメーター（まーぼー「didn't catch that」対策の受け皿）──
+// SIM PCは複数マイクが繋がり既定が違うことが多い。ユーザーが選んで、テストで「聞こえてる」を
+// 目で確認できるようにする。選択はbridge側に永続化され、次のキャプチャから即反映される。
+function populateMicList(devices, selected){
+  const sel=document.getElementById('mic-select'); if(!sel) return;
+  sel.innerHTML='';
+  const optD=document.createElement('option'); optD.value=''; optD.textContent=t('mic_default'); sel.appendChild(optD);
+  (devices||[]).forEach(d=>{
+    const o=document.createElement('option'); o.value=String(d.index);
+    o.textContent=d.name+(d.is_default?' ★':''); sel.appendChild(o);
+  });
+  sel.value=(selected==null)?'':String(selected);
+}
+function selectMic(){
+  if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off_retry')); return; }
+  const v=document.getElementById('mic-select').value;
+  const idx=(v==='')?null:parseInt(v,10);
+  irBridge.send(JSON.stringify({cmd:'mic_select', index:idx}));
+}
+let micTesting=false;
+function toggleMicTest(){
+  if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off_retry')); return; }
+  micTesting=!micTesting;
+  irBridge.send(JSON.stringify({cmd: micTesting?'mic_test_start':'mic_test_stop'}));
+  const b=document.getElementById('mic-test-btn');
+  if(b){ b.classList.toggle('on',micTesting); b.textContent=micTesting?t('mic_test_stop'):t('mic_test_btn'); }
+  if(!micTesting) setMicMeter(0);
+}
+function setMicMeter(level){
+  const f=document.getElementById('mic-meter-fill');
+  if(f) f.style.width=Math.max(0,Math.min(100,level))+'%';
 }
 
 // 設定：bridgeに「次に押されたボタンを登録して」と依頼（ボタン検出はネイティブのbridgeが担当）
