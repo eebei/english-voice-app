@@ -160,6 +160,17 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .chat-av{width:100%;height:280px;object-fit:cover;object-position:center 22%;display:block}
 .chat-header-info{padding:14px 18px}
 .chat-name{font-family:'Oxanium';font-weight:800;font-size:20px;margin-bottom:2px}
+/* Race Overlay panel */
+.ovl-panel{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;margin-bottom:12px;display:flex;flex-direction:column;gap:8px}
+.ovl-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.ovl-tog{background:var(--panel);border:1.5px solid var(--border);color:var(--silver);font-family:'Oxanium';font-weight:700;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;transition:all .15s}
+.ovl-tog.on{border-color:var(--blue);background:var(--blue-dim);color:var(--blue)}
+.ovl-lock{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer}
+.ovl-hint{font-size:11px;color:var(--muted);opacity:.7}
+.ovl-sliders{opacity:.5;pointer-events:none;transition:opacity .15s}
+.ovl-sliders.active{opacity:1;pointer-events:auto}
+.ovl-lab{font-size:11px;color:var(--muted);font-family:'Oxanium';letter-spacing:.5px}
+.ovl-sliders input[type=range]{flex:1;accent-color:var(--blue);max-width:130px}
 .chat-desc{font-size:12px;color:var(--muted)}
 .chat-header-top{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
 .back-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:5px 14px;border-radius:6px;font-size:12px;cursor:pointer;transition:all .15s}
@@ -590,6 +601,19 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
               </div>
             </div>
           </div>
+        </div>
+      </div>
+      <!-- ── レースオーバーレイ操作パネル（走行中に会話だけを最前面表示）── -->
+      <div id="ovl-panel" class="ovl-panel">
+        <div class="ovl-row">
+          <button class="ovl-tog" id="ovl-toggle" onclick="toggleOverlay()">🏁 Race Overlay: OFF</button>
+          <label class="ovl-lock"><input type="checkbox" id="ovl-lock" checked onchange="setOverlayLock(this.checked)"> Lock <span class="ovl-hint">（走行中ON・移動したい時だけOFF）</span></label>
+        </div>
+        <div class="ovl-row ovl-sliders">
+          <span class="ovl-lab">透明度</span>
+          <input type="range" id="ovl-opacity" min="0.3" max="1" step="0.05" value="1" oninput="setOverlayOpacity(this.value)">
+          <span class="ovl-lab">サイズ</span>
+          <input type="range" id="ovl-scale" min="0.7" max="1.6" step="0.05" value="1" oninput="setOverlayScale(this.value)">
         </div>
       </div>
       <div class="chat-area" id="chat-area"></div>
@@ -1281,12 +1305,56 @@ function addMsg(type, text){
 // 会話をbridgeデバッグログに転送（AI返答含む全会話が後から追える＝スクショ不要）。
 // user/ai/driver のみ。bridge未接続なら黙ってスキップ。
 function convoLog(type, text){
+  mirrorToOverlay(type, text);   // 完成した行だけをレースオーバーレイへも流す（同じファネル）
   try {
     if ((type==='user'||type==='ai'||type==='driver') && text && irBridge && irBridge.readyState===1) {
       const tag = type==='ai' ? (sel||'AI') : (type==='driver' ? 'DRIVER' : 'USER');
       irBridge.send(JSON.stringify({cmd:'log_line', text:'['+tag+'] '+text}));
     }
   } catch(e){}
+}
+
+// ── レースオーバーレイへ無線コールをミラー（会話のみ・テレメトリ数字は出さない）──
+// AI(エンジニア)=左/紫、ドライバー(driver/自分のuser発話)=右/琥珀。
+const OVL_ENG_NAME = { James:'James', Luna:'Luna', Hajime:'Omatsu', HajimeJP:'Omatsu', Kanbe:'Kanbe', Oishi:'Oishi', LunaJP:'Luna', Matthias:'Matthias' };
+function mirrorToOverlay(type, text){
+  if(!window.pitwall) return;
+  if(type!=='ai' && type!=='driver' && type!=='user') return;   // sys等は放送に載せない
+  let clean = (text||'').replace(/^\[PTT\]\s*/,'').replace(/\[JA:[\s\S]*\]$/,'').trim();
+  if(!clean) return;
+  if(type==='ai'){
+    const nm = (OVL_ENG_NAME[sel]||sel||'Engineer');
+    window.pitwall.overlayPush({ type:'ai', name:`${nm} ; AI Race Engineer`, text:clean });
+  } else {
+    window.pitwall.overlayPush({ type:'drv', name:(userName||'Driver'), text:clean });
+  }
+}
+
+// ── オーバーレイ操作（chat画面のパネル）──
+let overlayOn = false;
+function toggleOverlay(){
+  overlayOn = !overlayOn;
+  const btn = document.getElementById('ovl-toggle');
+  btn.textContent = '🏁 Race Overlay: ' + (overlayOn?'ON':'OFF');
+  btn.classList.toggle('on', overlayOn);
+  window.pitwall?.overlayShow(overlayOn);
+  document.querySelector('.ovl-sliders')?.classList.toggle('active', overlayOn && !document.getElementById('ovl-lock').checked);
+}
+function setOverlayLock(locked){
+  window.pitwall?.overlayLock(locked);
+  document.querySelector('.ovl-sliders')?.classList.toggle('active', overlayOn && !locked);
+}
+function setOverlayOpacity(v){ window.pitwall?.overlayOpacity(+v); }
+function setOverlayScale(v){ window.pitwall?.overlayScale(+v); }
+// 保存済み設定をパネルへ反映（起動時）
+if(window.pitwall?.overlayGetState){
+  window.pitwall.overlayGetState().then(cfg=>{
+    if(!cfg) return;
+    const op=document.getElementById('ovl-opacity'), sc=document.getElementById('ovl-scale'), lk=document.getElementById('ovl-lock');
+    if(op&&cfg.opacity!=null) op.value=cfg.opacity;
+    if(sc&&cfg.scale!=null) sc.value=cfg.scale;
+    if(lk&&cfg.locked!=null) lk.checked=cfg.locked;
+  }).catch(()=>{});
 }
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }
 function setHint(t){ document.getElementById('hint-text').textContent=t; }

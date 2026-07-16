@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PITWALL Overlay</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ai:#9D4EDD;         /* エンジニア＝紫 */
+    --drv:#f2b23e;        /* ドライバー＝琥珀 */
+    --ai-bg:rgba(24,16,38,.82);
+    --drv-bg:rgba(38,30,12,.82);
+    --ai-txt:#ecdcff;
+    --drv-txt:#ffeecb;
+    --scale:1;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{
+    background:transparent;               /* 窓全体は透明。iRacingが透けて見える */
+    overflow:hidden;
+    font-family:'Inter',-apple-system,'Segoe UI',sans-serif;
+    -webkit-user-select:none; user-select:none;
+    cursor:default;
+  }
+  #wrap{
+    position:fixed; inset:0;
+    display:flex; flex-direction:column; justify-content:flex-end;
+    gap:calc(8px * var(--scale));
+    padding:calc(10px * var(--scale));
+    transform-origin:bottom center;
+  }
+
+  /* ── ドラッグ用グリップ（ロック解除時のみ表示。ここを掴んで窓ごと動かす）── */
+  #grip{
+    -webkit-app-region:drag;
+    align-self:center;
+    display:flex; align-items:center; gap:8px;
+    font-family:'Oxanium'; font-weight:700; font-size:calc(10px * var(--scale));
+    letter-spacing:2px; color:#fff;
+    background:rgba(157,78,221,.9); border-radius:99px;
+    padding:calc(5px * var(--scale)) calc(16px * var(--scale));
+    margin-bottom:calc(4px * var(--scale));
+    box-shadow:0 4px 20px rgba(0,0,0,.5);
+    cursor:grab;
+  }
+  body.locked #grip{ display:none; }
+  #grip .dot{width:6px;height:6px;border-radius:50%;background:#fff;box-shadow:0 0 8px #fff}
+
+  /* ── 無線の1行（吹き出し）── */
+  .rc{
+    display:flex; flex-direction:column;
+    max-width:78%;
+    padding:calc(9px * var(--scale)) calc(14px * var(--scale));
+    border-radius:calc(14px * var(--scale));
+    font-size:calc(15px * var(--scale));
+    line-height:1.34;
+    box-shadow:0 6px 24px rgba(0,0,0,.45);
+    backdrop-filter:blur(6px);
+    animation:pop .28s cubic-bezier(.2,.9,.3,1.2) both;
+    word-break:break-word;
+  }
+  .rc .nm{
+    font-family:'Oxanium'; font-weight:800;
+    font-size:calc(10px * var(--scale)); letter-spacing:1.2px;
+    text-transform:uppercase; margin-bottom:calc(3px * var(--scale));
+    opacity:.92;
+  }
+  .rc .tx{ font-weight:500; }
+
+  /* エンジニア(AI)：左寄せ・紫・濃いグレー背景・明色文字 */
+  .rc.ai{
+    align-self:flex-start;
+    background:var(--ai-bg);
+    border-left:calc(3px * var(--scale)) solid var(--ai);
+    color:var(--ai-txt);
+    border-top-left-radius:calc(4px * var(--scale));
+  }
+  .rc.ai .nm{ color:var(--ai); }
+
+  /* ドライバー：右寄せ・琥珀・別のグレー濃淡・別文字色 */
+  .rc.drv{
+    align-self:flex-end;
+    background:var(--drv-bg);
+    border-right:calc(3px * var(--scale)) solid var(--drv);
+    color:var(--drv-txt);
+    text-align:right;
+    border-top-right-radius:calc(4px * var(--scale));
+  }
+  .rc.drv .nm{ color:var(--drv); }
+
+  /* 古い行のフェード（直近ほど濃く。#wrapの子として上から順に古い）*/
+  .rc.old3{opacity:.72}
+  .rc.old4{opacity:.42}
+  .rc.old5{opacity:0; transform:translateY(-6px); pointer-events:none; margin-top:calc(-1 * var(--scale) * 10px)}
+
+  @keyframes pop{ from{opacity:0; transform:translateY(10px) scale(.96)} to{opacity:1; transform:none} }
+</style>
+</head>
+<body class="locked">
+  <div id="wrap">
+    <div id="grip"><span class="dot"></span>PITWALL · DRAG TO MOVE</div>
+    <!-- 無線行はここに追記される -->
+  </div>
+
+<script>
+  const wrap = document.getElementById('wrap');
+  const grip = document.getElementById('grip');
+  const MAX = 4;                       // 表示する直近の行数
+  let scale = 1;
+
+  function applyConfig(cfg){
+    if(!cfg) return;
+    if(cfg.scale!=null){ scale = cfg.scale; document.documentElement.style.setProperty('--scale', scale); }
+    if(cfg.opacity!=null){ document.body.style.opacity = cfg.opacity; }
+    if(cfg.locked!=null){ document.body.classList.toggle('locked', !!cfg.locked); }
+  }
+
+  function pushLine(line){
+    if(!line || !line.text) return;
+    const div = document.createElement('div');
+    div.className = 'rc ' + (line.type==='drv' ? 'drv' : 'ai');
+    const nm = document.createElement('div'); nm.className='nm'; nm.textContent = line.name || (line.type==='drv'?'DRIVER':'ENGINEER');
+    const tx = document.createElement('div'); tx.className='tx'; tx.textContent = line.text;
+    div.appendChild(nm); div.appendChild(tx);
+    wrap.appendChild(div);
+    reflow();
+  }
+
+  // 直近MAX件だけ濃く、それ以上古いものは段階フェード→削除
+  function reflow(){
+    const lines = [...wrap.querySelectorAll('.rc')];
+    const n = lines.length;
+    lines.forEach((el, i) => {
+      el.classList.remove('old3','old4','old5');
+      const fromEnd = n - 1 - i;        // 0=最新
+      if(fromEnd === MAX-1) el.classList.add('old3');
+      else if(fromEnd === MAX) el.classList.add('old4');
+      else if(fromEnd >= MAX+1) el.classList.add('old5');
+    });
+    // フェードし切った古い行はDOMからも除去（メモリ/描画軽量化）
+    while(wrap.querySelectorAll('.rc').length > MAX+2){
+      const first = wrap.querySelector('.rc'); if(first) first.remove(); else break;
+    }
+  }
+
+  function clearAll(){ wrap.querySelectorAll('.rc').forEach(el=>el.remove()); }
+
+  if(window.pitwall){
+    window.pitwall.onOverlayData(pushLine);
+    window.pitwall.onOverlayConfig((cfg)=>{ if(cfg && cfg.__clear){ clearAll(); return; } applyConfig(cfg); });
+  }
+</script>
+</body>
+</html>

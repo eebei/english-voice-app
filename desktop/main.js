@@ -2,7 +2,7 @@
 // 最重要設定：backgroundThrottling:false
 //   → iRacingがフルスクリーンで前面に来てウィンドウが裏に回っても、
 //     タイマー・音声・JSが絞られず動き続ける（=ブラウザの「裏で死ぬ」問題の解決）
-const { app, BrowserWindow, session, shell } = require('electron');
+const { app, BrowserWindow, session, shell, ipcMain, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -30,7 +30,105 @@ function killStaleBridges() {
 }
 
 let win;
+let overlayWin = null;
 let bridgeProc = null;
+
+// ── レースオーバーレイの設定（位置/透明度/スケール/ロック）を永続化 ──
+let OVL_CFG_FILE = '';
+let ovlCfg = { bounds:null, opacity:1, scale:1, locked:true, enabled:false };
+function loadOvlCfg() {
+  try {
+    OVL_CFG_FILE = path.join(app.getPath('userData'), 'overlay-config.json');
+    if (fs.existsSync(OVL_CFG_FILE)) {
+      ovlCfg = Object.assign(ovlCfg, JSON.parse(fs.readFileSync(OVL_CFG_FILE, 'utf8')));
+    }
+  } catch (e) { log('loadOvlCfg failed: ' + e.message); }
+}
+function saveOvlCfg() {
+  try { if (OVL_CFG_FILE) fs.writeFileSync(OVL_CFG_FILE, JSON.stringify(ovlCfg)); } catch (e) {}
+}
+
+// ── オーバーレイ窓を生成（透明・フレームレス・常時最前面・非アクティブ）──
+//   肝：focusable:false + setIgnoreMouseEvents（ロック時）で iRacing からフォーカスを
+//   一切奪わない → SimuCube等のFFB(路面フィードバック)が生きたまま。
+function createOverlay() {
+  if (overlayWin && !overlayWin.isDestroyed()) return overlayWin;
+  const disp = screen.getPrimaryDisplay();
+  const wa = disp.workArea;
+  const defBounds = { width: 460, height: 300, x: Math.round(wa.x + wa.width/2 - 230), y: Math.round(wa.y + wa.height - 340) };
+  const b = ovlCfg.bounds || defBounds;
+
+  overlayWin = new BrowserWindow({
+    ...b,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    skipTaskbar: true,
+    hasShadow: false,
+    focusable: false,               // ★ WS_EX_NOACTIVATE 相当：クリックで前に出ない＝フォーカスを奪わない
+    alwaysOnTop: true,
+    fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: false,  // 裏でも止めない（メイン窓と同じ肝）
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  overlayWin.setAlwaysOnTop(true, 'screen-saver');   // フルスクリーンのiRacingより上
+  overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  overlayWin.loadFile(path.join(__dirname, 'overlay.html'));
+
+  overlayWin.webContents.on('did-finish-load', () => applyOverlayCfgToWindow());
+
+  // 位置/サイズ変更を永続化（ロック解除中にドラッグで動かした結果を覚える）
+  const persist = () => {
+    if (overlayWin && !overlayWin.isDestroyed()) { ovlCfg.bounds = overlayWin.getBounds(); saveOvlCfg(); }
+  };
+  overlayWin.on('move', persist);
+  overlayWin.on('resize', persist);
+  overlayWin.on('closed', () => { overlayWin = null; });
+  return overlayWin;
+}
+
+// ロック状態を窓に反映：ロック中はクリックスルー＆非フォーカス（走行中／FFB保護）。
+// 解除中はマウス操作可＆掴んで移動できる（配置調整）。
+function applyOverlayCfgToWindow() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const locked = ovlCfg.locked !== false;
+  try {
+    overlayWin.setIgnoreMouseEvents(locked, { forward: true });
+    overlayWin.setFocusable(!locked);
+  } catch (e) {}
+  overlayWin.webContents.send('overlay:config', { locked, opacity: ovlCfg.opacity, scale: ovlCfg.scale });
+}
+
+function ipcOverlaySetup() {
+  ipcMain.on('overlay:push', (_e, line) => {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:data', line);
+  });
+  ipcMain.on('overlay:show', (_e, on) => {
+    ovlCfg.enabled = !!on; saveOvlCfg();
+    if (on) { createOverlay(); overlayWin.showInactive(); applyOverlayCfgToWindow(); }
+    else if (overlayWin && !overlayWin.isDestroyed()) overlayWin.hide();
+  });
+  ipcMain.on('overlay:lock', (_e, locked) => {
+    ovlCfg.locked = !!locked; saveOvlCfg(); applyOverlayCfgToWindow();
+  });
+  ipcMain.on('overlay:opacity', (_e, v) => {
+    ovlCfg.opacity = Math.max(0.2, Math.min(1, +v || 1)); saveOvlCfg();
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:config', { opacity: ovlCfg.opacity });
+  });
+  ipcMain.on('overlay:scale', (_e, v) => {
+    ovlCfg.scale = Math.max(0.6, Math.min(2, +v || 1)); saveOvlCfg();
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:config', { scale: ovlCfg.scale });
+  });
+  ipcMain.on('overlay:clear', () => {
+    if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:config', { __clear: true });
+  });
+  ipcMain.handle('overlay:getState', () => ovlCfg);
+}
 
 // ── テレメトリbridgeを自動起動（ユーザーが手動でexeを立ち上げる必要をなくす）──
 // 必ず「古いbridgeを掃除→最新の同梱bridgeを起動」する。古い壊れたbridgeを再利用しない。
@@ -98,6 +196,7 @@ function createWindow() {
     backgroundColor: '#07080f',
     alwaysOnTop: true,   // ★ 走行中もチャット欄を見られるよう常に最前面（Yuji要望2026-07-15）
     webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),   // window.pitwall（オーバーレイIPC）
       backgroundThrottling: false,   // ★ 裏に回っても止めない（このプロジェクトの肝）
       autoplayPolicy: 'no-user-gesture-required',  // ★ TTS音声を確実に再生
       contextIsolation: true,
@@ -215,6 +314,8 @@ app.whenReady().then(() => {
     LOG_FILE = path.join(app.getPath('desktop'), 'OMORAY-bridge-debug-' + stamp + '.log');
     fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + now.toISOString() + ' ===\n');
   } catch (e) {}
+  loadOvlCfg();       // オーバーレイの保存済み設定を読む
+  ipcOverlaySetup();  // オーバーレイ制御IPCを登録
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
   setTimeout(checkForUpdate, 4000);   // 起動直後の輻輳を避けて少し待ってからチェック
