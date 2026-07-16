@@ -10,6 +10,7 @@ import asyncio
 import os
 import sys
 import json
+import re
 import mmap
 import ctypes
 from ctypes import wintypes
@@ -244,8 +245,22 @@ def _fix_device_name(raw, idx):
         pass   # 正しい日本語(latin-1に載らない)や復元不可はそのまま返す
     return s
 
+def _clean_display_name(raw, idx):
+    """表示用のデバイス名を整える。Windowsのマイク名は「<日本語の説明> (<英語のデバイス名>)」形式が多く、
+    括弧内の英語が確実な識別子。前置きの日本語(化ける/冗長)は捨てて括弧内の英語を優先する
+    (Yuji方針：英語で足りるなら日本語省略＝文字化けも消える)。括弧が無ければ復元済みの名前をそのまま。"""
+    fixed = _fix_device_name(raw, idx)
+    m = re.search(r'\(([^()]*[A-Za-z][^()]*)\)', fixed)   # 英字を含む括弧内＝英語デバイス名
+    if m:
+        inner = m.group(1).strip()
+        if inner:
+            return inner
+    return fixed
+
 def list_input_devices():
-    """マイク(入力デバイス)を列挙。[{index,name,is_default}] を返す（UIのマイク選択用）。"""
+    """マイク(入力デバイス)を列挙。[{index,name,is_default}] を返す（UIのマイク選択用）。
+    同一デバイスがWindowsの複数のオーディオ方式(MME/DirectSound/WASAPI等)で重複して出るので、
+    表示名で重複を1つに絞る(Yuji方針B：利用者が迷わないように)。既定デバイスは優先して残す。"""
     devices = []
     if not ptt_audio:
         return devices
@@ -255,13 +270,23 @@ def list_input_devices():
             default_idx = ptt_audio.get_default_input_device_info().get('index')
         except Exception:
             default_idx = None
+        seen = {}   # 表示名 -> devicesの要素（重複排除・既定優先）
         for i in range(ptt_audio.get_device_count()):
             try:
                 info = ptt_audio.get_device_info_by_index(i)
-                if int(info.get('maxInputChannels', 0)) > 0:
-                    devices.append({'index': i,
-                                    'name': _fix_device_name(info.get('name'), i),
-                                    'is_default': (i == default_idx)})
+                if int(info.get('maxInputChannels', 0)) <= 0:
+                    continue
+                disp = _clean_display_name(info.get('name'), i)
+                is_def = (i == default_idx)
+                if disp in seen:
+                    # 既に同名あり＝重複。既定デバイスなら、そちらのindexに差し替えて★を付ける。
+                    if is_def and not seen[disp]['is_default']:
+                        seen[disp]['index'] = i
+                        seen[disp]['is_default'] = True
+                    continue
+                entry = {'index': i, 'name': disp, 'is_default': is_def}
+                seen[disp] = entry
+                devices.append(entry)
             except Exception:
                 continue
     except Exception as e:
