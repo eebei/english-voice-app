@@ -555,6 +555,34 @@ class IRacingReader:
             pass
         return None
 
+    def dump_temp_vars(self):
+        """診断(2026-07-16)：名前に temp を含む全変数と実値をダンプ。タイヤ温度の正しい変数を
+        推測ゼロで特定するため。tempCM(=39.4)が何で、接地面80℃を示す変数がどれかを実走で確認する。"""
+        out = {}
+        if not self._ptr:
+            return out
+        try:
+            num_vars = self._read_int(self.H_NUM_VARS)
+            var_hdr_off = self._read_int(self.H_VAR_HEADER_OFFSET)
+            buf = self.get_buf_offset()
+            for i in range(min(num_vars, 600)):
+                base = var_hdr_off + i * self.VAR_HEADER_SIZE
+                vh = self._bytes(base, self.VAR_HEADER_SIZE)
+                if len(vh) < self.VAR_HEADER_SIZE:
+                    break
+                voffset = struct.unpack_from('i', vh, 4)[0]
+                raw_name = vh[self.VAR_NAME_OFF:self.VAR_NAME_OFF + 32]
+                vname = raw_name.split(b'\x00')[0].decode('utf-8', errors='ignore')
+                if 'temp' in vname.lower():
+                    try:
+                        val = struct.unpack('f', self._bytes(buf + voffset, 4))[0]
+                        out[vname] = round(val, 1)
+                    except Exception:
+                        out[vname] = None
+        except Exception:
+            pass
+        return out
+
     def read_float(self, name):
         try:
             info = self.find_var(name)
@@ -1235,6 +1263,17 @@ def poll_iracing():
                 # ★2026-07-16追加：タイヤ温度誤読(Yuji/まーぼー指摘)の切り分け。carcass温度(CM)が周回で
                 #   上がるか毎周期ログ→「固着なら本当のバグ」「上昇するならカーカス物理で正常(表面と別物)」を確定させる。
                 " TireCM(LF/RF/LR/RR):" + str(lfTemp) + "/" + str(rfTemp) + "/" + str(lrTemp) + "/" + str(rrTemp))
+
+            # ★2026-07-16診断：走行中に「temp」を含む全変数を実値付きで吐く。tempCM(=39.4)が何で、
+            #   接地面の70-85℃を示す変数がどれかを推測ゼロで特定するため（Yujiの正しい指摘の裏取り）。
+            #   走行中のみ・DATA CHECKと同じ5秒間隔。正解変数が判明したら削除する。
+            if onTrack:
+                try:
+                    tv = reader.dump_temp_vars()
+                    if tv:
+                        log("TEMP VARS -> " + " ".join(k + "=" + str(v) for k, v in tv.items()))
+                except Exception as _e:
+                    log("TEMP VARS dump error: " + str(_e))
 
 
         # ── ラップ完了検知：LapLastLapTime の「値が変わった瞬間」で発火 ──
