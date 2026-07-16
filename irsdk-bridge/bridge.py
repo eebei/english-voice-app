@@ -1210,6 +1210,11 @@ def poll_iracing():
             # 温度[内,中,外]と摩耗残%[内,中,外]。%は0-1で来るので100倍。
             t = [reader.read_float(corner+'tempCL'), reader.read_float(corner+'tempCM'), reader.read_float(corner+'tempCR')]
             w = [reader.read_float(corner+'wearL'), reader.read_float(corner+'wearM'), reader.read_float(corner+'wearR')]
+            # ★2026-07-16：iRacingは走行中はタイヤ温度を出さず、内中外すべて完全同一のデフォルト値
+            #   (≈39.4)を返す。本物はピット入庫時のみで、必ず内≠中≠外のグラデーションを持つ。
+            #   3点が完全一致＝デフォルト＝「未取得」とみなし温度はNoneにする（39.4の捏造報告を根絶）。
+            if t[0] is not None and t[0] == t[1] == t[2]:
+                t = [None, None, None]
             t = [round(x,1) if x is not None else None for x in t]
             w = [round(x*100,1) if x is not None else None for x in w]
             return {'t': t, 'w': w}

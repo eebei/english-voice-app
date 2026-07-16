@@ -795,7 +795,9 @@ function buildSystem(p) {
     if (tr && tr.lf) {
       const fmtC = (c, r) => {
         if (!r) return null;
-        const t = r.t, w = r.w;
+        let t = r.t; const w = r.w;
+        // iRacing走行中デフォルト(内中外すべて同一≈39.4)は温度未取得＝破棄。旧bridge対策のサーバー側保険。
+        if (t && t[0] != null && t[0] === t[1] && t[1] === t[2]) t = [null, null, null];
         const tTxt = (t && t[1] != null) ? (isJ ? '温度(内/中/外)' + t[0] + '/' + t[1] + '/' + t[2] + '℃' : t[0] + '/' + t[1] + '/' + t[2] + 'C') : '';
         const wTxt = (w && w[1] != null) ? (isJ ? '残' + w[0] + '/' + w[1] + '/' + w[2] + '%' : 'wear ' + w[0] + '/' + w[1] + '/' + w[2] + '%') : '';
         return c + ' ' + [tTxt, wTxt].filter(Boolean).join(' ');
@@ -803,8 +805,8 @@ function buildSystem(p) {
       const rows = [fmtC('LF', tr.lf), fmtC('RF', tr.rf), fmtC('LR', tr.lr), fmtC('RR', tr.rr)].filter(Boolean);
       if (rows.length) {
         liveNote += isJ
-          ? '\n\n【タイヤ詳細（各輪：接地面の内/中/外の温度℃・残トレッド%）※これは内部データ。そのまま読み上げるな】\n' + rows.join('\n') + '\n【温度の扱い】この温度はタイヤ接地面を内/中/外の3点で測った値。内外の差（グラデーション）でキャンバーや偏り、突出した高温でブリスター（熱ダレ）を読める。数字は届いた実値だけを使い、絶対に捏造・盛って言うな。【読み上げ方の鉄則】4輪の数字を機械的に全部羅列するな。聞かれたら要点を人間の言葉で一言に。①コーナー名は日本語で（LF→「左フロント」、RF→「右フロント」、LR→「左リア」、RR→「右リア」）。②アルファベット記号（LF/RF）は使うな。③単位を必ず添えろ。④一番気になる1輪だけ指摘が基本（例「右フロント外側が一番熱い、荷重かかりすぎかも」）。走行中は自分から言うな。'
-          : '\n\n[TYRE DETAIL (per corner: contact-patch inner/mid/outer temp C, tread remaining %) — internal data, do NOT read verbatim]\n' + rows.join('\n') + '\n[Temps] These are the tyre contact-patch temps at inner/mid/outer. The inner-vs-outer spread (gradient) reads camber/imbalance; a spiking corner reads blistering. Use only the real values that arrived — never fabricate or inflate. [How to report] NEVER robotically list all four corners. When asked, summarise in one human sentence, name the worst/most relevant corner (e.g. "right front outer is hottest — sounds like too much load"), always include the unit. Do not volunteer while driving.';
+          ? '\n\n【タイヤ詳細（各輪：接地面の内/中/外の温度℃・残トレッド%）※これは内部データ。そのまま読み上げるな】\n' + rows.join('\n') + '\n【温度の扱い】この温度はタイヤ接地面を内/中/外の3点で測った値。内外の差（グラデーション）でキャンバーや偏り、突出した高温でブリスター（熱ダレ）を読める。数字は届いた実値だけを使い、絶対に捏造・盛って言うな。【重要・温度が無い時＝厳守】上のデータに温度が載っていない時は、iRacingの仕様で走行中はタイヤ温度が取れない（本物の温度はピット入庫時のみ・走行中はデフォルト値しか来ないので破棄済み）。その時に温度を聞かれたら正直にこう言え→「タイヤ温度はピットに入った時しか取れないんだ。今は摩耗で見てる」。絶対に温度の数字をでっち上げるな。ピット入庫時に温度が来たら、その時こそグラデーションを読んでやれ。【読み上げ方の鉄則】4輪の数字を機械的に全部羅列するな。聞かれたら要点を人間の言葉で一言に。①コーナー名は日本語で（LF→「左フロント」、RF→「右フロント」、LR→「左リア」、RR→「右リア」）。②アルファベット記号（LF/RF）は使うな。③単位を必ず添えろ。④一番気になる1輪だけ指摘が基本（例「右フロント外側が一番熱い、荷重かかりすぎかも」）。走行中は自分から言うな。'
+          : '\n\n[TYRE DETAIL (per corner: contact-patch inner/mid/outer temp C, tread remaining %) — internal data, do NOT read verbatim]\n' + rows.join('\n') + '\n[Temps] These are the tyre contact-patch temps at inner/mid/outer. The inner-vs-outer spread (gradient) reads camber/imbalance; a spiking corner reads blistering. Use only the real values that arrived — never fabricate or inflate. [When temp is missing — STRICT] If no temp is shown above, iRacing does not provide tyre temps while on track (real temps come only in the pit box; the on-track default is discarded). If asked for temp while driving, say honestly "I only get tyre temps at the stops — right now I\'m going off wear", and NEVER invent a number. When temps do arrive at a stop, that\'s when you read the gradient. [How to report] NEVER robotically list all four corners. When asked, summarise in one human sentence, name the worst/most relevant corner (e.g. "right front outer is hottest — sounds like too much load"), always include the unit. Do not volunteer while driving.';
       }
     }
     if (live.damage_s != null && live.damage_s > 0) {
