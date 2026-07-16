@@ -62,6 +62,9 @@
   #ctrl input[type=range]{ accent-color:#9D4EDD; width:88px; cursor:pointer; }
   #ctrl .lab{ color:#8b93a7; }
   #ctrl .key{ color:#9D4EDD; font-weight:700; }
+  .langbtn{ background:#9D4EDD; color:#fff; border:none; border-radius:6px; padding:5px 12px;
+    font:700 11px Oxanium,sans-serif; letter-spacing:1px; cursor:pointer; }
+  .langbtn:hover{ filter:brightness(1.1); }
 
   /* ── 無線の1行（吹き出し）── */
   .rc{
@@ -118,7 +121,8 @@
     <div id="ctrl">
       <span class="lab">透明度</span><input type="range" id="c-op" min="0.3" max="1" step="0.05">
       <span class="lab">サイズ</span><input type="range" id="c-sc" min="0.7" max="1.6" step="0.05">
-      <span class="lab">矢印キー=微移動 / <span class="key">Ctrl+Alt+O</span>=固定</span>
+      <button id="c-lang" class="langbtn">字幕: EN</button>
+      <span class="lab">矢印=微移動 / <span class="key">Ctrl+Alt+O</span>=固定 / <span class="key">Ctrl+Alt+L</span>=言語</span>
     </div>
     <div id="grip"><span class="dot"></span>掴んで移動 · <span class="key">Ctrl+Alt+O</span> でロック</div>
     <!-- 無線行はここに追記される -->
@@ -132,17 +136,36 @@
 
   const cOp = document.getElementById('c-op');
   const cSc = document.getElementById('c-sc');
+  const cLang = document.getElementById('c-lang');
+  let dispLang = 'en';                 // 字幕の表示言語（'en'|'ja'）
+  const byId = {};                     // id -> {orig, origLang, tr, trLang}
 
   function applyConfig(cfg){
     if(!cfg) return;
     if(cfg.scale!=null){ scale = cfg.scale; document.documentElement.style.setProperty('--scale', scale); if(cSc) cSc.value = scale; }
     if(cfg.opacity!=null){ document.body.style.opacity = cfg.opacity; if(cOp) cOp.value = cfg.opacity; }
     if(cfg.locked!=null){ document.body.classList.toggle('locked', !!cfg.locked); }
+    if(cfg.lang){ dispLang = cfg.lang; if(cLang) cLang.textContent = '字幕: ' + dispLang.toUpperCase(); rerenderAll(); }
   }
 
   // その場スライダー → mainへ（mainが永続化＆全窓へ再ブロードキャスト）
   if(cOp) cOp.addEventListener('input', ()=> window.pitwall?.overlayOpacity(+cOp.value));
   if(cSc) cSc.addEventListener('input', ()=> window.pitwall?.overlayScale(+cSc.value));
+  if(cLang) cLang.addEventListener('click', ()=> window.pitwall?.overlaySetLang(dispLang==='en'?'ja':'en'));
+
+  // 1行に表示すべきテキストを表示言語から選ぶ（訳が未着なら原文のまま）
+  function textFor(d){
+    if(!d) return '';
+    if(d.origLang === dispLang) return d.orig;
+    return d.tr || d.orig;               // 訳があれば訳、無ければ原文
+  }
+  function rerenderAll(){
+    wrap.querySelectorAll('.rc').forEach(el=>{
+      const d = byId[el.dataset.id];
+      const tx = el.querySelector('.tx');
+      if(d && tx) tx.textContent = textFor(d);
+    });
+  }
 
   // ロック解除中：矢印キーで1pxずつ（Shiftで10px）微移動
   window.addEventListener('keydown', (e)=>{
@@ -157,11 +180,23 @@
   });
 
   function pushLine(line){
-    if(!line || !line.text) return;
+    if(!line) return;
+    // 翻訳の後乗せ：既存の行に訳を差し込む
+    if(line.update){
+      const d = byId[line.id];
+      if(d){ d.tr = line.tr; d.trLang = line.trLang; }
+      const el = wrap.querySelector('.rc[data-id="'+line.id+'"]');
+      if(el && d){ const tx = el.querySelector('.tx'); if(tx) tx.textContent = textFor(d); }
+      return;
+    }
+    if(!line.text) return;
+    const id = line.id || ('L'+Date.now());
+    byId[id] = { orig:line.text, origLang:line.lang || 'en', tr:'', trLang:'' };
     const div = document.createElement('div');
     div.className = 'rc ' + (line.type==='drv' ? 'drv' : 'ai');
+    div.dataset.id = id;
     const nm = document.createElement('div'); nm.className='nm'; nm.textContent = line.name || (line.type==='drv'?'DRIVER':'ENGINEER');
-    const tx = document.createElement('div'); tx.className='tx'; tx.textContent = line.text;
+    const tx = document.createElement('div'); tx.className='tx'; tx.textContent = textFor(byId[id]);
     div.appendChild(nm); div.appendChild(tx);
     wrap.appendChild(div);
     reflow();
@@ -180,11 +215,12 @@
     });
     // フェードし切った古い行はDOMからも除去（メモリ/描画軽量化）
     while(wrap.querySelectorAll('.rc').length > MAX+2){
-      const first = wrap.querySelector('.rc'); if(first) first.remove(); else break;
+      const first = wrap.querySelector('.rc'); if(!first) break;
+      delete byId[first.dataset.id]; first.remove();
     }
   }
 
-  function clearAll(){ wrap.querySelectorAll('.rc').forEach(el=>el.remove()); }
+  function clearAll(){ wrap.querySelectorAll('.rc').forEach(el=>{ delete byId[el.dataset.id]; el.remove(); }); }
 
   if(window.pitwall){
     window.pitwall.onOverlayData(pushLine);

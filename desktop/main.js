@@ -46,7 +46,7 @@ let bridgeProc = null;
 
 // ── レースオーバーレイの設定（位置/透明度/スケール/ロック）を永続化 ──
 let OVL_CFG_FILE = '';
-let ovlCfg = { bounds:null, opacity:1, scale:1, locked:true, enabled:false };
+let ovlCfg = { bounds:null, opacity:1, scale:1, locked:true, enabled:false, lang:'en' };
 function loadOvlCfg() {
   try {
     OVL_CFG_FILE = path.join(app.getPath('userData'), 'overlay-config.json');
@@ -115,7 +115,7 @@ function applyOverlayCfgToWindow() {
     overlayWin.setIgnoreMouseEvents(locked, { forward: true });
     overlayWin.setFocusable(!locked);
   } catch (e) {}
-  overlayWin.webContents.send('overlay:config', { locked, opacity: ovlCfg.opacity, scale: ovlCfg.scale });
+  overlayWin.webContents.send('overlay:config', { locked, opacity: ovlCfg.opacity, scale: ovlCfg.scale, lang: ovlCfg.lang });
   // ホットキーでロックが変わった時、メイン窓のパネル(チェックボックス)も合わせる
   try { if (win && !win.isDestroyed()) win.webContents.send('overlay:lockstate', { locked, enabled: ovlCfg.enabled }); } catch (e) {}
 }
@@ -162,6 +162,7 @@ function ipcOverlaySetup() {
   ipcMain.on('overlay:clear', () => {
     if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:config', { __clear: true });
   });
+  ipcMain.on('overlay:setLang', (_e, lang) => setOverlayLang(lang));
   ipcMain.on('overlay:nudge', (_e, d) => {
     if (!overlayWin || overlayWin.isDestroyed() || ovlCfg.locked) return;
     const b = overlayWin.getBounds();
@@ -170,10 +171,21 @@ function ipcOverlaySetup() {
   ipcMain.handle('overlay:getState', () => ovlCfg);
 }
 
+// 字幕の表示言語を切替（en⇄ja）。overlay(字幕描画)とメイン窓(翻訳先の判断)の両方へ配る。
+function setOverlayLang(lang) {
+  ovlCfg.lang = (lang === 'ja') ? 'ja' : 'en';
+  saveOvlCfg();
+  const msg = { lang: ovlCfg.lang };
+  try { if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:config', msg); } catch (e) {}
+  try { if (win && !win.isDestroyed()) win.webContents.send('overlay:config', msg); } catch (e) {}
+}
+function toggleOverlayLangHotkey() { setOverlayLang(ovlCfg.lang === 'en' ? 'ja' : 'en'); }
+
 // ホットキー登録（Borderless前提。排他フルスクリーンだとOSが握って発火しない場合がある）
 function registerOverlayShortcuts() {
   try {
     globalShortcut.register('Control+Alt+O', toggleOverlayLockHotkey);
+    globalShortcut.register('Control+Alt+L', toggleOverlayLangHotkey);   // 字幕 EN⇄JP
   } catch (e) { log('shortcut register failed: ' + e.message); }
 }
 

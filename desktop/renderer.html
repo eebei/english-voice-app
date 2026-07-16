@@ -1318,6 +1318,27 @@ function convoLog(type, text){
 // AI(エンジニア)=左/紫、ドライバー(driver/自分のuser発話)=右/琥珀。
 const OVL_ENG_NAME = { James:'James', Luna:'Luna', Hajime:'Omatsu', HajimeJP:'Omatsu', Kanbe:'Kanbe', Oishi:'Oishi', LunaJP:'Luna', Matthias:'Matthias' };
 let _ovlLast = { key:'', t:0 };
+let _ovlLineSeq = 0;
+let ovlLang = 'en';   // オーバーレイ字幕の表示言語（'en'|'ja'）。mainから同期される
+function detectLang(s){ return /[\u3040-\u30ff\u3400-\u9fff]/.test(s||'') ? 'ja' : 'en'; }
+
+// 1行を翻訳（haiku・独立系統）。失敗時は空（＝原文のまま）。
+async function translateLine(text, target){
+  try{
+    const authToken = localStorage.getItem('pw_auth_token');
+    const headers = {'Content-Type':'application/json'};
+    const body = { text, target };
+    if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+    const ctrl = new AbortController();
+    const timer = setTimeout(()=>ctrl.abort(), 8000);
+    const r = await fetch(API_BASE+'/api/translate',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!r.ok) return '';
+    const j = await r.json();
+    return (j && j.text || '').trim();
+  }catch(e){ return ''; }
+}
+
 function mirrorToOverlay(type, text){
   if(!window.pitwall) return;
   if(type!=='ai' && type!=='driver' && type!=='user') return;   // sys等は放送に載せない
@@ -1330,11 +1351,17 @@ function mirrorToOverlay(type, text){
     if(key===_ovlLast.key && now-_ovlLast.t < 3000) return;
     _ovlLast = { key, t:now };
   }
-  if(type==='ai'){
-    const nm = (OVL_ENG_NAME[sel]||sel||'Engineer');
-    window.pitwall.overlayPush({ type:'ai', name:`${nm} ; AI Race Engineer`, text:clean });
-  } else {
-    window.pitwall.overlayPush({ type:'drv', name:(userName||'Driver'), text:clean });
+  const side = (type==='ai') ? 'ai' : 'drv';
+  const name = (type==='ai') ? `${OVL_ENG_NAME[sel]||sel||'Engineer'} ; AI Race Engineer` : (userName||'Driver');
+  const lang = detectLang(clean);
+  const id = 'L'+(++_ovlLineSeq);
+  // まず原文を即表示（字幕の表示自体は遅らせない）
+  window.pitwall.overlayPush({ id, type:side, name, text:clean, lang });
+  // 表示言語と違う言語の行だけ、あとから訳を差し込む（同言語なら翻訳しない＝コスト/遅延ゼロ）
+  if(lang !== ovlLang){
+    translateLine(clean, ovlLang).then(tr=>{
+      if(tr) window.pitwall.overlayPush({ update:true, id, tr, trLang:ovlLang });
+    });
   }
 }
 
@@ -1362,8 +1389,11 @@ if(window.pitwall?.overlayGetState){
     if(op&&cfg.opacity!=null) op.value=cfg.opacity;
     if(sc&&cfg.scale!=null) sc.value=cfg.scale;
     if(lk&&cfg.locked!=null) lk.checked=cfg.locked;
+    if(cfg.lang) ovlLang=cfg.lang;
   }).catch(()=>{});
 }
+// 表示言語がホットキー/オーバーレイのボタンで変わったら、翻訳先も追従させる
+window.pitwall?.onOverlayConfig?.((cfg)=>{ if(cfg && cfg.lang) ovlLang=cfg.lang; });
 // ホットキー(Ctrl+Alt+O)でロック/表示が変わったら、chat画面パネルの表示も同期
 window.pitwall?.onOverlayLockState?.((s)=>{
   if(!s) return;

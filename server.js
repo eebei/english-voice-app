@@ -385,6 +385,33 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
   }
 });
 
+// ── 翻訳プロキシ（レースオーバーレイのEN/JP字幕用）────────────────────────────
+// 1行ずつの短い無線を翻訳する。haiku（激安・高速）。会話品質には影響させない独立系統。
+app.post('/api/translate', ttsLimiter, async (req, res) => {
+  try {
+    if (req.body.product === 'pitwall') {
+      if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
+      if (!req.user) return res.status(401).json({ error: 'login_required' });
+      if (!req.user.is_member) return res.status(403).json({ error: 'membership_required' });
+    }
+    const text = (req.body.text || '').toString().slice(0, 500);
+    const target = req.body.target === 'ja' ? 'Japanese' : 'English';
+    if (!text.trim()) return res.json({ text: '' });
+
+    const r = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: `You are a subtitle translator for a motorsport race-engineer radio overlay. Translate the user's line into ${target}. Keep it terse and natural, like a real radio call. Preserve driver/car numbers, positions (P3), lap/sector terms, and units (°C, L). Output ONLY the translation — no quotes, no notes, no romaji.`,
+      messages: [{ role: 'user', content: text }],
+    });
+    const out = (r.content || []).map(b => b.text || '').join('').trim();
+    res.json({ text: out });
+  } catch (err) {
+    console.error('[/api/translate ERROR]', err.message);
+    res.status(err.status || 500).json({ error: err.message || 'translate_failed' });
+  }
+});
+
 // ── Google Cloud TTS proxy ────────────────────────────────────────────────────
 // テキスト → MP3 base64。APIキーはサーバー側のみ（クライアントに漏らさない）。
 const TTS_API_KEY = process.env.GOOGLE_TTS_API_KEY;
