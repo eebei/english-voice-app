@@ -46,6 +46,19 @@
   body.locked #grip{ display:none; }
   #grip .dot{width:6px;height:6px;border-radius:50%;background:#fff;box-shadow:0 0 8px #fff}
 
+  /* ── その場設定バー（ロック解除時のみ表示。走行中=ロック中は非表示＝描画ゼロ）── */
+  #ctrl{
+    align-self:center; display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;
+    background:rgba(13,14,26,.92); border:1px solid rgba(157,78,221,.5); border-radius:10px;
+    padding:8px 12px; margin-bottom:6px;
+    font-family:'Oxanium',sans-serif; font-size:11px; letter-spacing:.5px; color:#cbd5e1;
+    box-shadow:0 6px 24px rgba(0,0,0,.5);
+  }
+  body.locked #ctrl{ display:none; }
+  #ctrl input[type=range]{ accent-color:#9D4EDD; width:88px; cursor:pointer; }
+  #ctrl .lab{ color:#8b93a7; }
+  #ctrl .key{ color:#9D4EDD; font-weight:700; }
+
   /* ── 無線の1行（吹き出し）── */
   .rc{
     display:flex; flex-direction:column;
@@ -98,7 +111,12 @@
 </head>
 <body class="locked">
   <div id="wrap">
-    <div id="grip"><span class="dot"></span>PITWALL · DRAG TO MOVE</div>
+    <div id="ctrl">
+      <span class="lab">透明度</span><input type="range" id="c-op" min="0.3" max="1" step="0.05">
+      <span class="lab">サイズ</span><input type="range" id="c-sc" min="0.7" max="1.6" step="0.05">
+      <span class="lab">矢印キー=微移動 / <span class="key">Ctrl+Alt+O</span>=固定</span>
+    </div>
+    <div id="grip"><span class="dot"></span>掴んで移動 · <span class="key">Ctrl+Alt+O</span> でロック</div>
     <!-- 無線行はここに追記される -->
   </div>
 
@@ -108,12 +126,31 @@
   const MAX = 4;                       // 表示する直近の行数
   let scale = 1;
 
+  const cOp = document.getElementById('c-op');
+  const cSc = document.getElementById('c-sc');
+
   function applyConfig(cfg){
     if(!cfg) return;
-    if(cfg.scale!=null){ scale = cfg.scale; document.documentElement.style.setProperty('--scale', scale); }
-    if(cfg.opacity!=null){ document.body.style.opacity = cfg.opacity; }
+    if(cfg.scale!=null){ scale = cfg.scale; document.documentElement.style.setProperty('--scale', scale); if(cSc) cSc.value = scale; }
+    if(cfg.opacity!=null){ document.body.style.opacity = cfg.opacity; if(cOp) cOp.value = cfg.opacity; }
     if(cfg.locked!=null){ document.body.classList.toggle('locked', !!cfg.locked); }
   }
+
+  // その場スライダー → mainへ（mainが永続化＆全窓へ再ブロードキャスト）
+  if(cOp) cOp.addEventListener('input', ()=> window.pitwall?.overlayOpacity(+cOp.value));
+  if(cSc) cSc.addEventListener('input', ()=> window.pitwall?.overlayScale(+cSc.value));
+
+  // ロック解除中：矢印キーで1pxずつ（Shiftで10px）微移動
+  window.addEventListener('keydown', (e)=>{
+    if(document.body.classList.contains('locked')) return;
+    const step = e.shiftKey ? 10 : 1;
+    let dx=0, dy=0;
+    if(e.key==='ArrowLeft') dx=-step; else if(e.key==='ArrowRight') dx=step;
+    else if(e.key==='ArrowUp') dy=-step; else if(e.key==='ArrowDown') dy=step;
+    else return;
+    e.preventDefault();
+    window.pitwall?.overlayNudge(dx, dy);
+  });
 
   function pushLine(line){
     if(!line || !line.text) return;

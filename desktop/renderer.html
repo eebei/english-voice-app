@@ -1356,6 +1356,18 @@ if(window.pitwall?.overlayGetState){
     if(lk&&cfg.locked!=null) lk.checked=cfg.locked;
   }).catch(()=>{});
 }
+// ホットキー(Ctrl+Alt+O)でロック/表示が変わったら、chat画面パネルの表示も同期
+window.pitwall?.onOverlayLockState?.((s)=>{
+  if(!s) return;
+  if(s.enabled && !overlayOn){
+    overlayOn = true;
+    const btn=document.getElementById('ovl-toggle');
+    if(btn){ btn.textContent='🏁 Race Overlay: ON'; btn.classList.add('on'); }
+  }
+  const lk=document.getElementById('ovl-lock');
+  if(lk && s.locked!=null) lk.checked=s.locked;
+  document.querySelector('.ovl-sliders')?.classList.toggle('active', overlayOn && s.locked===false);
+});
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }
 function setHint(t){ document.getElementById('hint-text').textContent=t; }
 

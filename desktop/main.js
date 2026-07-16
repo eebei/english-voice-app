@@ -2,7 +2,7 @@
 // 最重要設定：backgroundThrottling:false
 //   → iRacingがフルスクリーンで前面に来てウィンドウが裏に回っても、
 //     タイマー・音声・JSが絞られず動き続ける（=ブラウザの「裏で死ぬ」問題の解決）
-const { app, BrowserWindow, session, shell, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, session, shell, ipcMain, screen, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -102,6 +102,27 @@ function applyOverlayCfgToWindow() {
     overlayWin.setFocusable(!locked);
   } catch (e) {}
   overlayWin.webContents.send('overlay:config', { locked, opacity: ovlCfg.opacity, scale: ovlCfg.scale });
+  // ホットキーでロックが変わった時、メイン窓のパネル(チェックボックス)も合わせる
+  try { if (win && !win.isDestroyed()) win.webContents.send('overlay:lockstate', { locked, enabled: ovlCfg.enabled }); } catch (e) {}
+}
+
+// ── グローバルホットキー（Ctrl+Alt+O）でその場ロック解除／再ロック ──
+//   走行中に本体窓へ戻らず、オーバーレイの上で移動＆設定できるようにする。
+//   ロック中＝クリックスルー(FFB安全)、解除中＝掴んで移動＋スライダー表示＋矢印キー微調整。
+function toggleOverlayLockHotkey() {
+  if (!overlayWin || overlayWin.isDestroyed() || !ovlCfg.enabled) {
+    // まだ出てない/OFFなら、表示して即・解除状態に（設定を出す）
+    ovlCfg.enabled = true; createOverlay(); try { overlayWin.showInactive(); } catch (e) {}
+    ovlCfg.locked = false;
+  } else {
+    ovlCfg.locked = !ovlCfg.locked;
+  }
+  saveOvlCfg();
+  applyOverlayCfgToWindow();
+  // 解除中は矢印キー操作のためフォーカスを持たせる（配置作業中なのでFFBは問題にならない）
+  if (!ovlCfg.locked && overlayWin && !overlayWin.isDestroyed()) {
+    try { overlayWin.setFocusable(true); overlayWin.focus(); } catch (e) {}
+  }
 }
 
 function ipcOverlaySetup() {
@@ -127,7 +148,19 @@ function ipcOverlaySetup() {
   ipcMain.on('overlay:clear', () => {
     if (overlayWin && !overlayWin.isDestroyed()) overlayWin.webContents.send('overlay:config', { __clear: true });
   });
+  ipcMain.on('overlay:nudge', (_e, d) => {
+    if (!overlayWin || overlayWin.isDestroyed() || ovlCfg.locked) return;
+    const b = overlayWin.getBounds();
+    overlayWin.setBounds({ ...b, x: b.x + (d.dx|0), y: b.y + (d.dy|0) });
+  });
   ipcMain.handle('overlay:getState', () => ovlCfg);
+}
+
+// ホットキー登録（Borderless前提。排他フルスクリーンだとOSが握って発火しない場合がある）
+function registerOverlayShortcuts() {
+  try {
+    globalShortcut.register('Control+Alt+O', toggleOverlayLockHotkey);
+  } catch (e) { log('shortcut register failed: ' + e.message); }
 }
 
 // ── テレメトリbridgeを自動起動（ユーザーが手動でexeを立ち上げる必要をなくす）──
@@ -318,6 +351,7 @@ app.whenReady().then(() => {
   ipcOverlaySetup();  // オーバーレイ制御IPCを登録
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
+  registerOverlayShortcuts();   // Ctrl+Alt+O でオーバーレイのロック解除／再ロック
   setTimeout(checkForUpdate, 4000);   // 起動直後の輻輳を避けて少し待ってからチェック
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -330,3 +364,4 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', stopBridge);
+app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch (e) {} });

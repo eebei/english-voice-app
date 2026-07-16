@@ -13,8 +13,11 @@ contextBridge.exposeInMainWorld('pitwall', {
   overlayOpacity:(v)       => ipcRenderer.send('overlay:opacity', v),
   overlayScale:  (v)       => ipcRenderer.send('overlay:scale', v),
   overlayClear:  ()        => ipcRenderer.send('overlay:clear'),
+  overlayNudge:  (dx,dy)   => ipcRenderer.send('overlay:nudge', {dx,dy}),  // オーバーレイ内の矢印キーで微移動
   overlayGetState: ()      => ipcRenderer.invoke('overlay:getState'),
   // ── main → 窓（設定値の受信。overlay.html / renderer.html 両方が使う）──
   onOverlayConfig: (cb) => ipcRenderer.on('overlay:config', (_e, cfg) => cb(cfg)),
   onOverlayData:   (cb) => ipcRenderer.on('overlay:data',   (_e, line) => cb(line)),
+  // ── main → メイン窓（ホットキーでロック状態が変わったのをパネルに反映）──
+  onOverlayLockState: (cb) => ipcRenderer.on('overlay:lockstate', (_e, s) => cb(s)),
 });
