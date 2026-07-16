@@ -1446,8 +1446,9 @@ async function callAPI(){
     // ⚠️デブリーフのmax_tokensが低い(旧250/300)と分析コメントが文の途中で切れ、次に「続き」と
     //   言われた時モデルが尻切れ文の残りから補完＝単語の途中から始まる壊れた返答になる
     //   (Yuji 2026-07-15 Monza実走で発覚)。1返答で1論点を完結できる余裕に引き上げる。
-    const maxTok = (selMode==='race' && isJP) ? 120
-                 : (selMode==='race' && !isJP) ? 80
+    // レースは物理的にも短く（プロンプトの無線鉄則のバックストップ。冗長な4文返答を頭打ちに）
+    const maxTok = (selMode==='race' && isJP) ? 80
+                 : (selMode==='race' && !isJP) ? 55
                  : (selMode==='debrief' && isJP) ? 550
                  : 550;
     // ⚠️アクセスコードのみのセッション(八木さん/Tobi等)ではproductを送らない＝従来通りゲート無し。

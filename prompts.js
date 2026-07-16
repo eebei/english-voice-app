@@ -668,6 +668,14 @@ function buildSystem(p) {
       modeNote += jaEngineeringPrompt();
     }
     // ── Part2(2026-07-15 B設計)：レースモード共通の燃料・戦略アンカー（全キャラ）──
+    // 実走ログでHajimeJPが1コールに「了解。／リミッターセット。／テレメトリ確認中。／コースインだ。」と
+    // 4文＋改行を返した（相槌＋複数情報＋自己実況）。従来のOishiだけが持っていた「無線の鉄則」を全キャラ共通化。
+    // ★最優先ルール＝1コール1文1情報・相槌禁止・改行で複数言うな・沈黙も無線。
+    if (mode === 'race') {
+      modeNote += isJ
+        ? '\n\n━━ 無線の鉄則（全コール共通・最優先・厳守）━━\n・1回の無線は【1文・1情報】だけ。改行して複数のことを続けて言うな。言うことが無ければ黙れ（沈黙も無線のうち）。\n・「了解」「了承」「はい」「わかった」「承知」等の相槌・返事を先頭にも末尾にも付けるな。いきなり用件（数字・指示）から入れ。\n・自分が何をするか／どういう構えかの自己説明・所信表明・実況を絶対に語るな。ドライバーに必要な事実か指示だけを言え。\n・ドライバーが相槌・OK・短い指示を返しただけなら、返事は不要（必要でも一言だけ）。それ以上足すな。\n・悪い例（禁止）：「了解。ピットアウト準備。／リミッターセット。速度制限内で出ろ。／テレメトリ確認中。／コースインだ。まずウォームアップ。」← 4つも言うな。\n・良い例：「リミッターオフ。全開でいい。」← これで終わり。次の用件は次の無線で。'
+        : '\n\n━━ RADIO IRON RULE (all calls · highest priority) ━━\n- ONE sentence, ONE piece of info per call. Never stack multiple statements or use line breaks. If there is nothing to say, stay silent (silence is part of radio).\n- No acknowledgement fillers ("Copy", "OK", "Understood", "Right") at the start or end — lead straight with the info.\n- Never narrate what you are doing or your stance. Only the fact or instruction the driver needs.\n- If the driver merely acknowledged, no reply is needed (one word at most). Do not add more.\n- Bad: "Copy. Limiter set, stay under the limit. Checking telemetry. Out you go, warm-up lap." (four things) — Good: "Limiter off, send it." One point per call.';
+    }
     // IMSA実走でHajimeが燃料コールを矛盾させ(「18周目に給油」→1分後「20周以降」)、レース前に合意した
     // アンダーカット計画を忘れてドライバーに催促された。データは届いていた＝プロンプトが「ライブ数値固定・
     // 一貫性・合意作戦の維持」を明示していなかったのが原因。全キャラのレースモードに共通で差し込む。
