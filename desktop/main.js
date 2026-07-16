@@ -66,8 +66,11 @@ function createOverlay() {
   if (overlayWin && !overlayWin.isDestroyed()) return overlayWin;
   const disp = screen.getPrimaryDisplay();
   const wa = disp.workArea;
-  const defBounds = { width: 460, height: 300, x: Math.round(wa.x + wa.width/2 - 230), y: Math.round(wa.y + wa.height - 340) };
+  const defBounds = { width: 500, height: 440, x: Math.round(wa.x + wa.width/2 - 250), y: Math.round(wa.y + wa.height - 480) };
   const b = ovlCfg.bounds || defBounds;
+  // 以前の小さい保存サイズ（2〜3行しか映らない）を最低限まで引き上げる。位置は尊重。
+  if (b.height < 400) { b.y = Math.max(wa.y, b.y - (400 - b.height)); b.height = 440; }
+  if (b.width  < 460) b.width = 500;
 
   overlayWin = new BrowserWindow({
     ...b,

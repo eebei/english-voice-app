@@ -8,8 +8,8 @@
   :root{
     --ai:#9D4EDD;         /* エンジニア＝紫 */
     --drv:#f2b23e;        /* ドライバー＝琥珀 */
-    --ai-bg:rgba(24,16,38,.82);
-    --drv-bg:rgba(38,30,12,.82);
+    --ai-bg:rgba(20,13,32,.9);
+    --drv-bg:rgba(34,26,9,.9);
     --ai-txt:#ecdcff;
     --drv-txt:#ffeecb;
     --scale:1;
@@ -30,27 +30,31 @@
     transform-origin:bottom center;
   }
 
-  /* ── ドラッグ用グリップ（ロック解除時のみ表示。ここを掴んで窓ごと動かす）── */
+  /* 解除中は上部に固定バーの分だけ余白を空け、無線行が固定バーの下に潜らないようにする */
+  body:not(.locked) #wrap{ padding-top:96px; }
+
+  /* ── ドラッグ用グリップ（ロック解除時のみ表示。ここを掴んで窓ごと動かす）──
+     ★position:fixedで画面上部に固定。無線が増えても流れに押し出されて消えない。 */
   #grip{
     -webkit-app-region:drag;
-    align-self:center;
+    position:fixed; top:48px; left:50%; transform:translateX(-50%); z-index:30;
     display:flex; align-items:center; gap:8px;
-    font-family:'Oxanium'; font-weight:700; font-size:calc(10px * var(--scale));
-    letter-spacing:2px; color:#fff;
-    background:rgba(157,78,221,.9); border-radius:99px;
-    padding:calc(5px * var(--scale)) calc(16px * var(--scale));
-    margin-bottom:calc(4px * var(--scale));
+    font-family:'Oxanium'; font-weight:700; font-size:11px;
+    letter-spacing:2px; color:#fff; white-space:nowrap;
+    background:rgba(157,78,221,.92); border-radius:99px;
+    padding:6px 18px;
     box-shadow:0 4px 20px rgba(0,0,0,.5);
     cursor:grab;
   }
   body.locked #grip{ display:none; }
   #grip .dot{width:6px;height:6px;border-radius:50%;background:#fff;box-shadow:0 0 8px #fff}
 
-  /* ── その場設定バー（ロック解除時のみ表示。走行中=ロック中は非表示＝描画ゼロ）── */
+  /* ── その場設定バー（ロック解除時のみ・上部固定。走行中=ロック中は非表示＝描画ゼロ）── */
   #ctrl{
-    align-self:center; display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;
-    background:rgba(13,14,26,.92); border:1px solid rgba(157,78,221,.5); border-radius:10px;
-    padding:8px 12px; margin-bottom:6px;
+    position:fixed; top:8px; left:50%; transform:translateX(-50%); z-index:30;
+    display:flex; align-items:center; gap:10px; flex-wrap:nowrap; justify-content:center; white-space:nowrap;
+    background:rgba(13,14,26,.94); border:1px solid rgba(157,78,221,.5); border-radius:10px;
+    padding:8px 12px;
     font-family:'Oxanium',sans-serif; font-size:11px; letter-spacing:.5px; color:#cbd5e1;
     box-shadow:0 6px 24px rgba(0,0,0,.5);
   }
@@ -78,7 +82,7 @@
     text-transform:uppercase; margin-bottom:calc(3px * var(--scale));
     opacity:.92;
   }
-  .rc .tx{ font-weight:500; }
+  .rc .tx{ font-weight:500; text-shadow:0 1px 3px rgba(0,0,0,.7); }
 
   /* エンジニア(AI)：左寄せ・紫・濃いグレー背景・明色文字 */
   .rc.ai{
