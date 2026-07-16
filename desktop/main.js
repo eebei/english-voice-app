@@ -16,6 +16,17 @@ const RELEASE_API_URL = 'https://api.github.com/repos/eebei/english-voice-app/re
 //   デフォルト（ユーザー操作直後のみ許可）だとブロックされ無音になる。
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
+// ── 多重起動を禁止（2つ目のexe＝bridgeポート8765の奪い合い→接続エラー・オーバーレイのダブりの元）──
+//   すでに動いていたら、この新しいプロセスは即終了し、既存の窓を前に出す。
+const gotSingleLock = app.requestSingleInstanceLock();
+if (!gotSingleLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  });
+}
+
 // 既にbridgeがport8765で動いているか確認（重複起動＝点滅の原因を防ぐ）
 // 古い/ゾンビのbridgeを掃除（前回のアプリ実行残り・昔の手動起動・スケジューラ起動を一掃）
 function killStaleBridges() {
@@ -249,6 +260,14 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'renderer.html'));
+
+  // メイン窓を閉じたら、オーバーレイ窓も必ず閉じる。
+  //   ★これが無いと、隠れたオーバーレイ窓がプロセスを生かし続け（window-all-closedが発火せず）、
+  //     アプリが終了しない＝「アイコンが残る」「再起動でダブる」の原因になっていた。
+  win.on('closed', () => {
+    if (overlayWin && !overlayWin.isDestroyed()) { try { overlayWin.destroy(); } catch (e) {} }
+    overlayWin = null;
+  });
 
   // 開発中はDevToolsを開く（あとで消す）
   // win.webContents.openDevTools();

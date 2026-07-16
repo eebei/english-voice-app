@@ -1317,11 +1317,19 @@ function convoLog(type, text){
 // ── レースオーバーレイへ無線コールをミラー（会話のみ・テレメトリ数字は出さない）──
 // AI(エンジニア)=左/紫、ドライバー(driver/自分のuser発話)=右/琥珀。
 const OVL_ENG_NAME = { James:'James', Luna:'Luna', Hajime:'Omatsu', HajimeJP:'Omatsu', Kanbe:'Kanbe', Oishi:'Oishi', LunaJP:'Luna', Matthias:'Matthias' };
+let _ovlLast = { key:'', t:0 };
 function mirrorToOverlay(type, text){
   if(!window.pitwall) return;
   if(type!=='ai' && type!=='driver' && type!=='user') return;   // sys等は放送に載せない
   let clean = (text||'').replace(/^\[PTT\]\s*/,'').replace(/\[JA:[\s\S]*\]$/,'').trim();
   if(!clean) return;
+  // PTT発話は sendMsg()の'user' と addMsg('driver')の2経路で来て二重表示になる。
+  // ドライバー側(user/driver)は同一テキストの連続を短時間で1回に潰す。
+  if(type==='user' || type==='driver'){
+    const key = 'drv|'+clean, now = Date.now();
+    if(key===_ovlLast.key && now-_ovlLast.t < 3000) return;
+    _ovlLast = { key, t:now };
+  }
   if(type==='ai'){
     const nm = (OVL_ENG_NAME[sel]||sel||'Engineer');
     window.pitwall.overlayPush({ type:'ai', name:`${nm} ; AI Race Engineer`, text:clean });
@@ -1368,6 +1376,17 @@ window.pitwall?.onOverlayLockState?.((s)=>{
   if(lk && s.locked!=null) lk.checked=s.locked;
   document.querySelector('.ovl-sliders')?.classList.toggle('active', overlayOn && s.locked===false);
 });
+
+// 現在のビルド番号を隅に小さく表示（テスターが「今どのBuildか」を一目で言える／伝えやすい）
+fetch('build-info.json').then(r=>r.json()).then(info=>{
+  const n = (info && (info.buildNum!=null ? info.buildNum : info.buildTag));
+  if(n==null) return;
+  const el = document.createElement('div');
+  el.textContent = 'Build '+n;
+  el.style.cssText = 'position:fixed;right:8px;bottom:6px;z-index:9998;font:600 11px Oxanium,sans-serif;'
+    + 'letter-spacing:.5px;color:#64748b;opacity:.7;pointer-events:none;user-select:text';
+  document.body.appendChild(el);
+}).catch(()=>{});
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }
 function setHint(t){ document.getElementById('hint-text').textContent=t; }
 

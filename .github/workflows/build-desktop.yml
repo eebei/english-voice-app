@@ -46,7 +46,9 @@ jobs:
       - name: Write build-info.json (for in-app update check)
         run: |
           $iso = Get-Date -Format 'o'
-          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"${{ steps.date.outputs.DATE }}`"}"
+          # buildTag(=タイムスタンプ)は更新ゲートの数値比較に使うので従来どおり維持（後方互換）。
+          # buildNum(=連番)は利用者に分かりやすい「Build N」表示用。
+          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"${{ steps.date.outputs.DATE }}`", `"buildNum`": ${{ github.run_number }}}"
         shell: pwsh
 
       - name: Install & build Electron app
@@ -66,10 +68,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: desktop-latest
-          name: OMORAY PITWALL Desktop (latest)
+          name: OMORAY PITWALL Desktop — Build ${{ github.run_number }}
           body: |
-            ## OMORAY PITWALL Desktop - Build ${{ steps.date.outputs.DATE }}
-            ダウンロードしてダブルクリックするだけ。Node/Python不要。bridge内蔵・自動起動。
+            ## OMORAY PITWALL Desktop — Build ${{ github.run_number }}  (${{ steps.date.outputs.DATE }})
+            最新版は常に **Build ${{ github.run_number }}**。ダウンロードしてダブルクリックするだけ。Node/Python不要。bridge内蔵・自動起動。
 
             Webサイトのダウンロードリンクは常に `OMORAY-PITWALL-Desktop-latest.exe` を指しています(このビルドで自動上書き)。
           files: |
