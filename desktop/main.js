@@ -327,6 +327,12 @@ async function checkForUpdate() {
     const remoteN = parseInt(latestTag.replace('-', ''), 10);
     if (remoteN > localN) {
       log('update required (blocking): local=' + buildTag + ' remote=' + latestTag);
+      // ゲートに「現在 Build X / 最新 Build Y」を出す。ローカルはbuild-info.jsonのbuildNum、
+      // リモートはリリース名「… Build N」から取る（利用者に分かりやすい連番で示す）。
+      const localBuild = (info.buildNum != null) ? String(info.buildNum) : buildTag;
+      const remoteMatch = (release.name || '').match(/Build\s+(\d+)/i);
+      const remoteBuild = remoteMatch ? remoteMatch[1] : latestTag;
+      const buildLine = 'Current: Build ' + localBuild + '   →   Latest: Build ' + remoteBuild;
       // 閉じるボタンなし＝強制ゲート。理由：PITWALLはテレメトリ解釈がバージョン依存なので、
       // 古いクライアントのまま使うと燃料/ギャップ等を「静かに」誤読するリスクがある（＝捏造と同じ害）。
       // iRacing自体が採用してる「更新しないと入れない」方式に合わせる。
@@ -341,6 +347,7 @@ async function checkForUpdate() {
           g.innerHTML =
             '<div style="font-size:15px;letter-spacing:2px;color:#9D4EDD;font-weight:700;margin-bottom:14px">UPDATE REQUIRED</div>' +
             '<div style="font-size:20px;font-weight:700;margin-bottom:10px">A new version is required</div>' +
+            '<div style="font-family:Oxanium,system-ui,sans-serif;font-size:13px;letter-spacing:.5px;color:#cbd5e1;margin-bottom:18px">${buildLine}</div>' +
             '<div style="font-size:14px;color:#aaa;max-width:440px;margin-bottom:26px;line-height:1.6">' +
             'An older build may misread telemetry like fuel and gaps. Please update before you drive.' +
             '<br><span style="color:#777;font-size:13px">古いバージョンのままだと燃料・ギャップ等を正しく読めない場合があります。更新してからご利用ください。</span></div>' +

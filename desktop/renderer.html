@@ -218,7 +218,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <!-- ═══ ベータ・アクセスコード ゲート（八木さん・Tobi等の限定配布） ═══ -->
 <div id="beta-gate" style="position:fixed;inset:0;z-index:99999;background:#0a0a0f;display:none;align-items:center;justify-content:center;padding:24px">
   <div style="max-width:420px;width:100%;text-align:center">
-    <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:56px;margin-bottom:28px">
+    <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:56px;margin-bottom:10px">
+    <div id="gate-build" style="font:700 12px Oxanium,sans-serif;letter-spacing:1px;color:#9D4EDD;opacity:.85;margin-bottom:20px;min-height:15px"></div>
     <div data-i18n="gate_title" style="font-size:20px;font-weight:700;color:#fff;margin-bottom:8px">アクセスコード</div>
     <div id="beta-gate-sub" data-i18n="gate_sub" style="font-size:14px;color:#9aa;margin-bottom:24px;line-height:1.6">
       Yujiから受け取ったコードを入力してください。このコードはあなた専用です。
@@ -1411,6 +1412,9 @@ window.pitwall?.onOverlayLockState?.((s)=>{
 fetch('build-info.json').then(r=>r.json()).then(info=>{
   const n = (info && (info.buildNum!=null ? info.buildNum : info.buildTag));
   if(n==null) return;
+  // スタート画面(アクセスコード)にも明示＝起動時に自分の版が分かる
+  const gb = document.getElementById('gate-build');
+  if(gb) gb.textContent = 'Build '+n;
   const el = document.createElement('div');
   el.textContent = 'Build '+n;
   el.style.cssText = 'position:fixed;right:8px;bottom:6px;z-index:9998;font:600 11px Oxanium,sans-serif;'
