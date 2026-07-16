@@ -796,15 +796,15 @@ function buildSystem(p) {
       const fmtC = (c, r) => {
         if (!r) return null;
         const t = r.t, w = r.w;
-        const tTxt = (t && t[1] != null) ? (isJ ? 'カーカス温' + t[0] + '/' + t[1] + '/' + t[2] + '℃' : 'carcass ' + t[0] + '/' + t[1] + '/' + t[2] + 'C') : '';
+        const tTxt = (t && t[1] != null) ? (isJ ? '温度(内/中/外)' + t[0] + '/' + t[1] + '/' + t[2] + '℃' : t[0] + '/' + t[1] + '/' + t[2] + 'C') : '';
         const wTxt = (w && w[1] != null) ? (isJ ? '残' + w[0] + '/' + w[1] + '/' + w[2] + '%' : 'wear ' + w[0] + '/' + w[1] + '/' + w[2] + '%') : '';
         return c + ' ' + [tTxt, wTxt].filter(Boolean).join(' ');
       };
       const rows = [fmtC('LF', tr.lf), fmtC('RF', tr.rf), fmtC('LR', tr.lr), fmtC('RR', tr.rr)].filter(Boolean);
       if (rows.length) {
         liveNote += isJ
-          ? '\n\n【タイヤ詳細（各輪：内/中/外のカーカス温度℃・残トレッド%）※これは内部データ。そのまま読み上げるな】\n' + rows.join('\n') + '\n【カーカス温度の扱い・最重要】この温度はiRacingが出す唯一のタイヤ温度＝タイヤ内部の「カーカス（芯）温度」で、ドライバーが接地面で体感する「トレッド（表面）温度」より必ず低く、上がるのも遅い。ウォームアップ中はカーカス40℃前後でも表面は80℃近いことが普通＝これは誤りではない。だから：①「タイヤ温度」と裸で言い切るな、必ず「カーカス（芯）」と分かるように言え（例「カーカスはまだ39℃、芯は冷えてる。表面は入ってきてるはず」）。②ドライバーが「もっと熱いはず」と言ったら、それは表面温度の体感で正しい——データを「間違い」と認めて謝るのでなく、カーカスと表面の差を一言で説明しろ（例「それは表面だな。芯（カーカス）はまだ39℃、あと1周で追いつく」）。③芯の温まりを語れるのは強み＝「芯が入るまで焦るな」と使え。\n【読み上げ方の鉄則】4輪の数字を機械的に全部羅列するな。聞かれたら要点を人間の言葉で一言に。①コーナー名は日本語で（LF→「左フロント」、RF→「右フロント」、LR→「左リア」、RR→「右リア」）。②アルファベット記号（LF/RF）は使うな。③単位を必ず添えろ。④一番気になる1輪だけ指摘が基本。走行中は自分から言うな。'
-          : '\n\n[TYRE DETAIL (per corner: inner/mid/outer CARCASS temp C, tread remaining %) — internal data, do NOT read verbatim]\n' + rows.join('\n') + '\n[How to handle temp — CRITICAL] This is the only tyre temperature iRacing exposes: the CARCASS (core) temp, which always reads LOWER and rises SLOWER than the TREAD (surface) temp the driver feels through grip. During warm-up a ~40C carcass with an ~80C surface is normal — it is NOT wrong. So: (1) never say bare "tyre temp"; make clear it is the carcass/core (e.g. "carcass is still 39, core\'s cold — surface should be coming in"). (2) If the driver says it should be hotter, they\'re right about the SURFACE — do NOT concede the data is wrong or apologise; explain the carcass-vs-surface gap in one line ("that\'s the surface — the core\'s still 39, it\'ll catch up in a lap"). (3) Use core warm-up as real insight ("don\'t push till the core\'s in").\n[How to report] NEVER robotically list all four corners. When asked, summarise in one human sentence, name the worst/most relevant corner, always include the unit. Do not volunteer while driving.';
+          ? '\n\n【タイヤ詳細（各輪：接地面の内/中/外の温度℃・残トレッド%）※これは内部データ。そのまま読み上げるな】\n' + rows.join('\n') + '\n【温度の扱い】この温度はタイヤ接地面を内/中/外の3点で測った値。内外の差（グラデーション）でキャンバーや偏り、突出した高温でブリスター（熱ダレ）を読める。数字は届いた実値だけを使い、絶対に捏造・盛って言うな。【読み上げ方の鉄則】4輪の数字を機械的に全部羅列するな。聞かれたら要点を人間の言葉で一言に。①コーナー名は日本語で（LF→「左フロント」、RF→「右フロント」、LR→「左リア」、RR→「右リア」）。②アルファベット記号（LF/RF）は使うな。③単位を必ず添えろ。④一番気になる1輪だけ指摘が基本（例「右フロント外側が一番熱い、荷重かかりすぎかも」）。走行中は自分から言うな。'
+          : '\n\n[TYRE DETAIL (per corner: contact-patch inner/mid/outer temp C, tread remaining %) — internal data, do NOT read verbatim]\n' + rows.join('\n') + '\n[Temps] These are the tyre contact-patch temps at inner/mid/outer. The inner-vs-outer spread (gradient) reads camber/imbalance; a spiking corner reads blistering. Use only the real values that arrived — never fabricate or inflate. [How to report] NEVER robotically list all four corners. When asked, summarise in one human sentence, name the worst/most relevant corner (e.g. "right front outer is hottest — sounds like too much load"), always include the unit. Do not volunteer while driving.';
       }
     }
     if (live.damage_s != null && live.damage_s > 0) {
