@@ -127,6 +127,15 @@ RAILWAY_URL = "https://www.omoraypitwall.com"
 CORNER_ENTRY_RAD = 0.10   # 約5.7度。これを超えたら「コーナー進入」候補
 CORNER_EXIT_RAD = 0.04    # 約2.3度。これを下回ったら「コーナー脱出」候補（ヒステリシスで閾値付近のふらつき対策）
 
+# ── 発話タイミング「間合い」ゲート（Version A・2026-07-16 Yuji設計。舵角も加味）──
+# よく喋るAIでなく"間合いを読むエンジニア"。プロアクティブ無線(ラップタイム/ペース/ギャップ等)は
+# ブレーキング/コーナリング中に"喋り始めない"。ほぼ直進かつブレーキ踏んでない窓でだけ開始する。
+# 安全直結(隣接車/クラッシュ/損傷等)は常に即・ゲート無視。既に喋ってるのは止めない(開始だけゲート)。
+# ⚠️車種でステア比が違うので実走で要チューニング。閾値は初期値。
+SPEAK_STEER_RAD = 0.12    # 約7度未満＝ほぼ直進とみなす
+SPEAK_BRAKE_TH  = 0.12    # ブレーキ12%未満＝ブレーキしてないとみなす
+SPEAK_HOLD_MAX  = 4.0     # 窓が開くまでの最大保留秒。これを超えた古い情報は捨てる（陳腐化防止）
+
 # シリーズ固有のクラス略称/飾り名を、口頭で分かりやすい一般的なカテゴリー名に変換する
 # （例：IMSA23シリーズのGT3規定クラスは"IMSA23"という略称だが、喋る時は"GT3"の方が伝わる）。
 # ⚠️iRacingはシリーズ/AIレースごとにクラス名へ独自の飾り名を付ける（例「Crev GT3 2026」）。
@@ -429,6 +438,18 @@ async def send_stt_request(audio_b64):
         broadcast({"type": "ptt_text", "text": ""})
 
 def broadcast(event):
+    # ── 発話「間合い」ゲート：よく喋るプロアクティブ無線は、レース中に発話窓が閉じてたら保留する ──
+    #   （安全直結・非radio・窓が開いてる時は素通り。保留は最新1件のみ＝flush_radioが窓の開いた瞬間に送る）
+    try:
+        if (event.get('type') == 'radio' and event.get('trigger') in GATEABLE_TRIGGERS
+                and _gate_active and not _gate_window_ok):
+            _gate_state['pending'] = event
+            _gate_state['since'] = time.time()
+            log("RADIO gate: hold %s (braking/cornering)" % event.get('trigger'))
+            return
+    except Exception:
+        pass
+
     # 診断ログ：ラジオ発話とPTTイベントを記録（画面と突き合わせるため）
     try:
         et = event.get('type')
@@ -443,6 +464,35 @@ def broadcast(event):
         return
     msg = json.dumps(event)
     asyncio.run_coroutine_threadsafe(_broadcast_async(msg), loop)
+
+# ── 発話タイミング「間合い」ゲート（Version A）──
+# broadcast()の一点でゲート：GATEABLE_TRIGGERS(=よく喋るプロアクティブ無線)は、レース中に発話窓が
+# 閉じてる(ブレーキ/コーナリング中)なら送らず最新1件だけ保留し、flush_radioが窓の開いた瞬間に送る。
+# 安全直結(隣接車/クラッシュ/損傷等)や非radioイベントはゲート対象外＝常に即。窓状態はループが毎サイクル更新。
+GATEABLE_TRIGGERS = frozenset({
+    'personal_best', 'first_lap', 'session_best', 'lap_consistent', 'lap_time', 'lap_slow',
+    'rolling_gap', 'fuel_strategy_warning',
+})
+_gate_state = {'pending': None, 'since': 0.0}
+_gate_window_ok = True
+_gate_active = False        # ゲートを効かせる状況か（＝オントラック走行中。ピット/ガレージでは効かせない）
+
+def _set_speak_gate(window_ok, active):
+    global _gate_window_ok, _gate_active
+    _gate_window_ok = window_ok
+    _gate_active = active
+
+def flush_radio():
+    """毎サイクル呼ぶ。窓が開いてて保留があれば送る。古すぎたら破棄（陳腐化防止）。"""
+    p = _gate_state.get('pending')
+    if not p:
+        return
+    if _gate_window_ok:
+        _gate_state['pending'] = None
+        broadcast(p)                     # ゲートは通過済み扱い（下のbroadcast内チェックは窓ok時は素通り）
+    elif time.time() - _gate_state.get('since', 0.0) > SPEAK_HOLD_MAX:
+        log("RADIO gate: dropped stale %s" % p.get('trigger'))
+        _gate_state['pending'] = None
 
 async def _broadcast_async(msg):
     dead = set()
@@ -1154,6 +1204,15 @@ def poll_iracing():
         steering_angle = reader.read_float('SteeringWheelAngle')
         car_left_right = reader.read_int('CarLeftRight')
         brake_val = reader.read_float('Brake')
+
+        # ── 発話「間合い」窓の判定（Version A・毎サイクル）──
+        # ほぼ直進(舵角小)かつブレーキ踏んでない＝プロアクティブ無線を"開始"して良い窓。
+        # 保留があれば窓が開いた瞬間に送る（flush）。安全直結はemit_radioでゲート無視。
+        _steer_abs = abs(steering_angle) if steering_angle is not None else 0.0
+        _brake_now = brake_val if brake_val is not None else 0.0
+        speak_window_ok = (_steer_abs < SPEAK_STEER_RAD) and (_brake_now < SPEAK_BRAKE_TH)
+        _set_speak_gate(speak_window_ok, driver_state == 'track')   # 走行中だけゲート有効
+        flush_radio()
         if steering_angle is not None and is_race_session and not in_start_rush:
             _sa = abs(steering_angle)
             if _sa > CORNER_ENTRY_RAD:
