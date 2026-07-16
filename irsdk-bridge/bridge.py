@@ -1231,7 +1231,10 @@ def poll_iracing():
                 " Fuel:" + str(round(fuel,1) if fuel is not None else None) +
                 " CarIdx:" + str(player_car_idx) +   # 担当車の把握確認用
                 " gapAhead:" + str(nearest_ahead_gap) + " gapBehind:" + str(nearest_behind_gap) +
-                " TrackT:" + str(track_temp_c) + " AirT:" + str(air_temp_c))   # 天候読み取り確認用
+                " TrackT:" + str(track_temp_c) + " AirT:" + str(air_temp_c) +   # 天候読み取り確認用
+                # ★2026-07-16追加：タイヤ温度誤読(Yuji/まーぼー指摘)の切り分け。carcass温度(CM)が周回で
+                #   上がるか毎周期ログ→「固着なら本当のバグ」「上昇するならカーカス物理で正常(表面と別物)」を確定させる。
+                " TireCM(LF/RF/LR/RR):" + str(lfTemp) + "/" + str(rfTemp) + "/" + str(lrTemp) + "/" + str(rrTemp))
 
 
         # ── ラップ完了検知：LapLastLapTime の「値が変わった瞬間」で発火 ──
