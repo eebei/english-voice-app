@@ -351,7 +351,7 @@ async function checkForUpdate() {
             '<b style="color:#cbd">After downloading:</b><br>' +
             '1. Close this app, then run the new .exe.<br>' +
             '2. If Windows says "protected your PC": click <b>More info → Run anyway</b> (or right-click the file → Properties → tick <b>Unblock</b> → OK).<br>' +
-            '3. Delete older dated .exe files so you don\'t launch an old one by mistake. Your settings are kept.<br>' +
+            '3. Delete older dated .exe files so you do not launch an old one by mistake. Your settings are kept.<br>' +
             '<span style="color:#788;display:block;margin-top:8px">DL後：① このアプリを閉じて新しいexeを起動 ②「WindowsによってPCが保護されました」が出たら<b>詳細情報→実行</b>（または右クリック→プロパティ→<b>「許可する」にチェック</b>→OK） ③ 古い日付のexeは削除して誤起動を防止（設定は引き継がれます）</span>' +
             '</div>';
           document.body.appendChild(g);
