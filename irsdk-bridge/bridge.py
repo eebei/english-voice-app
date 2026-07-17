@@ -1798,20 +1798,24 @@ def poll_iracing():
                            'pos_in': pit_enter_pos, 'pos_out': class_pos})
                 log('PIT timing: lane ' + str(pit_lane_sec) + 's  P' + str(pit_enter_pos) + '->P' + str(class_pos))
 
-        # ── ピット入場カウントダウン診断（2026-07-17・ダート要望）──
-        # 自分のピットボックスまでの秒読み(混雑時に見逃す対策)を作るため、ピットレーン上での
-        # トラックサーフェス状態(1=ボックス内 / 2=ボックス接近 / 3=オントラック)とLapDistPct・速度を
-        # 毎サイクル記録。AI Raceテストで「2→1がいつ・どのLapDistPctで起きるか」を確定→正確に実装する。
-        if onPit:
-            try:
-                _cs = reader.read_int_array('CarIdxTrackSurface', 64)
-                _psurf = _cs[player_car_idx] if (_cs and 0 <= player_car_idx < len(_cs)) else None
-                _ldp = reader.read_float('LapDistPct')
-                log("PIT APPROACH -> surface=%s(1=box/2=approach/3=track) LapDistPct=%s Speed=%s" % (
-                    str(_psurf), str(round(_ldp, 4) if _ldp is not None else None),
+        # ── ピット秒読み診断 v2（2026-07-17）──
+        # iRacing公式スポッター相当の「Your box」信号を出してるSDK変数を推測ゼロで特定するため、
+        # ピット関連の全候補変数(PlayerTrackSurface/PlayerCarPitSvStatus/PitsOpen等)を実値付きでダンプ。
+        # 値が変わった瞬間だけ吐く(前回のonPit条件で500行超の垂れ流し反省)。次のピット1回で正解確定。
+        try:
+            _psurf = reader.read_int('PlayerTrackSurface')  # 自分専用(1=box/2=approach/3=track/-1=none)
+            _pss   = reader.read_int('PlayerCarPitSvStatus') # ピットサービス状態(★スポッターの本命候補)
+            _po    = reader.read_bool('PitsOpen')            # ピット口が開いてるか
+            _ldp   = reader.read_float('LapDistPct')
+            _key = "%s|%s|%s|%s" % (_psurf, _pss, _po, onPit)
+            if _key != prev.get('_pit_key'):
+                log("PIT DIAG -> PlayerTrackSurface=%s(1=box/2=approach/3=track) PlayerCarPitSvStatus=%s PitsOpen=%s OnPitRoad=%s LapDistPct=%s Speed=%s" % (
+                    str(_psurf), str(_pss), str(_po), str(onPit),
+                    str(round(_ldp, 4) if _ldp is not None else None),
                     str(round(spd, 1) if spd else None)))
-            except Exception as _pe:
-                log("PIT APPROACH diag error: " + str(_pe))
+                prev['_pit_key'] = _key
+        except Exception as _pe:
+            log("PIT DIAG error: " + str(_pe))
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
