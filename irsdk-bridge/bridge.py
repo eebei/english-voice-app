@@ -1802,12 +1802,25 @@ def poll_iracing():
         # iRacing公式スポッター相当の「Your box」信号を出してるSDK変数を推測ゼロで特定するため、
         # ピット関連の全候補変数(PlayerTrackSurface/PlayerCarPitSvStatus/PitsOpen等)を実値付きでダンプ。
         # 値が変わった瞬間だけ吐く(前回のonPit条件で500行超の垂れ流し反省)。次のピット1回で正解確定。
+        # ── ピット秒読み（ダート要望）★実装：iRacing公式スポッター相当を PlayerCarPitSvStatus で再現 ──
+        # 診断ログ(20260717-1411)で決定的：PlayerCarPitSvStatus が 0→1 に変わる瞬間＝iRacing自身が
+        # 「自分のボックスに完全停止＝サービス開始」と判定した瞬間。これが公式スポッターの「your box」信号。
+        # 加えて PlayerTrackSurface: 2(接近中) → 1(ボックス位置) の遷移で「ボックス目前」も通知できる。
         try:
-            _psurf = reader.read_int('PlayerTrackSurface')  # 自分専用(1=box/2=approach/3=track/-1=none)
-            _pss   = reader.read_int('PlayerCarPitSvStatus') # ピットサービス状態(★スポッターの本命候補)
-            _po    = reader.read_bool('PitsOpen')            # ピット口が開いてるか
-            _ldp   = reader.read_float('LapDistPct')
-            _spd_now = reader.read_float('Speed')            # ★spdはonTrack時のみ定義される変数なので、ここで独立に取得
+            _psurf   = reader.read_int('PlayerTrackSurface')
+            _pss     = reader.read_int('PlayerCarPitSvStatus')
+            _po      = reader.read_bool('PitsOpen')
+            _ldp     = reader.read_float('LapDistPct')
+            _spd_now = reader.read_float('Speed')
+            _prev_psurf = prev.get('_psurf')
+            _prev_pss   = prev.get('_pss')
+            # ① ピットレーン内で"ボックス位置に到達"＝PlayerTrackSurface 2→1
+            if onPit and _prev_psurf == 2 and _psurf == 1:
+                broadcast({'type': 'radio', 'trigger': 'pit_box_here', 'message': 'Box here. Slow.'})
+            # ② ★決定シグナル＝サービス開始(完全停止)。PlayerCarPitSvStatus 0→非0
+            if _prev_pss == 0 and _pss is not None and _pss != 0:
+                broadcast({'type': 'radio', 'trigger': 'pit_box_stop', 'message': 'Stop. Box position.'})
+            # 値が変わった時だけ診断ログ（1541行の垂れ流し反省）
             _key = "%s|%s|%s|%s" % (_psurf, _pss, _po, onPit)
             if _key != prev.get('_pit_key'):
                 log("PIT DIAG -> PlayerTrackSurface=%s(1=box/2=approach/3=track) PlayerCarPitSvStatus=%s PitsOpen=%s OnPitRoad=%s LapDistPct=%s Speed=%s" % (
@@ -1815,6 +1828,8 @@ def poll_iracing():
                     str(round(_ldp, 4) if _ldp is not None else None),
                     str(round(_spd_now, 1) if _spd_now is not None else None)))
                 prev['_pit_key'] = _key
+            prev['_psurf'] = _psurf
+            prev['_pss']   = _pss
         except Exception as _pe:
             log("PIT DIAG error: " + str(_pe))
 
