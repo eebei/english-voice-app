@@ -116,7 +116,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 /* Pricing */
 .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
 .price-grid.single{grid-template-columns:1fr;max-width:420px;margin-left:auto;margin-right:auto}
-@media(max-width:760px){.price-grid{grid-template-columns:1fr}}
+.price-grid.two-by-two{grid-template-columns:repeat(2,1fr);max-width:820px;margin-left:auto;margin-right:auto}
+@media(max-width:760px){.price-grid,.price-grid.two-by-two{grid-template-columns:1fr}}
 .price-card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:28px}
 .price-card.featured{border-color:var(--blue);background:linear-gradient(135deg,rgba(157,78,221,.08),var(--panel))}
 .price-card .plan{font-family:'Oxanium';font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
@@ -388,31 +389,49 @@ function showDemo(mode){
   <div class="wrap-lg">
     <div class="eyebrow">Now Testing</div>
     <h2 class="sec-title">Help Shape What's Next</h2>
-    <p class="sec-lead">Race strategy, fuel, gap tracking, and pit calls are fully live for every car class. Class-specific handling cues — dirty air, braking, and car setup — are still being tuned for Formula and Prototype cars.</p>
-    <div class="price-grid">
+    <p class="sec-lead">Race strategy, fuel, gap tracking, and pit calls are fully live for every road class. Class-specific handling cues — dirty air, braking, car setup — and native-language engineers are being shaped right now. Join a program below and help us build them.</p>
+    <div class="price-grid two-by-two">
       <div class="price-card">
-        <div class="plan">Formula &amp; Prototype Drivers</div>
+        <div class="plan">Super Formula &amp; IndyCar Drivers</div>
         <div class="desc" style="margin-top:2px">First month free</div>
-        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Help tune class-specific advice — dirty air &amp; aero, braking, and car setup — for the cars still being dialed in. Send a short report every 5 races.</p>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Help tune open-wheel handling advice — dirty air &amp; aero, braking, and setup — for the classes still being dialed in. Send a short report every 5 races.</p>
         <p style="font-size:13px;color:var(--silver);margin:0 0 14px"><strong style="color:var(--text)">Who we're looking for:</strong> proven drivers — iRating 2,300+ (road), and 3+ race wins against a field stronger than your own rating (SOF above your iRating). You should know your way around car setup — aerodynamics and mechanical grip — and be able to put what the car is doing into precise words.</p>
         <ul style="list-style:none;padding:0;margin:0 0 16px;font-size:14px;color:#cfd3da">
-          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">Formula — 3 spots</strong><br>Super Formula, IndyCar, or F1 (your choice of class)</li>
-          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">Prototype — 3 spots</strong><br>GTP</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">Super Formula — 3 spots</strong></li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">IndyCar — 3 spots</strong></li>
         </ul>
         <a href="https://discord.gg/3R3ssGmhdm" class="btn-ghost" style="display:block;text-align:center;text-decoration:none">Join on Discord →</a>
       </div>
       <div class="price-card">
-        <div class="plan">German &amp; Brazilian Portuguese Speakers</div>
-        <div class="desc" style="margin-top:2px">Help build the next engineers</div>
-        <p style="font-size:14px;color:#cfd3da;margin:14px 0">We're building native German and Brazilian Portuguese race engineers. We're after native speakers who race regularly — help shape how they sound so the radio feels real.</p>
+        <div class="plan">GTP &amp; Prototype Drivers</div>
+        <div class="desc" style="margin-top:2px">First month free</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Help shape prototype-specific calls — hybrid deployment feel, multi-class traffic, and long-stint pace management — for endurance and sprint prototypes.</p>
+        <p style="font-size:13px;color:var(--silver);margin:0 0 14px"><strong style="color:var(--text)">Who we're looking for:</strong> proven drivers — iRating 2,300+ (road), and 3+ race wins against a field stronger than your own rating (SOF above your iRating). You should know your way around car setup and be able to put what the car is doing into precise words.</p>
         <ul style="list-style:none;padding:0;margin:0 0 16px;font-size:14px;color:#cfd3da">
-          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">German — about 3 native speakers</strong></li>
-          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">Brazilian Portuguese — about 3 native speakers</strong></li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">GTP / LMP — 3 spots</strong></li>
+        </ul>
+        <a href="https://discord.gg/3R3ssGmhdm" class="btn-ghost" style="display:block;text-align:center;text-decoration:none">Join on Discord →</a>
+      </div>
+      <div class="price-card">
+        <div class="plan">German Community</div>
+        <div class="desc" style="margin-top:2px">First month free</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Help our German race engineer sound like it was born on the wall at the Nürburgring. Native speakers who race regularly — shape how the radio feels, phrase by phrase.</p>
+        <ul style="list-style:none;padding:0;margin:0 0 16px;font-size:14px;color:#cfd3da">
+          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">Native German speakers — 3 spots</strong></li>
+        </ul>
+        <a href="https://discord.gg/3R3ssGmhdm" class="btn-ghost" style="display:block;text-align:center;text-decoration:none">Join on Discord →</a>
+      </div>
+      <div class="price-card">
+        <div class="plan">Brazilian Portuguese Community</div>
+        <div class="desc" style="margin-top:2px">First month free · Engineer in design</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">A Brazilian Portuguese race engineer is coming — and we want you to help design them. Native speakers who race regularly: shape how they sound, name them, give them a soul.</p>
+        <ul style="list-style:none;padding:0;margin:0 0 16px;font-size:14px;color:#cfd3da">
+          <li style="padding:8px 0;border-top:1px solid var(--border)"><strong style="color:var(--text)">Native Brazilian Portuguese speakers — 3 spots</strong></li>
         </ul>
         <a href="https://discord.gg/3R3ssGmhdm" class="btn-ghost" style="display:block;text-align:center;text-decoration:none">Join on Discord →</a>
       </div>
     </div>
-    <p style="max-width:640px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--silver);line-height:1.75"><strong style="color:var(--text)">Built for road racing.</strong> PITWALL is developed primarily on GT3 and road-course cars (our core expertise). It runs across other road classes — Formula, Prototype — though class-specific advice there is still growing. <strong style="color:var(--blue)">Testing ovals, dirt ovals, and dirt road racing?</strong> We're looking for drivers to help shape PITWALL for your categories. <a href="https://discord.gg/3R3ssGmhdm" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">Join our Discord</a> to get involved.</p>
+    <p style="max-width:640px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--silver);line-height:1.75"><strong style="color:var(--text)">Built for road racing.</strong> PITWALL is developed primarily on GT3 and road-course cars — our core expertise. It runs across other road classes too, and class-specific advice keeps growing with feedback. <strong style="color:var(--blue)">Oval, dirt, or a category we haven't tuned yet?</strong> <a href="https://discord.gg/3R3ssGmhdm" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">Reach out on Discord</a> — new categories open up when drivers who race them show up.</p>
   </div>
 </section>
 
