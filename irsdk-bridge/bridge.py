@@ -1798,6 +1798,21 @@ def poll_iracing():
                            'pos_in': pit_enter_pos, 'pos_out': class_pos})
                 log('PIT timing: lane ' + str(pit_lane_sec) + 's  P' + str(pit_enter_pos) + '->P' + str(class_pos))
 
+        # ── ピット入場カウントダウン診断（2026-07-17・ダート要望）──
+        # 自分のピットボックスまでの秒読み(混雑時に見逃す対策)を作るため、ピットレーン上での
+        # トラックサーフェス状態(1=ボックス内 / 2=ボックス接近 / 3=オントラック)とLapDistPct・速度を
+        # 毎サイクル記録。AI Raceテストで「2→1がいつ・どのLapDistPctで起きるか」を確定→正確に実装する。
+        if onPit:
+            try:
+                _cs = reader.read_int_array('CarIdxTrackSurface', 64)
+                _psurf = _cs[player_car_idx] if (_cs and 0 <= player_car_idx < len(_cs)) else None
+                _ldp = reader.read_float('LapDistPct')
+                log("PIT APPROACH -> surface=%s(1=box/2=approach/3=track) LapDistPct=%s Speed=%s" % (
+                    str(_psurf), str(round(_ldp, 4) if _ldp is not None else None),
+                    str(round(spd, 1) if spd else None)))
+            except Exception as _pe:
+                log("PIT APPROACH diag error: " + str(_pe))
+
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
         nearest_ahead_gap = None    # 毎ループ更新（前後の最近接ギャップ）
