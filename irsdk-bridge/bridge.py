@@ -390,12 +390,27 @@ def record_ptt_audio():
         if was_recording and frames:
             # WAVファイルはWindows対応パスに（/tmpはWindows未対応）
             wav_file = os.path.join(_base, "ptt_audio.wav")
+            raw = b''.join(frames)
+            # ── マイク自動ゲイン（2026-07-17 Yuji方針）──
+            # 静かなマイクでもSTTが通るよう、ピーク音量を目標まで自動で底上げする。3人中2人が
+            # マイク音量問題を踏んだため、Windowsをいじらせずアプリ側で吸収する。無音は増幅しない
+            # （ノイズを大きくしないため）。クリップは飽和処理。audioop不可の環境では黙ってスキップ。
+            try:
+                import audioop
+                peak = audioop.max(raw, 2)          # 2バイト=16bit
+                TARGET = 22000                       # int16(32767)の約2/3。歪ませず十分な音量
+                if 200 < peak < TARGET:              # 無音(<200)は触らない／既に十分なら触らない
+                    gain = min(8.0, TARGET / float(peak))
+                    raw = audioop.mul(raw, 2, gain)  # クリップは内部で飽和
+                    log("PTT: auto-gain x%.1f (peak %d -> ~%d)" % (gain, peak, int(peak * gain)))
+            except Exception as _ge:
+                log("PTT auto-gain skipped: " + str(_ge))
             try:
                 with wave.open(wav_file, 'wb') as wf:
                     wf.setnchannels(CHANNELS)
                     wf.setsampwidth(ptt_audio.get_sample_size(FORMAT))
                     wf.setframerate(RATE)
-                    wf.writeframes(b''.join(frames))
+                    wf.writeframes(raw)
                 with open(wav_file, 'rb') as f:
                     b64 = base64.b64encode(f.read()).decode()
                 log("PTT: wav saved (%d bytes), sending to STT" % len(b64))
