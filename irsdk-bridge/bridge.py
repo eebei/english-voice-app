@@ -1807,12 +1807,13 @@ def poll_iracing():
             _pss   = reader.read_int('PlayerCarPitSvStatus') # ピットサービス状態(★スポッターの本命候補)
             _po    = reader.read_bool('PitsOpen')            # ピット口が開いてるか
             _ldp   = reader.read_float('LapDistPct')
+            _spd_now = reader.read_float('Speed')            # ★spdはonTrack時のみ定義される変数なので、ここで独立に取得
             _key = "%s|%s|%s|%s" % (_psurf, _pss, _po, onPit)
             if _key != prev.get('_pit_key'):
                 log("PIT DIAG -> PlayerTrackSurface=%s(1=box/2=approach/3=track) PlayerCarPitSvStatus=%s PitsOpen=%s OnPitRoad=%s LapDistPct=%s Speed=%s" % (
                     str(_psurf), str(_pss), str(_po), str(onPit),
                     str(round(_ldp, 4) if _ldp is not None else None),
-                    str(round(spd, 1) if spd else None)))
+                    str(round(_spd_now, 1) if _spd_now is not None else None)))
                 prev['_pit_key'] = _key
         except Exception as _pe:
             log("PIT DIAG error: " + str(_pe))
