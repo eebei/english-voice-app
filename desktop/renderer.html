@@ -1423,8 +1423,9 @@ fetch('build-info.json').then(r=>r.json()).then(info=>{
   if(gb) gb.textContent = 'Build '+n;
   const el = document.createElement('div');
   el.textContent = 'Build '+n;
-  el.style.cssText = 'position:fixed;right:8px;bottom:6px;z-index:9998;font:600 11px Oxanium,sans-serif;'
-    + 'letter-spacing:.5px;color:#64748b;opacity:.7;pointer-events:none;user-select:text';
+  el.style.cssText = 'position:fixed;left:10px;top:10px;z-index:9998;font:700 12px Oxanium,sans-serif;'
+    + 'letter-spacing:.5px;color:#c9b8ff;background:rgba(157,78,221,.16);border:1px solid rgba(157,78,221,.4);'
+    + 'padding:3px 10px;border-radius:99px;pointer-events:none;user-select:text';
   document.body.appendChild(el);
 }).catch(()=>{});
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }

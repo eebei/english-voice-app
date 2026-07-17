@@ -2,7 +2,7 @@
 // 最重要設定：backgroundThrottling:false
 //   → iRacingがフルスクリーンで前面に来てウィンドウが裏に回っても、
 //     タイマー・音声・JSが絞られず動き続ける（=ブラウザの「裏で死ぬ」問題の解決）
-const { app, BrowserWindow, session, shell, ipcMain, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, session, shell, ipcMain, screen, globalShortcut, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -247,6 +247,15 @@ function log(msg) {
   try { if (LOG_FILE) fs.appendFileSync(LOG_FILE, line + '\n'); } catch (e) {}
 }
 
+// build-info.json から「Build N」ラベルを作る（無ければ空）。タイトルバー表示用。
+function currentBuildLabel() {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
+    const n = (info.buildNum != null) ? info.buildNum : info.buildTag;
+    return (n != null && n !== 'dev') ? ('Build ' + n) : '';
+  } catch (e) { return ''; }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 760,
@@ -267,6 +276,13 @@ function createWindow() {
   //   ⚠️iRacingを"排他的フルスクリーン"で動かしているとWindowsの仕様でどんなオーバーレイも隠れる——
   //     その場合はiRacingの表示設定を「Borderless(枠なしウィンドウ)」にする必要がある（コードでは回避不可）。
   try { win.setAlwaysOnTop(true, 'screen-saver'); } catch (e) {}
+
+  // ── ウィンドウのタイトルバー(exeの一番上)に必ず Build番号 を出す ──
+  //   利用者が「今どの版か」を一目で分かるように。renderer.htmlの<title>が上書きするのを止めて固定する。
+  const _bl = currentBuildLabel();
+  const _winTitle = 'OMORAY PITWALL' + (_bl ? '  ·  ' + _bl : '');
+  try { win.setTitle(_winTitle); } catch (e) {}
+  win.on('page-title-updated', (e) => { e.preventDefault(); try { win.setTitle(_winTitle); } catch (_) {} });
 
   // 外部リンク（更新通知バナー等）はOSの既定ブラウザで開く。アプリ内に新ウィンドウを作らない。
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -388,6 +404,7 @@ app.whenReady().then(() => {
     LOG_FILE = path.join(app.getPath('desktop'), 'OMORAY-bridge-debug-' + stamp + '.log');
     fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + now.toISOString() + ' ===\n');
   } catch (e) {}
+  Menu.setApplicationMenu(null);   // File/Edit/View/Window/Help の無意味な既定メニューを消す（Windows）
   loadOvlCfg();       // オーバーレイの保存済み設定を読む
   ipcOverlaySetup();  // オーバーレイ制御IPCを登録
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
