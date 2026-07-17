@@ -486,6 +486,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       </div>
       <div class="mic-meter" style="margin-top:8px"><i id="mic-meter-fill"></i></div>
       <div class="setup-hint" data-i18n="setup_mic_hint">「テスト」を押して喋る→緑のバーが動けばそのマイクで聞こえてる。動かなければ上のリストから別のマイクを選ぶ。SIM PCは複数マイクが繋がっていて既定が違うことが多い。</div>
+      <div style="margin-top:10px">
+        <a href="https://omoraypitwall.com/help.html#mic" target="_blank" rel="noopener"
+           style="font-size:13px;color:#9D4EDD;text-decoration:none">🎤 <span data-i18n="mic_trouble_link">マイクが認識されない時はこちら（トラブルシューティング）</span></a>
+      </div>
 
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
     </div>
@@ -672,6 +676,7 @@ const I18N = {
     mic_test_stop:'Stop',
     mic_default:'System default microphone',
     setup_mic_hint:'Press "Test" and speak — if the green bar moves, that mic is being heard. If it doesn\'t move, pick a different mic above. Sim PCs often have several mics connected and the default is the wrong one.',
+    mic_trouble_link:'Mic not being picked up? Troubleshooting →',
     mic_err:'Could not open that microphone: ',
     next_btn:'Next →',
     // ── Engineer select ──
@@ -796,6 +801,7 @@ const I18N = {
     mic_test_stop:'停止',
     mic_default:'システム既定のマイク',
     setup_mic_hint:'「テスト」を押して喋る→緑のバーが動けばそのマイクで聞こえてる。動かなければ上のリストから別のマイクを選ぶ。SIM PCは複数マイクが繋がっていて既定が違うことが多い。',
+    mic_trouble_link:'マイクが認識されない時はこちら（トラブルシューティング）',
     mic_err:'そのマイクを開けませんでした: ',
     next_btn:'次へ →',
     select_title:'エンジニアを選ぶ',

@@ -124,8 +124,23 @@
 
   <div class="sec">App &amp; Voice</div>
 
-  <div class="q"><h3>The microphone keeps missing what I say</h3>
-  <p>Use <b>Google Chrome</b> — its speech recognition is the most accurate. Speak after your engineer finishes; the mic re-opens automatically.</p></div>
+  <div class="q" id="mic"><h3>マイクが認識されない／「聞き取れませんでした」と出る ／ Mic not picked up / "couldn't catch that"</h3>
+  <p>エンジニアの声は聞こえるのに自分の声が通らない時は、ほぼ<b>「別のマイクが選ばれている」</b>か<b>「Windowsの入力音量が低い」</b>のどちらかです。上から順に試してください。</p>
+  <div class="lang-lbl">日本語</div>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="txt">PITWALLの<b>マイク設定</b>で、リストからマイクを1つずつ選び<span class="btn">テスト</span>を押して喋る → <b>緑のバーが大きく動くマイク</b>を選ぶ（動かない／小さいのは別のデバイスです）。SIM PCは複数マイクが繋がっていて、既定が"喋っていない方"になっていることがよくあります。</span></li>
+    <li><span class="num">2</span><span class="txt">Windowsの入力音量を上げる：検索に<code>サウンドの設定</code>→「入力」で正しいマイクを選ぶ→<span class="btn">デバイスのプロパティ</span>→<b>音量を100</b>に。</span></li>
+    <li><span class="num">3</span><span class="txt">さらにブースト：検索に<code>mmsys.cpl</code>と入れてEnter→<b>録音</b>タブ→使うマイクを右クリック→プロパティ→<b>レベル</b>タブ→マイクを<b>100</b>、<b>マイクブースト</b>があれば<b>+10〜+20dB</b>上げる。</span></li>
+    <li><span class="num">4</span><span class="txt">ヘッドセットの<b>ミュートボタン／スイッチ</b>が入っていないか、検索<code>マイクのプライバシー設定</code>で<b>アプリのマイクアクセスがオン</b>かを確認。</span></li>
+  </ol>
+  <div class="lang-lbl">English</div>
+  <ol class="steps">
+    <li><span class="num">1</span><span class="txt">In PITWALL's <b>mic settings</b>, pick each mic in the list, press <span class="btn">Test</span> and speak → choose the one where the <b>green bar moves strongly</b> (a flat bar = wrong device). SIM PCs often have several mics and default to the wrong one.</span></li>
+    <li><span class="num">2</span><span class="txt">Raise the Windows input level: search <code>Sound settings</code> → Input → your mic → <span class="btn">Device properties</span> → <b>Volume 100</b>.</span></li>
+    <li><span class="num">3</span><span class="txt">Add boost: search <code>mmsys.cpl</code> → <b>Recording</b> tab → right-click your mic → Properties → <b>Levels</b> → Microphone <b>100</b>, and if there's a <b>Microphone Boost</b>, add <b>+10 to +20 dB</b>.</span></li>
+    <li><span class="num">4</span><span class="txt">Check the headset isn't muted, and that <code>Microphone privacy settings</code> lets apps use the mic.</span></li>
+  </ol>
+  <p style="margin-top:10px">まだダメなら、使っているマイク（ヘッドセット名など）を書いて<a href="mailto:omoraypitwall@gmail.com">omoraypitwall@gmail.com</a>へ。／ Still stuck? Email us the mic/headset name.</p></div>
 
   <div class="q"><h3>My engineer forgot our last session</h3>
   <p>Memory is stored in that browser. Use the <b>same normal Chrome window</b> on the same PC every time — Incognito keeps no memory. Cross-device memory arrives with accounts.</p></div>
