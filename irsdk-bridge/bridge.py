@@ -2001,12 +2001,24 @@ def poll_iracing():
                                 # 無ければ黙って省略(ゼッケン無し表記で捏造しない)。
                                 num = car_number_map.get(idx)
                                 car_tag = (' car #' + num) if num else ''
-                                # 診断：どのidxに、どの番号/SR/iRを紐付けて鳴らしたか（ゼッケンSR不一致調査）
-                                log("DANGER fire idx=" + str(idx) + " #" + str(num) + " SR=" + str(other_sr)
-                                    + " iR=" + str(other_irating) + " -> reason:" + reason)
-                                if delta > 0:  # 相手が後方（delta>0=後方）
+                                # ★2026-07-19 前後判定：同クラスはクラス順位で確定（EstTime符号反転の根絶）。
+                                #   別クラスは物差し(LapDistPct)の符号がコード内で未確定なためEstTime差のまま暫定とし、
+                                #   下の診断ログで実走の実値を残す→次ラウンドで別クラス方向も確定させる。
+                                _dpos = (car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None)
+                                _same_cls = (other_class == player_class_id)
+                                if _same_cls and _dpos is not None and class_pos is not None:
+                                    _behind = _dpos > class_pos          # 順位が下＝後方（真実・符号推測不要）
+                                else:
+                                    _behind = delta > 0                  # 別クラス：暫定（EstTime）
+                                # 診断：番号/SR/iR紐付け＋前後の物差し食い違い（EstTime vs クラス順位）を残す
+                                _est_dir = 'behind' if delta > 0 else 'ahead'
+                                _pos_dir = ('behind' if _dpos > class_pos else 'ahead') if (_same_cls and _dpos is not None and class_pos is not None) else 'n/a'
+                                log("DANGER fire idx=%s #%s SR=%s iR=%s clsP=%s myP=%s sameCls=%s EstTime=%s pos=%s -> %s (reason:%s)"
+                                    % (idx, num, other_sr, other_irating, _dpos, class_pos, _same_cls, _est_dir, _pos_dir,
+                                       'behind' if _behind else 'ahead', reason))
+                                if _behind:
                                     broadcast({'type': 'radio', 'trigger': 'danger_behind',
-                                        'delta': round(delta, 1), 'reason': reason, 'car_number': num,
+                                        'delta': round(abs(delta), 1), 'reason': reason, 'car_number': num,
                                         'message': 'Careful.' + car_tag + ' Risky driver behind (' + reason + ').'})
                                 else:  # 相手が前方
                                     broadcast({'type': 'radio', 'trigger': 'danger_ahead',
@@ -2076,8 +2088,24 @@ def poll_iracing():
                         _num2 = car_number_map.get(idx)
                         car_tag2 = ('car #' + _num2 + ', ') if _num2 else (_class_id_txt_en(car_class_name_map.get(idx), other_cls_pos) + ', ')
 
-                        if delta < 0:  # 相手が前方＝キャッチアップ対象
-                            gap = abs(delta)
+                        # ★2026-07-19 前後の物差しをEstTimeから「クラス順位そのもの」へ根絶変更。
+                        #   Yuji Monza実走で大松が前方#17を「behind」と取り違えた根本原因＝EstTime差(delta)は
+                        #   同一ラップ内・S/Fライン跨ぎで符号が反転しうる(gap値がF2Timeへ・マルチクラスがLapDistPctへ
+                        #   既に移ったのと同じ病巣)。同クラスの"隣の順位"なら前後の絶対的な真実はクラス順位：
+                        #   位置が1つ上(class_pos-1)＝前方＝キャッチアップ、1つ下(class_pos+1)＝後方＝ディフェンス。
+                        #   曖昧さゼロ。ギャップ値はレース中のF2Time差(=iRacingダッシュボードと同じ・7/15実走で検証済)。
+                        _f2gap = (abs(f2_time - player_time)
+                                  if (player_time is not None and player_time >= 0 and f2_time >= 0) else None)
+                        gap = _f2gap if _f2gap is not None else abs(delta)  # F2Time優先・欠損時のみEstTimeフォールバック
+                        _is_ahead_rival = (other_cls_pos == class_pos - 1)  # 順位が1つ上＝前方（真実・符号推測不要）
+                        # 診断：前後判定がEstTime(旧)とクラス順位(新)で食い違った瞬間を残す＝根絶の効きを実走で確認
+                        _old_dir = 'ahead' if delta < 0 else 'behind'
+                        _new_dir = 'ahead' if _is_ahead_rival else 'behind'
+                        if _old_dir != _new_dir:
+                            log("DIR FIX: car#%s clsP%s vs myP%s -> EstTime said %s, position says %s (gap %.1f)"
+                                % (_num2, other_cls_pos, class_pos, _old_dir, _new_dir, gap))
+
+                        if _is_ahead_rival:  # 相手が前方（順位が1つ上）＝キャッチアップ対象
                             if gap > 15.0:
                                 catchup_stage[idx] = 0
                             elif pace_diff2 is not None and pace_diff2 > 0.3:
@@ -2097,8 +2125,7 @@ def poll_iracing():
                                         'delta': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                         'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
                                     last_battle_global = now
-                        else:  # 相手が後方＝ディフェンス対象
-                            gap = delta
+                        else:  # 相手が後方（順位が1つ下）＝ディフェンス対象
                             if gap > 15.0:
                                 defend_stage[idx] = 0
                             elif pace_diff2 is not None and pace_diff2 < -0.3:
@@ -2157,6 +2184,11 @@ def poll_iracing():
                                 multiclass_stage[_mi] = _stg
                                 _ocpos = _cls_pos_mc[_mi] if (_cls_pos_mc and _mi < len(_cls_pos_mc)) else None
                                 _ocname = car_class_name_map.get(_mi)
+                                # ★2026-07-19 診断：マルチクラス"後方"警告の前後が正しいか実走で確定させる。
+                                #   Yuji Monza実走で「速いクラス後方」が実は前方スロー車では、との疑い。
+                                #   両車のLapDistPct・wrap後の差・秒gapを残す（LapDistPct符号規約の最終確定用）。
+                                log("MC fire _mi=%s myPct=%.3f otherPct=%.3f pd=%.3f gap=%.1f -> called BEHIND stg=%s"
+                                    % (_mi, _ppct, _opct, _pd, _mcgap, _stg))
                                 if _stg == 1:
                                     broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
                                         'delta': round(_mcgap, 1), 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
