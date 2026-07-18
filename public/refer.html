@@ -66,6 +66,11 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
     <div class="code-pill"><span class="lbl">Referral code</span><b id="ref-code">—</b></div>
   </div>
 
+  <div style="background:var(--panel);border:1px solid var(--blue);border-radius:14px;padding:18px 22px;margin-top:8px;text-align:center">
+    <div style="font-family:'Oxanium';font-weight:700;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--blue);margin-bottom:8px" id="sponsor-title">Run It Like a Sponsored Driver</div>
+    <p style="font-size:14px;color:#cfd3da;line-height:1.7;margin:0" id="sponsor-body">The strongest share isn't an ad — it's your racing. Post your own videos and clips (an overtake, a radio call with your engineer, a debrief) together with your link and code, the way a sponsored driver shows off a partner. The logos below are yours to use — on your car, your stream, your posts.</p>
+  </div>
+
   <div class="tabs" style="margin-top:20px">
     <button class="tab active" data-lang="en" onclick="setLang('en')">English</button>
     <button class="tab" data-lang="jp" onclick="setLang('jp')">日本語</button>
@@ -106,7 +111,7 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
     <p class="lead" style="margin-top:18px"><strong style="color:var(--silver)">Video ideas:</strong> your engineer's radio call after a good lap · a race debrief clip · "day in the life of a Founding driver" · reacting to a crash save.</p>
   </div>
 
-  <div class="note">Your referral code is Founding-only and yours to keep. Give it to friends when they join (5-day free trial, same as any new driver) — once their trial converts to a paid month, you get 33% off your next month per friend (100% off at 3). Don't give out your personal app access code — it only works on one device at a time, so if someone else uses it, you get locked out.</div>
+  <div class="note">Your referral code is Founding-only and yours to keep. Give it to friends when they join (5-day free trial, same as any new driver) — they enter it in the <strong>“Referral code”</strong> field at checkout (not the promotion-code box). Once their trial converts to a paid month, you get 33% off your next month per friend (100% off at 3). Don't give out your personal app access code — it only works on one device at a time, so if someone else uses it, you get locked out.</div>
 </div>
 
 <footer><div class="wrap">OMORAY <span style="color:var(--blue)">PITWALL</span> · <a href="/pitwall.html">Home</a> · <a href="/help.html">Help</a></div></footer>
@@ -116,7 +121,7 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
 <script>
 const params = new URLSearchParams(location.search);
 const ref = params.get('ref') || 'YOUR-REF-CODE';
-const siteUrl = 'https://buy.stripe.com/3cI3cvc6k1WIbSUcbo97G00'; // referral-only Payment Link (5-day trial, kept separate from the site's main 3-day link)
+const siteUrl = 'https://buy.stripe.com/3cI3cvc6k1WIbSUcbo97G00'; // referral Payment Link (5-day trial — since 7/19 all trials are 5 days; direct applicants get their link on approval)
 
 document.getElementById('ref-code').textContent = ref;
 
@@ -133,6 +138,17 @@ const templatesByLang = {
   },
 };
 
+const sponsorByLang = {
+  en: {
+    title: 'Run It Like a Sponsored Driver',
+    body: `The strongest share isn't an ad — it's your racing. Post your own videos and clips (an overtake, a radio call with your engineer, a debrief) together with your link and code, the way a sponsored driver shows off a partner. The logos below are yours to use — on your car, your stream, your posts.`,
+  },
+  jp: {
+    title: 'スポンサードドライバーのように',
+    body: `一番効くシェアは広告じゃなく、あなたのレースそのもの。オーバーテイクの瞬間、エンジニアとの無線、デブリーフ——あなたの動画やクリップと一緒に、リンクとコードを投稿してください。スポンサードドライバーがパートナーロゴを掲げるように。下のロゴはマシン・配信・投稿に自由に使ってOK。`,
+  },
+};
+
 let currentLang = 'en';
 
 function renderTemplates(){
@@ -141,6 +157,9 @@ function renderTemplates(){
   document.getElementById('tmpl-ig').textContent = t.ig;
   document.getElementById('tmpl-tiktok').textContent = t.tiktok;
   document.getElementById('x-intent').href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(t.x);
+  const s = sponsorByLang[currentLang];
+  document.getElementById('sponsor-title').textContent = s.title;
+  document.getElementById('sponsor-body').textContent = s.body;
 }
 renderTemplates();
 
