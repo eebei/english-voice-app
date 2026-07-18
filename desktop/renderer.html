@@ -399,6 +399,14 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="bio">German. Direct, process-driven, precise. Factory motorsport background. "Die Daten lügen nicht."</div>
         </div>
       </div>
+      <div class="eng-card">
+        <img src="Camila.png" alt="Camila">
+        <div>
+          <div class="nm">Camila Sato</div>
+          <div class="role">Race Engineer · OMORAY Racing</div>
+          <div class="bio">Brazilian (Nikkei, São Paulo). Data-first calm, Paulista warmth. "Estou com você. Vamos buscar essa volta."</div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -557,6 +565,15 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="erole" data-i18n="role_race_engineer">Race Engineer</div>
             <div class="elang" data-i18n="lang_matthias">🇩🇪 Deutsch</div>
             <div class="etrait" data-i18n="trait_matthias">直接的・プロセス重視。ドイツ流の精密さ。</div>
+          </div>
+        </div>
+        <div class="eng-sel-card" id="card-Camila" onclick="selectEng('Camila')">
+          <img src="Camila.png" alt="Camila">
+          <div class="einfo">
+            <div class="ename">Camila</div>
+            <div class="erole" data-i18n="role_race_engineer">Race Engineer</div>
+            <div class="elang" data-i18n="lang_camila">🇧🇷 Português</div>
+            <div class="etrait" data-i18n="trait_camila">データの冷静、パウリスタの温かさ。</div>
           </div>
         </div>
       </div>
@@ -938,7 +955,9 @@ const CHARS = {
   LunaJP: { avatar:'Luna.png',   desc:'レースエンジニア（日本語）· OMORAY Racing', voiceLang:'ja-JP', voiceNames:['Google 日本語','Kyoko','O-Ren'], pitch:1.05, rate:1.25,
             gVoice:'ja-JP-Neural2-B', gLang:'ja-JP', gRate:1.25, gPitch:1.0 },
   Matthias: { avatar:'Matthias.png', desc:'Race Engineer (German) · OMORAY Racing', voiceLang:'de-DE', voiceNames:['Google Deutsch','Anna','Markus'], pitch:0.9, rate:1.05,
-            gVoice:'de-DE-Neural2-B', gLang:'de-DE', gRate:1.1, gPitch:-2.0 }
+            gVoice:'de-DE-Neural2-B', gLang:'de-DE', gRate:1.1, gPitch:-2.0 },
+  Camila: { avatar:'Camila.png', desc:'Race Engineer (Brazilian) · OMORAY Racing', voiceLang:'pt-BR', voiceNames:['Google português do Brasil','Luciana','Fernanda'], pitch:1.02, rate:1.08,
+            gVoice:'pt-BR-Neural2-C', gLang:'pt-BR', gRate:1.14, gPitch:0.5 }
 };
 
 const GREETINGS = {
@@ -965,7 +984,10 @@ const GREETINGS = {
                               : `${n||'ドライバー'}、Luna。デブリーフしましょう。車の感触を教えて——データは私が見るから、あなたは物語を聞かせて。`,
   Matthias: (n,m) => m==='race' ? `${n||'Fahrer'}, hier ist Matthias. Funkcheck. Sobald iRacing verbunden ist, habe ich deine Daten. Warte.`
                  : m==='strategy' ? `${n||'Fahrer'}, Matthias hier. Rennen oder Testfahrt heute? Ich lese die Daten — sag mir, was wir vorhaben.`
-                              : `${n||'Fahrer'}, Matthias hier. Lass uns die Session durchgehen. Wie hat sich das Auto angefühlt — ich habe die Daten, du bringst das Gefühl.`
+                              : `${n||'Fahrer'}, Matthias hier. Lass uns die Session durchgehen. Wie hat sich das Auto angefühlt — ich habe die Daten, du bringst das Gefühl.`,
+  Camila: (n,m) => m==='race' ? `${n||'Piloto'}, aqui é a Camila. Checagem de rádio. Assim que o iRacing conectar, eu pego seus dados. Estou com você.`
+                 : m==='strategy' ? `${n||'Piloto'}, Camila aqui. Corrida ou treino hoje? Eu leio os dados — me conta o plano.`
+                              : `${n||'Piloto'}, Camila. Vamos revisar a sessão. Me conta como o carro se comportou — eu tenho os dados, você traz a sensação.`
 };
 
 // ── LP / App overlay ──
@@ -1323,7 +1345,7 @@ function convoLog(type, text){
 
 // ── レースオーバーレイへ無線コールをミラー（会話のみ・テレメトリ数字は出さない）──
 // AI(エンジニア)=左/紫、ドライバー(driver/自分のuser発話)=右/琥珀。
-const OVL_ENG_NAME = { James:'James', Luna:'Luna', Hajime:'Omatsu', HajimeJP:'Omatsu', Kanbe:'Kanbe', Oishi:'Oishi', LunaJP:'Luna', Matthias:'Matthias' };
+const OVL_ENG_NAME = { James:'James', Luna:'Luna', Hajime:'Omatsu', HajimeJP:'Omatsu', Kanbe:'Kanbe', Oishi:'Oishi', LunaJP:'Luna', Matthias:'Matthias', Camila:'Camila' };
 let _ovlLast = { key:'', t:0 };
 let _ovlLineSeq = 0;
 let ovlLang = 'en';   // オーバーレイ字幕の表示言語（'en'|'ja'）。mainから同期される
