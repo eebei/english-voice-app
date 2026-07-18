@@ -2269,26 +2269,59 @@ def poll_joystick():
     last_scan = 0
     log("PTT joystick monitor started")
 
+    # ジョイスティック一覧をゼロから作り直す。
+    # ★2026-07-19 まーぼー12h走行で発覚した根本対策：MOZA等のベースが長時間走行中に一瞬USB再列挙
+    #   すると、pygameの古いJoystickハンドルは「全ボタン0を返すだけの死体」になる（エラーも出ない）。
+    #   従来のスキャンは追加しかしないため死んだハンドルが残り続け、PTTも再設定モードも永久に無反応だった。
+    #   quit()→init()でSDLのデバイス列挙ごと刷新し、ハンドルを全部作り直すのが唯一確実な蘇生手段。
+    def _rebuild_sticks(reason):
+        out = {}
+        try:
+            pygame.joystick.quit()
+            pygame.joystick.init()
+            for i in range(pygame.joystick.get_count()):
+                try:
+                    js = pygame.joystick.Joystick(i)
+                    js.init()
+                    out[i] = js
+                    log("PTT: joystick %d connected: %s (%d buttons) [%s]" % (i, js.get_name(), js.get_numbuttons(), reason))
+                except Exception:
+                    pass
+        except Exception as e:
+            log("PTT: joystick rebuild failed (%s): %s" % (reason, e))
+        return out
+
     while True:
         try:
             try:
                 pygame.event.pump()
             except Exception:
                 pass
+            # デバイスの抜き差しイベントを検知したら一覧を全再構築（本命の蘇生経路）
+            try:
+                dev_events = pygame.event.get([pygame.JOYDEVICEADDED, pygame.JOYDEVICEREMOVED])
+                if dev_events:
+                    sticks = _rebuild_sticks("device change")
+            except Exception:
+                pass
             now = time.time()
-            # 接続スキャン（ホットプラグ対応）2秒ごと
+            # 接続スキャン（2秒ごと）：本数の食い違い or 死んだハンドルを検知したら全再構築。
+            # デバイスイベントを取り逃した場合の保険（イベント＋ポーリングの二重防御）。
             if now - last_scan > 2:
                 last_scan = now
-                cnt = pygame.joystick.get_count()
-                for i in range(cnt):
-                    if i not in sticks:
-                        try:
-                            js = pygame.joystick.Joystick(i)
-                            js.init()
-                            sticks[i] = js
-                            log("PTT: joystick %d connected: %s (%d buttons)" % (i, js.get_name(), js.get_numbuttons()))
-                        except Exception:
-                            pass
+                try:
+                    cnt = pygame.joystick.get_count()
+                except Exception:
+                    cnt = 0
+                dead = False
+                for i, js in list(sticks.items()):
+                    try:
+                        js.get_numbuttons()   # 死んだハンドルはここで例外を吐く（吐かずに0を返す型はイベント側が拾う）
+                    except Exception:
+                        dead = True
+                        break
+                if dead or cnt != len(sticks):
+                    sticks = _rebuild_sticks("health check")
 
             # 各ジョイスティックのボタン読み取り
             for i, js in list(sticks.items()):
