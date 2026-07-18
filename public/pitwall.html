@@ -346,18 +346,18 @@ function showDemo(mode){
         </div>
       </div>
 
-      <!-- Oishi (hidden until View All) -->
+      <!-- Camila (hidden until View All) -->
       <div class="eng-card v2 hidden-eng">
-        <div class="ec-photo"><img src="/Oishi.png" alt="Kuranosuke Oishi"></div>
+        <div class="ec-photo"><img src="/Camila.png" alt="Camila Sato"></div>
         <div class="ec-body">
-          <div class="nm">大石 蔵之助 <span style="font-size:12px;color:var(--muted)">/ Kuranosuke Oishi</span></div>
-          <div class="subrole">Chief Strategist</div>
+          <div class="nm">Camila Sato</div>
+          <div class="subrole">AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
-          <div class="eng-langs"><span class="eng-lang">JAPANESE</span></div>
-          <div class="eng-styles">Patient · Analytical · Composed</div>
-          <div class="bio2">Patient, observant, and never rushed. Oishi waits for the right moment and calls it with purpose.</div>
-          <div class="eng-sig">「焦らなくていい。次の一周を整えよう。」</div>
-          <button class="preview-btn" onclick="previewVoice('Oishi',this)">▶ Preview Voice</button>
+          <div class="eng-langs"><span class="eng-lang soon">PORTUGUESE · BR · COMING SOON</span><span class="eng-lang">ENGLISH</span></div>
+          <div class="eng-styles">Data-driven · Warm · Composed</div>
+          <div class="bio2">Data-first calm with São Paulo warmth. Camila reads the patterns, keeps you steady — and lights up when you go for the move.</div>
+          <div class="eng-sig">“Estou com você. Vamos buscar essa volta.”<span class="tr">I'm with you. Let's go get that lap.</span></div>
+          <button class="preview-btn" onclick="previewVoice('Camila',this)">▶ Preview Voice</button>
         </div>
       </div>
 
@@ -1248,8 +1248,8 @@ const PREVIEW_VOICES = {
   Luna:     { gVoice:'en-US-Neural2-F', gLang:'en-US', gRate:1.05, gPitch:1.5,  line:"I've got the data. You've got the car." },
   Hajime:   { gVoice:'en-GB-Neural2-D', gLang:'en-GB', gRate:1.06, gPitch:-1.0, line:"Keep it clean. The pace will come." },
   Kanbe:    { gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.24, gPitch:-6.0, line:"おもれえ走りしとったで。次、取り返そうや。" },
-  Oishi:    { gVoice:'ja-JP-Neural2-D', gLang:'ja-JP', gRate:1.08, gPitch:-9.5, line:"焦らなくていい。次の一周を整えよう。" },
   Matthias: { gVoice:'de-DE-Neural2-B', gLang:'de-DE', gRate:1.1,  gPitch:-2.0, line:"Ruhig bleiben. Wir bleiben beim Plan." },
+  Camila:   { gVoice:'pt-BR-Neural2-C', gLang:'pt-BR', gRate:1.14, gPitch:0.5,  line:"Estou com você. Vamos buscar essa volta." },
 };
 let previewAudio = null;
 async function previewVoice(char, btn){
