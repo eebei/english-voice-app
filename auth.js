@@ -77,6 +77,18 @@ async function init() {
   // 既存DBへの追加カラム（テーブルは既に存在するため IF NOT EXISTS の CREATE TABLE では追加されない）
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS exe_code TEXT UNIQUE;`);
+  // 誰の紹介で来たか（紹介者のREFコード）。決済時のカスタムフィールド入力から記録（2026-07-19 Grow the Grid自動化）
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT;`);
+  // 紹介の"実課金転換"を1人1回だけ数えるための台帳。PRIMARY KEYが冪等性の要
+  // （Stripeのwebhook再送でも同じ友達を二度数えない）。percent_awardedは監査用の記録。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS referral_conversions (
+      referred_user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      referrer_code    TEXT NOT NULL,
+      percent_awarded  INT NOT NULL,
+      counted_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS login_tokens (
       token       TEXT PRIMARY KEY,
@@ -491,6 +503,121 @@ async function sendWelcomeEmail(rawEmail, plan) {
   return { sent: true, referralCode, exeCode };
 }
 
+// ── Grow the Grid 自動化（2026-07-19） ──────────────────────────────────────
+// 設計の要点（7/11の無制限クーポン事故の教訓を踏まえた安全設計）：
+//   1. クーポンは「特定の1人のサブスクに・1回限り(duration:once)・サーバーが直接」当てる。共有可能なコードは作らない
+//   2. 全ステップ冪等：帰属は初回のみ記録(referred_byがNULLの時だけ)・転換はPRIMARY KEYで1人1回・
+//      クーポンIDは固定3種を使い回し(re-createしない)
+//   3. 紹介処理の失敗でwebhook本体(会員化)を巻き込まない：呼び出し側でtry/catch necking
+
+// 決済完了時：カスタムフィールドのREFコードを検証して帰属を記録する。
+// rawCode例: "REF-K3M9P2" / "ref-k3m9p2" / "K3M9P2"（プレフィックス無し入力も救済）
+async function recordReferralAttribution(rawEmail, rawCode) {
+  if (!ready || !rawCode) return { ok: false, reason: 'no_code' };
+  const email = normalizeEmail(rawEmail);
+  let code = String(rawCode).trim().toUpperCase().replace(/\s+/g, '');
+  if (!code) return { ok: false, reason: 'empty' };
+  if (!code.startsWith('REF-') && /^[A-Z0-9]{6}$/.test(code)) code = 'REF-' + code;
+  if (!/^REF-[A-Z0-9]{6}$/.test(code)) {
+    log('referral attribution rejected (bad format): ' + email + ' -> ' + JSON.stringify(rawCode));
+    return { ok: false, reason: 'bad_format' };
+  }
+  const ref = await pool.query('SELECT id, email FROM users WHERE referral_code = $1', [code]);
+  if (!ref.rows[0]) {
+    log('referral attribution rejected (unknown code): ' + email + ' -> ' + code);
+    return { ok: false, reason: 'unknown_code' };
+  }
+  if (normalizeEmail(ref.rows[0].email) === email) {
+    log('referral attribution rejected (self-referral): ' + email);
+    return { ok: false, reason: 'self' };
+  }
+  // 初回のみ記録（webhook再送や2回目の決済で上書きしない）
+  const upd = await pool.query(
+    'UPDATE users SET referred_by = $1 WHERE email = $2 AND referred_by IS NULL RETURNING id',
+    [code, email]
+  );
+  if (upd.rows[0]) log('referral attribution recorded: ' + email + ' <- ' + code);
+  return { ok: !!upd.rows[0], reason: upd.rows[0] ? 'recorded' : 'already_set' };
+}
+
+// 固定クーポン3種（33/66/100・1回限り）。既存ならそのまま使う＝冪等。
+const GROW_COUPONS = { 1: { id: 'GROW_THE_GRID_33', pct: 33 }, 2: { id: 'GROW_THE_GRID_66', pct: 66 }, 3: { id: 'GROW_THE_GRID_100', pct: 100 } };
+async function ensureGrowCoupon(cyclePos) {
+  const c = GROW_COUPONS[cyclePos];
+  try {
+    await stripe.coupons.retrieve(c.id);
+  } catch (e) {
+    if (e && e.code === 'resource_missing') {
+      await stripe.coupons.create({ id: c.id, percent_off: c.pct, duration: 'once', name: `Grow the Grid ${c.pct}% off` });
+      log('grow coupon created: ' + c.id);
+    } else throw e;
+  }
+  return c;
+}
+
+// 友達の"初回実課金"時：転換を数え、紹介者の次回請求にクーポンを当て、通知メールを送る。
+// stripeCustomerId = 課金した友達のStripe customer。戻り値は監査ログ用。
+async function countReferralConversion(stripeCustomerId) {
+  if (!ready || !stripe || !stripeCustomerId) return { ok: false, reason: 'not_ready' };
+  const friend = await pool.query(
+    'SELECT id, email, referred_by FROM users WHERE stripe_customer_id = $1', [stripeCustomerId]);
+  if (!friend.rows[0] || !friend.rows[0].referred_by) return { ok: false, reason: 'no_attribution' };
+  const code = friend.rows[0].referred_by;
+
+  const referrer = await pool.query(
+    'SELECT id, email, is_member, stripe_customer_id FROM users WHERE referral_code = $1', [code]);
+  if (!referrer.rows[0]) return { ok: false, reason: 'referrer_gone' };
+
+  // 冪等の要：この友達が既に数えられていたら何もしない（webhook再送・2ヶ月目以降の請求で二重加算しない）
+  const ins = await pool.query(
+    `INSERT INTO referral_conversions (referred_user_id, referrer_code, percent_awarded)
+     VALUES ($1, $2, 0) ON CONFLICT (referred_user_id) DO NOTHING RETURNING referred_user_id`,
+    [friend.rows[0].id, code]
+  );
+  if (!ins.rows[0]) return { ok: false, reason: 'already_counted' };
+
+  const tot = await pool.query('SELECT COUNT(*)::int AS n FROM referral_conversions WHERE referrer_code = $1', [code]);
+  const total = tot.rows[0].n;
+  const cyclePos = ((total - 1) % 3) + 1;   // 1→33% / 2→66% / 3→100%、以降リセットして繰り返し
+  const coupon = await ensureGrowCoupon(cyclePos);
+  await pool.query('UPDATE referral_conversions SET percent_awarded = $1 WHERE referred_user_id = $2', [coupon.pct, friend.rows[0].id]);
+
+  // 紹介者のアクティブなサブスクにクーポン適用。特典は「メンバーである限り」なので、
+  // 解約済みならカウントだけ残して適用はスキップ（Terms/HPの文言と整合）。
+  let applied = false;
+  if (referrer.rows[0].is_member && referrer.rows[0].stripe_customer_id) {
+    const subs = await stripe.subscriptions.list({ customer: referrer.rows[0].stripe_customer_id, status: 'active', limit: 3 });
+    const sub = subs.data[0] || (await stripe.subscriptions.list({ customer: referrer.rows[0].stripe_customer_id, status: 'trialing', limit: 3 })).data[0];
+    if (sub) {
+      // 同一サイクル内で2人目が来たら33%→66%に"置き換え"る（積算でなく上位で上書き＝設計どおり）
+      await stripe.subscriptions.update(sub.id, { coupon: coupon.id });
+      applied = true;
+      log(`grow the grid: ${code} conversion #${total} -> ${coupon.pct}% applied to ${referrer.rows[0].email}`);
+    } else {
+      log(`grow the grid: ${code} conversion #${total} counted, but no active subscription to discount`);
+    }
+  }
+
+  // 通知メール（失敗しても処理全体は成功扱い）
+  try {
+    const pct = coupon.pct;
+    await sendEmail({
+      to: referrer.rows[0].email,
+      bcc: ADMIN_NOTIFY_EMAIL || undefined,
+      subject: `Grow the Grid — a driver you invited just joined! ${pct}% off your next month 🏁`,
+      text:
+        `A driver you brought to the grid just converted to a paid month.\n\n` +
+        `Your reward: ${pct}% off your next month${applied ? ' — already applied, nothing to do.' : ' (will be applied to your next active billing).'}\n` +
+        `Progress in this cycle: ${cyclePos}/3 drivers. Bring ${3 - (total % 3 === 0 ? 3 : total % 3) || 3} more for a free month — it resets every 3, forever.\n\n` +
+        `あなたが招いたドライバーが実課金に転換しました。\n翌月${pct}%OFF${applied ? '（適用済み・手続き不要）' : '（次のアクティブな請求時に適用）'}。このサイクル: ${cyclePos}/3人。\n\n— OMORAY PITWALL`,
+    });
+  } catch (e) {
+    log('grow the grid notify email failed: ' + (e && e.message || e));
+  }
+
+  return { ok: true, total, percent: coupon.pct, applied, referrer: referrer.rows[0].email };
+}
+
 // 管理者による強制遮断／復帰（Stripe解約を待たず即座にis_memberを操作。悪質ユーザー対応用）
 async function setMemberActive(rawEmail, active) {
   if (!ready) throw new Error('auth_not_ready');
@@ -641,6 +768,7 @@ module.exports = {
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
   setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, foundingStatus,
+  recordReferralAttribution, countReferralConversion,
   createBillingPortalSession,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   FOUNDING_CAP,

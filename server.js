@@ -86,6 +86,23 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       if (result.justActivated) {
         auth.sendWelcomeEmail(email, result.plan).catch((e) => console.error('[stripe] welcome email failed:', e.message));
       }
+      // Grow the Grid：チェックアウトのカスタムフィールド（Referral code欄）から帰属を記録。
+      // 失敗しても会員化は完了しているので、握りつぶしてログだけ残す（webhook 500でStripeに再送させない）。
+      try {
+        const cf = Array.isArray(s.custom_fields) ? s.custom_fields.find(f => f.text && f.text.value) : null;
+        if (cf) await auth.recordReferralAttribution(email, cf.text.value);
+      } catch (e) { console.error('[stripe] referral attribution failed:', e.message); }
+    } else if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
+      // Grow the Grid：友達の"初回実課金"（トライアル明けの最初の支払い）で紹介カウント＋クーポン適用。
+      // amount_paid > 0 が実課金の証（トライアル開始時の$0請求は billing_reason=subscription_create かつ 0円）。
+      // 2ヶ月目以降の請求もここを通るが、referral_conversionsのPRIMARY KEYで二重加算は起きない。
+      const inv = event.data.object;
+      if (inv.amount_paid > 0 && inv.customer) {
+        try {
+          const r = await auth.countReferralConversion(inv.customer);
+          if (r && r.ok) console.log('[stripe] grow-the-grid conversion:', JSON.stringify(r));
+        } catch (e) { console.error('[stripe] referral conversion failed:', e.message); }
+      }
     } else if (event.type === 'customer.subscription.deleted') {
       await auth.unsetMemberByCustomer(event.data.object.customer, 'canceled');
     } else if (event.type === 'customer.subscription.updated') {
