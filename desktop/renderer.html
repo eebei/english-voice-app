@@ -1450,10 +1450,12 @@ async function callAPI(){
   document.getElementById('busy-ind').classList.add('show');
   const telemetry = iracingLive?'live':(bridgeConnected?'bridge':'off');
   const profile = loadProfile()||{};
-  const profileNote = buildProfileNote(profile) + buildCarTrackMemory();  // 1階記憶（コース×車種）を先回りで注入
+  const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+  // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
+  const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildContractNote(_isJP_pre);
   const raceHistory = buildRaceHistoryContext();
   try{
-    const isJP = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+    const isJP = _isJP_pre;
     // ⚠️デブリーフのmax_tokensが低い(旧250/300)と分析コメントが文の途中で切れ、次に「続き」と
     //   言われた時モデルが尻切れ文の残りから補完＝単語の途中から始まる壊れた返答になる
     //   (Yuji 2026-07-15 Monza実走で発覚)。1返答で1論点を完結できる余裕に引き上げる。
@@ -2180,7 +2182,7 @@ async function scheduleAutoBriefing(){
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
       liveData:lastTelemetry, sessionType:lastSessionType, driverState,
-      profileNote: buildProfileNote(profile)+buildCarTrackMemory(),
+      profileNote: buildProfileNote(profile)+buildCarTrackMemory()+buildContractNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'),
       raceHistory: buildRaceHistoryContext(),   // カルテ（過去セッション・全キャラ共有）を能動ブリーフィングにも渡す
       max_tokens: 150
     };
@@ -2249,6 +2251,82 @@ function scheduleAutoDebrief(data){
     pushMsg({role:'assistant',content:msg});
     speak(msg);
   },20000);  // チェッカー後20秒でデブリーフ発出（Yuji実走の体感で調整予定）
+}
+
+// ── Contract System（部品A：ドライバー×AIの契約書・全キャラ横断） ──
+// [[project_pitwall_real_ai_design_session1]] Phase 1。ドライバーが初回セッションで結ぶ契約。
+// 未契約時はsigned:falseの"最小限モード"デフォルトを返す＝案B（動くが控えめ）。
+// キーは pw_contract の1個だけ（キャラ別ではない・全キャラ共通のドライバー流儀）。
+const DEFAULT_CONTRACT = {
+  version: 1,
+  signed: false,           // 未契約＝最小限モード
+  updated: null,
+  start:    { follow: 'necessary', weak_start: false },
+  pace:     { readout: 'best_only', pace_drop: 'after_2' },
+  battle:   { behind: 'within_1s', ahead: 'attack_time', side: true, stopped_car: true },
+  strategy: { fuel: 'half_and_end', pit: 'on_request', tyre: 'on_request' },
+  tone:     { frequency: 'normal', address: 'name', encouragement: false },
+  danger:   { track_risks: true, front_trouble: true },
+  profile:  { iRating: null, SR: null, sim_years: null, usual_series: '', real_racing: '', main_category: 'road' }
+};
+function loadContract(){
+  try { const raw = localStorage.getItem('pw_contract'); if(!raw) return {...DEFAULT_CONTRACT};
+        const c = JSON.parse(raw); return {...DEFAULT_CONTRACT, ...c}; }
+  catch { return {...DEFAULT_CONTRACT}; }
+}
+function saveContract(c){
+  try { const merged = {...loadContract(), ...c, updated: new Date().toISOString()};
+        localStorage.setItem('pw_contract', JSON.stringify(merged)); return merged; }
+  catch { return c; }
+}
+function updateContract(patch){
+  // 部分更新（走行中の会話での契約更新用）：例 updateContract({tone:{frequency:'less'}})
+  const cur = loadContract(); const next = {...cur};
+  for(const k of Object.keys(patch||{})){
+    next[k] = (typeof patch[k]==='object' && !Array.isArray(patch[k])) ? {...(cur[k]||{}), ...patch[k]} : patch[k];
+  }
+  return saveContract(next);
+}
+function buildContractNote(isJ){
+  // LLMへ渡すシステム指示テキスト。未契約時は"最小限モード"と明示。
+  const c = loadContract();
+  if(!c.signed){
+    return isJ
+      ? '\n\n━━ 契約状態：未契約（最小限モード）━━\nドライバーはまだ「契約」を結んでいない（Strategyモードで結ぶ）。今日は最小限モードで振る舞え：発話は控えめ・自主的コールは安全直結（隣接車/クラッシュ/ピット/停止車両）だけ・数字の羅列や自主的な戦略提案はしない。1〜2回のセッション後、自然な流れで「契約結ぼう」と1度だけ促していい（押しつけるな）。'
+      : '\n\n━━ CONTRACT STATE: UNSIGNED (Minimum Mode) ━━\nThe driver has NOT signed the Contract yet (they sign it in Strategy mode). Today, behave in Minimum Mode: speak sparingly; only volunteer safety-critical calls (adjacent car / crash / pit / stopped car); no lap-time recitations or unsolicited strategy. After a session or two, invite them ONCE naturally to sign the contract — never push.';
+  }
+  // 契約済み：主要項目を"AIが守るべき約束"として整形
+  const L = [];
+  const fol = {multi:'多め',necessary:'必要時のみ',minimum:'最小限'}[c.start.follow] || c.start.follow;
+  const fol_en = {multi:'more calls',necessary:'only when needed',minimum:'minimal'}[c.start.follow] || c.start.follow;
+  L.push(isJ ? `スタート：フォロー${fol}${c.start.weak_start?'／スタート苦手（2-3周我慢戦略）':''}`
+             : `Start: follow=${fol_en}${c.start.weak_start?' / weak-starter (2-3 lap patience strategy)':''}`);
+  const ro = {every_lap:'毎周',after_change:'変化があった時',best_only:'ベスト更新時のみ',none:'不要'}[c.pace.readout] || c.pace.readout;
+  const ro_en = {every_lap:'every lap',after_change:'on change',best_only:'best only',none:'none'}[c.pace.readout] || c.pace.readout;
+  L.push(isJ ? `ラップ読み上げ：${ro}／ペース落ち指摘：${c.pace.pace_drop}`
+             : `Lap readout: ${ro_en} / pace-drop callouts: ${c.pace.pace_drop}`);
+  L.push(isJ ? `バトル：後方${c.battle.behind}／前方${c.battle.ahead}／サイド警告=${c.battle.side?'ON':'OFF'}／停止車両警告=${c.battle.stopped_car?'ON':'OFF'}`
+             : `Battle: behind=${c.battle.behind} / ahead=${c.battle.ahead} / side=${c.battle.side?'ON':'OFF'} / stopped-car=${c.battle.stopped_car?'ON':'OFF'}`);
+  L.push(isJ ? `戦略：燃料通知=${c.strategy.fuel}／ピット提案=${c.strategy.pit}／タイヤ=${c.strategy.tyre}`
+             : `Strategy: fuel=${c.strategy.fuel} / pit=${c.strategy.pit} / tyres=${c.strategy.tyre}`);
+  L.push(isJ ? `口調：頻度${c.tone.frequency}／呼び${c.tone.address}／励まし=${c.tone.encouragement?'欲しい':'不要（数字だけ）'}`
+             : `Tone: frequency=${c.tone.frequency} / address=${c.tone.address} / encouragement=${c.tone.encouragement?'yes':'no (numbers only)'}`);
+  L.push(isJ ? `危険予知：コースリスク=${c.danger.track_risks?'ON':'OFF'}／前方トラブル=${c.danger.front_trouble?'ON':'OFF'}`
+             : `Danger: track-risks=${c.danger.track_risks?'ON':'OFF'} / front-trouble=${c.danger.front_trouble?'ON':'OFF'}`);
+  // ドライバー像（問診）
+  const p = c.profile || {};
+  const pl = [];
+  if(p.iRating) pl.push(isJ?`iRating ${p.iRating}`:`iRating ${p.iRating}`);
+  if(p.SR)      pl.push(isJ?`SR ${p.SR}`:`SR ${p.SR}`);
+  if(p.sim_years) pl.push(isJ?`SIM歴${p.sim_years}年`:`${p.sim_years}yr sim`);
+  if(p.usual_series) pl.push(isJ?`主戦：${p.usual_series}`:`Series: ${p.usual_series}`);
+  if(p.real_racing) pl.push(isJ?`リアル：${p.real_racing}`:`Real: ${p.real_racing}`);
+  if(p.main_category && p.main_category!=='road') pl.push(isJ?`主カテゴリ：${p.main_category}`:`Main: ${p.main_category}`);
+  const head = isJ ? '\n\n━━ ドライバー契約（AIが守る約束）━━\n' : '\n\n━━ DRIVER CONTRACT (AI must honor) ━━\n';
+  const foot = pl.length ? (isJ?'\n【ドライバー像】'+pl.join(' / '):'\n[Driver profile] '+pl.join(' / ')) : '';
+  return head + L.join('\n') + foot + (isJ
+    ? '\n【契約の運用】この契約は絶対の約束だ。項目に反する自主コールはするな。ドライバーが会話で「今日は少なめ」等と言ったら『今日だけ？毎回？』と1度だけ確認し、記憶を更新するよう案内せよ。契約を忘れたか聞かれたら中身を要約せよ。'
+    : '\n[How to honor] This contract is binding. Do not volunteer calls that violate it. If the driver says something like "less today", ask ONCE "today only, or from now on?" and guide them to update. If asked, summarize the contract on request.');
 }
 
 // ── Session memory (localStorage) ──
