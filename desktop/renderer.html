@@ -1845,6 +1845,7 @@ function connectBridge(){
       if(data.type==='session_summary'){ saveSessionSummary(data); if(data.is_race) scheduleAutoDebrief(data); }
       if(data.type==='pit_timing'){ savePitTiming(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
+      if(data.type==='judge_call') judgeAndSpeak(data);   // ★2026-07-19 LLM判断コール（catchup/defend）
       // ── マイク選択＋レベルメーター（bridge側デバイスの受け皿）──
       if(data.type==='mic_list'){ populateMicList(data.devices, data.selected); return; }
       if(data.type==='mic_config'){ const s=document.getElementById('mic-select'); if(s) s.value=(data.selected==null)?'':String(data.selected); return; }
@@ -2165,6 +2166,48 @@ async function checkPaceJudgment(data){
     addMsg('ai',reply);
     speak(reply);
   }catch(e){ /* サイレント失敗でよい（元々テンプレ発話ではないため無理に埋めない） */ }
+}
+
+// ★2026-07-19 LLM判断コール：bridgeの"判断候補"(catchup/defend)を受け、AIが「言うか黙るか」を決める。
+//   checkPaceJudgmentと同じ独立POST方式（会話履歴messagesには触れない＝role交互破損の再発防止）。
+//   連呼撲滅の要＝直近で言ったコールの要約(recentCallSummary)を渡す→AIが「さっき言った」を自分で判断できる。
+let recentEngineerCalls = [];   // {label, ts} 直近に無線で言ったことのリングバッファ
+function pushRecentCall(label){
+  recentEngineerCalls.push({label, ts:Date.now()});
+  if(recentEngineerCalls.length>6) recentEngineerCalls.shift();
+}
+function recentCallSummary(){
+  const now=Date.now();
+  return recentEngineerCalls
+    .filter(c=> now-c.ts < 90000)   // 直近90秒だけ渡す（それより前は繰り返しでない）
+    .map(c=> c.label+' ('+Math.round((now-c.ts)/1000)+'s ago)');
+}
+async function judgeAndSpeak(data){
+  if(selMode!=='race') return;
+  const authToken = localStorage.getItem('pw_auth_token');
+  const headers = {'Content-Type':'application/json'};
+  const body = {
+    messages:[{role:'user', content:'[JUDGE_CALL]'}],
+    character:sel, mode:selMode, level:'C2', userName,
+    telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
+    liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+    judgeCall:{kind:data.kind, car_number:data.car_number, class_name:data.class_name, class_pos:data.class_pos,
+      gap:data.gap, stage:data.stage, confident:data.confident, recent:recentCallSummary()},
+    max_tokens:70
+  };
+  if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+  try{
+    const ctrl = new AbortController();
+    const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);
+    const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
+    clearTimeout(fetchTimer);
+    const resData = await res.json();
+    const reply = (resData.content?.[0]?.text||'').trim();
+    if(!reply || reply==='NO_CALL' || reply.includes('NO_CALL')) return;   // AIが「黙る」と判断
+    addMsg('ai',reply);
+    speak(reply);
+    pushRecentCall((data.kind==='catchup'?'catchup':'defend') + (data.car_number?' #'+data.car_number:''));
+  }catch(e){ /* サイレント失敗でよい（テンプレ発話でないため無理に埋めない） */ }
 }
 
 function injectBriefing(data){

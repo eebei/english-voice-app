@@ -649,6 +649,7 @@ function buildSystem(p) {
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
   const raceHistory = typeof p.raceHistory === 'string' ? p.raceHistory : '';
   const paceCheck = (p.paceCheck && typeof p.paceCheck === 'object') ? p.paceCheck : null; // AIペース文脈判断用の生データ
+  const judgeCall = (p.judgeCall && typeof p.judgeCall === 'object') ? p.judgeCall : null; // ★2026-07-19 LLM判断コール（テンプレでなくAIが"言うか黙るか"を判断）
 
   const base = CHARACTERS[character];
   if (!base) return null; // 未知キャラ → 呼び出し側でフォールバック
@@ -937,6 +938,41 @@ function buildSystem(p) {
           : 'Judge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with nothing else but the exact string "NO_CALL".');
   }
 
+  // ── ★2026-07-19 LLM判断コール：テンプレ発話を廃し、AIが「今言うか・繰り返さないか・黙るか」を判断する ──
+  // paceCheckと同じ独立トリガー方式（会話履歴は触らない＝role破損回避）。bridgeは"完成文"でなく
+  // "判断候補"（誰が・前後・ギャップ・ペース傾向・直近で自分が何を言ったか）を送り、ここで文脈を組む。
+  // 前後はクラス順位ベースの正しい値（[[bug_race_call_frontback_estimetime]]で根絶済）＝AIに前後を再導出させない。
+  let judgeCallNote = '';
+  if (isRacing && judgeCall && (judgeCall.kind === 'catchup' || judgeCall.kind === 'defend')) {
+    const j = judgeCall;
+    const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
+                                : (isJ ? '同クラスのライバル' : 'a same-class rival');
+    const ahead = j.kind === 'catchup';               // catchup=相手が前方(自分が追う) / defend=相手が後方(迫られてる)
+    const gapTxt = (j.gap != null) ? (isJ ? j.gap + '秒' : j.gap + 's') : (isJ ? '接近中' : 'close');
+    // ペース傾向：confident=傾向が固まった / stage=切迫度(1遠→4勝負どころ)
+    const trendJ = ahead
+      ? (j.confident ? '君のほうが速く、差が詰まってきている' : '差が動き始めた')
+      : (j.confident ? '相手のほうが速く、詰められてきている' : '差が動き始めた');
+    const trendE = ahead
+      ? (j.confident ? "you're faster and reeling them in" : 'the gap is starting to move')
+      : (j.confident ? "they're faster and closing on you" : 'the gap is starting to move');
+    const urgencyJ = j.stage >= 4 ? '勝負どころ。' : (j.stage === 3 ? '意味が出てきた頃合い。' : '');
+    const urgencyE = j.stage >= 4 ? "It's the decisive moment." : (j.stage === 3 ? "It's becoming meaningful." : '');
+    // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
+    const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
+    judgeCallNote = isJ
+      ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + carTag + 'が' + (ahead ? '前方' : '後方') + '、ギャップ' + gapTxt + '。' + trendJ + '。' + urgencyJ
+        + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この瞬間、無線で一言かける価値があるか判断しろ。'
+        + '直前に言ったことを繰り返すな。付け加える意味が無いなら黙れ（沈黙も一流の仕事だ）。'
+        + '固定文でなく、この状況に本当に効く一言を、君の口調で。かける価値があると判断した時だけ1文返せ。'
+        + '価値が無いと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。'
+      : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE
+        + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] Decide whether ONE short radio line is worth it RIGHT NOW. '
+        + 'Do not repeat what you just said. If it adds nothing, stay silent (silence is part of great engineering). '
+        + 'Not a fixed phrase — the one line that actually helps this moment, in your voice. Reply with ONE short line only if genuinely worth it. '
+        + 'If not, reply with nothing else but the exact string "NO_CALL".';
+  }
+
   // ── 無線の"型"（お手本）：固定文でなく、この短さ・具体性・前向きな構造を真似る手本 ──
   // 実データに合わせて数字は毎回変える。丸暗記して貼るのは禁止。あくまで「調子（cadence）」の見本。
   let voiceNote = '';
@@ -948,7 +984,7 @@ function buildSystem(p) {
 
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
   const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote;
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote;
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote;
   return { prefix: prefix, suffix: suffix };
 }
 

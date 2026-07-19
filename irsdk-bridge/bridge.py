@@ -2115,15 +2115,11 @@ def poll_iracing():
                                 stage = _catchup_stage_of(gap)
                                 if stage > catchup_stage.get(idx, 0) and now - last_battle_global > 15:
                                     catchup_stage[idx] = stage
-                                    if stage <= 2:
-                                        stage_txt = ''
-                                    elif stage == 3:
-                                        stage_txt = ' Closing in.' if confident else ' Early to tell.'
-                                    else:
-                                        stage_txt = ' Go for it.'
-                                    broadcast({'type': 'radio', 'trigger': 'catchup_ahead', 'stage': stage,
-                                        'delta': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
-                                        'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
+                                    # ★2026-07-19 LLM判断層へ：完成文でなく"判断候補"を送る。AIが言うか黙るか決める。
+                                    #   前後はクラス順位ベースの正しい値。messageはLLM失敗時のフォールバック用に残す。
+                                    broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
+                                        'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                        'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                     last_battle_global = now
                         else:  # 相手が後方（順位が1つ下）＝ディフェンス対象
                             if gap > 15.0:
@@ -2135,15 +2131,10 @@ def poll_iracing():
                                 stage = _catchup_stage_of(gap)
                                 if stage > defend_stage.get(idx, 0) and now - last_battle_global > 15:
                                     defend_stage[idx] = stage
-                                    if stage <= 2:
-                                        stage_txt = ''
-                                    elif stage == 3:
-                                        stage_txt = ' Closing.' if confident else ' Early to tell.'
-                                    else:
-                                        stage_txt = ' Check mirrors.'
-                                    broadcast({'type': 'radio', 'trigger': 'defend_behind', 'stage': stage,
-                                        'delta': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
-                                        'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.' + stage_txt})
+                                    # ★2026-07-19 LLM判断層へ（上のcatchupと同じ）
+                                    broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
+                                        'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                        'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                     last_battle_global = now
 
                 # ── マルチクラス(速いクラス)接近警告：クラス非依存のLapDistPct物理ギャップで測る ──
