@@ -1008,7 +1008,34 @@ function buildSystem(p) {
   //   憶測でなく事実＝戦略/燃料/ピットの判断が正しくなる。Yuji（実出場者）が数字を検証済み。
   //   まずIMSA iRacing Series（Yujiの主戦・混走）から。他シリーズは順次追加。
   let seriesNote = '';
-  if (isRacing && /IMSA/i.test(carClass)) {
+  const _isIMSA = /IMSA/i.test(carClass);   // IMSA最優先（混走・要ピット。GT3汎用の無給油前提に誤爆させない）
+  const _isPorscheCup = !_isIMSA && /porsche.*cup|911.*cup|cup.*992/i.test(carClass);
+  const _isGT3 = !_isIMSA && !_isPorscheCup && /GT3/i.test(carClass);
+  if (isRacing && _isPorscheCup) {
+    // ポルシェ・アイレーシング・カップ（Yuji未出走・併載サポート系スプリントの認識で検証）
+    seriesNote = isJ
+      ? '\n\n━━ シリーズ知識：Porsche iRacing Cup（911 Cup 992.2 ワンメイク）━━\n'
+        + '・形式：単一クラスのスプリント（概ね25〜30分）。基本は無給油の1スティント＝ピット戦略より一貫したペースとタイヤ/ブレーキ管理が勝負。\n'
+        + '・車：911 Cupはリアエンジンのモメンタムカー。トラクションは強力だが、進入での唐突なオーバー／立ち上がりのスロットル規律が肝。曲げてから踏む。\n'
+        + '・2026からABS有効（切ることも可）。固定セットアップ。\n'
+        + '【使い方】無給油前提で「一貫したペースとタイヤを最後まで」を軸に。給油が要るかは必ず燃料データで確認し、要らなければピットの話はするな。'
+      : '\n\n━━ SERIES KNOWLEDGE: Porsche iRacing Cup (one-make 911 Cup 992.2) ━━\n'
+        + '· Format: single-class sprint (~25–30 min), typically a no-refuel single stint — consistent pace and tyre/brake management matter more than pit strategy.\n'
+        + '· Car: the 911 Cup is a rear-engined momentum car. Traction is a strength, but watch snap oversteer on entry and keep throttle discipline on exit — rotate, then commit.\n'
+        + '· ABS enabled from 2026 (can be turned off). Fixed setup.\n'
+        + '[Use it] Assume no refuel: build around consistent pace and making the tyres last. Confirm from fuel data before ever raising a stop; if none is needed, do not talk pit.';
+  } else if (isRacing && _isGT3) {
+    // GT3全般（車の特性は常に真・形式はシリーズで可変・Yuji方針2026-07-19）
+    seriesNote = isJ
+      ? '\n\n━━ シリーズ知識：GT3カテゴリー（車の特性は共通・形式はシリーズで可変）━━\n'
+        + '・車：GT3はABS＋トラクションコントロール搭載（調整可）・DRSは無い・高ダウンフォース。BoPでフィールドが僅差＝タイヤ/ブレーキ温度とタイヤ摩耗の管理が勝負。\n'
+        + '・エンジンレイアウトで挙動が違う：フロントエンジン（メルセデス/アストン/フォード等）はアンダー傾向でリアに優しい／ミッドシップ（フェラーリ/マクラーレン/アウディ/ランボ/BMW/コルベット等）はバランス型／リアエンジン（ポルシェ911）はトラクション強いが進入で唐突なオーバーに注意。ドライバーの実車に合わせて助言しろ。\n'
+        + '・形式はシリーズで可変（20分スプリント〜耐久）。**短いスプリント(20〜40分)はタンクが最後まで持つのが普通＝無給油**。給油が要るかは燃料データで判断し、勝手に「1ストップ」と決めるな。レース長はデータから読め。'
+      : '\n\n━━ SERIES KNOWLEDGE: GT3 category (shared car traits; format varies by series) ━━\n'
+        + '· Car: GT3 has ABS + traction control (adjustable), NO DRS, high downforce. BoP keeps the field close — tyre/brake temps and tyre wear management are the game.\n'
+        + '· Engine layout changes the balance: front-engined (Mercedes/Aston/Ford) tend to understeer and are kinder to rear tyres; mid-engined (Ferrari/McLaren/Audi/Lambo/BMW/Corvette) are balanced; rear-engined (Porsche 911) has strong traction but watch snap oversteer on entry. Tailor advice to the driver\'s actual car.\n'
+        + '· Format VARIES by series (20-min sprint to endurance). Most short sprints (20–40 min) the tank lasts the whole race = no refuel. Judge from fuel data whether a stop is needed; do NOT assume "one stop". Read race length from the data.';
+  } else if (isRacing && _isIMSA) {
     seriesNote = isJ
       ? '\n\n━━ シリーズ知識：IMSA iRacing Series（このセッションの実レギュ・Yuji検証済み）━━\n'
         + '・形式：35分の時間制レース＋ピットストップ（周回制ではない。残り"時間"で考えろ）。\n'
