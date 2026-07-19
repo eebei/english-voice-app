@@ -1304,15 +1304,37 @@ def poll_iracing():
         # 自分のonTrack状態に関係なく毎周期更新する（下のfuel_strategy計算で使う）。
         car_positions = reader.read_int_array('CarIdxPosition', 64)
         car_laps_all  = reader.read_int_array('CarIdxLap', 64)
+        # ★2026-07-19 リーダー検出の堅牢化：位置1が"幽霊"(CarIdxLap<=0=コース上に居ない)を指すことがある
+        #   (Interlagos実走でleader_lap=-1が連発)。位置1でも周回が有効な車を優先し、ダメなら
+        #   「コース上で最も進んでる車(max CarIdxLap)」を実質リーダーとして採用してNoneを避ける。
         leader_idx = None
         if car_positions:
             for _pidx, _ppos in enumerate(car_positions):
-                if _ppos == 1:
+                if _ppos == 1 and car_laps_all and _pidx < len(car_laps_all) and car_laps_all[_pidx] is not None and car_laps_all[_pidx] > 0:
                     leader_idx = _pidx
                     break
+            if leader_idx is None:   # 位置1が無効→コース上で最も周回が進んだ車を実質リーダーに
+                for _pidx, _ppos in enumerate(car_positions):
+                    if _ppos == 1:
+                        leader_idx = _pidx   # 診断用に位置1のindexは拾っておく（leader_lapは下で無効化される）
+                        break
+                if car_laps_all:
+                    _best_lap, _best_idx = 0, None
+                    for _ci, _cl in enumerate(car_laps_all):
+                        if _cl is not None and _cl > _best_lap:
+                            _best_lap, _best_idx = _cl, _ci
+                    if _best_idx is not None:
+                        leader_idx = _best_idx
         leader_lap = None
         if leader_idx is not None and car_laps_all and leader_idx < len(car_laps_all):
-            leader_lap = car_laps_all[leader_idx]
+            _ll = car_laps_all[leader_idx]
+            # ★2026-07-19 leader_lap=-1根絶：CarIdxLapが-1＝その車はコース上に居ない(ペースカー/未接続/ガレージ)。
+            #   位置1がそういう"幽霊"を指すと leader_lap=-1 が残り周回推定を全部0に毒す(Interlagos実走で発覚)。
+            #   0以下は無効としてNoneのままにし、下でown-paceフォールバックへ落とす。
+            if _ll is not None and _ll > 0:
+                leader_lap = _ll
+            else:
+                log("LEADER DIAG: pos1 idx=%s but CarIdxLap=%s (幽霊/ペースカー疑い) -> leader_lap無効化" % (leader_idx, _ll))
         if leader_idx is not None:
             _leader_llt = reader.read_float_array('CarIdxLastLapTime', 64)
             if _leader_llt and leader_idx < len(_leader_llt):
@@ -1454,7 +1476,10 @@ def poll_iracing():
                 laps_remaining_est = None
                 finish_basis = None   # プロンプト側で「1位基準」「ラップダウン中」等を言い分けるため
                 laps_down = None
-                if lapsTot and 0 < lapsTot < 3000:
+                # ★2026-07-19 lapsTot誤読ガード：時間制レースでlapsTotが小さな値(3等)で返ることがあり
+                #   (Interlagos実走でlap5時点でlapsTot=3→rem_est=0に毒された)、総周回が現在周回未満なら
+                #   周回制ではないと判断して時間制の推定に回す。lapsTot>=lap の時だけ周回制として信頼。
+                if lapsTot and 0 < lapsTot < 3000 and lapsTot >= lap:
                     laps_remaining_est = max(0, lapsTot - lap)
                     finish_basis = 'laps_total'
                 elif timeRemain and 0 < timeRemain < 100000:
