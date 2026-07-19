@@ -944,7 +944,7 @@ function buildSystem(p) {
   // "判断候補"（誰が・前後・ギャップ・ペース傾向・直近で自分が何を言ったか）を送り、ここで文脈を組む。
   // 前後はクラス順位ベースの正しい値（[[bug_race_call_frontback_estimetime]]で根絶済）＝AIに前後を再導出させない。
   let judgeCallNote = '';
-  if (isRacing && judgeCall && ['catchup', 'defend', 'battle', 'multiclass'].includes(judgeCall.kind)) {
+  if (isRacing && judgeCall && ['catchup', 'defend', 'battle', 'multiclass', 'danger'].includes(judgeCall.kind)) {
     const j = judgeCall;
     const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
                                 : (isJ ? '同クラスの車' : 'a same-class car');
@@ -952,7 +952,23 @@ function buildSystem(p) {
     // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
     const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
     let eventJ, eventE;
-    if (j.kind === 'multiclass') {
+    if (j.kind === 'danger') {
+      // 危険ドライバー（SR2.0以下/iR1300以下）が直前or直後。セッション中この相手には1回だけ。
+      // ★命令調（「気をつけろ」）をやめ、LLMがその場に効く言い方を選ぶ。
+      const dirJ = j.behind ? '直後（後ろ）' : '直前（前）';
+      const dirE = j.behind ? 'right behind you' : 'right ahead of you';
+      eventJ = dirJ + 'の' + (j.car_number ? j.car_number + '号車' : '車') + 'は荒れた記録の持ち主（' + (j.reason || '') + '）。ギャップ' + (j.gap != null ? j.gap + '秒' : '接近中') + '。';
+      eventE = 'The car ' + dirE + (j.car_number ? ' (#' + j.car_number + ')' : '') + ' has a rough record (' + (j.reason || '') + '). Gap ' + (j.gap != null ? j.gap + 's' : 'closing') + '.';
+      judgeCallNote = isJ
+        ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
+          + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】これは"命令"でなく"共有"だ。'
+          + '**「気をつけろ」のような命令口調は使うな**——事実を短く渡して判断はドライバーに委ねる（例「後ろの32号車、記録が荒い」「前の車、SR低い。仕掛けるなら確実に」）。'
+          + 'この相手に言うのはセッション中この1回だけ。今言う価値が無ければ「NO_CALL」だけ返せ。'
+        : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + eventE
+          + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] This is information to SHARE, not an order. '
+          + "**Do NOT use commanding phrasing like \"be careful\"** — hand over the fact briefly and leave the judgement to the driver (e.g. \"car behind you, #32 — rough record\", \"the car ahead has a low SR; if you go, make it clean\"). "
+          + 'This is the only time you will mention this driver all session. If it is not worth saying now, reply with nothing but the exact string "NO_CALL".';
+    } else if (j.kind === 'multiclass') {
       // 速いクラス（別カテゴリー）が後方から接近。★クロスクラスの秒数は不正確なので数字は絶対に言うな＝質的に。
       const clsJ = (j.class_name || '速いクラス');
       const clsE = (j.class_name || 'a faster class');
@@ -991,8 +1007,8 @@ function buildSystem(p) {
       eventJ = carTag + 'が' + (ahead ? '前方' : '後方') + '、ギャップ' + gapTxt + '。' + trendJ + '。' + urgencyJ;
       eventE = carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE;
     }
-    // 共通末尾（catchup/defend/battle）。multiclassは上で専用noteを組み済みなので上書きしない。
-    if (j.kind !== 'multiclass') judgeCallNote = isJ
+    // 共通末尾（catchup/defend/battle）。multiclass/dangerは上で専用noteを組み済みなので上書きしない。
+    if (j.kind !== 'multiclass' && j.kind !== 'danger') judgeCallNote = isJ
       ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
         + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この状況がドライバーにとって本当に意味のある局面か——残り周回・順位・リードの余裕を踏まえて判断しろ。'
         + '意味が薄いなら黙れ（後ろで勝手にやってるだけのバトルや、まだ遠い差は無視していい。沈黙も一流の仕事だ）。直前に言ったことは繰り返すな。'

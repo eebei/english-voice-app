@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pitwall-static",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "3050", "--directory", "/Users/yuji.s/Desktop/Claude/english-voice-app/public"],
+      "port": 3050
+    }
+  ]
+}

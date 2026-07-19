@@ -2192,8 +2192,10 @@ async function judgeAndSpeak(data){
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
     liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+    carClass:lastCarClass,
     judgeCall:{kind:data.kind, car_number:data.car_number, class_name:data.class_name, class_pos:data.class_pos,
       gap:data.gap, stage:data.stage, confident:data.confident, faster:data.faster, repeat:data.repeat,
+      behind:data.behind, reason:data.reason,   // danger用（前後・低SR/iRの根拠）
       recent:recentCallSummary()},
     max_tokens:70
   };

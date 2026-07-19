@@ -1967,9 +1967,16 @@ def poll_iracing():
                         _sdist = pct_diff * player_last_lap_stopped
                         if _sdist > 6.0:
                             stopped_armed[idx] = True
-                        elif _sdist <= 5.0 and stopped_armed.get(idx, False):
+                        # ★2026-07-19 停止車警告が一度も鳴らない2つの穴を塞ぐ（Yuji: Monza/Interlagosで
+                        #   GT3が数台止まってたのに無言＝クレーム）。
+                        #   穴1: last_battle_global(15秒)の抑制。接近コールが15秒以内にあると黙る仕様だったが、
+                        #        Monzaはマルチクラスが12秒毎に94回鳴っており窓が永久に開かなかった＝構造的に発火不能。
+                        #        衝突リスク直結の警告を雑談のクールダウンで殺すのは本末転倒なので撤廃。
+                        #   穴2: stopped_armed（6秒圏外で一度"武装"が必要）。目の前でスピンした車は遠距離の観測
+                        #        履歴が無く永久に武装できない＝一番危ない瞬間に黙る。未警告の車は武装なしでも鳴らす。
+                        elif _sdist <= 5.0 and (stopped_armed.get(idx, False) or idx not in stopped_warned):
                             _lastw = stopped_warned.get(idx, 0)
-                            if _now2 - _lastw > 20 and _now2 - last_battle_global > 15:
+                            if _now2 - _lastw > 20:
                                 broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
                                     'delta': round(_sdist, 1),
                                     'message': 'Stopped car ahead, ' + _fmt_gap(_sdist) + '.'})
@@ -2022,8 +2029,15 @@ def poll_iracing():
                     # Yuji方針：バトル警告と同じタイミング(0.55→0.3の急接近で1回だけ)に乗せる。
                     other_irating = car_irating_map.get(idx, 0)
                     other_sr = car_sr_map.get(idx)
-                    is_risky = (0 < other_irating < 1500) or (other_sr is not None and 1.0 <= other_sr <= 2.5)
-                    if is_risky and not in_start_rush and idx not in danger_ever_warned:
+                    # ★2026-07-19 Yuji方針：最低ラインを下げて"本当に危ない相手"だけに絞る
+                    #   （旧 iR<1500 / SR<=2.5 は広すぎて鳴りすぎた）。SR2.0以下・iR1300以下。
+                    is_risky = (0 < other_irating <= 1300) or (other_sr is not None and 1.0 <= other_sr <= 2.0)
+                    # ★同時に「直前＆直後の1台だけ」に限定（同クラスでクラス順位が隣接）。
+                    #   離れた順位の危険ドライバーまで拾うと結局うるさくなる＝Yuji方針「少ない方がいい」。
+                    _dpos_pre = (car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None)
+                    _adjacent = (other_class == player_class_id and _dpos_pre is not None
+                                 and class_pos is not None and abs(_dpos_pre - class_pos) == 1)
+                    if is_risky and _adjacent and not in_start_rush and idx not in danger_ever_warned:
                         # 危険ドライバーは早めの安全予告なので3秒圏内で1回（バトルの0.3秒より広い）
                         # ⚠️このドライバーへの警告はセッション中1回のみ(danger_ever_warned)。
                         # 再武装方式だとギャップが4秒→3秒を何度も往復するだけで同じ相手に何度も鳴ってしまい
@@ -2054,14 +2068,12 @@ def poll_iracing():
                                 log("DANGER fire idx=%s #%s SR=%s iR=%s clsP=%s myP=%s sameCls=%s EstTime=%s pos=%s -> %s (reason:%s)"
                                     % (idx, num, other_sr, other_irating, _dpos, class_pos, _same_cls, _est_dir, _pos_dir,
                                        'behind' if _behind else 'ahead', reason))
-                                if _behind:
-                                    broadcast({'type': 'radio', 'trigger': 'danger_behind',
-                                        'delta': round(abs(delta), 1), 'reason': reason, 'car_number': num,
-                                        'message': 'Careful.' + car_tag + ' Risky driver behind (' + reason + ').'})
-                                else:  # 相手が前方
-                                    broadcast({'type': 'radio', 'trigger': 'danger_ahead',
-                                        'delta': round(abs(delta), 1), 'reason': reason, 'car_number': num,
-                                        'message': 'Careful passing —' + car_tag + ' risky driver ahead (' + reason + ').'})
+                                # ★2026-07-19 反射テンプレ→LLM判断へ卒業。旧文言は「気をつけろ」の命令調で
+                                #   Yujiの「命令口調をやめる」方針に反していた（実走ログで4回発話）。
+                                #   危険予告は数秒かけて接近する＝判断の"間"がある。セッション中1台1回のまま。
+                                broadcast({'type': 'judge_call', 'kind': 'danger',
+                                    'behind': bool(_behind), 'gap': round(abs(delta), 1),
+                                    'reason': reason, 'car_number': num})
                                 ahead_armed[idx] = False
                                 danger_warned[idx] = now
                                 danger_ever_warned.add(idx)
