@@ -1485,6 +1485,15 @@ def poll_iracing():
                     fuel_strategy['fuel_needed'] = round(fuel_needed, 1)
                     fuel_strategy['margin_laps'] = margin_laps
                     fuel_strategy['pit_required'] = margin_laps < 0
+                    # ★2026-07-19 燃料計算の計装（Monza実対決テストで誤警告の真因を実値で特定）。
+                    #   「残り1-2周で持たないと誤警告」の疑い＝laps_remaining_est過大 or リーダーペース
+                    #   予測ドリフト。毎ラップ1回、全中間値を吐いて、どこで数字が狂うかを一発で見えるように。
+                    _ld_avg = (round(sum(leader_lap_time_hist)/len(leader_lap_time_hist), 2)
+                               if leader_lap_time_hist else None)
+                    log("FUEL DIAG lap=%s fuel=%.2f avg=%.2f fuelLeftLaps=%s | rem_est=%s basis=%s leaderLap=%s down=%s timeRem=%s leaderAvg=%s | need=%.2f margin=%.2f WARN=%s clean=%s"
+                        % (lap, fuel, avg_fuel_lap, laps_of_fuel_left, laps_remaining_est, finish_basis,
+                           leader_lap, laps_down, (round(timeRemain, 1) if timeRemain else None), _ld_avg,
+                           fuel_needed, margin_laps, (margin_laps < -0.5), len(fuel_per_lap_hist)))
                     # ★2026-07-12実走で発覚：ラップ完了(=このブロック発火)がピットロード進入直後に
                     #   重なると、「ピット必須だ」という警告が実際にピットロードを走行中に届いてしまう
                     #   （既にピットに向かっているのに今更「ピットしろ」と言う矛盾した無線になる）。
