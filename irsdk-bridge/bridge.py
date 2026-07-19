@@ -2312,24 +2312,40 @@ def poll_joystick():
                     pass
         except Exception as e:
             log("PTT: joystick rebuild failed (%s): %s" % (reason, e))
+        # ★2026-07-19 まーぼー実機で発覚した無限ループの根絶：quit()→init() 自体が
+        #   JOYDEVICEADDED を再生成する。それを次ループのgetが拾ってまた作り直し…と自己増殖し、
+        #   ハンドルが毎フレーム破壊再生成されてPTTが誤動作(押しっぱなし・再登録不可)になっていた。
+        #   自分が生んだデバイスイベントをここで破棄して連鎖を断つ。
+        try:
+            pygame.event.pump()
+            pygame.event.clear([pygame.JOYDEVICEADDED, pygame.JOYDEVICEREMOVED])
+        except Exception:
+            pass
         return out
 
+    REBUILD_DEBOUNCE = 3.0   # 再構築は最短3秒に1回まで（自己増殖ループの二重安全網）
+    # 起動時に一度スキャン（接続済みデバイスを即バインド。イベント待ちにしない）
+    sticks = _rebuild_sticks("startup")
+    last_rebuild = time.time()
     while True:
         try:
             try:
                 pygame.event.pump()
             except Exception:
                 pass
-            # デバイスの抜き差しイベントを検知したら一覧を全再構築（本命の蘇生経路）
+            now = time.time()
+            # デバイスの抜き差しイベントを検知したら一覧を全再構築（本命の蘇生経路）。
+            # ★デバウンス必須：quit/initの自己生成イベント＋MOZA等が周期的に出すイベントで
+            #   毎フレーム再構築される事故を防ぐ（get自体はイベントを消費するので溜まらない）。
             try:
                 dev_events = pygame.event.get([pygame.JOYDEVICEADDED, pygame.JOYDEVICEREMOVED])
-                if dev_events:
+                if dev_events and now - last_rebuild > REBUILD_DEBOUNCE:
                     sticks = _rebuild_sticks("device change")
+                    last_rebuild = time.time()
             except Exception:
                 pass
-            now = time.time()
             # 接続スキャン（2秒ごと）：本数の食い違い or 死んだハンドルを検知したら全再構築。
-            # デバイスイベントを取り逃した場合の保険（イベント＋ポーリングの二重防御）。
+            # デバイスイベントを取り逃した場合の保険（イベント＋ポーリングの二重防御）。同じくデバウンス。
             if now - last_scan > 2:
                 last_scan = now
                 try:
@@ -2343,8 +2359,9 @@ def poll_joystick():
                     except Exception:
                         dead = True
                         break
-                if dead or cnt != len(sticks):
+                if (dead or cnt != len(sticks)) and now - last_rebuild > REBUILD_DEBOUNCE:
                     sticks = _rebuild_sticks("health check")
+                    last_rebuild = time.time()
 
             # 各ジョイスティックのボタン読み取り
             for i, js in list(sticks.items()):
