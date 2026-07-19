@@ -650,6 +650,7 @@ function buildSystem(p) {
   const raceHistory = typeof p.raceHistory === 'string' ? p.raceHistory : '';
   const paceCheck = (p.paceCheck && typeof p.paceCheck === 'object') ? p.paceCheck : null; // AIペース文脈判断用の生データ
   const judgeCall = (p.judgeCall && typeof p.judgeCall === 'object') ? p.judgeCall : null; // ★2026-07-19 LLM判断コール（テンプレでなくAIが"言うか黙るか"を判断）
+  const carClass = typeof p.carClass === 'string' ? p.carClass : ''; // シリーズ検出用（例"IMSA23"→IMSAルール注入）
 
   const base = CHARACTERS[character];
   if (!base) return null; // 未知キャラ → 呼び出し側でフォールバック
@@ -1002,6 +1003,31 @@ function buildSystem(p) {
         + 'Only if genuinely worth it, reply with ONE short line — not a fixed phrase, the line that actually helps — in your voice. If not, reply with nothing else but the exact string "NO_CALL".';
   }
 
+  // ── ★2026-07-19 シリーズ・レギュ知識の注入（Yuji提案：本物のルールを叩き込む）──
+  //   テレメトリのクラス名にシリーズ名が含まれる時、そのシリーズの実レギュをLLMに与える。
+  //   憶測でなく事実＝戦略/燃料/ピットの判断が正しくなる。Yuji（実出場者）が数字を検証済み。
+  //   まずIMSA iRacing Series（Yujiの主戦・混走）から。他シリーズは順次追加。
+  let seriesNote = '';
+  if (isRacing && /IMSA/i.test(carClass)) {
+    seriesNote = isJ
+      ? '\n\n━━ シリーズ知識：IMSA iRacing Series（このセッションの実レギュ・Yuji検証済み）━━\n'
+        + '・形式：35分の時間制レース＋ピットストップ（周回制ではない。残り"時間"で考えろ）。\n'
+        + '・クラス速度順：GTP（最速・ハイブリッド）＞ LMP2（Dallara P217）＞ GT3/GTD。スロットにGTP/P217が居なければGT3のワンメイクになる（その時は"速いクラス"警戒は不要）。\n'
+        + '・燃料：BoPの小さめタンク。無給油では最後まで持たない設計＝中盤に最低1回の燃料ストップが基本前提。\n'
+        + '・タイヤ：全開でも最後まで持つ。交換は可能だが上位勢は普通しない（＝実質"燃料だけ"のストップ）。\n'
+        + '・ピット：IMSAルール＝ボックス最低滞在時間あり。給油だけにしても短縮できない。給油とタイヤは同時作業。\n'
+        + '・スタート：8分予選→ローリングスタート。\n'
+        + '【使い方】この知識を前提に戦略を語れ。「35分レース、小タンクだから中盤に1ストップ要る計算だ」等をデータと合わせて先回りで示す。合意した作戦（アンダーカット＝序盤ピット等）は必ず保持し、途中で勝手に別の周回に変えるな。'
+      : '\n\n━━ SERIES KNOWLEDGE: IMSA iRacing Series (real regulations for this session — verified by the driver) ━━\n'
+        + '· Format: a 35-minute TIMED race + a pit stop (NOT lap-limited — reason in remaining TIME).\n'
+        + '· Class pace order: GTP (fastest, hybrid) > LMP2 (Dallara P217) > GT3/GTD. If no GTP/P217 are in the slot it becomes a GT3 one-make (then no faster-class threat to watch).\n'
+        + '· Fuel: a BoP-restricted smaller tank — you cannot run the full distance without stopping, so at least ONE fuel stop mid-race is the baseline plan.\n'
+        + '· Tyres: last the full distance; a change is allowed but front-runners usually skip it (so it is effectively a fuel-only stop).\n'
+        + '· Pit: IMSA ruleset — a MINIMUM time in the box applies; taking less service will not shorten it below the floor; fuel and tyres are serviced together.\n'
+        + '· Start: 8-min qualifying, then a rolling start.\n'
+        + '[Use it] Reason strategy from this. Proactively frame it ("35-min race, small tank — the maths says one stop mid-race") together with the live data. Hold any agreed plan (undercut = early stop, etc.) — do NOT silently drift to a different lap later.';
+  }
+
   // ── 無線の"型"（お手本）：固定文でなく、この短さ・具体性・前向きな構造を真似る手本 ──
   // 実データに合わせて数字は毎回変える。丸暗記して貼るのは禁止。あくまで「調子（cadence）」の見本。
   let voiceNote = '';
@@ -1013,7 +1039,7 @@ function buildSystem(p) {
 
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
   const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote;
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote;
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote;
   return { prefix: prefix, suffix: suffix };
 }
 

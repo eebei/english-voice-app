@@ -1502,6 +1502,7 @@ async function callAPI(){
         liveData:lastTelemetry,
         sessionType:lastSessionType,
         driverState,
+        carClass:lastCarClass,   // シリーズ検出用（例IMSA23→IMSAルール注入）
         profileNote,
         raceHistory,
         max_tokens:maxTok
@@ -2247,7 +2248,7 @@ async function scheduleAutoBriefing(){
       messages:[{role:'user', content:'[BRIEFING_KICKOFF] iRacingに接続した。今わかっているコース・車種・セッション種別を踏まえ、ドライバーに戦略ブリーフィングを自分から短く切り出せ。まずレースかテストか、目標を一問だけ聞け。'}],
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
-      liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+      liveData:lastTelemetry, sessionType:lastSessionType, driverState, carClass:lastCarClass,
       profileNote: buildProfileNote(profile)+buildCarTrackMemory()+buildContractNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'),
       raceHistory: buildRaceHistoryContext(),   // カルテ（過去セッション・全キャラ共有）を能動ブリーフィングにも渡す
       max_tokens: 150
