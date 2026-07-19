@@ -943,6 +943,7 @@ def poll_iracing():
     catchup_stage = {}          # car_idx -> 前方車両への段階的キャッチアップコール、直近で知らせた段階(0=未・1=7秒・2=4秒・3=3秒・4=1.5秒)
     defend_stage = {}           # car_idx -> 後方車両への段階的ディフェンスコール、同上
     gap_pace_hist = {}          # car_idx -> 直前ラップでのpace_diff（トレンド判定・確度の高低に使う）
+    dir_fix_seen = {}           # car_idx -> 直近ログ済みの前後食い違い状態（DIR FIX診断のログ肥大を防ぐ間引き用）
     in_corner = False           # コーナー単位サイドバイサイド検知：今コーナー中か
     corner_over_count = 0       # 舵角がCORNER_ENTRY_RADを超えた連続サンプル数
     corner_under_count = 0      # 舵角がCORNER_EXIT_RADを下回った連続サンプル数
@@ -2113,7 +2114,9 @@ def poll_iracing():
                         # 診断：前後判定がEstTime(旧)とクラス順位(新)で食い違った瞬間を残す＝根絶の効きを実走で確認
                         _old_dir = 'ahead' if delta < 0 else 'behind'
                         _new_dir = 'ahead' if _is_ahead_rival else 'behind'
-                        if _old_dir != _new_dir:
+                        # 間引き：同じ食い違い状態を毎サイクル吐かない（1車につき状態が変わった時だけ1回）
+                        if _old_dir != _new_dir and dir_fix_seen.get(idx) != (_old_dir, _new_dir):
+                            dir_fix_seen[idx] = (_old_dir, _new_dir)
                             log("DIR FIX: car#%s clsP%s vs myP%s -> EstTime said %s, position says %s (gap %.1f)"
                                 % (_num2, other_cls_pos, class_pos, _old_dir, _new_dir, gap))
 
@@ -2192,14 +2195,14 @@ def poll_iracing():
                                 #   両車のLapDistPct・wrap後の差・秒gapを残す（LapDistPct符号規約の最終確定用）。
                                 log("MC fire _mi=%s myPct=%.3f otherPct=%.3f pd=%.3f gap=%.1f -> called BEHIND stg=%s"
                                     % (_mi, _ppct, _opct, _pd, _mcgap, _stg))
-                                if _stg == 1:
-                                    broadcast({'type': 'radio', 'trigger': 'multiclass_approaching',
-                                        'delta': round(_mcgap, 1), 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
-                                        'message': _class_id_txt_en(_ocname, _ocpos) + ' back, ' + _fmt_gap(_mcgap) + '. Prepare.'})
-                                else:
-                                    broadcast({'type': 'radio', 'trigger': 'multiclass_imminent',
-                                        'delta': round(_mcgap, 1), 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
-                                        'message': 'Give room now — ' + _class_id_txt_en(_ocname, _ocpos) + '.'})
+                                # ★2026-07-19 反射テンプレ→LLM判断へ卒業（Yuji Monza実走で「準備しておこう」87連呼＝
+                                #   クロスクラスのLapDistPctギャップが不正確(実0.1秒を4-5秒と誤報)・訂正しても12秒後に再発火の
+                                #   "ドリフターズのコント"が発覚）。速いクラスは数秒かけて迫る＝0.1秒の衝突反射でなくLLM判断の時間がある。
+                                #   ★不正確な秒数は渡さない（盛らない）＝stageだけ渡し、Lunaは数字を言わず質的に警告。
+                                #   recentバッファで「さっき速いクラス言った→黙る」＝連呼死＋ドライバーの訂正も踏まえられる。
+                                broadcast({'type': 'judge_call', 'kind': 'multiclass',
+                                    'stage': _stg,   # 1=接近(備え) / 2=直後(今譲れ)
+                                    'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos})
                                 last_battle_global = now
 
         # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──

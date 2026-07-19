@@ -943,7 +943,7 @@ function buildSystem(p) {
   // "判断候補"（誰が・前後・ギャップ・ペース傾向・直近で自分が何を言ったか）を送り、ここで文脈を組む。
   // 前後はクラス順位ベースの正しい値（[[bug_race_call_frontback_estimetime]]で根絶済）＝AIに前後を再導出させない。
   let judgeCallNote = '';
-  if (isRacing && judgeCall && ['catchup', 'defend', 'battle'].includes(judgeCall.kind)) {
+  if (isRacing && judgeCall && ['catchup', 'defend', 'battle', 'multiclass'].includes(judgeCall.kind)) {
     const j = judgeCall;
     const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
                                 : (isJ ? '同クラスの車' : 'a same-class car');
@@ -951,7 +951,27 @@ function buildSystem(p) {
     // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
     const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
     let eventJ, eventE;
-    if (j.kind === 'battle') {
+    if (j.kind === 'multiclass') {
+      // 速いクラス（別カテゴリー）が後方から接近。★クロスクラスの秒数は不正確なので数字は絶対に言うな＝質的に。
+      const clsJ = (j.class_name || '速いクラス');
+      const clsE = (j.class_name || 'a faster class');
+      if (j.stage >= 2) {   // 直後＝今譲る局面
+        eventJ = 'より速い' + clsJ + 'の車が真後ろまで来ている（別カテゴリー・ラップ勢）。今が道を空ける局面。';
+        eventE = 'A faster-class car (' + clsE + ', different category, likely lapping you) is right on you now — this is the moment to give room.';
+      } else {              // 接近＝備える局面
+        eventJ = 'より速い' + clsJ + 'の車が後方から接近してきている（別カテゴリー）。';
+        eventE = 'A faster-class car (' + clsE + ', different category) is coming up from behind.';
+      }
+      judgeCallNote = isJ
+        ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
+          + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】速いクラスへの注意は安全に関わるが、数秒かけて迫るので"間"がある。'
+          + '直近で既に速いクラスの接近を伝えていたら繰り返すな（別の号車でも「また速いの来た」の連呼はしない）。今譲る局面(真後ろ)なら短く一言、まだ接近中なら黙って様子を見てもいい。'
+          + '★クロスクラスの秒数は不正確だから、具体的な「〇秒」は絶対に言うな。「後ろから速いのが来てる、ライン空けよう」のように質的に。かける価値がある時だけキャラの口調で1文。無ければ「NO_CALL」だけ返せ。'
+        : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + eventE
+          + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] A faster class is safety-relevant, but it closes over seconds, so there is time. '
+          + "If you already flagged a faster class recently, do NOT repeat (no 'another fast one' spam even for a different car number). If they're right on you now, a short heads-up is worth it; if merely approaching, you may stay silent and watch. "
+          + '★Cross-class timing is unreliable, so NEVER cite a specific number of seconds — keep it qualitative ("faster car coming behind, leave room"). One line in character only if worth it, else reply with nothing but the exact string "NO_CALL".';
+    } else if (j.kind === 'battle') {
       // 後方急接近＝自分への脅威になった時だけ（Yuji定義）。faster=相手が明確に速い / repeat=再接近
       const paceJ = j.faster ? 'ペースは相手のほうが明確に速い' : 'ペースは互角';
       const paceE = j.faster ? 'their pace is clearly faster' : 'pace is similar';
@@ -970,7 +990,8 @@ function buildSystem(p) {
       eventJ = carTag + 'が' + (ahead ? '前方' : '後方') + '、ギャップ' + gapTxt + '。' + trendJ + '。' + urgencyJ;
       eventE = carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE;
     }
-    judgeCallNote = isJ
+    // 共通末尾（catchup/defend/battle）。multiclassは上で専用noteを組み済みなので上書きしない。
+    if (j.kind !== 'multiclass') judgeCallNote = isJ
       ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
         + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この状況がドライバーにとって本当に意味のある局面か——残り周回・順位・リードの余裕を踏まえて判断しろ。'
         + '意味が薄いなら黙れ（後ろで勝手にやってるだけのバトルや、まだ遠い差は無視していい。沈黙も一流の仕事だ）。直前に言ったことは繰り返すな。'
