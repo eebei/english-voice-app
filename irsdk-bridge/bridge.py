@@ -2049,15 +2049,18 @@ def poll_iracing():
                                 num = car_number_map.get(idx)
                                 car_tag = (' car #' + num) if num else ''
                                 again_tag = ' again' if is_repeat else ''
-                                if pace_diff < -1.5:  # 相手が明らかに速い → 抑えるより先に行かせる
-                                    broadcast({'type': 'radio', 'trigger': 'battle_behind_faster',
-                                        'delta': round(delta, 1), 'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
-                                        'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '. Faster pace. Let him go.'})
-                                else:
-                                    broadcast({'type': 'radio', 'trigger': 'battle_behind',
-                                        'delta': round(delta, 1), 'repeat': is_repeat,
-                                        'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '. Closing.'})
-                                behind_armed[idx] = False   # 1回言ったら再武装まで黙る
+                                # ★2026-07-19 LLM判断層へ：後方急接近を"完成文"でなく"判断候補"として送る。
+                                #   「後ろのバトルでも自分に迫った時だけ・文脈で言うか黙るか」をAIが決める(Yuji定義)。
+                                #   前後はクラス順位で確認（EstTime符号事故の防止）。位置が前方＝誤検知なら送らない。
+                                _bpos = car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None
+                                _pos_says_ahead = (_bpos is not None and class_pos is not None and _bpos < class_pos)
+                                if not _pos_says_ahead:
+                                    broadcast({'type': 'judge_call', 'kind': 'battle',
+                                        'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
+                                        'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
+                                        'car_number': num, 'class_pos': _bpos,
+                                        'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '.'})
+                                behind_armed[idx] = False   # 1回判断に回したら再武装まで黙る
                                 battle_ever_warned.add(idx)
                                 last_battle_global = now
 

@@ -2192,7 +2192,8 @@ async function judgeAndSpeak(data){
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
     liveData:lastTelemetry, sessionType:lastSessionType, driverState,
     judgeCall:{kind:data.kind, car_number:data.car_number, class_name:data.class_name, class_pos:data.class_pos,
-      gap:data.gap, stage:data.stage, confident:data.confident, recent:recentCallSummary()},
+      gap:data.gap, stage:data.stage, confident:data.confident, faster:data.faster, repeat:data.repeat,
+      recent:recentCallSummary()},
     max_tokens:70
   };
   if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
@@ -2206,7 +2207,7 @@ async function judgeAndSpeak(data){
     if(!reply || reply==='NO_CALL' || reply.includes('NO_CALL')) return;   // AIが「黙る」と判断
     addMsg('ai',reply);
     speak(reply);
-    pushRecentCall((data.kind==='catchup'?'catchup':'defend') + (data.car_number?' #'+data.car_number:''));
+    pushRecentCall(data.kind + (data.car_number?' #'+data.car_number:''));
   }catch(e){ /* サイレント失敗でよい（テンプレ発話でないため無理に埋めない） */ }
 }
 

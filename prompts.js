@@ -943,34 +943,42 @@ function buildSystem(p) {
   // "判断候補"（誰が・前後・ギャップ・ペース傾向・直近で自分が何を言ったか）を送り、ここで文脈を組む。
   // 前後はクラス順位ベースの正しい値（[[bug_race_call_frontback_estimetime]]で根絶済）＝AIに前後を再導出させない。
   let judgeCallNote = '';
-  if (isRacing && judgeCall && (judgeCall.kind === 'catchup' || judgeCall.kind === 'defend')) {
+  if (isRacing && judgeCall && ['catchup', 'defend', 'battle'].includes(judgeCall.kind)) {
     const j = judgeCall;
     const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
-                                : (isJ ? '同クラスのライバル' : 'a same-class rival');
-    const ahead = j.kind === 'catchup';               // catchup=相手が前方(自分が追う) / defend=相手が後方(迫られてる)
+                                : (isJ ? '同クラスの車' : 'a same-class car');
     const gapTxt = (j.gap != null) ? (isJ ? j.gap + '秒' : j.gap + 's') : (isJ ? '接近中' : 'close');
-    // ペース傾向：confident=傾向が固まった / stage=切迫度(1遠→4勝負どころ)
-    const trendJ = ahead
-      ? (j.confident ? '君のほうが速く、差が詰まってきている' : '差が動き始めた')
-      : (j.confident ? '相手のほうが速く、詰められてきている' : '差が動き始めた');
-    const trendE = ahead
-      ? (j.confident ? "you're faster and reeling them in" : 'the gap is starting to move')
-      : (j.confident ? "they're faster and closing on you" : 'the gap is starting to move');
-    const urgencyJ = j.stage >= 4 ? '勝負どころ。' : (j.stage === 3 ? '意味が出てきた頃合い。' : '');
-    const urgencyE = j.stage >= 4 ? "It's the decisive moment." : (j.stage === 3 ? "It's becoming meaningful." : '');
     // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
     const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
+    let eventJ, eventE;
+    if (j.kind === 'battle') {
+      // 後方急接近＝自分への脅威になった時だけ（Yuji定義）。faster=相手が明確に速い / repeat=再接近
+      const paceJ = j.faster ? 'ペースは相手のほうが明確に速い' : 'ペースは互角';
+      const paceE = j.faster ? 'their pace is clearly faster' : 'pace is similar';
+      const againJ = j.repeat ? '（一度離してまた迫ってきた）' : '';
+      const againE = j.repeat ? ' (they dropped back and are closing again)' : '';
+      eventJ = carTag + 'が真後ろまで急接近、ギャップ' + gapTxt + '。' + paceJ + againJ + '。';
+      eventE = carTag + ' has closed right onto your tail, gap ' + gapTxt + '. ' + paceE + againE + '.';
+    } else {
+      const ahead = j.kind === 'catchup';   // catchup=相手が前方(自分が追う) / defend=相手が後方(迫られてる)
+      const trendJ = ahead ? (j.confident ? '君のほうが速く差が詰まってきている' : '差が動き始めた')
+                           : (j.confident ? '相手のほうが速く詰められてきている' : '差が動き始めた');
+      const trendE = ahead ? (j.confident ? "you're faster and reeling them in" : 'the gap is starting to move')
+                           : (j.confident ? "they're faster and closing on you" : 'the gap is starting to move');
+      const urgencyJ = j.stage >= 4 ? '勝負どころ。' : (j.stage === 3 ? '意味が出てきた頃合い。' : '');
+      const urgencyE = j.stage >= 4 ? "It's the decisive moment." : (j.stage === 3 ? "It's becoming meaningful." : '');
+      eventJ = carTag + 'が' + (ahead ? '前方' : '後方') + '、ギャップ' + gapTxt + '。' + trendJ + '。' + urgencyJ;
+      eventE = carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE;
+    }
     judgeCallNote = isJ
-      ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + carTag + 'が' + (ahead ? '前方' : '後方') + '、ギャップ' + gapTxt + '。' + trendJ + '。' + urgencyJ
-        + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この瞬間、無線で一言かける価値があるか判断しろ。'
-        + '直前に言ったことを繰り返すな。付け加える意味が無いなら黙れ（沈黙も一流の仕事だ）。'
-        + '固定文でなく、この状況に本当に効く一言を、君の口調で。かける価値があると判断した時だけ1文返せ。'
-        + '価値が無いと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。'
-      : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE
-        + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] Decide whether ONE short radio line is worth it RIGHT NOW. '
-        + 'Do not repeat what you just said. If it adds nothing, stay silent (silence is part of great engineering). '
-        + 'Not a fixed phrase — the one line that actually helps this moment, in your voice. Reply with ONE short line only if genuinely worth it. '
-        + 'If not, reply with nothing else but the exact string "NO_CALL".';
+      ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
+        + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この状況がドライバーにとって本当に意味のある局面か——残り周回・順位・リードの余裕を踏まえて判断しろ。'
+        + '意味が薄いなら黙れ（後ろで勝手にやってるだけのバトルや、まだ遠い差は無視していい。沈黙も一流の仕事だ）。直前に言ったことは繰り返すな。'
+        + 'かける価値があると判断した時だけ、固定文でなくこの状況に効く一言を君の口調で1文返せ。価値が無ければ、他には一切書かず「NO_CALL」とだけ返せ。'
+      : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + eventE
+        + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] Decide whether this genuinely matters to the driver RIGHT NOW — weigh laps remaining, position, and how comfortable the gap is. '
+        + "Stay silent if it adds little (a scrap happening behind that doesn't threaten you, or a gap still too far, is not worth a call — silence is part of great engineering). Do not repeat what you just said. "
+        + 'Only if genuinely worth it, reply with ONE short line — not a fixed phrase, the line that actually helps — in your voice. If not, reply with nothing else but the exact string "NO_CALL".';
   }
 
   // ── 無線の"型"（お手本）：固定文でなく、この短さ・具体性・前向きな構造を真似る手本 ──
