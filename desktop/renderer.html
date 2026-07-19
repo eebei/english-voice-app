@@ -2407,20 +2407,40 @@ function buildProfileNote(profile){
   const lines=[];
   if(profile.sessions) lines.push(isJP?`セッション数：${profile.sessions}`:`Sessions with this engineer: ${profile.sessions}`);
   if(profile.lastDate) lines.push(isJP?`最終セッション：${profile.lastDate}`:`Last session: ${profile.lastDate}`);
-  if(profile.notes&&profile.notes.length) lines.push(isJP?`過去のメモ：${profile.notes.slice(-3).join(' / ')}`:`Past notes: ${profile.notes.slice(-3).join(' / ')}`);
+  // ★2026-07-19 記憶2階：積み上げた"人物理解"を毎回注入（生ログでなく蒸留メモ＝濃いので5件まで遡る）
+  if(profile.notes&&profile.notes.length) lines.push(isJP
+    ?`このドライバーについて分かっていること（過去セッションの観察）：\n${profile.notes.slice(-5).join('\n')}`
+    :`What you know about this driver (observations from past sessions):\n${profile.notes.slice(-5).join('\n')}`);
   if(!lines.length) return '';
   return isJP?'\n\n━━ ドライバープロファイル ━━\n'+lines.join('\n'):'\n\n━━ DRIVER PROFILE ━━\n'+lines.join('\n');
 }
-function saveMemory(){
+// ★2026-07-19 生ログのコピペ→LLMによる"人物理解の蒸留"に作り替え（Yuji方針）。
+//   旧実装は直近6発言を120文字で切って貼るだけ＝転写であって理解ではなく、
+//   Monzaデブリーフの金塊（「プレッシャー下の判断が冷静」「どこで焦るか」等）を毎回捨てていた。
+//   ラップタイム等の数字は pw_raceHistory / pw_ctmem が別に持つので、ここは"人"だけを積む。
+//   これが記憶2階＝クセ＝Crew Chiefとの決定的差別化（Yuji「これだよ！これ！」）。
+async function saveMemory(){
   if(memorySavedThisSession||messages.length<4) return;
   memorySavedThisSession=true;
-  const recent=messages.slice(-6).map(m=>`${m.role}: ${m.content.slice(0,120)}`).join('\n');
+  const convo=messages.slice(-16).map(m=>`${m.role==='user'?'D':'E'}: ${String(m.content||'').slice(0,200)}`).join('\n');
   const profile=loadProfile()||{name:userName,sessions:1};
-  const note=`[${new Date().toISOString().slice(0,10)}] ${recent}`;
+  let note='';
+  try{
+    const authToken=localStorage.getItem('pw_auth_token');
+    const headers={'Content-Type':'application/json'};
+    const body={messages:[{role:'user',content:'[DRIVER_INSIGHT]\n'+convo}],
+      character:sel, mode:selMode, level:'C2', userName, telemetry:'off',
+      driverInsight:true, profileNote:buildProfileNote(profile), max_tokens:180};
+    if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+    const res=await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});
+    const d=await res.json();
+    note=(d.content?.[0]?.text||'').trim();
+  }catch(e){ /* 失敗時は何も残さない */ }
+  if(!note||note.length<4) return;   // 蒸留できなければ書かない（生ログで汚すより無い方がマシ）
   const notes=(profile.notes||[]);
-  notes.push(note);
-  if(notes.length>5) notes.shift();
-  saveProfile({...profile,notes});
+  notes.push(`[${new Date().toISOString().slice(0,10)}] ${note}`);
+  while(notes.length>8) notes.shift();
+  saveProfile({...loadProfile()||profile,notes});
 }
 function saveSessionSummary(data){
   try{

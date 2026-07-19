@@ -1731,8 +1731,9 @@ def poll_iracing():
         if tow_time is not None and tow_time > 0:
             if not tow_active:
                 tow_active = True
-                broadcast({'type': 'radio', 'trigger': 'towing', 'tow_time': round(tow_time, 1),
-                    'message': 'Being towed back. Time counts against us until it clears, no pit work yet. Nothing you can do — breathe, we regroup when you are in.'})
+                # ★2026-07-19 固定文→LLMへ（Yuji「簡単な声掛けでいい。当てられた時も、その逆もある」）。
+                #   当てられたのか自分のミスかは分からない＝決め打ちの慰めも説教も外す。短く一言だけ。
+                broadcast({'type': 'judge_call', 'kind': 'towing', 'tow_time': round(tow_time, 1)})
         else:
             tow_active = False
 

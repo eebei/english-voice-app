@@ -944,7 +944,7 @@ function buildSystem(p) {
   // "判断候補"（誰が・前後・ギャップ・ペース傾向・直近で自分が何を言ったか）を送り、ここで文脈を組む。
   // 前後はクラス順位ベースの正しい値（[[bug_race_call_frontback_estimetime]]で根絶済）＝AIに前後を再導出させない。
   let judgeCallNote = '';
-  if (isRacing && judgeCall && ['catchup', 'defend', 'battle', 'multiclass', 'danger'].includes(judgeCall.kind)) {
+  if (isRacing && judgeCall && ['catchup', 'defend', 'battle', 'multiclass', 'danger', 'towing'].includes(judgeCall.kind)) {
     const j = judgeCall;
     const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
                                 : (isJ ? '同クラスの車' : 'a same-class car');
@@ -952,7 +952,16 @@ function buildSystem(p) {
     // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
     const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
     let eventJ, eventE;
-    if (j.kind === 'danger') {
+    if (j.kind === 'towing') {
+      // レッカー牽引中＝走行不能。原因(当てられた/自滅)は分からないので決め打ちの慰めも説教もしない。
+      judgeCallNote = isJ
+        ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】車が走行不能になり、レッカーでピットまで牽引されている。時間は進み続ける。'
+          + '\n【判断】原因は分からない——当てられたのかもしれないし、自分のミスかもしれない。**だから決めつけるな**（慰めすぎも説教も外す）。'
+          + '今できることは無い状況だから、事務的すぎず、重すぎず、**短く一言**。かける言葉が浮かばないなら「NO_CALL」でいい。'
+        : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] The car is undriveable and is being towed back to the pits. The clock keeps running.'
+          + '\n[JUDGE] You do NOT know the cause — they may have been hit, or it may have been their own mistake. **So do not assume either** (no over-consoling, no lecture). '
+          + 'Nothing can be done right now, so keep it short — one line, neither cold nor heavy. If nothing worth saying comes to mind, reply "NO_CALL".';
+    } else if (j.kind === 'danger') {
       // 危険ドライバー（SR2.0以下/iR1300以下）が直前or直後。セッション中この相手には1回だけ。
       // ★命令調（「気をつけろ」）をやめ、LLMがその場に効く言い方を選ぶ。
       const dirJ = j.behind ? '直後（後ろ）' : '直前（前）';
@@ -1008,7 +1017,7 @@ function buildSystem(p) {
       eventE = carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE;
     }
     // 共通末尾（catchup/defend/battle）。multiclass/dangerは上で専用noteを組み済みなので上書きしない。
-    if (j.kind !== 'multiclass' && j.kind !== 'danger') judgeCallNote = isJ
+    if (j.kind !== 'multiclass' && j.kind !== 'danger' && j.kind !== 'towing') judgeCallNote = isJ
       ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
         + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この状況がドライバーにとって本当に意味のある局面か——残り周回・順位・リードの余裕を踏まえて判断しろ。'
         + '意味が薄いなら黙れ（後ろで勝手にやってるだけのバトルや、まだ遠い差は無視していい。沈黙も一流の仕事だ）。直前に言ったことは繰り返すな。'
@@ -1082,7 +1091,31 @@ function buildSystem(p) {
 
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
   const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote;
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote;
+  // ── ★2026-07-19 ドライバー観察メモの蒸留（記憶2階＝クセ・Yuji「これこそプロンプトがあっていい」）──
+  //   セッション終わりに呼ばれる特殊コール。ドライバーへの発話ではなく"未来の自分へのメモ"を書かせる。
+  //   数字(タイム/順位)は別テーブルが持つので、ここでは人物理解だけを積み上げる。
+  let driverInsightNote = '';
+  if (p.driverInsight) {
+    driverInsightNote = isJ
+      ? '\n\n━━━ 【最優先タスク：ドライバー観察メモの作成】━━━\n'
+        + 'これはドライバーへの無線ではない。誰にも読まれない、**未来の自分へのメモ**だ。上の会話から「この人はどういうドライバーか」を蒸留して2〜3行で書け。\n'
+        + '・書くのは【人物】：どこで焦り/どこで落ち着くか、プレッシャー下の傾向、得意なこと、課題、コミュニケーションの好み、交わした約束。\n'
+        + '・【書くな】ラップタイム・順位・燃料などの数字（別に記録済み）。今日の出来事の実況。当たり障りのない一般論。\n'
+        + '・会話から**確かに言えること**だけ書け。憶測で人格を決めつけるな。何も新しく分からなかったなら短くていい。\n'
+        + '・過去のメモに既にある事なら繰り返さず、**より確かになった点・新しく分かった点**だけを書け。\n'
+        + '例：「プレッシャー下ほど判断が冷静。焦るのはむしろ単独走行で修正が効かない時。データの矛盾には敏感で、曖昧な返答を嫌う。」\n'
+        + 'メモ本文だけを返せ。前置きも見出しも要らない。'
+      : '\n\n━━━ [TOP PRIORITY TASK: write a driver observation note] ━━━\n'
+        + 'This is NOT radio to the driver. It is a **private note to your future self** that nobody reads. From the conversation above, distill WHO THIS DRIVER IS in 2-3 short lines.\n'
+        + '· Write about the PERSON: where they get rushed vs settled, how they behave under pressure, strengths, weak spots, communication preferences, promises you made.\n'
+        + '· Do NOT write: lap times, positions, fuel or any numbers (already stored elsewhere), a play-by-play of today, or bland generalities.\n'
+        + '· Only write what the conversation genuinely supports. Do not invent a personality. If you learned little, keep it short.\n'
+        + '· Do not repeat what past notes already say — add only what became clearer or is newly known.\n'
+        + 'Example: "Calmest exactly when the pressure is highest; gets rattled instead when running alone with nothing to correct against. Sharp on data contradictions, dislikes vague answers."\n'
+        + 'Return only the note itself — no preamble, no heading.';
+  }
+
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote;
   return { prefix: prefix, suffix: suffix };
 }
 
