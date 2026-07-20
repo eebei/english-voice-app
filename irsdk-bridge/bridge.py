@@ -2711,63 +2711,73 @@ async def handler(websocket):
         # クライアントからのコマンド受信（PTT設定など）
         async for raw in websocket:
             try:
-                msg = json.loads(raw)
-            except Exception:
+                try:
+                    msg = json.loads(raw)
+                except Exception:
+                    continue
+                cmd = msg.get('cmd')
+
+                # log_line = rendererからの会話ログ転送。デバッグログに会話(AI返答含む)を残す。
+                # スクショ無しで後から会話を追えるように(Yuji時短)。CMDノイズは出さない。
+                if cmd == 'spoke':
+                    # rendererが実際に再生を開始した通知。ここで予算を消費する（Codex指摘の修正）。
+                    # ⚠️2026-07-20 このスコープの受信メッセージは msg。data と書いて NameError を投げ、
+                    #   発話のたびに websocket ハンドラごと落ちて接続が切れていた（実走で発覚）。
+                    director_commit(int(msg.get('prio', 4)), str(msg.get('kind', 'radio')))
+                    continue
+                if cmd == 'quiet_mode':
+                    # ★2026-07-20 ドライバーの「あんまり喋らなくていい」を構造で受ける。
+                    #   P3〜P5(戦略/情報/雑談)の予算を絞るだけで、P0/P1(安全)には一切効かない。
+                    #   実走でモデルが「言わなくていいと言われたから速いクラスを報告しなかった」と述べた
+                    #   事故の再発防止＝"静かに"の意味をプロンプトでなく仕組みで限定する。
+                    set_quiet_mode(int(msg.get('seconds', 600)))
+                    continue
+                if cmd == 'log_line':
+                    log("CONVO " + str(msg.get('text', '')))
+                    continue
+                log("CMD received: " + str(cmd))
+                if cmd == "ptt_start":
+                    lang = msg.get('lang')
+                    if lang:
+                        ptt_lang = lang
+                        log("PTT STT language -> " + str(lang))
+                    start_ptt_record()
+                elif cmd == "ptt_stop":
+                    stop_ptt_record()
+                elif cmd == 'ptt_setup':
+                    ptt_capturing = True
+                    log("PTT setup mode: waiting for button press")
+                elif cmd == 'ptt_cancel':
+                    ptt_capturing = False
+                elif cmd == 'vol_setup':
+                    which = msg.get('dir')
+                    if which in ('up', 'down'):
+                        vol_capturing = which
+                        log("VOL setup mode (%s): waiting for button press" % which)
+                elif cmd == 'vol_cancel':
+                    vol_capturing = None
+                elif cmd == 'mic_list':
+                    # マイク一覧を再列挙して返す（USB抜き差し後の更新用）
+                    await websocket.send(json.dumps({'type': 'mic_list',
+                        'devices': list_input_devices(), 'selected': selected_mic_index}))
+                elif cmd == 'mic_select':
+                    idx = msg.get('index')
+                    selected_mic_index = idx if isinstance(idx, int) and idx >= 0 else None
+                    save_mic_config()
+                    log("mic selected -> " + str(selected_mic_index))
+                    await websocket.send(json.dumps({'type': 'mic_config', 'selected': selected_mic_index}))
+                elif cmd == 'mic_test_start':
+                    ptt_test_active = True
+                    log("mic test start")
+                elif cmd == 'mic_test_stop':
+                    ptt_test_active = False
+                    log("mic test stop")
+            except Exception as _cmd_err:
+                # ★2026-07-20 1コマンドの失敗で websocket ハンドラごと落とさない。
+                #   実走で cmd="spoke" 内の NameError がハンドラを殺し、Lunaが喋るたびに接続が切れ、
+                #   ドライバーの問いかけに一切応答できない状態になった（予選が丸ごと無駄になった）。
+                log("CMD handler error (connection kept alive): %s -> %s" % (msg.get("cmd"), _cmd_err))
                 continue
-            cmd = msg.get('cmd')
-            # log_line = rendererからの会話ログ転送。デバッグログに会話(AI返答含む)を残す。
-            # スクショ無しで後から会話を追えるように(Yuji時短)。CMDノイズは出さない。
-            if cmd == 'spoke':
-                # rendererが実際に再生を開始した通知。ここで予算を消費する（Codex指摘の修正）。
-                director_commit(int(data.get('prio', 4)), str(data.get('kind', 'radio')))
-                continue
-            if cmd == 'quiet_mode':
-                # ★2026-07-20 ドライバーの「あんまり喋らなくていい」を構造で受ける。
-                #   P3〜P5(戦略/情報/雑談)の予算を絞るだけで、P0/P1(安全)には一切効かない。
-                #   実走でモデルが「言わなくていいと言われたから速いクラスを報告しなかった」と述べた
-                #   事故の再発防止＝"静かに"の意味をプロンプトでなく仕組みで限定する。
-                set_quiet_mode(int(data.get('seconds', 600)))
-                continue
-            if cmd == 'log_line':
-                log("CONVO " + str(msg.get('text', '')))
-                continue
-            log("CMD received: " + str(cmd))
-            if cmd == "ptt_start":
-                lang = msg.get('lang')
-                if lang:
-                    ptt_lang = lang
-                    log("PTT STT language -> " + str(lang))
-                start_ptt_record()
-            elif cmd == "ptt_stop":
-                stop_ptt_record()
-            elif cmd == 'ptt_setup':
-                ptt_capturing = True
-                log("PTT setup mode: waiting for button press")
-            elif cmd == 'ptt_cancel':
-                ptt_capturing = False
-            elif cmd == 'vol_setup':
-                which = msg.get('dir')
-                if which in ('up', 'down'):
-                    vol_capturing = which
-                    log("VOL setup mode (%s): waiting for button press" % which)
-            elif cmd == 'vol_cancel':
-                vol_capturing = None
-            elif cmd == 'mic_list':
-                # マイク一覧を再列挙して返す（USB抜き差し後の更新用）
-                await websocket.send(json.dumps({'type': 'mic_list',
-                    'devices': list_input_devices(), 'selected': selected_mic_index}))
-            elif cmd == 'mic_select':
-                idx = msg.get('index')
-                selected_mic_index = idx if isinstance(idx, int) and idx >= 0 else None
-                save_mic_config()
-                log("mic selected -> " + str(selected_mic_index))
-                await websocket.send(json.dumps({'type': 'mic_config', 'selected': selected_mic_index}))
-            elif cmd == 'mic_test_start':
-                ptt_test_active = True
-                log("mic test start")
-            elif cmd == 'mic_test_stop':
-                ptt_test_active = False
-                log("mic test stop")
     finally:
         connected_clients.discard(websocket)
 
