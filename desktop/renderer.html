@@ -1887,6 +1887,7 @@ function connectBridge(){
     irBridge.onmessage=(e)=>{
       let data; try{data=JSON.parse(e.data);}catch{return;}
       if(data.type==='iracing_connected'){ iracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live'); return; }
+      if(data.type==='iracing_connected' && !window.__memDumped){ window.__memDumped=true; setTimeout(()=>dumpLearnedMemory('iRacing接続時'),1200); }
       if(data.type==='iracing_disconnected'){ iracingLive=false; updateBridgeStatus(); bridgeVoice('iracing_lost'); return; }
       if(data.type==='radio') injectRadio(data);
       if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; if(data.data){ if(data.data.player_car_class) lastCarClass=data.data.player_car_class; if(data.data.track) lastTrack=data.data.track; if(data.data.player_irating) lastIrating=data.data.player_irating; if(data.data.safety_rating) lastSr=data.data.safety_rating; } }
@@ -2712,6 +2713,38 @@ function populateMicList(devices, selected){
 //   （実走：速いクラスの接近を24回検知して0回しか報告せず、理由は「言わなくていいと言われたから」）。
 //   ここで検出してbridgeへ渡し、P3〜P5の発話予算だけを絞る。P0/P1(安全)には一切効かない。
 const QUIET_RE = /(あんまり|あまり|そんなに)?\s*(喋ら|しゃべら|話さ)なくて(も)?(いい|大丈夫)|静かに(して|しといて)|黙って(て|いて)|コールしなくていい|今は?いらない/;
+// ★★2026-07-20 「Lunaが何を学習しているか」を見えるようにする（Yuji要望）★★
+//   これまで学習内容(人物理解・コース×車種の記憶・戦歴)はブラウザ内に隠れており、
+//   ドライバーもClaude Codeも中身を確認できなかった。誤った理解が記録されても
+//   気づかないまま毎セッション注入され続ける（実際に「言わなくていいと言われたから
+//   速いクラスを報告しなかった」という事故が起きた）。
+//   セッション開始時にデバッグログへ書き出し、いつでも人間が読める状態にする。
+function dumpLearnedMemory(reason){
+  try{
+    const prof = JSON.parse(localStorage.getItem('pw_profile')||'{}');
+    const ct   = JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    const hist = JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
+    const lines = [];
+    lines.push('===== Lunaが学習していること ('+(reason||'session start')+') =====');
+    lines.push('[ドライバー] 名前:'+(prof.name||'?')+' / セッション数:'+(prof.sessions||0)+' / 最終:'+(prof.lastDate||'?'));
+    const notes = prof.notes||[];
+    lines.push('[人物理解 '+notes.length+'件] ' + (notes.length? '' : '(まだ無し)'));
+    notes.forEach(n=> lines.push('   ・'+String(n).replace(/\s+/g,' ').slice(0,300)));
+    const keys = Object.keys(ct);
+    lines.push('[コース×車種の記憶 '+keys.length+'件]');
+    keys.slice(-8).forEach(k=>{
+      const m = ct[k]||{};
+      lines.push('   ・'+k+' → ベスト'+(m.bestLap||'?')+' / 燃料'+(m.fuelPerLap||'?')+'L per lap / '+(m.sessions||0)+'回');
+    });
+    lines.push('[戦歴 '+hist.length+'件] 直近3件:');
+    hist.slice(-3).forEach(h=> lines.push('   ・'+h.date+' '+(h.car||'')+' '+h.track+' ベスト'+(h.bestLap||'?')+' '+h.totalLaps+'周 インシデント'+h.incidents));
+    lines.push('==========================================');
+    lines.forEach(l=>{
+      if(irBridge && irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'log_line', line:l}));
+    });
+    return lines.join('\n');
+  }catch(e){ return 'memory dump failed: '+e; }
+}
 function maybeQuietMode(text){
   if(!text || !QUIET_RE.test(text)) return;
   if(irBridge && irBridge.readyState===1){
