@@ -86,7 +86,9 @@
 - **PTT 遅延 1〜3秒の内訳**：**未計装**。どの区間で時間を使っているか不明。Codex 提示の計測点（ptt_release〜playback_started）を採用予定。
 - **オーバル/ロードのシステム分割の価値**：テスター（まーぼー）の実需要はあるが、市場規模・実装コストとも未評価。
 - **「40人・半年で自己資金化」**：事業計画上の仮定であり実績ではない。
-- **Microsoft Store 配布の実現可能性**：SmartScreen 回避には最も確実だが、審査要件・自動更新・exeコード方式との整合は**未調査**。署名より安価な可能性が高く、次に調べる価値がある。
+- **Microsoft Store MSIX 試作の実機互換性**：公式要件と現行コードの静的確認では**実現可能性が高い**。ただし、Store用 AppX/MSIX から同梱 `OMORAY-PITWALL-Bridge.exe` の起動、`taskkill`、iRacing SDK共有メモリ、常時最前面オーバーレイ、グローバルホットキー、マイクを実機で未検証。次の判定点は「Store提出」ではなく「ローカル署名したMSIX試作で1レース完走」。
+  - **Claude Code によるコード側の裏取り（2026-07-20）**：Codex が挙げたリスク箇所は**全て実在**する。`desktop/main.js:207` で同梱Bridge exe を `spawn`、`:36` と `:238` で `taskkill /F /IM OMORAY-PITWALL-Bridge.exe /T` を実行、`:404` で **デバッグログを `app.getPath('desktop')` に直接書き出し**、`:12` に GitHub exe への更新ゲート URL。→ MSIX試作では**この4点を最優先で検証**する。
+  - ⚠️**ログ保存先の変更は「軽微な検討事項」ではない**（Claude Code 判断）：**Desktop のデバッグログは我々の証拠エンジン**であり、2026-07-19〜20 の重大修正（停止車警告・日付読み・燃料の残り周回）は**全てこのログから発見**された。本台帳の「出典を付ける」規律も、テスター（まーぼー）のログ送付フローも、これに依存している。**MSIX へ進むなら、ログの保存先と受け渡し導線をセットで設計する**こと。ここを壊すと開発速度そのものが落ちる。
 - **「走るほど理解する」で本当に差別化できるか**：CHIEF が横断記憶を明確に主張、RaceCrewAI も個人適応あり（EXTERNAL FACT 参照）。**「記憶がある」だけでは差別化にならない可能性**。差別化の芯を「記憶の深さ・日本語・現場インサイダーの声」に置き直す必要があるか要検討。
 
 ---
@@ -119,6 +121,15 @@
 - **OV**：GlobalSign 年 **60,000円**（税別）・最短 **3営業日**
 - **EV**：年 **78,000円**（税別）・最短 **7営業日**
 - **Microsoft Store 配布が SmartScreen 警告を最も確実に回避する**
+
+### Microsoft Store 実現可能性（Codex 調査・コード静的確認・2026-07-20）
+- **結論：MSIX/AppX経路なら実現可能性は高い。** 現行の portable EXE をそのままStoreへ登録する経路は全PEの有効なコード署名が必須なので、今回の「証明書を買わない」方針と両立しない。Storeへパッケージ本体を提出する MSIX/AppX 経路なら Microsoft が再署名・ホストし、証明書購入不要、Store管理更新とSmartScreen警告回避を得られる。
+- `electron-builder` は `appx` ターゲットを正式サポートし、Electronに必要な `runFullTrust` を既定で付与できる。現行 `extraResources` のBridge EXE同梱も形式上は可能。
+- **既存Stripe課金は維持可能。** PITWALLをPC向け非ゲーム製品として提出する限り、Store規約は安全な第三者課金APIと第三者の継続課金を認める。Partner Centerで第三者課金を申告し、Store説明にサブスク価格・トライアル条件を明示する。既存購入コードでの認証も禁止されていない。
+- **Store版で変更が必要**：①`win.target`にStore専用`appx`ビルドを追加 ②Store版ではGitHub EXEへの強制更新ゲートを無効化しStore更新へ委譲 ③バージョンをStore用4区切り数値へ対応 ④`microphone`等のcapabilityと日英languageをmanifestへ宣言 ⑤iRacing必須をStore説明冒頭に明示 ⑥審査用の有効なデモコード／アカウントを提供 ⑦起動時にDesktopへ自動生成するデバッグログは`userData`保存＋明示的Exportへ変更を検討。
+- **最大の技術リスク**：Storeの制度ではなく、MSIXのPackage Identity下で `Bridge.exe`、共有メモリ、`taskkill`、オーバーレイ、ホットキーが現行通り動くか。`runFullTrust`により可能性は高いが、実走検証なしにSHIPPEDへ格上げしない。
+- Microsoft Store開発者登録は新オンボーディング経由なら個人・会社とも無料。PITWALLは事業として販売するためCompanyアカウントが適切で、DUNSまたは法人・事業書類と独自ドメインのメールが必要。
+  出典：[Windows配布経路](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/choose-distribution-path) / [Store MSI・EXE要件](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msi/app-package-requirements) / [Store Policy 7.19](https://learn.microsoft.com/en-us/windows/apps/publish/store-policies) / [Microsoft Electron MSIXガイド](https://learn.microsoft.com/en-us/windows/apps/dev-tools/winapp-cli/guides/electron-packaging) / [electron-builder AppX](https://www.electron.build/appx/) / [開発者登録](https://learn.microsoft.com/en-us/windows/apps/publish/partner-center/open-a-developer-account)
 
 ### 競合（Codex 提供・2026-07-20 / **Claude Code は未独立検証**）
 - **PitWise**：€3.99 買い切り、4人格・29言語、AC/ACC/LMU/rF2/F1 23/iRacing、PTT双方向、ローカルSTT/TTS、自由会話は BYOK
