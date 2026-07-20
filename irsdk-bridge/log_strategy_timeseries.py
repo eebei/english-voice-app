@@ -22,6 +22,13 @@ OMORAY PITWALL - 戦略エンジン用 時系列ロガー（Phase A2・2026-07-2
   3. Ctrl+C で終了。strategy_ts-<日時>.csv が出る
   4. ピットにも1回入ること（サービス状態遷移の記録に必要）
 
+【2026-07-21 訂正】
+  「変数が存在するか」は 2026-07-06 の実機ダンプで既に確定している
+  （PitSvFuel / PitSvLFP等 / PitstopActive / SessionLapsRemainEx すべて存在）。
+  よって本ツールの目的は実在確認ではなく、**挙動と状態遷移の観測**である：
+    ・CarIdxF2Time が周回遅れ混在・ピット中・S/F通過でどう振る舞うか
+    ・PitSvFuel がいつ確定し、PitstopActive がいつ立つか
+
 ※読み取り専用。iRacing には一切書き込まない（bridge.py / dump_all_vars.py と同じ方式）。
 """
 
@@ -61,11 +68,17 @@ SELF_SCALARS = [
     'OnPitRoad', 'PlayerTrackSurface', 'PlayerCarPitSvStatus',
     'PitRepairLeft', 'PitOptRepairLeft', 'PitsOpen', 'Speed', 'FuelLevel',
 ]
-# 存在するか確かめたい（提案書が前提にしているが未取得の）候補
-PROBE_SCALARS = [
-    'PitSvFuel', 'PitSvFlags', 'PitSvLFP', 'PitSvRFP', 'PitSvLRP', 'PitSvRRP',
+# ★2026-07-21 訂正：これらは 2026-07-06 の実機ダンプで**存在が既に確定済み**
+#   （PitSvFuel=給油予定量 / PitSvLFP等=各輪注入圧＝タイヤ交換の判別 /
+#     PitstopActive / SessionLapsRemainEx）。
+#   よってここでの目的は「在るか」ではなく **いつ値が確定し、どう遷移するか** の観測。
+#   起動時に一度スナップショットを表示し、以降は毎行CSVへ記録して遷移を追う。
+PIT_SERVICE_VARS = [
+    'PitSvFuel',                                    # 給油予定量（いつ確定するか）
+    'PitSvLFP', 'PitSvRFP', 'PitSvLRP', 'PitSvRRP',  # 各輪注入圧（タイヤ交換の有無を示す）
+    'PitSvFlags', 'PitstopActive',
     'SessionTimeRemain', 'SessionLapsRemain', 'SessionLapsRemainEx',
-    'PlayerCarPitSvStatus', 'PitstopActive', 'FuelUsePerHour',
+    'FuelUsePerHour',
 ]
 
 
@@ -138,8 +151,8 @@ def main():
     print(f"✅ 接続。公開変数 {len(idx)} 個")
 
     # ── まず「存在するか」を1回だけ報告（提案書が前提にしている変数の実在確認）──
-    print("\n── 戦略エンジンが必要とする変数の実在確認 ──")
-    for nm in PROBE_SCALARS:
+    print("\n── ピットサービス変数の起動時スナップショット（存在は7/6ダンプで確定済み）──")
+    for nm in PIT_SERVICE_VARS:
         if nm in idx:
             t, o, c = idx[nm]
             print(f"  ✅ {nm:24} type={t} count={c}  値={read_val(ptr, get_buf_offset(ptr), idx[nm])}")
@@ -151,7 +164,8 @@ def main():
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         f'strategy_ts-{stamp}{("-" + label) if label else ""}.csv')
 
-    cols = ['wall_clock'] + SELF_SCALARS + [f'{a}[{i}]' for a in CAR_ARRAYS for i in range(64)]
+    cols = (['wall_clock'] + SELF_SCALARS + PIT_SERVICE_VARS
+            + [f'{a}[{i}]' for a in CAR_ARRAYS for i in range(64)])
     n = 0
     print(f"\n記録開始 → {os.path.basename(path)}   （Ctrl+C で終了）")
     print("  ※ 周回遅れ混在・他車ピット中・S/F通過を含むよう、数周は走ってください")
@@ -162,7 +176,7 @@ def main():
             while True:
                 buf_off = get_buf_offset(ptr)
                 row = [time.strftime('%H:%M:%S') + f'.{int(time.time()*10)%10}']
-                for nm in SELF_SCALARS:
+                for nm in SELF_SCALARS + PIT_SERVICE_VARS:
                     row.append(read_val(ptr, buf_off, idx[nm]) if nm in idx else '')
                 for arr in CAR_ARRAYS:
                     info = idx.get(arr)
