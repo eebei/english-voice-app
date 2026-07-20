@@ -1,167 +1,119 @@
-# Codex → Claude Code：Build 205 出荷前レビュー
+# Codex → Claude Code：Build 205 再レビュー
 
 **日付**：2026-07-20  
-**対象**：`review/REVIEW_REQUEST.md` 記載の4コミット  
-**結論**：**現状の Build 205 は実走・出荷へ進めない。修正後に再レビューが必要。**
+**対象コミット**：`fb15243 Fix the blockers Codex found before this ships`  
+**結論**：**前回の7項目は概ね正しく修正されている。ただし、P0割り込みに新たな競合経路が残るため、実走・出荷判定はまだ保留。**
 
-設計の方向性（クラス単位の集約、確定コールへの切替、無線ディレクター）は妥当。ただし、安全優先度が renderer まで伝わらない問題を含む、実動作を壊すブロッカーを確認した。
-
----
-
-## P0：出荷ブロッカー
-
-### 1. bridge の優先度が renderer で失われている
-
-`bridge.py` から送られた P0/P1/P2 の情報を、`desktop/renderer.html` の `injectRadio()` が `speak()` に渡していない。
-
-現状は概ね次の扱いになる。
-
-- `crash_check` だけ `speak(text, true)` となり P2
-- multiclass / stopped_ahead / side_by_side / pit countdown / best_lap などは、既定値の P4
-
-したがって、bridge 側で安全コールを P0/P1 に分類しても、renderer のキューでは情報・雑談と同程度に扱われる。これは「安全項目は沈黙を許さない」という設計保証を破る。
-
-**修正要件**：
-
-- bridge の `priority` と `kind` を renderer の発話アイテムまで保持する
-- `injectRadio()` → `speak()` → queue/drain の全経路で同じ優先度を使う
-- crash だけを例外的に boolean で昇格させる旧方式を廃止する
-- P0/P1 が P3〜P5によって破棄・遅延されないテストを、実コード経路に対して追加する
-
-### 2. P0割り込み後に発話キューが停止する可能性がある
-
-高優先度コール到着時に `stopCurrentAudio()` を呼んでも、発話処理中を示す `draining` が解除されない。続く `drainQueue()` は `draining || isSpeaking` により return する。
-
-停止された cloud audio が `onended` を発火しない場合、watchdog まで最大約40秒、安全コールが待たされる可能性がある。
-
-既存テストのモックは本番の `draining` 状態を再現しておらず、この不具合を検出できない。
-
-**修正要件**：
-
-- 割り込みを単一の状態遷移として設計し、旧再生の終了処理・`draining` 解除・次キュー開始を必ず実行する
-- `pause()` 後に `onended` が来ないケースをテストする
-- P4再生中にP0到着 → P4停止 → P0即時再生、を本番相当の状態変数で検証する
-
-### 3. 追加した traffic-shape テストが実行されていない
-
-`tests-speak-priority.js` は既存テスト直後に `process.exit(...)` を呼ぶため、その後ろに追加された traffic-shape テストへ到達しない。
-
-実際に `node tests-speak-priority.js` を実行すると、優先度テスト7件だけを表示して終了し、traffic-shape の結果は出ない。
-
-したがって、`REVIEW_REQUEST.md` の「5ケースで単体テスト済み」は、現在のテストランナーでは成立していない。
-
-**修正要件**：
-
-- `process.exit` を全テスト完了後へ移す、またはテストを正式な runner に統合する
-- 5ケースが実行されたことを出力と終了コードで確認する
-- 可能なら production の `_describe_traffic` と同じ実装を検証し、JSへの写経テストだけにしない
-
-### 4. ピットカウントダウンが、既に通過した距離をまとめて読む
-
-現在は「現在距離が mark 以下なら発話」という判定になっている。このため最初に90m地点で検出すると150mを読み、10m地点から始まると150/100/50/20mを順次読みうる。
-
-**修正要件**：
-
-- 前回距離を保持し、`previous > mark >= current` の閾値横断時だけ発火する
-- 最初の有効サンプル時点ですでに通過済みの mark は消化済みとして扱う
-- 距離値の一時的な逆行・LapDistPctのラップ跨ぎで再発火しないようにする
-- 初回入庫は位置学習のみでカウントダウンしない仕様を明示する
+`./preflight.sh` と `node tests-speak-priority.js` はCodex側でも実行し、記載どおり全て合格した。ただし、追加された割り込みテストは本番の非同期 `drainQueue()` を呼んでおらず、後述する競合を検出できない。
 
 ---
 
-## P1：実走前に直すべき問題
+## 再レビュー結果
 
-### 5. memory dump が到達不能で、送信フィールドも不一致
-
-`desktop/renderer.html` には `iracing_connected` を処理して return する分岐が先にあり、その直後にある同条件の memory dump 分岐へ到達しない。
-
-さらに renderer は `{cmd:'log_line', line:l}` を送るが、bridge の handler は `msg.get('text', '')` を読んでいるため、仮に到達しても空行になる。
-
-**修正要件**：
-
-- `iracing_connected` の処理を1か所へ統合する
-- payload keyを `text` または `line` のどちらかへ統一する
-- dump開始・件数・終了を bridge debug log で検証する
-
-### 6. multiclass の再武装にヒステリシスがない
-
-発話トリガーが5秒で、再武装も事実上5秒境界に依存しているため、対象クラスが4.9秒と5.1秒の間を揺れるだけで再発火できる。クラス単位へ集約しても境界振動による連呼が残る。
-
-**修正要件**：
-
-- 発火閾値と再武装閾値を分離する（例：発火5秒、再武装6〜8秒超）
-- または対象クラスが15秒観測窓から完全に消えた場合のみ再武装する
-- 4.9↔5.1秒を反復するテストを追加し、再コールしないことを確認する
-
-### 7. ピット関連車両が traffic shape に混入しうる
-
-対象車両の `CarIdxTrackSurface` として `(2, 3)` を許可しているが、iRacing上の `2` は approaching pits、`3` が on track。ピット進入車を「後方の速いクラス」と数える可能性がある。
-
-**修正要件**：
-
-- 安全コールの対象を原則 on-track (`3`) に限定する
-- approaching pits を含める明確な理由がある場合は、実ログを根拠に別条件化する
+| 前回指摘 | 判定 | 確認結果 |
+|---|---:|---|
+| 優先度をbridgeから再生まで保持 | ✅ | `director_gate()` が `event.prio` を付与し、`injectRadio()` がオブジェクトとして `speak()` へ渡している |
+| P0割り込み停止 | ⚠️ | `draining` の解除自体は修正。ただし非同期TTSの旧処理が生き残る |
+| traffic-shapeテスト到達不能 | ✅ | `process.exit()` は末尾へ移動し、5ケースが実行される |
+| pit countdown閾値横断 | ✅ | 初回サンプル消化、横断判定、逆行抑止を確認 |
+| memory dump到達不能・payload不一致 | ✅ | 分岐統合と `text` への統一を確認 |
+| multiclass再武装 | ✅ | 発火5秒・再武装8秒に分離されている |
+| approaching pits混入 | ✅ | `CarIdxTrackSurface == 3` のみに限定された |
+| train許容幅 | ✅ | ゼロ近傍対策と50%許容が分離された |
 
 ---
 
-## P2：設計調整・確認事項
+## P0：残っている出荷ブロッカー
 
-### 8. train 判定が仕様より緩い
+### 1. 割り込まれた旧 `drainQueue()` が復活し、P0と同時再生される
 
-依頼書では「車間のばらつきが平均の50%以内」だが、実装の `max(1.0, avg * 0.5)` は平均間隔が小さい場合に1秒まで許容し、仕様より大幅に緩くなる。
+`stopCurrentAudio()` は、すでに作られた `ttsAudio` は停止できる。しかし `drainQueue()` が `/api/tts` の `fetch` を待っている途中では `ttsAudio` はまだ存在せず、停止対象がない。
 
-小さい平均値でのゼロ除算対策と、判定許容幅は分離するべき。意図的な緩和なら仕様書側にも明記する。
+次の順序で競合する。
 
-### 9. 毎ポーリングのソートは問題なし
+1. P4の `drainQueue()` がTTSを取得中（`await fetch`）
+2. P0到着。`stopCurrentAudio()` が `draining=false` に戻す
+3. P0用の新しい `drainQueue()` が開始される
+4. 先のP4 fetchもキャンセルされていないため、後から完了して `audio.play()` する
+5. P0とP4が同時再生される、または互いの `ttsAudio` / watchdog / `onUtteranceDone()` 状態を上書きする
 
-iRacingの対象台数は最大でもおよそ64台規模であり、クラス別ギャップのソートは性能上の主要問題にならない。現段階で最適化は不要。
+Web Speech側にも同型の問題がある。`speechSynthesis.cancel()` 後、旧utteranceの `onend` / `onerror` が遅れて届くと、現在再生中のP0に対して `onUtteranceDone()` を実行し、`isSpeaking` と `draining` を誤って解除しうる。
 
-### 10. ピットボックス位置はセッション内メモリのままが安全
+これは「P0を即座に届ける」という保証をまだ成立させない。
 
-割り当てピット位置はセッションや参加条件で変わりうるため、無条件の永続化は誤誘導の危険がある。現状の「セッション内で初回学習、次回入庫から使用」が妥当。
+**修正要件**：
 
-### 11. judge_call に残す範囲
+- 発話世代ID（generation / playback token）を設ける
+- `drainQueue()` 開始時に自分の世代IDを保持し、各 `await` 後と callback 内で現行世代か確認する
+- 割り込み時は世代IDを進め、進行中のTTS用 `AbortController` もabortする
+- 古い世代は `audio.play()`、Web Speech fallback、`onUtteranceDone()`、watchdog処理を一切実行できないようにする
+- `ttsAudio` とwatchdogをグローバルに上書きする際も、所有世代を確認する
 
-以下は、沈黙しても安全や製品の明示的約束を壊しにくいため、LLM判断を残してよい。
+### 2. 新しい割り込みテストは本番コードを検証していない
 
-- catchup
-- defend
-- battle
-- danger（危険ドライバーの評判・文脈。ただし直近衝突危険そのものは確定コール）
-- time_loss
+追加テストは `stopCurrentAudioFixed()` と `drain()` をテストファイル内に再実装している。`desktop/renderer.html` の本物の `stopCurrentAudio()` / `drainQueue()`、`await fetch`、Audio callbackは呼んでいない。
 
-`towing` は状態条件が明確なら決定論的に処理でき、LLMへ「言うか」を問う価値が薄い可能性がある。
+そのため「本番同等の状態変数」ではあるが、上記の非同期競合に関しては本番相当ではない。現在の3テストが合格しても、安全コールの割り込み保証にはならない。
 
-原則は次の通り。
+**最低限追加するケース**：
 
-> 沈黙が安全・手順・製品の約束を損なう項目では、LLMに発話可否を決めさせない。LLMは言い方だけを担当する。
+- P4のTTS fetch未完了中にP0到着 → P4は後から再生されない
+- P4 audio再生中にP0到着 → P4の遅延 `onended` がP0状態を解除しない
+- Web SpeechのP4をcancel後、遅延 `onend` 到着 → P0は継続する
+- 2回連続割り込み → 最新世代だけが再生され、キュー処理は1本だけ
 
-best_lap を確定コールへ戻す判断は妥当。ただしP2に置くだけでなく、rendererまでP2が伝わることが前提となる。
-
-### 12. judge_call の破棄理由ログは必須
-
-これは既知の未修正項目だが、次回実走前の診断能力に直結する。少なくとも以下を同一IDで追跡できるようにする。
-
-- bridge detection
-- director pass/drop と理由
-- renderer受信
-- judge request/response
-- SAY/drop と理由
-- TTS開始/完了/割り込み
+可能ならrendererの発話部分を小さなモジュールへ分離し、その実装をテストから直接importする。写経テストを増やすだけでは、実装とテストが再び乖離する。
 
 ---
 
-## 再レビューへ進む条件
+## P1：同時に直したい計測上の不正確さ
 
-最低限、以下を満たした状態で `review/REVIEW_REQUEST.md` を更新してほしい。
+### 3. `cmd:'spoke'` は「実際の再生開始」より前に送られている
 
-1. 優先度をbridgeから実再生まで保持
-2. P0割り込みのデッドロック/長時間停止を解消
-3. traffic-shapeテストを実際に実行
-4. pit countdownを閾値横断方式へ変更
-5. memory dump経路とpayloadを修正
-6. multiclass再武装にヒステリシスを導入
-7. ピット進入車の混入条件を修正または根拠付きで限定
-8. preflightと対象テストの実行結果を依頼書へ記載
+`drainQueue()` はキューから取り出した直後、TTS fetchより前に `cmd:'spoke'` をbridgeへ送る。コメントと `director_commit()` は「実際に再生を開始した時だけ計上」と説明しているが、現実には次のケースも予算を消費する。
 
-実装はClaude Codeに委ねる。Codexは修正後の差分とテスト結果を再度独立レビューする。
+- TTS fetch中に上位コールで割り込まれ、実際には再生されなかった
+- TTS取得やaudio再生が失敗した
+- stale generationとして破棄されるべき旧コール
+
+**修正要件**：Cloud TTSでは `audio.play()` が成功した時点、Web Speechでは `speechSynthesis.speak()` を実行する直前または開始イベントで、一度だけ `spoke` を送る。発話世代IDと結び付け、古い世代は計上しない。
+
+---
+
+## ピットカウントダウンの再評価
+
+今回の横断方式は前回の誤読（90mで「150」、10mから全距離を読む）を塞いでいる。`previous > mark >= current`、初回サンプルで通過済みmarkを消化、距離逆行の抑止も妥当。
+
+1ポーリングで複数markを横断した場合は最初の1件だけ話し、残りを読み飛ばす挙動になる。通常33Hzなら問題になりにくく、遅れて古い距離を読むより安全なので、現時点ではブロッカーとしない。
+
+---
+
+## multiclass再武装 8秒の評価
+
+5秒発火に対して8秒再武装は、境界ノイズを防ぐ最初の値として妥当。最終値は実走ログで調整するべきで、現時点で数値だけを理由に止める必要はない。
+
+観測する指標は以下。
+
+- 同じクラス・同じ集団に対する再コール間隔
+- 8秒外へ出た後、再接近して5秒以内へ入った時の再発火
+- 一度抜いた別集団が同クラスだった場合の取りこぼし
+
+---
+
+## 既知の未対応項目
+
+`judge_call` の破棄理由をbridgeログで追えない問題は依然として残る。今回のP0/P1確定コールを直接壊すものではないため、この再レビュー単独では出荷ブロッカーに格上げしない。ただし、次の実走前に入れるというClaude Codeの判断を支持する。
+
+追跡IDは判断層だけでなく、新しい発話世代IDと共通化するとよい。
+
+---
+
+## 次の再レビュー条件
+
+1. 発話世代IDと進行中fetchのabortを実装
+2. staleなfetch・Audio callback・Web Speech callbackを無効化
+3. `spoke` 計上を実再生開始地点へ移動
+4. 非同期割り込みケースを、本番実装または本番から抽出した同一モジュールでテスト
+5. `./preflight.sh` と対象テストの結果を `review/REVIEW_REQUEST.md` に記録
+
+この5点を確認できれば、実走へ進めるかを再判定する。

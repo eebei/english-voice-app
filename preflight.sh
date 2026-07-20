@@ -32,6 +32,9 @@ if node --check /tmp/_r.js >/dev/null 2>&1; then echo "   ✅ renderer"; else ec
 echo "── 発話ディレクターの競合テスト"
 if node tests-speak-priority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speak-priority.js 2>&1|tail -5; fail=1; fi
 
+echo "── 非同期割り込みテスト（本番コードを抽出して実行）"
+if node tests-speak-async.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speak-async.js 2>&1|tail -6; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

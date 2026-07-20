@@ -1638,6 +1638,14 @@ let ttsDisabledUntil = 0;     // TTS失敗時はこの時刻まで一時的にWe
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
 let speakQueue = [];          // 発話待ち行列（{text,prio,kind,ts,dedupeKey}）
 let currentSpeakPrio = 9;     // 再生中の優先度（割り込み判定用・9=何も鳴っていない）
+// ★2026-07-20 Codex再レビュー P0-1：割り込みは同期部分しか止められていなかった。
+//   drainQueue()が /api/tts の fetch を待っている間は ttsAudio がまだ存在せず、
+//   stopCurrentAudio() に止める対象が無い。よって古いP4のfetchが後から完了して
+//   audio.play() し、P0と同時再生される／互いのttsAudio・watchdog・状態を上書きする。
+//   Web Speech側も同型で、cancel後に遅れて届く onend が現在のP0を解除しうる。
+//   対策：発話世代ID。割り込みで世代を進め、古い世代は再生も状態変更も一切できなくする。
+let speakGeneration = 0;      // 割り込みのたびに進む。await後・callback内で必ず照合する
+let speakFetchCtrl = null;    // 進行中のTTS取得（割り込み時にabortする）
 let draining = false;         // キュー処理中フラグ
 let speakWatchdog = null;     // 発話が完了イベントを返さず固まるのを防ぐ見張り番
 const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる（鮮度優先）
@@ -1695,8 +1703,10 @@ function speakReplyChunk(text){
 //   pause() は onended を発火しないため、watchdog(最大40秒)まで安全コールが待たされ得た。
 //   割り込みを「1つの状態遷移」として扱い、旧再生の後始末・draining解除・次の再生開始まで必ず行う。
 function stopCurrentAudio(){
+  speakGeneration++;           // ★これ以降、古い世代の再生・状態変更を全て無効化する
+  if(speakFetchCtrl){ try{speakFetchCtrl.abort();}catch(e){} speakFetchCtrl=null; }
   window.speechSynthesis.cancel();
-  if(ttsAudio){ try{ttsAudio.onended=null; ttsAudio.pause();}catch(e){} ttsAudio=null; }
+  if(ttsAudio){ try{ttsAudio.onended=null; ttsAudio.onerror=null; ttsAudio.pause();}catch(e){} ttsAudio=null; }
   if(speakWatchdog){ clearTimeout(speakWatchdog); speakWatchdog=null; }
   isSpeaking=false;
   draining=false;              // ←これが無いとキューが二度と流れない
@@ -1721,25 +1731,30 @@ async function drainQueue(){
   // 発話中はマイクを止めて自分の声を拾わない
   if(autoMicActive && autoMicRec){ try{autoMicRec.stop();}catch(e){} }
 
+  const myGen = speakGeneration;   // ★この発話の世代。以降のawait後・callbackで必ず照合する
   const _it = speakQueue.shift();
   const raw = (typeof _it === 'string') ? _it : _it.text;
   currentSpeakPrio = (typeof _it === 'object' && typeof _it.prio === 'number') ? _it.prio : 9;
-  // ★実際に再生を始めた時だけディレクターへ計上する（Codex指摘：通過時計上だとNO_CALLで
-  //   黙った判断コールが予算を食い、下位を不当にダックしていた）
-  try{ if(irBridge && irBridge.readyState===1)
-    irBridge.send(JSON.stringify({cmd:'spoke', prio:currentSpeakPrio, kind:(_it&&_it.kind)||'radio'})); }catch(e){}
+  // ★2026-07-20 Codex再レビュー P1-3：'spoke'は取り出し直後でなく**実際に再生を始めた時**に送る。
+  //   取り出し直後だと、割り込まれて再生されなかった分やTTS失敗分まで予算を消費していた。
+  const reportSpoke = ()=>{
+    if(myGen !== speakGeneration) return;      // 古い世代は計上しない
+    try{ if(irBridge && irBridge.readyState===1)
+      irBridge.send(JSON.stringify({cmd:'spoke', prio:currentSpeakPrio, kind:(_it&&_it.kind)||'radio'})); }catch(e){}
+  };
   const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
 
   // 見張り番：完了イベントが来なくても必ず一定時間で次へ進める（キュー永久固まり防止）
   if(speakWatchdog) clearTimeout(speakWatchdog);
   const watchMs = Math.min(40000, 5000 + clean.length * 130);
-  speakWatchdog = setTimeout(()=>{ try{stopCurrentAudio();}catch(e){} onUtteranceDone(); }, watchMs);
+  speakWatchdog = setTimeout(()=>{ if(myGen!==speakGeneration) return; try{stopCurrentAudio();}catch(e){} onUtteranceDone(); }, watchMs);
 
   // Cloud TTSが使えない/設定なしなら即Web Speech
-  if(Date.now() < ttsDisabledUntil || !c.gVoice){ playWebSpeech(clean, c); return; }
+  if(Date.now() < ttsDisabledUntil || !c.gVoice){ reportSpoke(); playWebSpeech(clean, c, myGen); return; }
 
   try{
     const ctrl = new AbortController();
+    speakFetchCtrl = ctrl;                                  // 割り込み時にabortできるよう保持
     const fetchTimer = setTimeout(()=>ctrl.abort(), 8000);  // TTS取得が固まらないようタイムアウト
     const r = await fetch(API_BASE+'/api/tts',{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1747,32 +1762,44 @@ async function drainQueue(){
       signal: ctrl.signal
     });
     clearTimeout(fetchTimer);
-    if(r.status===503){ ttsDisabledUntil = Date.now()+60000; playWebSpeech(clean, c); return; }
+    if(myGen !== speakGeneration) return;                   // ★割り込まれた＝この発話は破棄
+    if(r.status===503){ ttsDisabledUntil = Date.now()+60000; reportSpoke(); playWebSpeech(clean, c, myGen); return; }
     if(!r.ok) throw new Error('tts '+r.status);
     const data = await r.json();
+    if(myGen !== speakGeneration) return;                   // ★json待ちの間の割り込みも捨てる
     if(!data.audioContent) throw new Error('empty audio');
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
     audio.volume = pwVolume;   // ユーザー設定の音量を適用
     ttsAudio = audio;
-    audio.onended = ()=>{ ttsAudio=null; onUtteranceDone(); };
-    audio.onerror = ()=>{ ttsAudio=null; onUtteranceDone(); };  // 再生失敗でも次へ（固まらせない）
+    // callbackも世代を照合してから状態を触る（遅れて届いた旧世代がP0を解除しないように）
+    audio.onended = ()=>{ if(myGen!==speakGeneration) return; ttsAudio=null; onUtteranceDone(); };
+    audio.onerror = ()=>{ if(myGen!==speakGeneration) return; ttsAudio=null; onUtteranceDone(); };
     await audio.play();
+    reportSpoke();                                          // ★再生が始まってから計上
   }catch(e){
-    playWebSpeech(clean, c);  // ネットワークエラー等 → Web Speechにフォールバック
+    if(myGen !== speakGeneration) return;                   // 割り込みによるabortはフォールバックしない
+    reportSpoke();
+    playWebSpeech(clean, c, myGen);  // ネットワークエラー等 → Web Speechにフォールバック
   }
 }
 
-function playWebSpeech(text, c){
+// ★2026-07-20 Codex再レビュー P0-1：cancel()後に遅れて届く旧utteranceの onend/onerror が
+//   現在再生中のP0に対して onUtteranceDone() を実行し、isSpeaking/draining を誤って解除しうる。
+//   世代IDを受け取り、自分の世代でなければ状態に一切触れない。
+function playWebSpeech(text, c, gen){
+  const myGen = (typeof gen === 'number') ? gen : speakGeneration;
+  const done = ()=>{ if(myGen !== speakGeneration) return; onUtteranceDone(); };
   try{
     window.speechSynthesis.cancel();
+    if(myGen !== speakGeneration) return;      // cancel中に割り込まれていたら喋らない
     const utt = new SpeechSynthesisUtterance(text);
     utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate; utt.volume=pwVolume;
     const voice = pickVoice(c.voiceLang,c.voiceNames);
     if(voice) utt.voice=voice;
-    utt.onend=onUtteranceDone;
-    utt.onerror=onUtteranceDone;
+    utt.onend=done;
+    utt.onerror=done;
     window.speechSynthesis.speak(utt);
-  }catch(e){ onUtteranceDone(); }
+  }catch(e){ done(); }
 }
 function toggleVoice(){
   voiceOn=!voiceOn;

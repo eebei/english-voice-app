@@ -1,0 +1,132 @@
+// ══════════════════════════════════════════════════════════════════════
+// 非同期割り込みテスト（Codex再レビュー P0-2 への対応）
+//   指摘：前回の割り込みテストは stopCurrentAudio/drainQueue をテスト内に
+//   再実装した「写経」で、本番の await fetch や Audio callback を通っておらず、
+//   非同期競合を検出できない。写経を増やすと実装とテストが再び乖離する。
+//
+//   対策：**desktop/renderer.html から本物の関数定義を抽出して実行する**。
+//   単一の真実（renderer.html）をテストするので、実装を変えればテストも追随する。
+//   ブラウザAPI（fetch / Audio / speechSynthesis / WebSocket）はスタブで置き換える。
+// ══════════════════════════════════════════════════════════════════════
+const fs = require('fs');
+const vm = require('vm');
+
+const html = fs.readFileSync(__dirname + '/desktop/renderer.html', 'utf8');
+const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const src = scripts.reduce((a, b) => (a.length > b.length ? a : b));
+
+// 本番から検証対象の関数だけを切り出す（定義の先頭から次のトップレベル定義の直前まで）
+function extract(name, kind) {
+  const head = kind === 'async' ? `async function ${name}(` : `function ${name}(`;
+  const i = src.indexOf(head);
+  if (i < 0) throw new Error('本番コードに ' + name + ' が見つからない（実装が変わった可能性）');
+  const rest = src.slice(i);
+  const end = rest.search(/\n(?:async function |function |const |let |\/\/ ──)/);
+  return rest.slice(0, end > 0 ? end : rest.length);
+}
+
+const parts = ['speak', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
+  .map(n => extract(n, n === 'drainQueue' ? 'async' : 'fn')).join('\n');
+
+// ── テスト用のスタブ環境 ──
+let ttsResolve = null;                 // TTS取得の完了を手動で制御する
+const played = [];                     // 実際に再生された音声（順序と内容）
+const audioInstances = [];             // 本番コードが生成したAudio（callbackを本物のまま検証する）
+const spokeReports = [];               // bridgeへ送られた 'spoke'（予算計上）
+
+const sandbox = {
+  console,
+  setTimeout, clearTimeout,
+  // 状態変数（本番と同じ初期値）
+  speakQueue: [], draining: false, isSpeaking: false, speakWatchdog: null,
+  ttsAudio: null, currentSpeakPrio: 9, speakGeneration: 0, speakFetchCtrl: null,
+  voiceOn: true, sel: 'LunaJP', pwVolume: 1, ttsDisabledUntil: 0,
+  autoMicActive: false, autoMicRec: null, isBusy: false,
+  MAX_RADIO_QUEUE: 2,
+  SPEAK_PRIO: { P0_SAFETY: 0, P1_HAZARD: 1, P2_PROCEDURE: 2, P3_STRATEGY: 3, P4_INFO: 4, P5_CHAT: 5 },
+  CHARS: { LunaJP: { gVoice: 'ja-JP-x', gLang: 'ja-JP', gRate: 1, gPitch: 0, voiceLang: 'ja-JP', pitch: 1, rate: 1, voiceNames: [] } },
+  API_BASE: 'http://x',
+  // 依存関数のスタブ
+  phonetify: t => t, stripMarkdown: t => t, stripParens: t => t, stripEmoji: t => t,
+  pickVoice: () => null,
+  irBridge: { readyState: 1, send: (j) => spokeReports.push(JSON.parse(j)) },
+  AbortController: class { constructor(){ this.signal={aborted:false}; } abort(){ this.signal.aborted=true; } },
+  // TTS取得：テストが好きなタイミングで完了させられる
+  fetch: () => new Promise((res, rej) => { ttsResolve = { res, rej }; }),
+  Audio: class {
+    constructor(srcUrl){ this.src = srcUrl; this.volume = 1; this.onended = null; this.onerror = null;
+      audioInstances.push(this); }   // ★本番が付けた onended を後で呼ぶために保持する
+    async play(){ played.push(this.src); }
+    pause(){ this.paused = true; }
+  },
+  speechSynthesis: { cancel(){}, speak(u){ played.push('webspeech'); sandbox.__lastUtt = u; } },
+  SpeechSynthesisUtterance: class { constructor(t){ this.text = t; } },
+};
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(parts, sandbox);
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let pass = 0, fail = 0;
+const check = (name, cond) => { cond ? pass++ : fail++; console.log((cond ? '  ✅ ' : '  ❌ ') + name); };
+const reset = () => {
+  sandbox.speakQueue = []; sandbox.draining = false; sandbox.isSpeaking = false;
+  sandbox.ttsAudio = null; sandbox.currentSpeakPrio = 9; sandbox.speakGeneration = 0;
+  sandbox.speakFetchCtrl = null; sandbox.speakWatchdog = null;
+  played.length = 0; spokeReports.length = 0; ttsResolve = null; audioInstances.length = 0;
+};
+
+(async () => {
+  console.log('══ 非同期割り込み（本番コードを renderer.html から抽出して実行）══\n');
+
+  // ① TTS取得中に割り込まれたP4は、後から再生されてはいけない
+  reset();
+  sandbox.speak('情報', { prio: 4, kind: 'info' });
+  await sleep(5);
+  const p4Fetch = ttsResolve;                       // P4がfetch待ちで止まっている
+  check('P4がTTS取得中（まだ再生されていない）', played.length === 0 && p4Fetch !== null);
+  sandbox.speak('停止車両', { prio: 0, kind: 'stopped_ahead' });   // P0到着＝割り込み
+  await sleep(5);
+  p4Fetch.res({ status: 200, ok: true, json: async () => ({ audioContent: 'P4AUDIO' }) });  // 遅れて完了
+  await sleep(10);
+  check('割り込まれたP4は再生されない', !played.includes('data:audio/mp3;base64,P4AUDIO'));
+  check('P0のfetchが開始されている', ttsResolve !== null && ttsResolve !== p4Fetch);
+
+  // ② P0再生中に、旧P4の**本番が付けた**遅延onendedがP0の状態を解除しない
+  reset();
+  sandbox.speak('情報', { prio: 4 });
+  await sleep(5);
+  ttsResolve.res({ status: 200, ok: true, json: async () => ({ audioContent: 'P4' }) });
+  await sleep(10);
+  const p4Audio = audioInstances[audioInstances.length - 1];   // 本番が生成し、本番がcallbackを付けたAudio
+  check('P4のAudioが本番コードで生成された', !!p4Audio && typeof p4Audio.onended === 'function');
+  // ブラウザが既にcallbackをスケジュール済みの状況を再現する：割り込み前に本番のcallbackを捕まえておく
+  const staleCb = p4Audio.onended;
+  sandbox.speak('停止車両', { prio: 0 });                        // 割り込み
+  await sleep(5);
+  check('P0が再生中', sandbox.isSpeaking === true);
+  staleCb();                                                    // ★本番のcallbackが遅れて発火
+  check('旧世代の遅延onendedはP0の再生状態を壊さない', sandbox.isSpeaking === true && sandbox.draining === true);
+
+  // ③ 2回連続割り込み：最新世代だけが生きる
+  reset();
+  sandbox.speak('情報', { prio: 4 });   await sleep(5);
+  sandbox.speak('速いクラス', { prio: 1 }); await sleep(5);
+  const genAfter1 = sandbox.speakGeneration;
+  sandbox.speak('停止車両', { prio: 0 }); await sleep(5);
+  check('割り込むたびに世代が進む', sandbox.speakGeneration > genAfter1);
+  check('再生処理は1本だけ（drainingが多重化しない）', sandbox.draining === true);
+
+  // ④ 'spoke'（予算計上）は実際に再生された分だけ
+  reset();
+  sandbox.speak('情報', { prio: 4 });
+  await sleep(5);
+  check('取り出しただけでは計上しない', spokeReports.length === 0);
+  const f = ttsResolve;
+  f.res({ status: 200, ok: true, json: async () => ({ audioContent: 'OK' }) });
+  await sleep(10);
+  check('再生開始後に1回だけ計上される', spokeReports.filter(r => r.cmd === 'spoke').length === 1);
+
+  console.log('\n[非同期割り込み] 合格 ' + pass + ' / 不合格 ' + fail);
+  process.exit(fail ? 1 : 0);
+})();
