@@ -1636,27 +1636,57 @@ function updateVolLabel(){
 let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
 let ttsDisabledUntil = 0;     // TTS失敗時はこの時刻まで一時的にWeb Speech。過ぎたらCloud TTSへ自動復帰（恒久無効化しない）
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
-let speakQueue = [];          // 発話待ち行列
+let speakQueue = [];          // 発話待ち行列（{text,prio,kind,ts,dedupeKey}）
+let currentSpeakPrio = 9;     // 再生中の優先度（割り込み判定用・9=何も鳴っていない）
 let draining = false;         // キュー処理中フラグ
 let speakWatchdog = null;     // 発話が完了イベントを返さず固まるのを防ぐ見張り番
 const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる（鮮度優先）
 
 // text を発話キューに積む。priority=true（ドライバーへの会話返答）は古いラジオを捨てて先頭へ。
-function speak(text, priority){
+// ══════════════════════════════════════════════════════════════════════
+// ★★2026-07-20 発話ディレクター（renderer側＝本当の関門）★★
+//   Codexの指摘で判明：bridgeのbroadcast()を関門にしたが、会話の返事・ブリーフィング・
+//   判断コールの発話は renderer から直接 speak() に入るため、ディレクターは発話の一部しか
+//   見ていなかった。さらに旧実装では speak(text,true)（会話）が
+//     speakQueue=[]; stopCurrentAudio();
+//   を実行しており、**会話の返事が再生中の停止車警告を殺せる**状態だった。
+//   ここを優先度付きキューにして、割り込みを一方向（上位だけが下位を止める）にする。
+//   優先度は bridge 側 PRIORITY と同じ意味：P0安全即時 / P1安全文脈 / P2手順 /
+//   P3戦略 / P4情報 / P5雑談。会話の返事は P2 相当（重要だが安全より下）。
+const SPEAK_PRIO = { P0_SAFETY:0, P1_HAZARD:1, P2_PROCEDURE:2, P3_STRATEGY:3, P4_INFO:4, P5_CHAT:5 };
+function speak(text, opts){
   if(!voiceOn || !text) return;
-  if(priority){
-    speakQueue = [];                 // 溜まったラジオを破棄して会話を最優先
-    stopCurrentAudio();              // 再生中のラジオも止める
-  } else if(speakQueue.length >= MAX_RADIO_QUEUE){
-    speakQueue.shift();              // 古いラジオを1件捨てる
+  // 後方互換：speak(text, true) は「会話の返事」＝P2扱い（旧仕様の"全部止める"はやめる）
+  let o = (opts === true) ? {prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply'}
+        : (opts && typeof opts === 'object') ? opts
+        : {prio:SPEAK_PRIO.P4_INFO, kind:'radio'};
+  const prio = (typeof o.prio === 'number') ? o.prio : SPEAK_PRIO.P4_INFO;
+  const item = {text, prio, kind:o.kind||'radio', ts:Date.now(), dedupeKey:o.dedupeKey||null};
+
+  // 同一ハザードの重複は捨てる（「必ず届ける」は「毎サンプル喋る」ではない＝Codex指摘）
+  if(item.dedupeKey && speakQueue.some(q=>q.dedupeKey===item.dedupeKey)) return;
+
+  // 割り込みは一方向：**上位だけが再生中の下位を止められる**。会話はP0/P1を止めない。
+  if(prio <= SPEAK_PRIO.P1_HAZARD && isSpeaking && currentSpeakPrio > prio){
+    console.log('speak: interrupt P'+currentSpeakPrio+' for P'+prio+' ('+item.kind+')');
+    stopCurrentAudio();
   }
-  speakQueue.push(text);
+  // 溢れたら**優先度の低い方から**捨てる（従来は先頭＝古い順で、安全も落ちえた）
+  speakQueue.push(item);
+  if(speakQueue.length > MAX_RADIO_QUEUE + 2){
+    let worst=-1, wi=-1;
+    speakQueue.forEach((q,i)=>{ if(q.prio>worst){ worst=q.prio; wi=i; } });
+    if(wi>=0 && speakQueue[wi].prio > SPEAK_PRIO.P1_HAZARD) speakQueue.splice(wi,1);
+  }
+  // 常に優先度順（同順位は到着順）で並べ替える
+  speakQueue.sort((a,b)=> a.prio-b.prio || a.ts-b.ts);
   drainQueue();
 }
 // ストリーミング返答の2文目以降＝一つの返答の続きなので絶対に捨てない（MAX_RADIO_QUEUE対象外）。
 function speakReplyChunk(text){
   if(!voiceOn || !text) return;
-  speakQueue.push(text);
+  // 返答の続きは捨てない。会話と同じP2で、到着順を保つため末尾へ。
+  speakQueue.push({text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null});
   drainQueue();
 }
 
@@ -1683,7 +1713,13 @@ async function drainQueue(){
   // 発話中はマイクを止めて自分の声を拾わない
   if(autoMicActive && autoMicRec){ try{autoMicRec.stop();}catch(e){} }
 
-  const raw = speakQueue.shift();
+  const _it = speakQueue.shift();
+  const raw = (typeof _it === 'string') ? _it : _it.text;
+  currentSpeakPrio = (typeof _it === 'object' && typeof _it.prio === 'number') ? _it.prio : 9;
+  // ★実際に再生を始めた時だけディレクターへ計上する（Codex指摘：通過時計上だとNO_CALLで
+  //   黙った判断コールが予算を食い、下位を不当にダックしていた）
+  try{ if(irBridge && irBridge.readyState===1)
+    irBridge.send(JSON.stringify({cmd:'spoke', prio:currentSpeakPrio, kind:(_it&&_it.kind)||'radio'})); }catch(e){}
   const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
 
   // 見張り番：完了イベントが来なくても必ず一定時間で次へ進める（キュー永久固まり防止）
@@ -2239,7 +2275,7 @@ function extractJudgeSpeech(reply, kind){
   //   安全クラスは特に取りこぼしが致命的なので、接頭辞が無くても内容が正当なら通す。
   const raw = (reply||'').trim();
   if(!raw || /^NO_CALL/i.test(raw)) return null;
-  const SAFETY = ['multiclass','danger','towing'].includes(kind);
+  const SAFETY = ['multiclass'].includes(kind);   // 物理的な即時危険＝速いクラスの接近のみ
   const m = /^SAY:[ \t]*(\S[\s\S]*)$/.exec(raw);
   let text;
   if(m){ text = m[1].trim(); }
@@ -2282,7 +2318,13 @@ async function runJudgeCall(data){
   const speech = extractJudgeSpeech(reply, data.kind);
   if(!speech){ console.log('judge_call silent ['+data.kind+']', reply.slice(0,60)); return; }
   addMsg('ai',speech);
-  speak(speech);
+  // ★kindごとの優先度で発話（会話がこれを止められないように・安全は最優先で割り込む）
+  const JUDGE_PRIO = {multiclass:SPEAK_PRIO.P1_HAZARD, danger:SPEAK_PRIO.P3_STRATEGY,
+                      towing:SPEAK_PRIO.P4_INFO, battle:SPEAK_PRIO.P3_STRATEGY,
+                      catchup:SPEAK_PRIO.P3_STRATEGY, defend:SPEAK_PRIO.P3_STRATEGY,
+                      best_lap:SPEAK_PRIO.P4_INFO, time_loss:SPEAK_PRIO.P4_INFO};
+  speak(speech, {prio:(JUDGE_PRIO[data.kind] ?? SPEAK_PRIO.P4_INFO), kind:data.kind,
+                 dedupeKey:data.kind + (data.car_number||'')});
   pushRecentCall(data.kind + (data.car_number?' #'+data.car_number:''), speech);  // 実発話も保存
 }
 

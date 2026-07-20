@@ -1158,7 +1158,8 @@ function buildSystem(p) {
   //   実走でマルチクラス接近を24回検知して0回しか喋らず、ドライバーが「なんでわかってねえんだよ」と怒った。
   //   Yuji仕様：「GT3は最も遅いクラス。速い車が来ると危険。必ずレポートしてほしい」＝安全であり、
   //   "今言う価値があるか"を問うてはいけない項目。ここでは NO_CALL 自体を選択肢から外す。
-  const SAFETY_KINDS = ['multiclass', 'danger', 'towing'];
+  const SAFETY_KINDS = ['multiclass'];   // ★Codex提案でdanger(低SR/iR)=P3・towing=P4へ格下げ。
+                                        //   物理的な即時危険は「速いクラスが迫っている」だけ。
   if (judgeCallNote && judgeCall && SAFETY_KINDS.includes(judgeCall.kind)) {
     judgeCallNote += isJ
       ? '\n\n【最重要・沈黙禁止】これは**安全に関わる報告**だ。ドライバーは今このレースで最も遅いクラスにいて、'

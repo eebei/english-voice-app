@@ -478,9 +478,11 @@ PRIORITY = {
     # P0 安全・即時（0.1秒が命。絶対に落とさない）
     'stopped_ahead': 0, 'side_by_side': 0, 'crash_check': 0, 'incident': 0, 'damage_report': 0,
     # P1 安全・文脈（Yuji仕様：GT3は最も遅いクラス＝速い車の接近は危険。必ず報告する）
-    'multiclass': 1, 'danger': 1, 'multi_car_straight': 1, 'towing': 1,
+    'multiclass': 1, 'multi_car_straight': 1, 'pit_box_here': 1,   # pit_box_hereは期限が極端に短い
+    # ↓Codex提案で格下げ：低SR/iRは物理的な即時危険ではない／towingは既に停止済みで回避不要
+    'danger': 3, 'towing': 4,
     # P2 手順（タイミングが命）
-    'pit_entry': 2, 'pit_exit': 2, 'pit_box_here': 2, 'pit_box_stop': 2, 'limiter_off': 2,
+    'pit_entry': 2, 'pit_exit': 2, 'pit_box_stop': 2, 'limiter_off': 2,
     # P3 戦略
     'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
@@ -522,6 +524,17 @@ def _director_allows(kind, prio, now):
         return False, 'budget_P%d_%d/%d%s' % (prio, used, cap, '_quiet' if quiet else '')
     return True, None
 
+def director_commit(prio, kind='radio'):
+    """rendererが実際に再生を開始した時に呼ぶ＝ここで初めて予算とダッキング基準を消費する。
+       （通過時計上だと、黙った判断コールが下位を不当に抑制してしまう）"""
+    try:
+        now = time.time()
+        _director['last_by_prio'][prio] = now
+        _director['recent'].append((now, prio))
+        log("DIRECTOR spoke: %s (P%d)" % (kind, prio))
+    except Exception:
+        pass
+
 def director_gate(event):
     """broadcast() の入口で全イベントを裁く。True=通す / False=捨てる。"""
     try:
@@ -535,8 +548,9 @@ def director_gate(event):
         if not ok:
             log("DIRECTOR drop: %s (P%d) reason=%s" % (kind, prio, why))
             return False
-        _director['last_by_prio'][prio] = now
-        _director['recent'].append((now, prio))
+        # ★Codex指摘：ここで計上してはいけない。judge_callはNO_CALLで黙ることがあり、
+        #   通過時に計上すると「黙ったのに予算を食い、下位をダックする」不正が起きる。
+        #   計上は renderer が実際に再生を開始した時（cmd:'spoke'）に行う。
         log("DIRECTOR pass: %s (P%d)" % (kind, prio))
         return True
     except Exception as _de:
@@ -551,7 +565,9 @@ def broadcast(event):
     #   （安全直結・非radio・窓が開いてる時は素通り。保留は最新1件のみ＝flush_radioが窓の開いた瞬間に送る）
     try:
         if (event.get('type') == 'radio' and event.get('trigger') in GATEABLE_TRIGGERS
+                and not event.get('_admitted')          # 保留から戻った分は再判定しない（二重計上防止）
                 and _gate_active and not _gate_window_ok):
+            event['_admitted'] = True                  # 次にflushされる時はディレクターを再通過させない
             _gate_state['pending'] = event
             _gate_state['since'] = time.time()
             log("RADIO gate: hold %s (braking/cornering)" % event.get('trigger'))
@@ -2661,6 +2677,10 @@ async def handler(websocket):
             cmd = msg.get('cmd')
             # log_line = rendererからの会話ログ転送。デバッグログに会話(AI返答含む)を残す。
             # スクショ無しで後から会話を追えるように(Yuji時短)。CMDノイズは出さない。
+            if cmd == 'spoke':
+                # rendererが実際に再生を開始した通知。ここで予算を消費する（Codex指摘の修正）。
+                director_commit(int(data.get('prio', 4)), str(data.get('kind', 'radio')))
+                continue
             if cmd == 'quiet_mode':
                 # ★2026-07-20 ドライバーの「あんまり喋らなくていい」を構造で受ける。
                 #   P3〜P5(戦略/情報/雑談)の予算を絞るだけで、P0/P1(安全)には一切効かない。
