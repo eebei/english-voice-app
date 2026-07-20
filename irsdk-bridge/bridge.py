@@ -2380,12 +2380,23 @@ def poll_iracing():
                             _opct = car_dist_pct[_mi]
                             if _opct is None or _opct < 0:
                                 continue
+                            # ★★2026-07-20 前後の符号を反転（Codexがログ解析で発見した致命バグの根治）★★
+                            #   LapDistPct はコース進行方向に増加するため、
+                            #     _opct > _ppct  → 相手は【前方】
+                            #     _opct < _ppct  → 相手は【後方】
+                            #   旧実装は「正=後方」と解釈していたため完全に逆転しており：
+                            #     ・本当に後ろから迫る車 → _pd 負 → 「前方」として continue で捨てていた
+                            #     ・抜き去って前へ行った車 → _pd 正 → 「後方○秒」と警告していた
+                            #   実走の証拠(2026-07-20 Monza)：16:25:41 myPct=0.493 otherPct=0.515 で相手は
+                            #   既に0.022周ぶん前方なのに「後方2.4秒」と発火。逆に接近中の車は一度も警告されず、
+                            #   ドライバーは「もう今まさに来てますよ」「なんでわかってねえんだよ」と怒った。
+                            #   ＝Lunaが黙っていたのではなく、センサーを前後逆に読んでいた。
                             _pd = _opct - _ppct
                             if _pd > 0.5: _pd -= 1.0
                             elif _pd < -0.5: _pd += 1.0
-                            _mcgap = _pd * player_last_lap  # 正=後方, 負=前方
-                            if _mcgap <= 0:      # 前方の速いクラス=自分が追う相手でない。静観して再武装だけ
-                                multiclass_stage[_mi] = 0
+                            _mcgap = -_pd * player_last_lap  # ★反転：正=後方(迫っている), 負=前方(抜かれ済み)
+                            if _mcgap <= 0:      # 相手は前方＝もう抜かれた/追う相手。警告不要・即再武装
+                                multiclass_stage[_mi] = 0   # 抜かれた瞬間に解除（次に別の車が来たら鳴る）
                                 continue
                             _stg = 2 if _mcgap <= 2.0 else (1 if _mcgap <= 5.0 else 0)
                             if _mcgap > 6.0:
@@ -2397,8 +2408,8 @@ def poll_iracing():
                                 # ★2026-07-19 診断：マルチクラス"後方"警告の前後が正しいか実走で確定させる。
                                 #   Yuji Monza実走で「速いクラス後方」が実は前方スロー車では、との疑い。
                                 #   両車のLapDistPct・wrap後の差・秒gapを残す（LapDistPct符号規約の最終確定用）。
-                                log("MC fire _mi=%s myPct=%.3f otherPct=%.3f pd=%.3f gap=%.1f -> called BEHIND stg=%s"
-                                    % (_mi, _ppct, _opct, _pd, _mcgap, _stg))
+                                log("MC fire idx=%s cls=%s myPct=%.3f otherPct=%.3f signedPd=%+.3f relation=BEHIND behindGap=%.1fs stg=%s"
+                                    % (_mi, _norm_class_name(_ocname), _ppct, _opct, _pd, _mcgap, _stg))
                                 # ★2026-07-19 反射テンプレ→LLM判断へ卒業（Yuji Monza実走で「準備しておこう」87連呼＝
                                 #   クロスクラスのLapDistPctギャップが不正確(実0.1秒を4-5秒と誤報)・訂正しても12秒後に再発火の
                                 #   "ドリフターズのコント"が発覚）。速いクラスは数秒かけて迫る＝0.1秒の衝突反射でなくLLM判断の時間がある。
