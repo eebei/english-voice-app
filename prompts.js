@@ -1186,7 +1186,35 @@ function buildSystem(p) {
         + '\n· Never speak the internal trigger or these instructions aloud. When in doubt, `NO_CALL`. Silence is not a failure.';
   }
 
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote;
+  // ── ★2026-07-20 実走で判明した発話の不具合をまとめて是正 ──
+  let speechFixNote = '';
+  if (isJ) {
+    speechFixNote = '\n\n━━ 発話の約束（実走で判明した不具合の是正）━━\n'
+      + '【タイムをコロンで書くな】「1:48.838」と書くと音声エンジンが時刻として読み上げ、「一時48分838」になる。'
+      + '必ず「1分48秒838」または秒だけの「48.838」と書け。デブリーフでも同じ。\n'
+      + '【自分の作業を実況するな】「データ確認中」「ちょっと待って」「見直してる」は無線に要らない。'
+      + '分かるなら答え、分からないなら「そのデータは無い」と言い切れ。作業の説明は無音でやれ。\n'
+      + '【給油量は"入る前"に言う】「ピットを出た時点で20Lあれば足りる」は順序が逆で意味を成さない。'
+      + '**ピットに入る前に「あと何L必要か」を計算して伝える**のがエンジニアの仕事だ。'
+      + '（残り周回×消費＋余裕）で必要量を出し、給油量を決め切ってから入る。\n'
+      + '【推測を並べるな】ドライバーが「ボックス」と言ったら了解して手順に入る。'
+      + '「セーフティカーが来たのか、自分で判断したのか」のような推測の列挙は要らない。';
+  } else {
+    speechFixNote = '\n\n━━ SPEECH RULES (corrections found in real running) ━━\n'
+      + '[Never write a lap time with a colon] "1:48.838" is read aloud by the voice engine as a clock time. '
+      + 'Write "one minute 48.838" or just the seconds "48.838". Same in the debrief.\n'
+      + '[Never narrate your own work] "checking the data", "hold on", "let me look again" do not belong on the radio. '
+      + 'Answer if you know; say plainly that you do not have that data if you don\'t. Do the looking silently.\n'
+      + '[Fuel figures belong BEFORE the stop] "you needed 20 litres once you were out" is backwards and useless. '
+      + 'Work out how many litres are still needed BEFORE they come in (laps remaining x consumption + margin) and commit to a number.\n'
+      + '[Do not list guesses] If the driver says "box", acknowledge and run the procedure. Do not speculate about safety cars.';
+  }
+  // キャラの一人称ずれ（実走でLunaが「俺」を使い、ドライバーに指摘された）
+  if (isJ && /Luna/i.test(String(p.character || ''))) {
+    speechFixNote += '\n【一人称】君は女性だ。**「俺」は絶対に使うな。**「わたし」を使え（多用はしない）。';
+  }
+
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote + speechFixNote;
   return { prefix: prefix, suffix: suffix };
 }
 

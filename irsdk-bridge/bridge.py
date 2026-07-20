@@ -493,7 +493,8 @@ PRIORITY = {
 DEFAULT_PRIORITY = 5                  # 未知は雑談扱い＝最も抑制される（安全側に倒れる）
 DUCK_WINDOW = {3: 6.0, 4: 10.0, 5: 12.0}   # 上位が喋った直後、この秒数は下位を出さない
 BUDGET_WINDOW = 60.0                  # 発話予算の観測窓（秒）
-BUDGET_MAX = {3: 6, 4: 4, 5: 2}       # 窓内の最大発話回数（P3=戦略/P4=情報/P5=雑談）
+BUDGET_MAX = {3: 5, 4: 2, 5: 1}       # 窓内の最大発話回数（P3=戦略/P4=情報/P5=雑談）
+#   ★2026-07-20 実走で順位コールが16秒に5連発したためP4を4→2へ、雑談も2→1へ絞った
 QUIET_FACTOR = 0.4                    # ドライバーが「静かにして」と言った時に予算へ掛ける係数
 
 _director = {'last_by_prio': {}, 'recent': [], 'quiet_until': 0.0}
@@ -1155,6 +1156,12 @@ def poll_iracing():
             consecutive_slow    = 0
             consistent_lap_count = 0
             pace_check_last_lap = -99
+            # ★2026-07-20 セッションが変わったら燃料の完走判定を白紙に戻す。
+            #   実走：レース終了直後に次セッションの時計(timeRem=678.5)が入り「あと7周」と誤認し、
+            #   ファイナルラップで「燃料が持たない、ピット計画を決めよう」と誤警告した。
+            fuel_strategy_warned = False
+            leader_lap_time_hist.clear()
+            lap_delta_hist.clear()
 
         # 切断は15秒間ずっと非アクティブな時だけ（セッション移行・ロード中を含むブリップで初期化しない）
         if not active and ir_was_connected:
@@ -1919,6 +1926,9 @@ def poll_iracing():
                     'Down to P' + str(class_pos) + '. You\'re fine, pace is there.'])
                 broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos, 'message': _pd_msg})
 
+        # ★2026-07-20 順位コールの連発対策（実走で16秒に5回＝ピットアウト直後の順位激変）。
+        #   ドライバーは前レースでも「そういうのはいらない」と明言。1周に1回までに制限し、
+        #   ピット退出直後の順位が定まらない30秒は黙る。
         # Fuel warning
         # ※実際にトラック走行中＆燃料が有効な数値の時だけ警告する。
         #   ガレージ/ピット/セッション開始直後は燃料0やデータ未取得で誤発火するため除外。
@@ -2410,12 +2420,31 @@ def poll_iracing():
                                 #   両車のLapDistPct・wrap後の差・秒gapを残す（LapDistPct符号規約の最終確定用）。
                                 log("MC fire idx=%s cls=%s myPct=%.3f otherPct=%.3f signedPd=%+.3f relation=BEHIND behindGap=%.1fs stg=%s"
                                     % (_mi, _norm_class_name(_ocname), _ppct, _opct, _pd, _mcgap, _stg))
-                                # ★2026-07-19 反射テンプレ→LLM判断へ卒業（Yuji Monza実走で「準備しておこう」87連呼＝
-                                #   クロスクラスのLapDistPctギャップが不正確(実0.1秒を4-5秒と誤報)・訂正しても12秒後に再発火の
-                                #   "ドリフターズのコント"が発覚）。速いクラスは数秒かけて迫る＝0.1秒の衝突反射でなくLLM判断の時間がある。
-                                #   ★不正確な秒数は渡さない（盛らない）＝stageだけ渡し、Lunaは数字を言わず質的に警告。
-                                #   recentバッファで「さっき速いクラス言った→黙る」＝連呼死＋ドライバーの訂正も踏まえられる。
-                                broadcast({'type': 'judge_call', 'kind': 'multiclass',
+                                # ★★2026-07-20 P1確定コール化（Codex指摘#4）★★
+                                #   速いクラスの接近は安全項目であり、LLMに「言うべきか」を問うてはいけない。
+                                #   実走で検知24回・発話0回（judge_callが全件沈黙）＝ドライバーが危険に晒された。
+                                #   よって type='radio'（確定発話）で送る。ただしYujiが最も嫌ったのが
+                                #   「準備しておこう」×87の機械音なので、**自然な言い回しを複数用意して回す**
+                                #   （待たない・黙らない・毎回同じにならない＝候補C）。
+                                #   連呼はディレクターのlifecycle(段階が上がった時だけ)とdedupeで抑える。
+                                _mc_variants_1 = [   # stage1：接近中（まだ余裕がある）
+                                    'Faster car coming up behind — leave them room.',
+                                    'Quicker class closing from behind. Hold your line.',
+                                    'Faster traffic behind you. Let them through cleanly.',
+                                    'Got a faster one catching you. Stay predictable.',
+                                ]
+                                _mc_variants_2 = [   # stage2：真後ろ（今譲る）
+                                    'They\'re on you now — give them room.',
+                                    'Faster car right behind. Let them by.',
+                                    'On your tail now. Ease over, let them go.',
+                                    'Right there — open the door for them.',
+                                ]
+                                _pool = _mc_variants_2 if _stg >= 2 else _mc_variants_1
+                                _msg_mc = _pool[int(now) % len(_pool)]
+                                broadcast({'type': 'radio', 'trigger': 'multiclass',
+                                    'stage': _stg, 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
+                                    'message': _msg_mc})
+                                _unused_multiclass_judge = ({'type': 'judge_call', 'kind': 'multiclass',
                                     'stage': _stg,   # 1=接近(備え) / 2=直後(今譲れ)
                                     'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos})
                                 last_battle_global = now

@@ -1989,6 +1989,15 @@ function oishiRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。全開でいい。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
+    case 'multiclass': {
+      // ★2026-07-20 P1確定コール。秒数は言わない（クロスクラスの秒は不正確）。
+      //   Yujiが最も嫌った「準備しておこう」の固定文を避けるため複数から回す。
+      const _v1 = ['後ろから速いの来てる。ライン空けよう。','速いクラスが迫ってる。動きは読みやすく。',
+                   '後方に速い車。無理に抑えなくていい。','速いのが来てる。いつも通りのラインで。'];
+      const _v2 = ['真後ろに来た。譲ろう。','今、真後ろ。道を空けて。','来てる、そこ。行かせよう。','真後ろだ。スッと開けて。'];
+      const _p = (d.stage>=2?_v2:_v1);
+      return _p[Math.floor(Date.now()/1000)%_p.length];
+    }
     case 'multiclass_approaching': return `後方に速いクラス、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。準備しておこう。`;
     case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン譲ろう。`;
     case 'battle_behind': {
@@ -2056,6 +2065,12 @@ function kanbeRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。踏んでいけぇ。`;
     case 'rolling_gap':    return `前と${d.gap}秒。じわじわ詰めていこうや。`;
+    case 'multiclass': {
+      const _v1 = ['後ろから速えのが来とる。ライン空けとけ。','速えクラスが迫っとる。動きは分かりやすうな。','後ろに速え車。無理に抑えんでええ。'];
+      const _v2 = ['真後ろじゃ。譲ろう。','今、真後ろ。道空けえ。','来とる、そこ。行かせえ。'];
+      const _p = (d.stage>=2?_v2:_v1);
+      return _p[Math.floor(Date.now()/1000)%_p.length];
+    }
     case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えとけ。`;
     case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けえ。`;
     case 'battle_behind': {
