@@ -2002,6 +2002,7 @@ function oishiRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。全開でいい。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
+    case 'pit_box_countdown': return `${d.meters}メートル。`;
     case 'multiclass': {
       // ★2026-07-20 P1確定コール。秒数は言わない（クロスクラスの秒は不正確）。
       //   Yujiが最も嫌った「準備しておこう」の固定文を避けるため複数から回す。
@@ -2078,6 +2079,7 @@ function kanbeRadio(d){
     case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
     case 'limiter_off':    return `リミッターオフ。踏んでいけぇ。`;
     case 'rolling_gap':    return `前と${d.gap}秒。じわじわ詰めていこうや。`;
+    case 'pit_box_countdown': return `${d.meters}メートルじゃ。`;
     case 'multiclass': {
       const _v1 = ['後ろから速えのが来とる。ライン空けとけ。','速えクラスが迫っとる。動きは分かりやすうな。','後ろに速え車。無理に抑えんでええ。'];
       const _v2 = ['真後ろじゃ。譲ろう。','今、真後ろ。道空けえ。','来とる、そこ。行かせえ。'];

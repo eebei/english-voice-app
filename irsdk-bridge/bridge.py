@@ -482,7 +482,7 @@ PRIORITY = {
     # ↓Codex提案で格下げ：低SR/iRは物理的な即時危険ではない／towingは既に停止済みで回避不要
     'danger': 3, 'towing': 4,
     # P2 手順（タイミングが命）
-    'pit_entry': 2, 'pit_exit': 2, 'pit_box_stop': 2, 'limiter_off': 2,
+    'pit_entry': 2, 'pit_exit': 2, 'pit_box_stop': 2, 'limiter_off': 2, 'pit_box_countdown': 2,
     # P3 戦略
     'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
@@ -856,7 +856,14 @@ def parse_session_info(yaml_str):
         # Track name
         for line in yaml_str.split('\n'):
             line = line.strip()
-            if line.startswith('TrackName:'):
+            if line.startswith('TrackLength:'):
+                # ★2026-07-20 ピットボックスまでの距離換算用（例 "TrackLength: 5.793 km"）
+                try:
+                    _tl = line.split(':',1)[1].strip().split()[0]
+                    result['track_length_m'] = float(_tl) * 1000.0
+                except Exception:
+                    pass
+            elif line.startswith('TrackName:'):
                 result['track'] = line.split(':', 1)[1].strip()
             elif line.startswith('TrackDisplayName:'):
                 result['track_display'] = line.split(':', 1)[1].strip()
@@ -1111,6 +1118,9 @@ def poll_iracing():
     consecutive_slow = 0       # (旧lap_slow用・2026-07-19のタイム読み上げ再設計で未使用化)
     consistent_lap_count = 0   # (旧lap_consistent用・同上)
     pace_check_last_lap = -99  # ペース判断を最後に投げた周回（3周に1回までに制限＝連呼防止）
+    pit_box_pct = None         # 自分のピットボックスのLapDistPct（初回入庫で学習・以後カウントダウンに使う）
+    pit_marks_called = set()   # 今回の入庫で読み上げ済みの距離マーカー
+    track_length_m = None      # コース長(m)。ピット距離の換算用
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
     tow_active = False         # トーイング中フラグ（開始時に1回だけ声かけ・終了でリセット）
@@ -1201,6 +1211,8 @@ def poll_iracing():
                     sig = str(info.get('event_type', '')) + '|' + str(info.get('track', ''))
                     if info.get('sessions'):
                         sessions_map = info['sessions']   # {SessionNum: SessionType}
+                        if info.get('track_length_m'):
+                            track_length_m = info['track_length_m']
                     session_track = info.get('track', '')
                     session_car_class = info.get('player_car_class', '')
                     session_event_type = info.get('event_type', '')
@@ -2026,8 +2038,31 @@ def poll_iracing():
             _spd_now = reader.read_float('Speed')
             _prev_psurf = prev.get('_psurf')
             _prev_pss   = prev.get('_pss')
+            # ★★2026-07-20 ピットボックスまでの距離カウントダウン（Yuji要望）★★
+            #   iRacingはボックス位置を直接くれないので、**自分のボックスを学習**する：
+            #   最初の入庫で「到達した瞬間のLapDistPct」を記録し、次からそこまでの距離を数える。
+            #   走るほど正確になる＝この製品の思想と同じ。Monzaのように短いピットでは
+            #   間に合わない距離は自動的に飛ばされる（近い方から順に、まだ先の距離だけ言う）。
+            if onPit and _ldp is not None and _ldp >= 0 and pit_box_pct is not None and track_length_m:
+                _dpct = pit_box_pct - _ldp
+                if _dpct > 0.5: _dpct -= 1.0
+                elif _dpct < -0.5: _dpct += 1.0
+                _dist_m = _dpct * track_length_m
+                if 0 < _dist_m < 220:
+                    for _mark in (150, 100, 50, 20):
+                        if _dist_m <= _mark and _mark not in pit_marks_called:
+                            pit_marks_called.add(_mark)
+                            broadcast({'type': 'radio', 'trigger': 'pit_box_countdown',
+                                'meters': _mark, 'message': str(_mark) + ' metres.'})
+                            break
             # ① ピットレーン内で"ボックス位置に到達"＝PlayerTrackSurface 2→1
+            if (not onPit) and pit_marks_called:
+                pit_marks_called.clear()   # コースに戻ったら次の入庫に備えて白紙化
             if onPit and _prev_psurf == 2 and _psurf == 1:
+                if _ldp is not None and _ldp >= 0:
+                    pit_box_pct = _ldp        # ★自分のボックス位置を学習（次回から秒読みできる）
+                    log("PIT BOX learned at LapDistPct=%.4f (track=%.0fm)" % (_ldp, track_length_m or 0))
+                pit_marks_called.clear()
                 broadcast({'type': 'radio', 'trigger': 'pit_box_here', 'message': 'Box here. Slow.'})
             # ② ★決定シグナル＝サービス開始(完全停止)。PlayerCarPitSvStatus 0→非0
             if _prev_pss == 0 and _pss is not None and _pss != 0:
