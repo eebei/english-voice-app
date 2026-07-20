@@ -7,7 +7,8 @@ OMORAY PITWALL - iRacing SDK 全変数ダンプツール
 使い方:
   1. iRacingでテストドライブ等に出走し、コース上を走行する(OnTrack状態にする)
   2. このスクリプトを実行: python dump_all_vars.py
-  3. 同じフォルダに all_vars_dump.txt と all_vars_dump.csv が出る
+  3. 同じフォルダに all_vars_dump-<日時>[-ラベル].txt / .csv が出る（過去分を上書きしない）
+     ラベル付き実行例: python dump_all_vars.py before-service
   4. そのテキストをClaudeに渡せば全変数が読める
 
 ※読み取り専用。iRacingには一切書き込まない(bridge.pyと同じ方式)。
@@ -18,6 +19,7 @@ from ctypes import wintypes
 import struct
 import time
 import csv
+import re
 import os
 import sys
 
@@ -141,8 +143,14 @@ def dump():
     rows.sort(key=lambda r: r['name'].lower())
 
     base_dir = os.path.dirname(os.path.abspath(sys.argv[0])) or '.'
-    txt_path = os.path.join(base_dir, 'all_vars_dump.txt')
-    csv_path = os.path.join(base_dir, 'all_vars_dump.csv')
+    # ★2026-07-21 上書き防止：実行のたびに日時入りで保存する。
+    #   戦略エンジンの設計根拠として「いつ・どの状態で採った値か」が証拠になるため、
+    #   過去のダンプを失ってはいけない（Yuji指示）。
+    _stamp = time.strftime('%Y%m%d-%H%M%S')
+    _label = (sys.argv[1] if len(sys.argv) > 1 else '').strip()
+    _suffix = ('-' + re.sub(r'[^A-Za-z0-9_-]', '', _label)) if _label else ''
+    txt_path = os.path.join(base_dir, f'all_vars_dump-{_stamp}{_suffix}.txt')
+    csv_path = os.path.join(base_dir, f'all_vars_dump-{_stamp}{_suffix}.csv')
 
     # テキスト出力(Claudeに貼りやすい)
     with open(txt_path, 'w', encoding='utf-8') as f:
@@ -183,7 +191,7 @@ def dump():
     print(f"✅ 完了！ {len(rows)}個の変数をダンプしました。")
     print(f"   → {txt_path}")
     print(f"   → {csv_path}")
-    print(f"\n   all_vars_dump.txt をClaudeに渡してください。")
+    print(f"\n   {os.path.basename(txt_path)} をClaudeに渡してください。")
 
     # コンソールにもキー変数チェックを即表示
     print("\n【ドライビング解析キー変数の有無】")
