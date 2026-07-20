@@ -2005,13 +2005,15 @@ function oishiRadio(d){
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     case 'multiclass': {
-      // ★2026-07-20 P1確定コール。秒数は言わない（クロスクラスの秒は不正確）。
-      //   Yujiが最も嫌った「準備しておこう」の固定文を避けるため複数から回す。
-      const _v1 = ['後ろから速いの来てる。ライン空けよう。','速いクラスが迫ってる。動きは読みやすく。',
-                   '後方に速い車。無理に抑えなくていい。','速いのが来てる。いつも通りのラインで。'];
-      const _v2 = ['真後ろに来た。譲ろう。','今、真後ろ。道を空けて。','来てる、そこ。行かせよう。','真後ろだ。スッと開けて。'];
-      const _p = (d.stage>=2?_v2:_v1);
-      return _p[Math.floor(Date.now()/1000)%_p.length];
+      // ★2026-07-20 ドライバー要求：クラス名＋台数＋秒数を言う。
+      //   「GTPとP217では近づいてくる速さが違う」「2台続いてると言ってくれた方が」
+      //   「何秒後方と言ってくれた方がいい。その言葉が全部一緒だと分からない」
+      const cls = d.class_name || '速いクラス';
+      const n   = (d.count && d.count > 1) ? `${d.count}台` : '';
+      const sec = (d.delta != null) ? `${d.delta}秒後方` : '後方';
+      return (d.stage >= 2)
+        ? `${cls}${n}、${sec}。譲ろう。`
+        : `${cls}${n}、${sec}。`;
     }
     case 'multiclass_approaching': return `後方に速いクラス、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。準備しておこう。`;
     case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン譲ろう。`;
@@ -2082,10 +2084,10 @@ function kanbeRadio(d){
     case 'rolling_gap':    return `前と${d.gap}秒。じわじわ詰めていこうや。`;
     case 'pit_box_countdown': return `${d.meters}メートルじゃ。`;
     case 'multiclass': {
-      const _v1 = ['後ろから速えのが来とる。ライン空けとけ。','速えクラスが迫っとる。動きは分かりやすうな。','後ろに速え車。無理に抑えんでええ。'];
-      const _v2 = ['真後ろじゃ。譲ろう。','今、真後ろ。道空けえ。','来とる、そこ。行かせえ。'];
-      const _p = (d.stage>=2?_v2:_v1);
-      return _p[Math.floor(Date.now()/1000)%_p.length];
+      const cls = d.class_name || '速えクラス';
+      const n   = (d.count && d.count > 1) ? `${d.count}台` : '';
+      const sec = (d.delta != null) ? `${d.delta}秒後ろ` : '後ろ';
+      return (d.stage >= 2) ? `${cls}${n}、${sec}。譲れ。` : `${cls}${n}、${sec}。`;
     }
     case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えとけ。`;
     case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けえ。`;

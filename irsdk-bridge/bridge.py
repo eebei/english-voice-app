@@ -483,12 +483,14 @@ PRIORITY = {
     'danger': 3, 'towing': 4,
     # P2 手順（タイミングが命）
     'pit_entry': 2, 'pit_exit': 2, 'pit_box_stop': 2, 'limiter_off': 2, 'pit_box_countdown': 2,
+    # ★ベスト更新は祝う瞬間。予算で消されないようP2に置く（実走で沈黙しドライバーが落胆した）
+    'personal_best': 2, 'session_best': 2,
     # P3 戦略
     'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
     # P4 情報
-    'best_lap': 4, 'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
-    'rolling_gap': 4, 'lap_time': 4, 'session_best': 4, 'personal_best': 4,
+    'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
+    'rolling_gap': 4, 'lap_time': 4,
 }
 DEFAULT_PRIORITY = 5                  # 未知は雑談扱い＝最も抑制される（安全側に倒れる）
 DUCK_WINDOW = {3: 6.0, 4: 10.0, 5: 12.0}   # 上位が喋った直後、この秒数は下位を出さない
@@ -1719,10 +1721,15 @@ def poll_iracing():
                 if is_personal_best:
                     if personal_best is not None:
                         diff = personal_best - lapTime
-                        # ★2026-07-19 テンプレ→LLMへ（Yuji「ベストラップ更新はコールして」＝言う事は確定、
-                        #   言い方だけLLMに委ねる。定型「Personal best. 24.594. Plus 0.46」の機械音を卒業）
-                        broadcast({'type': 'judge_call', 'kind': 'best_lap', 'best_kind': 'personal',
-                            'time': t, 'gain': round(diff, 3)})
+                        # ★★2026-07-20 判断層→確定コールへ（Yuji「自己ベストを出した時にコールが
+                        #   なかったのが、ちょっとテンションが上がらなかった」）。
+                        #   判断層に預けた項目は繰り返し沈黙する（ディレクターは通過しているのに発話0）。
+                        #   ベスト更新は"祝う瞬間"であり、黙る判断を許す種類のものではない。
+                        #   機械音を避けるため言い回しは複数から回す。
+                        _bl = ['Personal best. ', 'That\'s your best. ', 'New best. ', 'Best of the day. ']
+                        broadcast({'type': 'radio', 'trigger': 'personal_best',
+                            'time': t, 'diff': round(diff, 2),
+                            'message': _bl[int(time.time()) % len(_bl)] + t + '.'})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
                             'message': t + '. Baseline lap.'})
@@ -1730,7 +1737,8 @@ def poll_iracing():
                     session_best = lapTime
 
                 elif is_session_best:
-                    broadcast({'type': 'judge_call', 'kind': 'best_lap', 'best_kind': 'session', 'time': t})
+                    broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t,
+                        'message': 'Session best. ' + t + '.'})
                     session_best = lapTime
 
                 else:
@@ -2401,88 +2409,64 @@ def poll_iracing():
                                         'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                     last_battle_global = now
 
-                # ── マルチクラス(速いクラス)接近警告：クラス非依存のLapDistPct物理ギャップで測る ──
-                # ⚠️2026-07-14 IMSA実走で発覚：旧実装はCarIdxEstTime差でクロスクラス車間を測っていたが、
-                #   EstTimeは各車のクラス想定ラップで位置を秒換算する値。GT3(93秒)とP217(85秒)では同じコース
-                #   位置でも数秒ズレ、「後方P217 4.6秒」と幻を6連呼した(実際の最近接は0.2-0.9秒)。LapDistPct
-                #   (0-1のコース内位置・クラス非依存)差×自分のラップタイムなら物理車間が正しい。周回数も無関係
-                #   なので周回遅れにされる直前の速いクラスも拾える(EstTimeの同一周回フィルターに縛られない)。
-                # 連呼対策：段階(1=5秒/2=2秒)を跨いだ最初の瞬間だけ1回。6秒より離れたら再武装。
+                # ══ マルチクラス(速いクラス)接近警告 ══
+                # ⚠️2026-07-14：EstTimeはクラス毎の想定ラップで秒換算する値でクロスクラスでは狂うため、
+                #   クラス非依存の LapDistPct(0-1のコース内位置)差 × 自分のラップタイムで物理車間を測る。
+                # ⚠️2026-07-20：符号が逆で「抜かれた車を後方と報告し、迫る車を無視」していた（根治済み）。
+                # ★★2026-07-20 ドライバー要求により「1台ずつ叫ぶ」→「クラス単位でまとめる」へ★★
+                #   実走で82回発話し、Yuji「その言葉が全部一緒のことを言うから分からない」
+                #   「2台続いてる、3台続いてるって言ってくれた方が。回数は君が答えなくていい」
+                #   「クラス名を言ってくれた方がいい。GTPとP217では近づいてくる速さが違う」←最高評価
+                #   よって：最も近い1台を代表に、同クラスで近接している台数を添えて【1クラス1コール】。
+                #   秒数も言う（符号が直り物理ギャップが正しくなったため。以前は不正確なので伏せていた）。
                 if car_dist_pct and player_car_idx < len(car_dist_pct) and player_last_lap and player_last_lap > 0:
                     _ppct = car_dist_pct[player_car_idx]
                     _cls_pos_mc = reader.read_int_array('CarIdxClassPosition', 64)
                     if _ppct is not None and _ppct >= 0:
+                        _mc_groups = {}     # クラス名 -> {'gap':最近接の秒, 'count':近接台数, 'pos':代表の順位}
                         for _mi in range(len(car_dist_pct)):
                             if _mi == player_car_idx:
                                 continue
                             _mcls = car_class_map.get(_mi, -1)
                             _mrel = car_relspeed_map.get(_mi, 0)
                             if _mcls == -1 or _mcls == player_class_id or _mrel <= player_rel_speed:
-                                continue  # 速いクラス(別クラス かつ 相対速度が自分より速い)のみ対象
+                                continue  # 速いクラス(別クラス かつ 相対速度が上)のみ
                             if car_on_track and _mi < len(car_on_track) and car_on_track[_mi] not in (2, 3):
-                                multiclass_stage.pop(_mi, None)   # ピット/未使用は再武装扱い
                                 continue
                             _opct = car_dist_pct[_mi]
                             if _opct is None or _opct < 0:
                                 continue
-                            # ★★2026-07-20 前後の符号を反転（Codexがログ解析で発見した致命バグの根治）★★
-                            #   LapDistPct はコース進行方向に増加するため、
-                            #     _opct > _ppct  → 相手は【前方】
-                            #     _opct < _ppct  → 相手は【後方】
-                            #   旧実装は「正=後方」と解釈していたため完全に逆転しており：
-                            #     ・本当に後ろから迫る車 → _pd 負 → 「前方」として continue で捨てていた
-                            #     ・抜き去って前へ行った車 → _pd 正 → 「後方○秒」と警告していた
-                            #   実走の証拠(2026-07-20 Monza)：16:25:41 myPct=0.493 otherPct=0.515 で相手は
-                            #   既に0.022周ぶん前方なのに「後方2.4秒」と発火。逆に接近中の車は一度も警告されず、
-                            #   ドライバーは「もう今まさに来てますよ」「なんでわかってねえんだよ」と怒った。
-                            #   ＝Lunaが黙っていたのではなく、センサーを前後逆に読んでいた。
                             _pd = _opct - _ppct
                             if _pd > 0.5: _pd -= 1.0
                             elif _pd < -0.5: _pd += 1.0
-                            _mcgap = -_pd * player_last_lap  # ★反転：正=後方(迫っている), 負=前方(抜かれ済み)
-                            if _mcgap <= 0:      # 相手は前方＝もう抜かれた/追う相手。警告不要・即再武装
-                                multiclass_stage[_mi] = 0   # 抜かれた瞬間に解除（次に別の車が来たら鳴る）
-                                continue
-                            _stg = 2 if _mcgap <= 2.0 else (1 if _mcgap <= 5.0 else 0)
-                            if _mcgap > 6.0:
-                                multiclass_stage[_mi] = 0   # 十分離れた=再武装
-                            elif _stg > multiclass_stage.get(_mi, 0):
-                                multiclass_stage[_mi] = _stg
-                                _ocpos = _cls_pos_mc[_mi] if (_cls_pos_mc and _mi < len(_cls_pos_mc)) else None
-                                _ocname = car_class_name_map.get(_mi)
-                                # ★2026-07-19 診断：マルチクラス"後方"警告の前後が正しいか実走で確定させる。
-                                #   Yuji Monza実走で「速いクラス後方」が実は前方スロー車では、との疑い。
-                                #   両車のLapDistPct・wrap後の差・秒gapを残す（LapDistPct符号規約の最終確定用）。
-                                log("MC fire idx=%s cls=%s myPct=%.3f otherPct=%.3f signedPd=%+.3f relation=BEHIND behindGap=%.1fs stg=%s"
-                                    % (_mi, _norm_class_name(_ocname), _ppct, _opct, _pd, _mcgap, _stg))
-                                # ★★2026-07-20 P1確定コール化（Codex指摘#4）★★
-                                #   速いクラスの接近は安全項目であり、LLMに「言うべきか」を問うてはいけない。
-                                #   実走で検知24回・発話0回（judge_callが全件沈黙）＝ドライバーが危険に晒された。
-                                #   よって type='radio'（確定発話）で送る。ただしYujiが最も嫌ったのが
-                                #   「準備しておこう」×87の機械音なので、**自然な言い回しを複数用意して回す**
-                                #   （待たない・黙らない・毎回同じにならない＝候補C）。
-                                #   連呼はディレクターのlifecycle(段階が上がった時だけ)とdedupeで抑える。
-                                _mc_variants_1 = [   # stage1：接近中（まだ余裕がある）
-                                    'Faster car coming up behind — leave them room.',
-                                    'Quicker class closing from behind. Hold your line.',
-                                    'Faster traffic behind you. Let them through cleanly.',
-                                    'Got a faster one catching you. Stay predictable.',
-                                ]
-                                _mc_variants_2 = [   # stage2：真後ろ（今譲る）
-                                    'They\'re on you now — give them room.',
-                                    'Faster car right behind. Let them by.',
-                                    'On your tail now. Ease over, let them go.',
-                                    'Right there — open the door for them.',
-                                ]
-                                _pool = _mc_variants_2 if _stg >= 2 else _mc_variants_1
-                                _msg_mc = _pool[int(now) % len(_pool)]
+                            _mcgap = -_pd * player_last_lap   # 正=後方(迫っている) / 負=前方(抜かれ済み)
+                            if _mcgap <= 0 or _mcgap > 6.0:
+                                continue                       # 前方 or まだ遠い
+                            _cn = _norm_class_name(car_class_name_map.get(_mi)) or 'faster class'
+                            _g = _mc_groups.get(_cn)
+                            if _g is None or _mcgap < _g['gap']:
+                                _mc_groups[_cn] = {'gap': _mcgap, 'count': (_g['count'] + 1) if _g else 1,
+                                                   'pos': (_cls_pos_mc[_mi] if (_cls_pos_mc and _mi < len(_cls_pos_mc)) else None)}
+                            else:
+                                _g['count'] += 1
+
+                        _seen_classes = set()
+                        for _cn, _g in _mc_groups.items():
+                            _seen_classes.add(_cn)
+                            _gap = _g['gap']
+                            _stg = 2 if _gap <= 2.0 else 1          # 2秒後方=今譲る / 5秒後方=備える
+                            if _stg > multiclass_stage.get(_cn, 0):
+                                multiclass_stage[_cn] = _stg
+                                log("MC fire class=%s behindGap=%.1fs count=%d stage=%d (grouped)"
+                                    % (_cn, _gap, _g['count'], _stg))
                                 broadcast({'type': 'radio', 'trigger': 'multiclass',
-                                    'stage': _stg, 'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos,
-                                    'message': _msg_mc})
-                                _unused_multiclass_judge = ({'type': 'judge_call', 'kind': 'multiclass',
-                                    'stage': _stg,   # 1=接近(備え) / 2=直後(今譲れ)
-                                    'class_name': _norm_class_name(_ocname), 'class_pos': _ocpos})
-                                last_battle_global = now
+                                    'stage': _stg, 'class_name': _cn, 'class_pos': _g['pos'],
+                                    'delta': round(_gap, 1), 'count': _g['count'],
+                                    'message': _cn + ' ' + (str(_g['count']) + ' cars, ' if _g['count'] > 1 else '')
+                                               + _fmt_gap(_gap) + ' behind.'})
+                        for _cn in list(multiclass_stage.keys()):
+                            if _cn not in _seen_classes:
+                                multiclass_stage.pop(_cn, None)     # 居なくなった＝再武装（次に来たら鳴る）
 
         # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──
         # 今までは「直前直後の車」としか比較できず、離れた順位を聞かれると答えられなかった。
