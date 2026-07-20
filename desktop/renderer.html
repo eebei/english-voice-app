@@ -2005,15 +2005,18 @@ function oishiRadio(d){
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     case 'multiclass': {
-      // ★2026-07-20 ドライバー要求：クラス名＋台数＋秒数を言う。
-      //   「GTPとP217では近づいてくる速さが違う」「2台続いてると言ってくれた方が」
-      //   「何秒後方と言ってくれた方がいい。その言葉が全部一緒だと分からない」
+      // ★2026-07-20 ドライバー要求：クラス名＋秒数＋**隊列の形**を伝える。
+      //   「2台が3秒以内で接近時とか。3台が10秒以内でも2+1台で来てるとか。
+      //     等間隔で来てる場合、"GTPが等間隔に7台くるぞ"」
+      //   固まる=一度譲れば終わる / 分かれる=間に息継ぎ / 等間隔=長く付き合う。対処が変わる。
       const cls = d.class_name || '速いクラス';
-      const n   = (d.count && d.count > 1) ? `${d.count}台` : '';
       const sec = (d.delta != null) ? `${d.delta}秒後方` : '後方';
-      return (d.stage >= 2)
-        ? `${cls}${n}、${sec}。譲ろう。`
-        : `${cls}${n}、${sec}。`;
+      const cl  = Array.isArray(d.clusters) ? d.clusters : [];
+      const yield_ = (d.stage >= 2) ? '譲ろう。' : '';
+      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来てる。先頭${sec}。${yield_}`;
+      if(d.shape === 'pack')   return `${cls}${d.count}台、固まって${sec}。${yield_}`;
+      if(d.shape === 'split')  return `${cls}${cl[0]}台が${sec}、その後に${cl.slice(1).join('＋')}台。${yield_}`;
+      return `${cls}、${sec}。${yield_}`;
     }
     case 'multiclass_approaching': return `後方に速いクラス、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。準備しておこう。`;
     case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン譲ろう。`;
@@ -2085,9 +2088,13 @@ function kanbeRadio(d){
     case 'pit_box_countdown': return `${d.meters}メートルじゃ。`;
     case 'multiclass': {
       const cls = d.class_name || '速えクラス';
-      const n   = (d.count && d.count > 1) ? `${d.count}台` : '';
       const sec = (d.delta != null) ? `${d.delta}秒後ろ` : '後ろ';
-      return (d.stage >= 2) ? `${cls}${n}、${sec}。譲れ。` : `${cls}${n}、${sec}。`;
+      const cl  = Array.isArray(d.clusters) ? d.clusters : [];
+      const y   = (d.stage >= 2) ? '譲れ。' : '';
+      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来とる。先頭${sec}。${y}`;
+      if(d.shape === 'pack')   return `${cls}${d.count}台、固まって${sec}。${y}`;
+      if(d.shape === 'split')  return `${cls}${cl[0]}台が${sec}、その後に${cl.slice(1).join('＋')}台。${y}`;
+      return `${cls}、${sec}。${y}`;
     }
     case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えとけ。`;
     case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けえ。`;

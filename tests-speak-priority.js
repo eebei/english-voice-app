@@ -57,3 +57,22 @@ check('同一ハザードの重複は破棄される', r==='deduped' && speakQue
 
 console.log('\n合格 '+pass+' / 不合格 '+fail);
 process.exit(fail?1:0);
+
+// ── 後方集団の「形」判定（2026-07-20 Yuji要望・実走前の検証）──
+const MC_PACK_SEC = 3.0;
+function describeTraffic(gaps){
+  const n = gaps.length;
+  if(n <= 1) return ['single',[1]];
+  let clusters=[], cur=1;
+  for(let i=1;i<n;i++){ if(gaps[i]-gaps[i-1] <= MC_PACK_SEC) cur++; else { clusters.push(cur); cur=1; } }
+  clusters.push(cur);
+  if(n>=4 && clusters.length===1){
+    const steps=[]; for(let i=1;i<n;i++) steps.push(gaps[i]-gaps[i-1]);
+    const avg=steps.reduce((a,b)=>a+b,0)/steps.length;
+    if(avg>0 && Math.max(...steps.map(x=>Math.abs(x-avg))) <= Math.max(1.0, avg*0.5)) return ['train',clusters];
+  }
+  return [clusters.length===1?'pack':'split', clusters];
+}
+console.log('\n══ 後方集団の形 ══');
+[[[4.5],'single'],[[2,3.5],'pack'],[[2,3,9.5],'split'],[[1.5,3.5,5.5,7.5,9.5,11.5,13.5],'train'],[[1,2,3,10,11],'split']]
+ .forEach(([g,want])=>{ const [sh]=describeTraffic(g); console.log((sh===want?'  ✅ ':'  ❌ ')+JSON.stringify(g)+' → '+sh); if(sh!==want) process.exitCode=1; });

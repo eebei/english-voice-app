@@ -560,6 +560,51 @@ def director_gate(event):
         log("DIRECTOR error (fail-open): " + str(_de))
         return True                              # 判断に失敗したら通す＝安全側
 
+# ══ 後方から迫る同クラス集団の「形」を読む（2026-07-20 Yuji要望）══
+#   台数だけでは対処が決められない。ドライバーの言葉：
+#     「2台が3秒以内で接近時とか。仮に3台が10秒以内でも2+1台で来てるとか。
+#       等間隔で来てる場合、"GTPが等間隔に7台くるぞ"」
+#   固まって来る＝一度譲れば終わる／分かれて来る＝間に息継ぎがある／
+#   等間隔の列車＝長時間付き合う覚悟が要る。対処が全く変わるので形を伝える。
+MC_OBSERVE_SEC = 15.0     # 隊列を見るための観測窓（発話の引き金は近い5秒/2秒のまま）
+MC_PACK_SEC    = 3.0      # この秒数以内に続いていれば「固まっている」
+
+def _describe_traffic(gaps):
+    """後方車のギャップ列(昇順)から形を返す。 -> (shape, clusters)
+       shape: single / pack / split / train
+       clusters: 各かたまりの台数（例 [2,1] = 2台の後にもう1台）"""
+    n = len(gaps)
+    if n <= 1:
+        return 'single', [1]
+    clusters, cur = [], 1
+    for i in range(1, n):
+        if gaps[i] - gaps[i-1] <= MC_PACK_SEC:
+            cur += 1
+        else:
+            clusters.append(cur); cur = 1
+    clusters.append(cur)
+    if n >= 4 and len(clusters) == 1:
+        # 全部繋がっている＝列車。間隔が揃っていれば「等間隔」と呼べる
+        steps = [gaps[i] - gaps[i-1] for i in range(1, n)]
+        avg = sum(steps) / len(steps)
+        if avg > 0 and max(abs(x - avg) for x in steps) <= max(1.0, avg * 0.5):
+            return 'train', clusters
+    if len(clusters) == 1:
+        return ('pack' if n > 1 else 'single'), clusters
+    return 'split', clusters
+
+def _mc_message_en(cls, nearest, gaps, shape, clusters, stage):
+    """英語キャラ用の文言。日本語はrenderer側で組む。"""
+    tail = ' Give them room.' if stage >= 2 else ''
+    if shape == 'train':
+        return '%s, %d cars evenly spaced, first one %s behind.%s' % (cls, len(gaps), _fmt_gap(nearest), tail)
+    if shape == 'pack':
+        return '%s, %d together, %s behind.%s' % (cls, len(gaps), _fmt_gap(nearest), tail)
+    if shape == 'split':
+        return '%s, %s behind — %s.%s' % (cls, _fmt_gap(nearest),
+                                          ' then '.join(str(c) for c in clusters) + ' in groups', tail)
+    return '%s, %s behind.%s' % (cls, _fmt_gap(nearest), tail)
+
 def broadcast(event):
     # ★2026-07-20 まず無線ディレクターが優先度・ダッキング・予算で裁く（全発話の単一の関門）
     if not director_gate(event):
@@ -2440,30 +2485,30 @@ def poll_iracing():
                             if _pd > 0.5: _pd -= 1.0
                             elif _pd < -0.5: _pd += 1.0
                             _mcgap = -_pd * player_last_lap   # 正=後方(迫っている) / 負=前方(抜かれ済み)
-                            if _mcgap <= 0 or _mcgap > 6.0:
-                                continue                       # 前方 or まだ遠い
+                            # ★観測窓は広く(隊列の形を見るため)、発話の引き金は近い車だけ(5秒/2秒)。
+                            if _mcgap <= 0 or _mcgap > MC_OBSERVE_SEC:
+                                continue                       # 前方 or 観測範囲外
                             _cn = _norm_class_name(car_class_name_map.get(_mi)) or 'faster class'
-                            _g = _mc_groups.get(_cn)
-                            if _g is None or _mcgap < _g['gap']:
-                                _mc_groups[_cn] = {'gap': _mcgap, 'count': (_g['count'] + 1) if _g else 1,
-                                                   'pos': (_cls_pos_mc[_mi] if (_cls_pos_mc and _mi < len(_cls_pos_mc)) else None)}
-                            else:
-                                _g['count'] += 1
+                            _mc_groups.setdefault(_cn, []).append(_mcgap)
 
                         _seen_classes = set()
-                        for _cn, _g in _mc_groups.items():
+                        for _cn, _gaps in _mc_groups.items():
+                            _gaps.sort()
+                            _near = _gaps[0]
+                            if _near > 5.0:
+                                continue                        # まだ引き金の距離に入っていない
                             _seen_classes.add(_cn)
-                            _gap = _g['gap']
-                            _stg = 2 if _gap <= 2.0 else 1          # 2秒後方=今譲る / 5秒後方=備える
+                            _stg = 2 if _near <= 2.0 else 1     # 2秒後方=今譲る / 5秒後方=備える
                             if _stg > multiclass_stage.get(_cn, 0):
                                 multiclass_stage[_cn] = _stg
-                                log("MC fire class=%s behindGap=%.1fs count=%d stage=%d (grouped)"
-                                    % (_cn, _gap, _g['count'], _stg))
+                                _shape, _clusters = _describe_traffic(_gaps)
+                                log("MC fire class=%s nearest=%.1fs gaps=%s shape=%s clusters=%s stage=%d"
+                                    % (_cn, _near, [round(g,1) for g in _gaps], _shape, _clusters, _stg))
                                 broadcast({'type': 'radio', 'trigger': 'multiclass',
-                                    'stage': _stg, 'class_name': _cn, 'class_pos': _g['pos'],
-                                    'delta': round(_gap, 1), 'count': _g['count'],
-                                    'message': _cn + ' ' + (str(_g['count']) + ' cars, ' if _g['count'] > 1 else '')
-                                               + _fmt_gap(_gap) + ' behind.'})
+                                    'stage': _stg, 'class_name': _cn,
+                                    'delta': round(_near, 1), 'count': len(_gaps),
+                                    'shape': _shape, 'clusters': _clusters,
+                                    'message': _mc_message_en(_cn, _near, _gaps, _shape, _clusters, _stg)})
                         for _cn in list(multiclass_stage.keys()):
                             if _cn not in _seen_classes:
                                 multiclass_stage.pop(_cn, None)     # 居なくなった＝再武装（次に来たら鳴る）
