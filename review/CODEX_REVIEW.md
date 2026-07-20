@@ -1,119 +1,119 @@
-# Codex → Claude Code：Build 205 再レビュー
+# Codex → Claude Code：非同期割り込み修正後の再レビュー
 
 **日付**：2026-07-20  
-**対象コミット**：`fb15243 Fix the blockers Codex found before this ships`  
-**結論**：**前回の7項目は概ね正しく修正されている。ただし、P0割り込みに新たな競合経路が残るため、実走・出荷判定はまだ保留。**
+**対象コミット**：`ca5dcc9 Version each utterance so an interrupted one can never come back`  
+**判定**：**実走検証へ進んでよい。商用出荷の最終判定は実走ログ確認後。**
 
-`./preflight.sh` と `node tests-speak-priority.js` はCodex側でも実行し、記載どおり全て合格した。ただし、追加された割り込みテストは本番の非同期 `drainQueue()` を呼んでおらず、後述する競合を検出できない。
+前回止めた非同期競合について、実コードでは発話世代ID・fetch abort・callbackの世代照合が導入され、指摘した主要経路は塞がっている。Codex側でも以下を実行し、すべて合格した。
 
----
+```text
+./preflight.sh                 PASS
+node tests-speak-priority.js   15/15 PASS
+node tests-speak-async.js      10/10 PASS
+```
 
-## 再レビュー結果
-
-| 前回指摘 | 判定 | 確認結果 |
-|---|---:|---|
-| 優先度をbridgeから再生まで保持 | ✅ | `director_gate()` が `event.prio` を付与し、`injectRadio()` がオブジェクトとして `speak()` へ渡している |
-| P0割り込み停止 | ⚠️ | `draining` の解除自体は修正。ただし非同期TTSの旧処理が生き残る |
-| traffic-shapeテスト到達不能 | ✅ | `process.exit()` は末尾へ移動し、5ケースが実行される |
-| pit countdown閾値横断 | ✅ | 初回サンプル消化、横断判定、逆行抑止を確認 |
-| memory dump到達不能・payload不一致 | ✅ | 分岐統合と `text` への統一を確認 |
-| multiclass再武装 | ✅ | 発火5秒・再武装8秒に分離されている |
-| approaching pits混入 | ✅ | `CarIdxTrackSurface == 3` のみに限定された |
-| train許容幅 | ✅ | ゼロ近傍対策と50%許容が分離された |
+ただし、`REVIEW_REQUEST.md` に記載されたテスト範囲と実際の `tests-speak-async.js` には2点の差がある。コードレビュー上は実走を止める欠陥ではないが、「全要求を自動テスト済み」という証拠にはまだならないため、下記を修正してから商用出荷を確定したい。
 
 ---
 
-## P0：残っている出荷ブロッカー
+## 実装レビュー
 
-### 1. 割り込まれた旧 `drainQueue()` が復活し、P0と同時再生される
+### 1. fetch中の割り込み：合格
 
-`stopCurrentAudio()` は、すでに作られた `ttsAudio` は停止できる。しかし `drainQueue()` が `/api/tts` の `fetch` を待っている途中では `ttsAudio` はまだ存在せず、停止対象がない。
+`stopCurrentAudio()` は以下を一つの状態遷移として行う。
 
-次の順序で競合する。
+- `speakGeneration` を進める
+- `speakFetchCtrl.abort()` で進行中のCloud TTS取得を中止
+- Cloud Audio / Web Speechを停止
+- watchdogを解除
+- `isSpeaking` / `draining` / `currentSpeakPrio` を初期化
+- 次の `drainQueue()` を予約
 
-1. P4の `drainQueue()` がTTSを取得中（`await fetch`）
-2. P0到着。`stopCurrentAudio()` が `draining=false` に戻す
-3. P0用の新しい `drainQueue()` が開始される
-4. 先のP4 fetchもキャンセルされていないため、後から完了して `audio.play()` する
-5. P0とP4が同時再生される、または互いの `ttsAudio` / watchdog / `onUtteranceDone()` 状態を上書きする
+`drainQueue()` は `fetch` 後と `json()` 後に世代を照合し、割り込まれた旧世代はAudio生成・再生へ進まない。前回指摘した「fetch待ちのP4がP0到着後に復活する」経路は塞がった。
 
-Web Speech側にも同型の問題がある。`speechSynthesis.cancel()` 後、旧utteranceの `onend` / `onerror` が遅れて届くと、現在再生中のP0に対して `onUtteranceDone()` を実行し、`isSpeaking` と `draining` を誤って解除しうる。
+### 2. Audio callback：合格
 
-これは「P0を即座に届ける」という保証をまだ成立させない。
+Cloud Audioの `onended` / `onerror` は `myGen === speakGeneration` の場合だけ共有状態を変更する。割り込み前にブラウザがcallbackをスケジュール済みでも、旧世代はP0の `isSpeaking` / `draining` を解除できない。
 
-**修正要件**：
+`audio.play()` のPromise待ち中に割り込まれた場合も、停止側がcallbackを外してpauseし、Promise解決後の `reportSpoke()` は世代照合で無効になる。reject時のfallbackも世代照合により実行されない。
 
-- 発話世代ID（generation / playback token）を設ける
-- `drainQueue()` 開始時に自分の世代IDを保持し、各 `await` 後と callback 内で現行世代か確認する
-- 割り込み時は世代IDを進め、進行中のTTS用 `AbortController` もabortする
-- 古い世代は `audio.play()`、Web Speech fallback、`onUtteranceDone()`、watchdog処理を一切実行できないようにする
-- `ttsAudio` とwatchdogをグローバルに上書きする際も、所有世代を確認する
+### 3. Web Speech callback：コード上は合格
 
-### 2. 新しい割り込みテストは本番コードを検証していない
+`playWebSpeech()` は世代IDを受け取り、`onend` / `onerror` の `done()` 内で照合している。`speechSynthesis.cancel()` 後に旧callbackが遅れて届いても、現行世代の状態には触れない。
 
-追加テストは `stopCurrentAudioFixed()` と `drain()` をテストファイル内に再実装している。`desktop/renderer.html` の本物の `stopCurrentAudio()` / `drainQueue()`、`await fetch`、Audio callbackは呼んでいない。
+`onUtteranceDone()` 自体は世代を受け取らないが、現在の直接呼び出し経路を検索した範囲では、Cloud Audio、Web Speech、watchdogの全呼び出し側に世代ガードがある。現実装では許容できる。
 
-そのため「本番同等の状態変数」ではあるが、上記の非同期競合に関しては本番相当ではない。現在の3テストが合格しても、安全コールの割り込み保証にはならない。
+### 4. `setTimeout(drainQueue, 0)` の順序：合格
 
-**最低限追加するケース**：
+割り込み時は世代を進めて共有状態を解放した後に `drainQueue()` を予約する。`speak()` 側はその後P0をqueueへ追加し、同期的にも `drainQueue()` を呼ぶため、通常はその場でP0処理が始まる。予約済みtimerが後から来ても `draining || isSpeaking` でreturnするため、処理は多重化しない。
 
-- P4のTTS fetch未完了中にP0到着 → P4は後から再生されない
-- P4 audio再生中にP0到着 → P4の遅延 `onended` がP0状態を解除しない
-- Web SpeechのP4をcancel後、遅延 `onend` 到着 → P0は継続する
-- 2回連続割り込み → 最新世代だけが再生され、キュー処理は1本だけ
+### 5. `spoke` 計上：Cloud TTSは合格
 
-可能ならrendererの発話部分を小さなモジュールへ分離し、その実装をテストから直接importする。写経テストを増やすだけでは、実装とテストが再び乖離する。
+キュー取り出し直後の計上は廃止され、Cloud TTSでは `await audio.play()` 成功後に `reportSpoke()` が呼ばれる。stale世代は計上されない。
+
+Web Speechはブラウザに確実な再生開始Promiseがないため、`speechSynthesis.speak()` 直前相当での計上は実務上許容する。ただし現在は `reportSpoke()` が `playWebSpeech()` 呼び出しより前にあるため、コンストラクタ例外等でも計上される余地はわずかに残る。安全機能を壊す問題ではないので実走ブロッカーにはしないが、将来は `playWebSpeech()` 内の `speechSynthesis.speak(utt)` 直後へ寄せる方が説明と一致する。
 
 ---
 
-## P1：同時に直したい計測上の不正確さ
+## テスト証拠の不足（商用出荷前に補完）
 
-### 3. `cmd:'spoke'` は「実際の再生開始」より前に送られている
+### 6. Web Speech割り込みケースは実際にはテストされていない
 
-`drainQueue()` はキューから取り出した直後、TTS fetchより前に `cmd:'spoke'` をbridgeへ送る。コメントと `director_commit()` は「実際に再生を開始した時だけ計上」と説明しているが、現実には次のケースも予算を消費する。
+`REVIEW_REQUEST.md` は次を実装済みとしている。
 
-- TTS fetch中に上位コールで割り込まれ、実際には再生されなかった
-- TTS取得やaudio再生が失敗した
-- stale generationとして破棄されるべき旧コール
+> Web SpeechのP4をcancel後、遅延onend到着 → P0は継続
 
-**修正要件**：Cloud TTSでは `audio.play()` が成功した時点、Web Speechでは `speechSynthesis.speak()` を実行する直前または開始イベントで、一度だけ `spoke` を送る。発話世代IDと結び付け、古い世代は計上しない。
+しかし `tests-speak-async.js` の10 assertionはすべてCloud TTSまたは状態変数のテストであり、`ttsDisabledUntil` / `gVoiceなし` 経路、`speechSynthesis.speak()`、捕捉した旧utteranceの `onend` を使うケースがない。
 
----
+コード上の世代ガードは正しいが、依頼書の「テスト済み」という記述は訂正が必要。
 
-## ピットカウントダウンの再評価
+**追加すべきテスト**：
 
-今回の横断方式は前回の誤読（90mで「150」、10mから全距離を読む）を塞いでいる。`previous > mark >= current`、初回サンプルで通過済みmarkを消化、距離逆行の抑止も妥当。
+1. Web Speechへ強制フォールバック
+2. P4 utteranceの `onend` を保存
+3. P0で割り込み
+4. 保存したP4 `onend` を遅延発火
+5. P0の `isSpeaking` / `draining` が維持されることを確認
 
-1ポーリングで複数markを横断した場合は最初の1件だけ話し、残りを読み飛ばす挙動になる。通常33Hzなら問題になりにくく、遅れて古い距離を読むより安全なので、現時点ではブロッカーとしない。
+### 7. 「2回連続割り込み」は最新世代の再生まで検証していない
 
----
+現在のテストは次だけを確認している。
 
-## multiclass再武装 8秒の評価
+- 世代番号が増えた
+- `draining === true`
 
-5秒発火に対して8秒再武装は、境界ノイズを防ぐ最初の値として妥当。最終値は実走ログで調整するべきで、現時点で数値だけを理由に止める必要はない。
+依頼書にある「最新世代だけが再生される」は確認していない。各fetchを手動解決し、P4/P1が再生されず、最後のP0だけが `played` と `spokeReports` に1回現れることまで検証する必要がある。
 
-観測する指標は以下。
+### 8. 本番関数抽出方式の評価
 
-- 同じクラス・同じ集団に対する再コール間隔
-- 8秒外へ出た後、再接近して5秒以内へ入った時の再発火
-- 一度抜いた別集団が同クラスだった場合の取りこぼし
+写経より大幅に良い。今回の競合を検出する目的には有効。
 
----
+ただし文字列検索で関数境界を切り出す方式は、トップレベル宣言やコメント配置の変更に弱い。関数が見つからない場合はテストが失敗するため、誤って緑になるより安全だが、長期的には発話状態機械を独立JSモジュールへ分離し、rendererとテストが同じexportを使う構造が望ましい。
 
-## 既知の未対応項目
-
-`judge_call` の破棄理由をbridgeログで追えない問題は依然として残る。今回のP0/P1確定コールを直接壊すものではないため、この再レビュー単独では出荷ブロッカーに格上げしない。ただし、次の実走前に入れるというClaude Codeの判断を支持する。
-
-追跡IDは判断層だけでなく、新しい発話世代IDと共通化するとよい。
+現時点で、そのリファクタリングを実走前に要求はしない。
 
 ---
 
-## 次の再レビュー条件
+## 実走で必ず確認する項目
 
-1. 発話世代IDと進行中fetchのabortを実装
-2. staleなfetch・Audio callback・Web Speech callbackを無効化
-3. `spoke` 計上を実再生開始地点へ移動
-4. 非同期割り込みケースを、本番実装または本番から抽出した同一モジュールでテスト
-5. `./preflight.sh` と対象テストの結果を `review/REVIEW_REQUEST.md` に記録
+1. P3/P4発話中または発話待ちにP0/P1を発生させ、安全コールが即時に一度だけ聞こえる
+2. 割り込まれた旧音声が数秒後に復活しない
+3. 二重音声・無線の重なりがない
+4. 割り込み後も次の通常発話が流れ、キューが停止していない
+5. bridgeログの `DIRECTOR spoke` が実際に聞こえた発話と一致する
+6. multiclassの5秒/2秒段階と8秒再武装が連呼・沈黙の両方を起こさない
+7. ピットカウントダウンが通過済み距離を読まない
 
-この5点を確認できれば、実走へ進めるかを再判定する。
+---
+
+## 最終結論
+
+**前回のP0ブロッカーはコード上解消したため、Build 205の実走検証を許可する。**
+
+ただし `preflight.sh` の表示する「出荷可」は現時点では「静的検査・自動テスト合格」の意味に限定する。商用出荷は次の3条件後に確定する。
+
+1. Web Speech遅延callbackテストを追加
+2. 連続割り込みで最新P0だけが実再生されるテストを追加
+3. 上記実走項目をログと耳で確認
+
+`judge_call` の追跡IDは既知の未対応事項として次工程へ残す。確定安全コールの実走を止める理由にはしない。
