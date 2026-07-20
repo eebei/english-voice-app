@@ -2172,48 +2172,107 @@ async function checkPaceJudgment(data){
 // ★2026-07-19 LLM判断コール：bridgeの"判断候補"(catchup/defend)を受け、AIが「言うか黙るか」を決める。
 //   checkPaceJudgmentと同じ独立POST方式（会話履歴messagesには触れない＝role交互破損の再発防止）。
 //   連呼撲滅の要＝直近で言ったコールの要約(recentCallSummary)を渡す→AIが「さっき言った」を自分で判断できる。
-let recentEngineerCalls = [];   // {label, ts} 直近に無線で言ったことのリングバッファ
-function pushRecentCall(label){
-  recentEngineerCalls.push({label, ts:Date.now()});
+let recentEngineerCalls = [];   // {label, said, ts} 直近に無線で言ったことのリングバッファ
+// ★2026-07-20 Codexレビュー反映：ラベルだけでなく「実際に喋った本文」も保存する。
+//   従来は "catchup #12" のようなイベント名しか持たず、プロンプトの「直近で君はこう言った」が
+//   事実と違っていた（＝AIが自分の発話を踏まえられない＝連呼の温床）。
+function pushRecentCall(label, said){
+  recentEngineerCalls.push({label, said:said||'', ts:Date.now()});
   if(recentEngineerCalls.length>6) recentEngineerCalls.shift();
 }
 function recentCallSummary(){
   const now=Date.now();
   return recentEngineerCalls
     .filter(c=> now-c.ts < 90000)   // 直近90秒だけ渡す（それより前は繰り返しでない）
-    .map(c=> c.label+' ('+Math.round((now-c.ts)/1000)+'s ago)');
+    .map(c=>{
+      const age = Math.round((now-c.ts)/1000)+'s ago';
+      return c.said ? '「'+c.said+'」('+age+')' : c.label+' ('+age+')';
+    });
 }
-async function judgeAndSpeak(data){
-  // ★2026-07-19 ベスト更新とタイムロスは練習/テストでも意味があるのでレースモード限定にしない
-  //   （判断コール化で練習中のベスト更新が無音になる回帰を防ぐ）
+
+// ── ★2026-07-20 判断コールの入口を単一キュー化（Codex指摘：並列実行で複数が同時に喋る）──
+//   実走で13:15:14〜16に3件が同時発火し、全部が同じrecent状態を見て各々「喋る」と判断した。
+//   1件ずつ順に処理し、処理中に来た同種イベントは新しい方だけ残す（dedupe）。
+const JUDGE_REQUIRED = {           // kind別の必須フィールド（欠けたら黙る＝undefinedをプロンプトに流さない）
+  best_lap:  ['best_kind','time'],
+  time_loss: ['lost','time'],
+  danger:    ['reason'],
+  multiclass:['stage'],
+  towing:    [],
+  battle:    ['gap'], catchup:['gap'], defend:['gap']
+};
+let judgeQueue = [], judgeBusy = false;
+function judgeAndSpeak(data){
+  if(!data || !data.kind) return;
+  if(!(data.kind in JUDGE_REQUIRED)) return;                       // 未知kindは黙る
   if(selMode!=='race' && !['best_lap','time_loss'].includes(data.kind)) return;
+  const need = JUDGE_REQUIRED[data.kind];
+  for(const f of need){                                            // 必須値欠落は黙る
+    if(data[f]===undefined || data[f]===null){
+      console.warn('judge_call dropped (missing '+f+')', data.kind); return;
+    }
+  }
+  const i = judgeQueue.findIndex(q=> q.kind===data.kind && q.car_number===data.car_number);
+  if(i>=0) judgeQueue[i] = data; else judgeQueue.push(data);       // 同種は新しい方で置換
+  drainJudgeQueue();
+}
+async function drainJudgeQueue(){
+  if(judgeBusy) return;
+  judgeBusy = true;
+  try{
+    while(judgeQueue.length){
+      const data = judgeQueue.shift();
+      try{ await runJudgeCall(data); }catch(e){ /* 1件の失敗で列を止めない */ }
+    }
+  } finally { judgeBusy = false; }
+}
+
+// 発話してよい形式か厳密に検査する。既定は沈黙。
+//   Codex指摘：単一トークンNO_CALL一致に頼ると「無言で待機」等の日本語で素通りする。
+//   よって「SAY:」で始まる時だけ発話し、それ以外は全部捨てる（失敗時は必ず沈黙）。
+const JUDGE_BANNED = /JUDGE_CALL|NO_CALL|SAY:|データ確認中|判定待ち|待機中|ここにいる|I'm in position|race engineer at/i;
+function extractJudgeSpeech(reply){
+  const m = /^SAY:[ \t]*(\S[\s\S]*)$/.exec((reply||'').trim());
+  if(!m) return null;                       // 先頭完全一致のみ
+  const text = m[1].trim();
+  if(!text || text.length>160) return null; // 空・長すぎは捨てる（無線は1文）
+  if(JUDGE_BANNED.test(text)) return null;  // 内部語・自己言及の混入は捨てる
+  return text;
+}
+
+async function runJudgeCall(data){
   const authToken = localStorage.getItem('pw_auth_token');
   const headers = {'Content-Type':'application/json'};
   const body = {
-    messages:[{role:'user', content:'[JUDGE_CALL]'}],
+    // ★内部イベントは「ドライバーの発言」に見えない形で渡す（Codex指摘：role:userの[JUDGE_CALL]は
+    //   noteがあっても最新のユーザー発話として誤読され、「はい、ここにいます」を誘発する）
+    messages:[{role:'user', content:'(システム内部イベント。ドライバーは何も言っていない。system側の指示に従い、発話するなら SAY: で始め、しなければ NO_CALL とだけ返す)'}],
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
     liveData:lastTelemetry, sessionType:lastSessionType, driverState,
     carClass:lastCarClass,
     judgeCall:{kind:data.kind, car_number:data.car_number, class_name:data.class_name, class_pos:data.class_pos,
       gap:data.gap, stage:data.stage, confident:data.confident, faster:data.faster, repeat:data.repeat,
-      behind:data.behind, reason:data.reason,   // danger用（前後・低SR/iRの根拠）
+      behind:data.behind, reason:data.reason,              // danger用
+      best_kind:data.best_kind, time:data.time, gain:data.gain,  // best_lap用
+      lost:data.lost, tow_time:data.tow_time,              // time_loss / towing用
       recent:recentCallSummary()},
-    max_tokens:70
+    max_tokens:80
   };
   if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+  const ctrl = new AbortController();
+  const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);
+  let reply='';
   try{
-    const ctrl = new AbortController();
-    const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);
     const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
-    clearTimeout(fetchTimer);
     const resData = await res.json();
-    const reply = (resData.content?.[0]?.text||'').trim();
-    if(!reply || reply==='NO_CALL' || reply.includes('NO_CALL')) return;   // AIが「黙る」と判断
-    addMsg('ai',reply);
-    speak(reply);
-    pushRecentCall(data.kind + (data.car_number?' #'+data.car_number:''));
-  }catch(e){ /* サイレント失敗でよい（テンプレ発話でないため無理に埋めない） */ }
+    reply = (resData.content?.[0]?.text||'').trim();
+  } finally { clearTimeout(fetchTimer); }
+  const speech = extractJudgeSpeech(reply);
+  if(!speech){ console.log('judge_call silent ['+data.kind+']', reply.slice(0,60)); return; }
+  addMsg('ai',speech);
+  speak(speech);
+  pushRecentCall(data.kind + (data.car_number?' #'+data.car_number:''), speech);  // 実発話も保存
 }
 
 function injectBriefing(data){

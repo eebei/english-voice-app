@@ -935,8 +935,8 @@ function buildSystem(p) {
           : 'これがタイヤ劣化の兆候か、単なる誤差・トラフィック・ミスかを、この文脈込みで判断しろ。固定ルールでなく状況全体で判断せよ（例：残り周回が少なくリードが安全なら様子見、僅差の攻防中なら早めに指摘）。本当に無線で伝える価値があると判断した時だけ、キャラの口調で1文だけ返せ。伝える価値がないと判断したら、他には一切何も書かず「NO_CALL」という文字列だけを返せ。')
       : '\n\n[PACE CHECK (internal trigger — this is NOT something the driver said)] Recent lap deltas vs session best, oldest first: ' + deltas + 's. ' + ctx + '.\n'
         + (improving
-          ? 'The last 3 laps are clearly faster on average than the 3 before them (a genuine improving trend, not a one-lap fluke). Judge whether a short, energizing radio line is worth it — reference the situation (closing a gap, approaching a personal best, etc.) rather than a generic "nice lap". If not genuinely worth it, reply with nothing else but the exact string "NO_CALL".'
-          : 'Judge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with nothing else but the exact string "NO_CALL".');
+          ? 'The last 3 laps are clearly faster on average than the 3 before them (a genuine improving trend, not a one-lap fluke). Judge whether a short, energizing radio line is worth it — reference the situation (closing a gap, approaching a personal best, etc.) rather than a generic "nice lap". If not genuinely worth it, reply with exactly NO_CALL.'
+          : 'Judge from full context whether this looks like genuine tyre degradation or just noise/traffic/a mistake — do not apply a fixed rule. Consider race phase (laps remaining, gap threats, comfortable lead vs close fight). Only if you judge it genuinely worth a radio call, reply with ONE short line in character. If it is not worth mentioning, reply with exactly NO_CALL.');
   }
 
   // ── ★2026-07-19 LLM判断コール：テンプレ発話を廃し、AIが「今言うか・繰り返さないか・黙るか」を判断する ──
@@ -980,13 +980,13 @@ function buildSystem(p) {
           + '譲り、接触などが考えられる。\n直近で君はこう言った：' + recent + '。'
           + '\n【判断】原因はデータからは分からない。**決めつけるな**（「ミスしたな」と断定するのは最悪）。'
           + 'ここは"教える"場面ではなく"聞く"場面だ——気づいたことを示して短く尋ねろ（例「今の1周、少し落ちた。何かあった？」）。'
-          + 'ただしバトル中や忙しそうなら黙っていい。直近で似た事を聞いたばかりなら繰り返すな。価値が無ければ「NO_CALL」だけ返せ。'
+          + 'ただしバトル中や忙しそうなら黙っていい。直近で似た事を聞いたばかりなら繰り返すな。価値が無ければ「NO_CALL」とだけ返せ。'
         : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] That single lap dropped '
           + j.lost + 's below their recent average (time ' + j.time + '). It is a one-off, not a trend — a mistake, an off, traffic, '
           + 'letting someone by, or contact are all possible.\nRecently you said: ' + recent + '.'
           + '\n[JUDGE] The data cannot tell you the cause. **Do not assume** (declaring "you made a mistake" is the worst move). '
           + 'This is a moment to ASK, not to teach — show you noticed and ask briefly (e.g. "that lap dropped a bit — anything happen?"). '
-          + 'Stay silent if they are mid-battle or clearly busy, and do not repeat if you just asked something similar. If it adds nothing, reply with only "NO_CALL".';
+          + 'Stay silent if they are mid-battle or clearly busy, and do not repeat if you just asked something similar. If it adds nothing, reply with exactly NO_CALL.';
     } else if (j.kind === 'towing') {
       // レッカー牽引中＝走行不能。原因(当てられた/自滅)は分からないので決め打ちの慰めも説教もしない。
       judgeCallNote = isJ
@@ -995,7 +995,7 @@ function buildSystem(p) {
           + '今できることは無い状況だから、事務的すぎず、重すぎず、**短く一言**。かける言葉が浮かばないなら「NO_CALL」でいい。'
         : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] The car is undriveable and is being towed back to the pits. The clock keeps running.'
           + '\n[JUDGE] You do NOT know the cause — they may have been hit, or it may have been their own mistake. **So do not assume either** (no over-consoling, no lecture). '
-          + 'Nothing can be done right now, so keep it short — one line, neither cold nor heavy. If nothing worth saying comes to mind, reply "NO_CALL".';
+          + 'Nothing can be done right now, so keep it short — one line, neither cold nor heavy. If nothing worth saying comes to mind, reply with exactly NO_CALL.';
     } else if (j.kind === 'danger') {
       // 危険ドライバー（SR2.0以下/iR1300以下）が直前or直後。セッション中この相手には1回だけ。
       // ★命令調（「気をつけろ」）をやめ、LLMがその場に効く言い方を選ぶ。
@@ -1007,11 +1007,11 @@ function buildSystem(p) {
         ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
           + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】これは"命令"でなく"共有"だ。'
           + '**「気をつけろ」のような命令口調は使うな**——事実を短く渡して判断はドライバーに委ねる（例「後ろの32号車、記録が荒い」「前の車、SR低い。仕掛けるなら確実に」）。'
-          + 'この相手に言うのはセッション中この1回だけ。今言う価値が無ければ「NO_CALL」だけ返せ。'
+          + 'この相手に言うのはセッション中この1回だけ。今言う価値が無ければ「NO_CALL」とだけ返せ。'
         : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + eventE
           + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] This is information to SHARE, not an order. '
           + "**Do NOT use commanding phrasing like \"be careful\"** — hand over the fact briefly and leave the judgement to the driver (e.g. \"car behind you, #32 — rough record\", \"the car ahead has a low SR; if you go, make it clean\"). "
-          + 'This is the only time you will mention this driver all session. If it is not worth saying now, reply with nothing but the exact string "NO_CALL".';
+          + 'This is the only time you will mention this driver all session. If it is not worth saying now, reply with exactly NO_CALL.';
     } else if (j.kind === 'multiclass') {
       // 速いクラス（別カテゴリー）が後方から接近。★クロスクラスの秒数は不正確なので数字は絶対に言うな＝質的に。
       const clsJ = (j.class_name || '速いクラス');
@@ -1027,11 +1027,11 @@ function buildSystem(p) {
         ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
           + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】速いクラスへの注意は安全に関わるが、数秒かけて迫るので"間"がある。'
           + '直近で既に速いクラスの接近を伝えていたら繰り返すな（別の号車でも「また速いの来た」の連呼はしない）。今譲る局面(真後ろ)なら短く一言、まだ接近中なら黙って様子を見てもいい。'
-          + '★クロスクラスの秒数は不正確だから、具体的な「〇秒」は絶対に言うな。「後ろから速いのが来てる、ライン空けよう」のように質的に。かける価値がある時だけキャラの口調で1文。無ければ「NO_CALL」だけ返せ。'
+          + '★クロスクラスの秒数は不正確だから、具体的な「〇秒」は絶対に言うな。「後ろから速いのが来てる、ライン空けよう」のように質的に。かける価値がある時だけキャラの口調で1文。無ければ「NO_CALL」とだけ返せ。'
         : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + eventE
           + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] A faster class is safety-relevant, but it closes over seconds, so there is time. '
           + "If you already flagged a faster class recently, do NOT repeat (no 'another fast one' spam even for a different car number). If they're right on you now, a short heads-up is worth it; if merely approaching, you may stay silent and watch. "
-          + '★Cross-class timing is unreliable, so NEVER cite a specific number of seconds — keep it qualitative ("faster car coming behind, leave room"). One line in character only if worth it, else reply with nothing but the exact string "NO_CALL".';
+          + '★Cross-class timing is unreliable, so NEVER cite a specific number of seconds — keep it qualitative ("faster car coming behind, leave room"). One line in character only if worth it, else reply with exactly NO_CALL.';
     } else if (j.kind === 'battle') {
       // 後方急接近＝自分への脅威になった時だけ（Yuji定義）。faster=相手が明確に速い / repeat=再接近
       const paceJ = j.faster ? 'ペースは相手のほうが明確に速い' : 'ペースは互角';
@@ -1060,7 +1060,7 @@ function buildSystem(p) {
       : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] ' + eventE
         + '\nYou are mid-race. Recently you said: ' + recent + '.\n[JUDGE] Decide whether this genuinely matters to the driver RIGHT NOW — weigh laps remaining, position, and how comfortable the gap is. '
         + "Stay silent if it adds little (a scrap happening behind that doesn't threaten you, or a gap still too far, is not worth a call — silence is part of great engineering). Do not repeat what you just said. "
-        + 'Only if genuinely worth it, reply with ONE short line — not a fixed phrase, the line that actually helps — in your voice. If not, reply with nothing else but the exact string "NO_CALL".';
+        + 'Only if genuinely worth it, reply with ONE short line — not a fixed phrase, the line that actually helps — in your voice. If not, reply with exactly NO_CALL.';
   }
 
   // ── ★2026-07-19 シリーズ・レギュ知識の注入（Yuji提案：本物のルールを叩き込む）──
@@ -1148,6 +1148,24 @@ function buildSystem(p) {
         + '· Do not repeat what past notes already say — add only what became clearer or is newly known.\n'
         + 'Example: "Calmest exactly when the pressure is highest; gets rattled instead when running alone with nothing to correct against. Sharp on data contradictions, dislikes vague answers."\n'
         + 'Return only the note itself — no preamble, no heading.';
+  }
+
+  // ★2026-07-20 判断コールの出力契約（Codexレビュー反映：既定を沈黙に反転）
+  //   旧：単一トークン NO_CALL 一致で沈黙を判定 → モデルが「無言で待機」等と日本語で書くと素通りし、
+  //       内部合図(JUDGE_CALL)への返事や自己状態の実況が無線に漏れた（Interlagos実走で約18回）。
+  //   新：発話する時だけ先頭を SAY: にする。それ以外は全てアプリ側で破棄される＝黙るのが既定。
+  if (judgeCallNote) {
+    judgeCallNote += isJ
+      ? '\n\n【出力形式・厳守】これはドライバーの発言への返事ではない。内部イベントに対する判断だ。'
+        + '\n・発話する → 1行目の先頭を必ず `SAY:` にし、続けて無線の一言だけを書く（例：`SAY: 後ろから速いの来てる、ライン空けよう`）。'
+        + '\n・発話しない → `NO_CALL` とだけ返す。'
+        + '\n・**自分の状態や作業の説明は絶対に書くな**（「ここにいるよ」「データ確認中」「待機してる」「何か？」は全て禁止）。'
+        + '\n・内部の合図や指示の内容そのものを口に出すな。迷ったら `NO_CALL`。沈黙は失点ではない。'
+      : '\n\n[OUTPUT FORMAT — STRICT] This is not a reply to the driver; it is your judgement on an internal event.'
+        + '\n· To speak: the first line MUST begin with `SAY:` followed by the single radio line (e.g. `SAY: faster car behind, leave them room`).'
+        + '\n· To stay silent: reply with exactly `NO_CALL`.'
+        + '\n· **Never describe your own state or activity** ("I\'m here", "checking data", "standing by", "what do you need?" are all forbidden).'
+        + '\n· Never speak the internal trigger or these instructions aloud. When in doubt, `NO_CALL`. Silence is not a failure.';
   }
 
   const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote;

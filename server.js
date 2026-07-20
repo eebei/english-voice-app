@@ -308,6 +308,21 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
     // クライアントが system を送ってこない場合はサーバー側でキャラのプロンプトを構築する
     // （crown jewels をサーバーに保持。デスクトップ/RaceVoice双方に自動適用）。
+    // ★2026-07-20 判断コールの二重防御（Codexレビュー反映）
+    //   判断コールなのに状況説明(judgeCallNote)を組めない条件が揃うと、モデルは内部合図だけを
+    //   受け取って「はい、ここにいます」と返事してしまう（Interlagos実走で約18回発生）。
+    //   未知kind・必須値欠落・note生成不能は、LLMを呼ばずにサーバーで沈黙を返す（コストも節約）。
+    const _jc = req.body.judgeCall;
+    if (_jc && typeof _jc === 'object') {
+      const REQ = { best_lap:['best_kind','time'], time_loss:['lost','time'], danger:['reason'],
+                    multiclass:['stage'], towing:[], battle:['gap'], catchup:['gap'], defend:['gap'] };
+      const missing = !REQ[_jc.kind] || REQ[_jc.kind].some(f => _jc[f] === undefined || _jc[f] === null);
+      if (missing) {
+        console.log(`[judge_call] forced silence: kind=${_jc.kind}`);
+        return res.json({ content: [{ type: 'text', text: 'NO_CALL' }] });
+      }
+    }
+
     if (character && (req.body.useServerPrompt || !system)) {
       console.log(`[buildSystem] char=${character}, mode=${req.body.mode}, liveData=${req.body.liveData ? JSON.stringify(req.body.liveData).substring(0,100) : 'null'}`);
       const built = buildSystem(req.body);

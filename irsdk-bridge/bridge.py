@@ -1513,13 +1513,21 @@ def poll_iracing():
                 laps_remaining_est = None
                 finish_basis = None   # プロンプト側で「1位基準」「ラップダウン中」等を言い分けるため
                 laps_down = None
-                # ★2026-07-19 lapsTot誤読ガード：時間制レースでlapsTotが小さな値(3等)で返ることがあり
-                #   (Interlagos実走でlap5時点でlapsTot=3→rem_est=0に毒された)、総周回が現在周回未満なら
-                #   周回制ではないと判断して時間制の推定に回す。lapsTot>=lap の時だけ周回制として信頼。
-                if lapsTot and 0 < lapsTot < 3000 and lapsTot >= lap:
+                # ★★2026-07-20 「不明」を「あと1周」に変換しない（Codexレビューの原則）★★
+                #   実走(Interlagos)で全周 rem_est=1 だった真因：SessionTimeRemain を float で誤読して
+                #   0.04 のような極小のゴミ値になり、`0 < timeRemain` を通過 → ceil(0.04/90)=1周 →
+                #   「35分レースがあと1周」として全周計算していた。表示は round して 0.0 に見えていた。
+                #   対策：①型を見て読む(修正済) ②極小値は"不明"として弾く ③どの根拠も無ければ None のまま。
+                #   None のときは下流で to-finish 燃料警告を出さない（＝誤警告より沈黙を選ぶ）。
+                TIME_REMAIN_MIN = 5.0    # これ未満は計測不能かレース終了直前。残り周回の根拠にしない。
+                time_remain_ok = (timeRemain is not None and TIME_REMAIN_MIN < timeRemain < 100000)
+                # lapsTot は「現在周回より確実に先」を指している時だけ周回制と見なす。
+                #   時間制で lapsTot が暫定的に lap+1 を返すと毎周 rem_est=1 になるため lap+1 は信用しない。
+                laps_total_ok = (lapsTot is not None and 0 < lapsTot < 3000 and lapsTot > lap + 1)
+                if laps_total_ok:
                     laps_remaining_est = max(0, lapsTot - lap)
                     finish_basis = 'laps_total'
-                elif timeRemain and 0 < timeRemain < 100000:
+                elif time_remain_ok:
                     if leader_lap is not None and len(leader_lap_time_hist) >= 2:
                         leader_avg_lap = sum(leader_lap_time_hist) / len(leader_lap_time_hist)
                         leader_laps_left = math.ceil(timeRemain / leader_avg_lap)
@@ -1804,7 +1812,20 @@ def poll_iracing():
         # Fuel warning
         # ※実際にトラック走行中＆燃料が有効な数値の時だけ警告する。
         #   ガレージ/ピット/セッション開始直後は燃料0やデータ未取得で誤発火するため除外。
+        # ★2026-07-20 Yuji指摘「残り5Lでセーブと言われたが、周回数的に確実に持つ場面だった。
+        #   燃料セーブのコールは本当に必要な時だけ」→ 残量の絶対値だけで鳴らすのをやめ、
+        #   残り周回が分かっていて足りるなら黙る。残り周回が不明な時だけ従来通り"本当に危ない量"で鳴らす。
+        _fuel_ok_to_finish = False
+        try:
+            _fs = fuel_strategy if isinstance(fuel_strategy, dict) else {}
+            _rem = _fs.get('laps_remaining_est')
+            _lft = _fs.get('laps_of_fuel_left')
+            if _rem is not None and _lft is not None:
+                _fuel_ok_to_finish = (_lft >= _rem)   # 完走できる見込み＝セーブを促す必要がない
+        except Exception:
+            pass
         if driver_state == 'track' and fuel is not None and 0.5 < fuel < 5 \
+                and not _fuel_ok_to_finish \
                 and (prev['fuel'] is None or prev['fuel'] >= 5):
             broadcast({'type': 'radio', 'trigger': 'fuel_warning', 'fuel': round(fuel, 1),
                 'message': 'Fuel ' + str(round(fuel, 1)) + '. Save mode now.'})
