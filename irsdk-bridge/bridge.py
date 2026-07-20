@@ -648,21 +648,42 @@ class IRacingReader:
             pass
         return out
 
+    # ★2026-07-20 型を見て読む（実走で発覚した重大バグの根治）
+    #   find_var は (vtype, voffset) を返しているのに read_float/read_double が vtype を無視し、
+    #   常に4バイト/8バイトで固定解釈していた。iRacing SDK の SessionTimeRemain は double(型5) なので、
+    #   read_float で読むと8バイト値の下位4バイトだけを float として解釈＝ゴミ値になる。
+    #   実害：timeRem が全周 0.0（たまに778.6のような"それっぽい値"）→ 残り周回推定が崩壊し、
+    #        燃料の完走可否計算が壊れていた（Interlagos 2026-07-20 のログで確認）。
+    #   SDK 型：0=char 1=bool 2=int 3=bitField 4=float 5=double
+    IRSDK_FLOAT = 4
+    IRSDK_DOUBLE = 5
+
+    def _read_num(self, name):
+        """宣言された型に従って数値を読む。型が分かるので float/double を取り違えない。"""
+        info = self.find_var(name)
+        if not info:
+            return None
+        vtype, voffset = info[0], info[1]
+        addr = self.get_buf_offset() + voffset
+        if vtype == self.IRSDK_DOUBLE:
+            return struct.unpack('d', self._bytes(addr, 8))[0]
+        if vtype == self.IRSDK_FLOAT:
+            return struct.unpack('f', self._bytes(addr, 4))[0]
+        if vtype in (2, 3):          # int / bitField
+            return struct.unpack('i', self._bytes(addr, 4))[0]
+        if vtype in (0, 1):          # char / bool
+            return struct.unpack('b', self._bytes(addr, 1))[0]
+        return None
+
     def read_float(self, name):
         try:
-            info = self.find_var(name)
-            if not info:
-                return None
-            return struct.unpack('f', self._bytes(self.get_buf_offset() + info[1], 4))[0]
+            return self._read_num(name)
         except Exception:
             return None
 
     def read_double(self, name):
         try:
-            info = self.find_var(name)
-            if not info:
-                return None
-            return struct.unpack('d', self._bytes(self.get_buf_offset() + info[1], 8))[0]
+            return self._read_num(name)
         except Exception:
             return None
 
@@ -898,6 +919,7 @@ def fmt_radio(seconds):
     return "%.3f" % s                 # 24.567 / 6.630 / 45.300（先頭ゼロ無し＝日付に誤読されない）
 
 
+_str_type_logged = False   # SDK型診断を1回だけ出すためのフラグ（2026-07-20）
 reader = IRacingReader()
 session_info_sent = False
 
@@ -1121,6 +1143,16 @@ def poll_iracing():
         lap         = reader.read_int('Lap')
         lapsTot     = reader.read_int('SessionLapsTotal')
         timeRemain  = reader.read_float('SessionTimeRemain')  # 時間制セッション用(秒)。周回制では巨大値/無関係
+        # 診断（2026-07-20・1回だけ）：SessionTimeRemain の宣言型を実機で確定させる。
+        #   型を見て読むよう直したが、「doubleだったはず」を推測で終わらせず実測で残す。
+        global _str_type_logged
+        if not _str_type_logged:
+            _stinfo = reader.find_var('SessionTimeRemain')
+            _lapsinfo = reader.find_var('SessionLapsRemain')
+            log("SDK TYPE DIAG: SessionTimeRemain=%s (4=float,5=double) val=%s | SessionLapsRemain=%s val=%s"
+                % (_stinfo[0] if _stinfo else 'n/a', timeRemain,
+                   _lapsinfo[0] if _lapsinfo else 'n/a', reader.read_int('SessionLapsRemain')))
+            _str_type_logged = True
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
