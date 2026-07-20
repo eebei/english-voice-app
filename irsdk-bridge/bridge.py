@@ -546,6 +546,10 @@ def director_gate(event):
             return True                          # テレメトリ等の非発話イベントは対象外
         kind = event.get('trigger') or event.get('kind') or ''
         prio = PRIORITY.get(kind, DEFAULT_PRIORITY)
+        # ★2026-07-20 Codexレビュー P0-1：bridgeで決めた優先度が renderer に伝わっておらず、
+        #   crash_check以外の安全コールが全て既定のP4扱いになっていた（＝安全保証が成立していない）。
+        #   イベント自体に載せて発話の最後まで運ぶ。
+        event['prio'] = prio
         now = time.time()
         ok, why = _director_allows(kind, prio, now)
         if not ok:
@@ -568,6 +572,8 @@ def director_gate(event):
 #   等間隔の列車＝長時間付き合う覚悟が要る。対処が全く変わるので形を伝える。
 MC_OBSERVE_SEC = 15.0     # 隊列を見るための観測窓（発話の引き金は近い5秒/2秒のまま）
 MC_PACK_SEC    = 3.0      # この秒数以内に続いていれば「固まっている」
+MC_REARM_SEC   = 8.0      # 発火は5秒。再武装はここまで離れた時だけ（境界振動での連呼防止）
+MC_TRAIN_TOLERANCE = 0.5  # 等間隔判定：車間のばらつきが平均のこの割合以内なら「列車」
 
 def _describe_traffic(gaps):
     """後方車のギャップ列(昇順)から形を返す。 -> (shape, clusters)
@@ -587,7 +593,9 @@ def _describe_traffic(gaps):
         # 全部繋がっている＝列車。間隔が揃っていれば「等間隔」と呼べる
         steps = [gaps[i] - gaps[i-1] for i in range(1, n)]
         avg = sum(steps) / len(steps)
-        if avg > 0 and max(abs(x - avg) for x in steps) <= max(1.0, avg * 0.5):
+        # ★2026-07-20 Codexレビュー P2-8：max(1.0, avg*0.5) は平均間隔が小さい時に1秒まで許容し、
+        #   仕様「ばらつきが平均の50%以内」より大幅に緩かった。ゼロ除算対策と許容幅を分離する。
+        if avg >= 0.2 and max(abs(x - avg) for x in steps) <= avg * MC_TRAIN_TOLERANCE:
             return 'train', clusters
     if len(clusters) == 1:
         return ('pack' if n > 1 else 'single'), clusters
@@ -1167,6 +1175,7 @@ def poll_iracing():
     pace_check_last_lap = -99  # ペース判断を最後に投げた周回（3周に1回までに制限＝連呼防止）
     pit_box_pct = None         # 自分のピットボックスのLapDistPct（初回入庫で学習・以後カウントダウンに使う）
     pit_marks_called = set()   # 今回の入庫で読み上げ済みの距離マーカー
+    pit_prev_dist_m = None     # 前サンプルのボックスまでの距離（閾値横断の判定用）
     track_length_m = None      # コース長(m)。ピット距離の換算用
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
@@ -2101,16 +2110,29 @@ def poll_iracing():
                 if _dpct > 0.5: _dpct -= 1.0
                 elif _dpct < -0.5: _dpct += 1.0
                 _dist_m = _dpct * track_length_m
-                if 0 < _dist_m < 220:
-                    for _mark in (150, 100, 50, 20):
-                        if _dist_m <= _mark and _mark not in pit_marks_called:
-                            pit_marks_called.add(_mark)
-                            broadcast({'type': 'radio', 'trigger': 'pit_box_countdown',
-                                'meters': _mark, 'message': str(_mark) + ' metres.'})
-                            break
+                # ★2026-07-20 Codexレビュー P0-4：「現在距離 <= mark」だと、90m地点で初検出した時に
+                #   150mを読み、10m地点からだと150/100/50/20を一気に読み上げてしまう。
+                #   前回距離を持ち「previous > mark >= current」の**横断時だけ**鳴らす。
+                #   最初の有効サンプルで既に通過済みのmarkは消化済みとして黙って捨てる。
+                if 0 < _dist_m < 400:
+                    if pit_prev_dist_m is None:
+                        for _mark in (150, 100, 50, 20):
+                            if _dist_m <= _mark:
+                                pit_marks_called.add(_mark)   # 既に通過＝読まない
+                    elif _dist_m < pit_prev_dist_m and (pit_prev_dist_m - _dist_m) < 120:
+                        # 近づいている時のみ（距離の逆行やラップ跨ぎの飛びでは鳴らさない）
+                        for _mark in (150, 100, 50, 20):
+                            if pit_prev_dist_m > _mark >= _dist_m and _mark not in pit_marks_called:
+                                pit_marks_called.add(_mark)
+                                broadcast({'type': 'radio', 'trigger': 'pit_box_countdown',
+                                    'meters': _mark, 'message': str(_mark) + ' metres.'})
+                                break
+                    pit_prev_dist_m = _dist_m
+                else:
+                    pit_prev_dist_m = None
             # ① ピットレーン内で"ボックス位置に到達"＝PlayerTrackSurface 2→1
-            if (not onPit) and pit_marks_called:
-                pit_marks_called.clear()   # コースに戻ったら次の入庫に備えて白紙化
+            if (not onPit) and (pit_marks_called or pit_prev_dist_m is not None):
+                pit_marks_called.clear(); pit_prev_dist_m = None   # コース復帰＝次の入庫に備え白紙化
             if onPit and _prev_psurf == 2 and _psurf == 1:
                 if _ldp is not None and _ldp >= 0:
                     pit_box_pct = _ldp        # ★自分のボックス位置を学習（次回から秒読みできる）
@@ -2476,7 +2498,10 @@ def poll_iracing():
                             _mrel = car_relspeed_map.get(_mi, 0)
                             if _mcls == -1 or _mcls == player_class_id or _mrel <= player_rel_speed:
                                 continue  # 速いクラス(別クラス かつ 相対速度が上)のみ
-                            if car_on_track and _mi < len(car_on_track) and car_on_track[_mi] not in (2, 3):
+                            # ★2026-07-20 Codexレビュー P1-7：iRacingの 2=approaching pits, 3=on track。
+                            #   旧実装は2も許容しており、ピットへ向かう車を「後方から迫る速いクラス」と
+                            #   数える可能性があった。安全コールは on-track の車だけを対象にする。
+                            if not (car_on_track and _mi < len(car_on_track) and car_on_track[_mi] == 3):
                                 continue
                             _opct = car_dist_pct[_mi]
                             if _opct is None or _opct < 0:
@@ -2509,9 +2534,12 @@ def poll_iracing():
                                     'delta': round(_near, 1), 'count': len(_gaps),
                                     'shape': _shape, 'clusters': _clusters,
                                     'message': _mc_message_en(_cn, _near, _gaps, _shape, _clusters, _stg)})
+                        # ★2026-07-20 Codexレビュー P1-6：発火(5秒)と再武装が同じ境界に依存しており、
+                        #   4.9↔5.1秒を揺れるだけで再発火できた。再武装は8秒超に離れた時だけにする。
                         for _cn in list(multiclass_stage.keys()):
-                            if _cn not in _seen_classes:
-                                multiclass_stage.pop(_cn, None)     # 居なくなった＝再武装（次に来たら鳴る）
+                            _g2 = _mc_groups.get(_cn)
+                            if _g2 is None or min(_g2) > MC_REARM_SEC:
+                                multiclass_stage.pop(_cn, None)     # 十分離れた/消えた＝再武装
 
         # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──
         # 今までは「直前直後の車」としか比較できず、離れた順位を聞かれると答えられなかった。

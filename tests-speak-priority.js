@@ -55,8 +55,7 @@ speak('速い車',{prio:1,kind:'multiclass',dedupeKey:'multiclass38'});
 const r=speak('速い車',{prio:1,kind:'multiclass',dedupeKey:'multiclass38'});
 check('同一ハザードの重複は破棄される', r==='deduped' && speakQueue.length===1);
 
-console.log('\n合格 '+pass+' / 不合格 '+fail);
-process.exit(fail?1:0);
+console.log('\n[優先度] 合格 '+pass+' / 不合格 '+fail);
 
 // ── 後方集団の「形」判定（2026-07-20 Yuji要望・実走前の検証）──
 const MC_PACK_SEC = 3.0;
@@ -74,5 +73,43 @@ function describeTraffic(gaps){
   return [clusters.length===1?'pack':'split', clusters];
 }
 console.log('\n══ 後方集団の形 ══');
+let shapePass=0, shapeFail=0;
 [[[4.5],'single'],[[2,3.5],'pack'],[[2,3,9.5],'split'],[[1.5,3.5,5.5,7.5,9.5,11.5,13.5],'train'],[[1,2,3,10,11],'split']]
- .forEach(([g,want])=>{ const [sh]=describeTraffic(g); console.log((sh===want?'  ✅ ':'  ❌ ')+JSON.stringify(g)+' → '+sh); if(sh!==want) process.exitCode=1; });
+ .forEach(([g,want])=>{ const [sh]=describeTraffic(g); const ok=(sh===want); ok?shapePass++:shapeFail++;
+   console.log((ok?'  ✅ ':'  ❌ ')+JSON.stringify(g)+' → '+sh); });
+console.log('\n[形] 合格 '+shapePass+' / 不合格 '+shapeFail);
+
+// ── ★Codexレビュー P0-2 の検証：割り込み後にキューが止まらないこと ──
+//   本番同等の状態変数(draining/isSpeaking/watchdog)を再現する。
+//   旧実装は stopCurrentAudio() が draining を戻さず、pause()はonendedを出さないため
+//   watchdog(最大40秒)まで安全コールが待たされていた。
+console.log('\n══ 割り込み後のキュー継続（本番相当の状態） ══');
+let dPass=0,dFail=0;
+function dcheck(name,cond){ (cond?dPass++:dFail++); console.log((cond?'  ✅ ':'  ❌ ')+name); }
+{
+  let draining=false, isSpeaking=false, watchdog=null, playing=null, q=[];
+  function stopCurrentAudioFixed(){
+    if(watchdog){ clearTimeout(watchdog); watchdog=null; }
+    playing=null; isSpeaking=false; draining=false;   // ★draining解除が肝
+  }
+  function drain(){
+    if(draining||isSpeaking) return false;
+    if(!q.length) return false;
+    q.sort((a,b)=>a.prio-b.prio);
+    playing=q.shift(); draining=true; isSpeaking=true;
+    watchdog=setTimeout(()=>{},40000);
+    return true;
+  }
+  q.push({text:'情報',prio:4}); drain();
+  dcheck('P4が再生中', playing && playing.prio===4);
+  // P0が到着 → 割り込み（onendedは来ない＝pause相当）
+  q.push({text:'停止車両',prio:0}); stopCurrentAudioFixed();
+  dcheck('割り込みでdrainingが解除される', draining===false);
+  const started = drain();
+  dcheck('P0が即座に再生される（40秒待たない）', started && playing.prio===0);
+  if(watchdog) clearTimeout(watchdog);
+}
+console.log('\n[割り込み] 合格 '+dPass+' / 不合格 '+dFail);
+
+console.log('\n══ 合計 合格 '+(pass+shapePass+dPass)+' / 不合格 '+(fail+shapeFail+dFail)+' ══');
+process.exit((fail+shapeFail+dFail)?1:0);
