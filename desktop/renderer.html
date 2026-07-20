@@ -1838,12 +1838,25 @@ function startAutoMic(){
 // ── Bridge / telemetry ──
 // 連続告知の抑制：同じ告知は30秒に1回まで（bridge点滅で喋りまくるのを防ぐ）
 let lastBridgeVoiceKey='', lastBridgeVoiceAt=0;
+// ★2026-07-20 接続告知は「状態が安定してから」しか言わない。
+//   実走で bridge の websocket が数秒ごとに落ちて再接続し、「システムが切れちゃった」を連発した。
+//   瞬断・点滅では黙り、6秒以上その状態が続いた時に初めて1回だけ告知する。
+let pendingBridgeVoice=null;
 function bridgeVoice(key){
+  if(key==='bridge_up'||key==='bridge_down'){
+    if(pendingBridgeVoice) clearTimeout(pendingBridgeVoice.timer);
+    // 同じ状態が6秒続いたら初めて喋る（途中で反対の状態が来たら取り消される）
+    pendingBridgeVoice={key, timer:setTimeout(()=>{ pendingBridgeVoice=null; bridgeVoiceNow(key); }, 6000)};
+    return;
+  }
+  bridgeVoiceNow(key);
+}
+function bridgeVoiceNow(key){
   const now=Date.now();
-  // bridge_up/down の点滅は特にうるさい → 同じkeyは30秒に1回、かつ前回と違うkeyの時だけ
+  // 同じkeyは30秒に1回
   if(key===lastBridgeVoiceKey && now-lastBridgeVoiceAt < 30000) return;
-  // bridge_up と bridge_down が短時間で交互に来る（点滅）場合も抑制
-  if((key==='bridge_up'||key==='bridge_down') && now-lastBridgeVoiceAt < 8000) { lastBridgeVoiceKey=key; lastBridgeVoiceAt=now; return; }
+  // 種類が違っても、接続系の告知が30秒以内に続くなら黙る（点滅の連呼を根絶）
+  if((key==='bridge_up'||key==='bridge_down') && now-lastBridgeVoiceAt < 30000) { lastBridgeVoiceKey=key; lastBridgeVoiceAt=now; return; }
   lastBridgeVoiceKey=key; lastBridgeVoiceAt=now;
   const lines={
     bridge_up:{ James:"System's up. Waiting for iRacing.", Luna:"System's ready. Waiting for iRacing.", Hajime:"System online. Waiting for iRacing.", Kanbe:"システム起動。iRacing待ちじゃ。", Oishi:"システム起動完了。iRacingを待つ。", HajimeJP:"システム起動。iRacing待ち。", LunaJP:"システム起動完了。iRacing待ってるわ。", Matthias:"System online. Warte auf iRacing." },
