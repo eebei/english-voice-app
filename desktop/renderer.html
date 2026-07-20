@@ -1462,6 +1462,7 @@ async function sendMsg(){
   if(!text||isBusy) return;
   inp.value=''; inp.style.height='auto';
   addMsg('user',text);
+  maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
   await callAPI();
@@ -2231,10 +2232,20 @@ async function drainJudgeQueue(){
 //   Codex指摘：単一トークンNO_CALL一致に頼ると「無言で待機」等の日本語で素通りする。
 //   よって「SAY:」で始まる時だけ発話し、それ以外は全部捨てる（失敗時は必ず沈黙）。
 const JUDGE_BANNED = /JUDGE_CALL|NO_CALL|SAY:|データ確認中|判定待ち|待機中|ここにいる|I'm in position|race engineer at/i;
-function extractJudgeSpeech(reply){
-  const m = /^SAY:[ \t]*(\S[\s\S]*)$/.exec((reply||'').trim());
-  if(!m) return null;                       // 先頭完全一致のみ
-  const text = m[1].trim();
+function extractJudgeSpeech(reply, kind){
+  // ★2026-07-20 SAY: 必須を主軸にしたら、モデルが良い一言を接頭辞なしで返した分まで全部捨てて
+  //   判断層が100%沈黙した（マルチクラス検知24回・発話0回）。騒音を実際に消していたのは
+  //   接頭辞ではなく下の禁止語フィルタだったので、フィルタを主軸に戻す。
+  //   安全クラスは特に取りこぼしが致命的なので、接頭辞が無くても内容が正当なら通す。
+  const raw = (reply||'').trim();
+  if(!raw || /^NO_CALL/i.test(raw)) return null;
+  const SAFETY = ['multiclass','danger','towing'].includes(kind);
+  const m = /^SAY:[ \t]*(\S[\s\S]*)$/.exec(raw);
+  let text;
+  if(m){ text = m[1].trim(); }
+  else if(SAFETY || !/^[\s\S]{0,20}(SAY:)/i.test(raw)){ text = raw; }  // 接頭辞なしでも中身で判定
+  else return null;
+  text = text.replace(/^SAY:[ \t]*/i,'').trim();
   if(!text || text.length>160) return null; // 空・長すぎは捨てる（無線は1文）
   if(JUDGE_BANNED.test(text)) return null;  // 内部語・自己言及の混入は捨てる
   return text;
@@ -2268,7 +2279,7 @@ async function runJudgeCall(data){
     const resData = await res.json();
     reply = (resData.content?.[0]?.text||'').trim();
   } finally { clearTimeout(fetchTimer); }
-  const speech = extractJudgeSpeech(reply);
+  const speech = extractJudgeSpeech(reply, data.kind);
   if(!speech){ console.log('judge_call silent ['+data.kind+']', reply.slice(0,60)); return; }
   addMsg('ai',speech);
   speak(speech);
@@ -2624,6 +2635,17 @@ function populateMicList(devices, selected){
     o.textContent=d.name+(d.is_default?' ★':''); sel.appendChild(o);
   });
   sel.value=(selected==null)?'':String(selected);
+}
+// ★2026-07-20 「静かにして」を構造で受ける。プロンプト任せにすると安全項目まで黙る事故が起きた
+//   （実走：速いクラスの接近を24回検知して0回しか報告せず、理由は「言わなくていいと言われたから」）。
+//   ここで検出してbridgeへ渡し、P3〜P5の発話予算だけを絞る。P0/P1(安全)には一切効かない。
+const QUIET_RE = /(あんまり|あまり|そんなに)?\s*(喋ら|しゃべら|話さ)なくて(も)?(いい|大丈夫)|静かに(して|しといて)|黙って(て|いて)|コールしなくていい|今は?いらない/;
+function maybeQuietMode(text){
+  if(!text || !QUIET_RE.test(text)) return;
+  if(irBridge && irBridge.readyState===1){
+    irBridge.send(JSON.stringify({cmd:'quiet_mode', seconds:600}));
+    console.log('quiet_mode requested (safety calls unaffected)');
+  }
 }
 function selectMic(){
   if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off_retry')); return; }

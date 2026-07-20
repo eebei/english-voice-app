@@ -1154,6 +1154,23 @@ function buildSystem(p) {
   //   旧：単一トークン NO_CALL 一致で沈黙を判定 → モデルが「無言で待機」等と日本語で書くと素通りし、
   //       内部合図(JUDGE_CALL)への返事や自己状態の実況が無線に漏れた（Interlagos実走で約18回）。
   //   新：発話する時だけ先頭を SAY: にする。それ以外は全てアプリ側で破棄される＝黙るのが既定。
+  // ★2026-07-20 安全クラスは沈黙を許さない（仕組みで保証する）。
+  //   実走でマルチクラス接近を24回検知して0回しか喋らず、ドライバーが「なんでわかってねえんだよ」と怒った。
+  //   Yuji仕様：「GT3は最も遅いクラス。速い車が来ると危険。必ずレポートしてほしい」＝安全であり、
+  //   "今言う価値があるか"を問うてはいけない項目。ここでは NO_CALL 自体を選択肢から外す。
+  const SAFETY_KINDS = ['multiclass', 'danger', 'towing'];
+  if (judgeCallNote && judgeCall && SAFETY_KINDS.includes(judgeCall.kind)) {
+    judgeCallNote += isJ
+      ? '\n\n【最重要・沈黙禁止】これは**安全に関わる報告**だ。ドライバーは今このレースで最も遅いクラスにいて、'
+        + '速い車に突然入ってこられる危険がある。**必ず伝えろ。NO_CALL は使うな。**'
+        + '\n過去にドライバーが「あんまり喋らなくていい」と言っていたとしても、**それはこの項目には適用されない**'
+        + '（雑談を減らせという意味であって、危険を黙れという意味ではない）。短く、1文で、今すぐ。'
+      : '\n\n[CRITICAL — SILENCE FORBIDDEN] This is a SAFETY report. The driver is in the slowest class in this race '
+        + 'and can be caught out by a much faster car arriving suddenly. **You MUST pass it on. Do NOT use NO_CALL.**'
+        + '\nEven if the driver earlier asked you to talk less, **that does not apply here** (it meant less chatter, '
+        + 'never stay quiet about danger). Keep it to one short line, right now.';
+  }
+
   if (judgeCallNote) {
     judgeCallNote += isJ
       ? '\n\n【出力形式・厳守】これはドライバーの発言への返事ではない。内部イベントに対する判断だ。'

@@ -452,7 +452,101 @@ async def send_stt_request(audio_b64):
         log("STT error: " + str(e))
         broadcast({"type": "ptt_text", "text": ""})
 
+# ══════════════════════════════════════════════════════════════════════════
+# ★★2026-07-20 無線ディレクター（発話アーキテクチャの全面再設計）★★
+# ══════════════════════════════════════════════════════════════════════════
+# 【なぜ作ったか】
+#   これまで発話の可否を各検知ロジックが「自分の中だけで」判断しており、全体を見る主体が
+#   居なかった。その結果、正反対に見える2つの事故が同じ原因から起きた：
+#     ・マルチクラス接近が12秒毎に94回連呼（自分しか見ていないので"うるさい"と気づけない）
+#     ・停止車警告が構造的に永久沈黙（雑談用クールダウン last_battle_global が衝突警告を抑制
+#       ＝低優先度が高優先度をダッキングしていた）
+#     ・2026-07-20 実走では全判断コールが沈黙（検知24回・発話0回。ドライバー激怒）
+#
+# 【設計の由来】Yujiの言葉（SIMの振動スピーカー）：
+#   「エンジン音は鳴り続けるが、シフトが来ればシフトが強調され、タイヤロックが来れば
+#     エンジン音は隠れるぐらいになる。そういう仕組みになっているのか？」
+#   ＝音響のサイドチェイン・ダッキング。無線コールも同じ構造にする。
+#
+# 【規則】
+#   1. 優先度クラス P0(安全・即時) 〜 P5(雑談)
+#   2. 上位が直近に喋っていたら下位は破棄する。**下位は上位を絶対に抑制できない**
+#   3. P3〜P5 だけ発話予算で構造的に制限する（プロンプトでの「連呼するな」は守られなかった）
+#   4. P0〜P2 は予算・ダッキングの対象外＝絶対に落とさない
+#   5. ドライバーの「静かにして」は P3〜P5 の予算を絞るだけ。P0/P1 には効かせない
+PRIORITY = {
+    # P0 安全・即時（0.1秒が命。絶対に落とさない）
+    'stopped_ahead': 0, 'side_by_side': 0, 'crash_check': 0, 'incident': 0, 'damage_report': 0,
+    # P1 安全・文脈（Yuji仕様：GT3は最も遅いクラス＝速い車の接近は危険。必ず報告する）
+    'multiclass': 1, 'danger': 1, 'multi_car_straight': 1, 'towing': 1,
+    # P2 手順（タイミングが命）
+    'pit_entry': 2, 'pit_exit': 2, 'pit_box_here': 2, 'pit_box_stop': 2, 'limiter_off': 2,
+    # P3 戦略
+    'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'first_lap': 3,
+    'catchup': 3, 'defend': 3, 'battle': 3,
+    # P4 情報
+    'best_lap': 4, 'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
+    'rolling_gap': 4, 'lap_time': 4, 'session_best': 4, 'personal_best': 4,
+}
+DEFAULT_PRIORITY = 5                  # 未知は雑談扱い＝最も抑制される（安全側に倒れる）
+DUCK_WINDOW = {3: 6.0, 4: 10.0, 5: 12.0}   # 上位が喋った直後、この秒数は下位を出さない
+BUDGET_WINDOW = 60.0                  # 発話予算の観測窓（秒）
+BUDGET_MAX = {3: 6, 4: 4, 5: 2}       # 窓内の最大発話回数（P3=戦略/P4=情報/P5=雑談）
+QUIET_FACTOR = 0.4                    # ドライバーが「静かにして」と言った時に予算へ掛ける係数
+
+_director = {'last_by_prio': {}, 'recent': [], 'quiet_until': 0.0}
+
+def set_quiet_mode(seconds=600):
+    """ドライバーが『あんまり喋らなくていい』と言った時に呼ぶ。
+       ★P3〜P5の予算を絞るだけで、P0/P1(安全)には一切効かない。
+       2026-07-20のデブリーフでモデルが「言わなくていいと言われたから速いクラスを報告しなかった」
+       と述べた事故の再発防止＝"静かに"の意味を構造で限定する。"""
+    _director['quiet_until'] = time.time() + seconds
+    log("DIRECTOR: quiet mode ON for %ds (P3-P5 budget x%.1f / safety unaffected)" % (seconds, QUIET_FACTOR))
+
+def _director_allows(kind, prio, now):
+    """発話してよいかを1箇所で決める。落とした時は必ず理由をログに残す（測れないものは直せない）。"""
+    if prio <= 2:
+        return True, None                       # 安全と手順は無条件で通す
+    for p in range(0, prio):                    # 上位が直近に喋っていたらダック
+        last = _director['last_by_prio'].get(p, 0)
+        if now - last < DUCK_WINDOW.get(prio, 8.0):
+            return False, 'ducked_by_P%d' % p
+    quiet = now < _director['quiet_until']
+    cap = BUDGET_MAX.get(prio, 2)
+    if quiet:
+        cap = max(1, int(cap * QUIET_FACTOR))
+    _director['recent'] = [r for r in _director['recent'] if now - r[0] < BUDGET_WINDOW]
+    used = sum(1 for r in _director['recent'] if r[1] == prio)
+    if used >= cap:
+        return False, 'budget_P%d_%d/%d%s' % (prio, used, cap, '_quiet' if quiet else '')
+    return True, None
+
+def director_gate(event):
+    """broadcast() の入口で全イベントを裁く。True=通す / False=捨てる。"""
+    try:
+        et = event.get('type')
+        if et not in ('radio', 'judge_call'):
+            return True                          # テレメトリ等の非発話イベントは対象外
+        kind = event.get('trigger') or event.get('kind') or ''
+        prio = PRIORITY.get(kind, DEFAULT_PRIORITY)
+        now = time.time()
+        ok, why = _director_allows(kind, prio, now)
+        if not ok:
+            log("DIRECTOR drop: %s (P%d) reason=%s" % (kind, prio, why))
+            return False
+        _director['last_by_prio'][prio] = now
+        _director['recent'].append((now, prio))
+        log("DIRECTOR pass: %s (P%d)" % (kind, prio))
+        return True
+    except Exception as _de:
+        log("DIRECTOR error (fail-open): " + str(_de))
+        return True                              # 判断に失敗したら通す＝安全側
+
 def broadcast(event):
+    # ★2026-07-20 まず無線ディレクターが優先度・ダッキング・予算で裁く（全発話の単一の関門）
+    if not director_gate(event):
+        return
     # ── 発話「間合い」ゲート：よく喋るプロアクティブ無線は、レース中に発話窓が閉じてたら保留する ──
     #   （安全直結・非radio・窓が開いてる時は素通り。保留は最新1件のみ＝flush_radioが窓の開いた瞬間に送る）
     try:
@@ -1304,14 +1398,14 @@ def poll_iracing():
                 _side = {2: 'left', 5: 'left', 3: 'right', 6: 'right', 4: 'both'}.get(car_left_right)
                 if _side and _side not in corner_sides_announced:
                     corner_sides_announced.add(_side)
-                    if _now3 - last_battle_global > 8:  # サイドコールは安全直結＝短めのクールダウン。側ごとにdedup済み。
+                    if True:  # サイドコールは安全直結＝短めのクールダウン。側ごとにdedup済み。
                         _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
                         broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side, 'message': _side_msg})
                         last_battle_global = _now3
             # ストレート(ゾーン外)で3台以上並走の検知。CarLeftRight=4(両側)/5/6(片側2台)を代用
             # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。2台までは自分で見えるのでスルー。
             elif not in_side_zone and car_left_right in (4, 5, 6):
-                if _now3 - straight_sbs_warned > 20 and _now3 - last_battle_global > 15:
+                if _now3 - straight_sbs_warned > 20:
                     broadcast({'type': 'radio', 'trigger': 'multi_car_straight', 'message': 'Three wide. Watch the space.'})
                     straight_sbs_warned = _now3
                     last_battle_global = _now3
@@ -2101,7 +2195,7 @@ def poll_iracing():
                             ahead_armed[idx] = True
                         elif adist <= 3.0 and ahead_armed.get(idx, False):
                             last_warn = danger_warned.get(idx, 0)
-                            if now - last_warn > 20 and now - last_battle_global > 15:
+                            if now - last_warn > 20:
                                 reason = 'SR ' + str(other_sr) if (other_sr is not None and other_sr <= 2.5) else 'iR ' + str(other_irating)
                                 # ゼッケンが取れてれば認識度アップのため文言に含める(Yuji方針・2026/7/14)。
                                 # 無ければ黙って省略(ゼッケン無し表記で捏造しない)。
@@ -2145,7 +2239,7 @@ def poll_iracing():
                         if delta > 3.0:
                             behind_armed[idx] = True  # 本当に引き離した＝次の接近で警告できる状態に
                         elif delta <= 0.3 and behind_armed.get(idx, False):
-                            if now - last_battle_global > 15:
+                            if True:   # 抑制はディレクターが一元管理（旧last_battle_globalの自前ゲートは撤去）
                                 other_last_lap = car_last_laps[idx] if car_last_laps else 0
                                 pace_diff = (other_last_lap - player_last_lap
                                              if other_last_lap > 0 and player_last_lap > 0 else 0)
@@ -2222,7 +2316,7 @@ def poll_iracing():
                                 gap_pace_hist[('ahead', idx)] = pace_diff2
                                 confident = prev_pace is not None and prev_pace > 0.3
                                 stage = _catchup_stage_of(gap)
-                                if stage > catchup_stage.get(idx, 0) and now - last_battle_global > 15:
+                                if stage > catchup_stage.get(idx, 0):
                                     catchup_stage[idx] = stage
                                     # ★2026-07-19 LLM判断層へ：完成文でなく"判断候補"を送る。AIが言うか黙るか決める。
                                     #   前後はクラス順位ベースの正しい値。messageはLLM失敗時のフォールバック用に残す。
@@ -2238,7 +2332,7 @@ def poll_iracing():
                                 gap_pace_hist[('behind', idx)] = pace_diff2
                                 confident = prev_pace is not None and prev_pace < -0.3
                                 stage = _catchup_stage_of(gap)
-                                if stage > defend_stage.get(idx, 0) and now - last_battle_global > 15:
+                                if stage > defend_stage.get(idx, 0):
                                     defend_stage[idx] = stage
                                     # ★2026-07-19 LLM判断層へ（上のcatchupと同じ）
                                     broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
@@ -2280,7 +2374,7 @@ def poll_iracing():
                             _stg = 2 if _mcgap <= 2.0 else (1 if _mcgap <= 5.0 else 0)
                             if _mcgap > 6.0:
                                 multiclass_stage[_mi] = 0   # 十分離れた=再武装
-                            elif _stg > multiclass_stage.get(_mi, 0) and now - last_battle_global > 12:
+                            elif _stg > multiclass_stage.get(_mi, 0):
                                 multiclass_stage[_mi] = _stg
                                 _ocpos = _cls_pos_mc[_mi] if (_cls_pos_mc and _mi < len(_cls_pos_mc)) else None
                                 _ocname = car_class_name_map.get(_mi)
@@ -2567,6 +2661,13 @@ async def handler(websocket):
             cmd = msg.get('cmd')
             # log_line = rendererからの会話ログ転送。デバッグログに会話(AI返答含む)を残す。
             # スクショ無しで後から会話を追えるように(Yuji時短)。CMDノイズは出さない。
+            if cmd == 'quiet_mode':
+                # ★2026-07-20 ドライバーの「あんまり喋らなくていい」を構造で受ける。
+                #   P3〜P5(戦略/情報/雑談)の予算を絞るだけで、P0/P1(安全)には一切効かない。
+                #   実走でモデルが「言わなくていいと言われたから速いクラスを報告しなかった」と述べた
+                #   事故の再発防止＝"静かに"の意味をプロンプトでなく仕組みで限定する。
+                set_quiet_mode(int(data.get('seconds', 600)))
+                continue
             if cmd == 'log_line':
                 log("CONVO " + str(msg.get('text', '')))
                 continue
