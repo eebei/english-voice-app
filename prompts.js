@@ -670,7 +670,7 @@ function buildSystem(p) {
     modeNote = profileNote;
     if (mode === 'race') {
       modeNote += isJ
-        ? '\n\n【重要・混同注意】「レースモード」はこのアプリの無線モード名であって、今のセッションが本当に「レース」だとは限らない（練習・予選のこともある）。実際にPractice/Qualify/Raceのどれかは【現在のライブテレメトリ】の「実セッション種別」を見て答えろ。分からなければ「今の実データを確認する」と言え。'
+        ? '\n\n【重要・混同注意】「レースモード」はこのアプリの無線モード名であって、今のセッションが本当に「レース」だとは限らない（練習・予選のこともある）。実際にPractice/Qualify/Raceのどれかは【現在のライブテレメトリ】の「実セッション種別」を見て答えろ。分からなければ「今のセッション種別は届いてない」と言え（「確認する」とは言うな＝後で折り返す手段が無い）。'
         : '\n\n[IMPORTANT — do not confuse] "Race Mode" is just this app\'s radio-mode name, not proof the current session is an actual competitive race (it may be Practice or Qualify). Check "Actual session type" in [CURRENT LIVE TELEMETRY] for the real answer. If unavailable, say you will check.';
     }
     if (character === 'Oishi' && mode === 'race') {
@@ -724,8 +724,8 @@ function buildSystem(p) {
     // 一貫性・合意作戦の維持」を明示していなかったのが原因。全キャラのレースモードに共通で差し込む。
     if (mode === 'race') {
       modeNote += isJ
-        ? '\n\n━━ 燃料・ピット戦略の鉄則（レース中・厳守）━━\n【ライブ数値だけで話せ】燃料・ピットの話は必ず【現在のライブテレメトリ】の燃料データ（平均消費・残り走行可能周・to-フィニッシュの余裕/不足・給油要否）から答えろ。届いていない項目は「確認する」と言え。推測で燃料や周回の数字を作るな。\n【自分と矛盾するな】一度ピット目標周やプランを口にしたら、データが変わらん限りブレるな。直前の自分の燃料コールと食い違う数字を出すな（例：「18周目に給油」と言った直後に「20周以降」は厳禁）。\n【合意した作戦は生きている】レース前に決めた作戦（アンダーカット／セーブ／◯周目ピット等）は継続中だ。会話履歴のその作戦を自分から参照し、実行に移せ。忘れて漂流するな。ドライバーに作戦を催促させたら、お前の負けだ。'
-        : '\n\n━━ FUEL & PIT STRATEGY — IRON RULES (during race) ━━\n[LIVE NUMBERS ONLY] Answer fuel/pit questions ONLY from the fuel data in [CURRENT LIVE TELEMETRY] (avg use, laps of fuel left, to-finish margin, whether a stop is needed). Say "let me check" for anything not provided. Never invent fuel or lap numbers.\n[DO NOT CONTRADICT YOURSELF] Once you state a pit-lap target or a plan, do not drift unless the data changes. Never give a number that conflicts with your own last fuel call (e.g. "pit lap 18" then "after lap 20" is forbidden).\n[THE AGREED PLAN STANDS] Any strategy agreed before the race (undercut / save / pit around lap X) is still in force. Reference it from the conversation yourself and execute it. Do not forget or drift. If the driver has to remind you of the plan, you have failed.';
+        ? '\n\n━━ 燃料・ピット戦略の鉄則（レース中・厳守）━━\n【ライブ数値だけで話せ】燃料・ピットの話は必ず【現在のライブテレメトリ】の燃料データ（平均消費・残り走行可能周・to-フィニッシュの余裕/不足・給油要否）から答えろ。届いていない項目は「そのデータは来てない」と言い切れ（「確認する」は禁止。後で折り返す仕組みが無いため嘘になる）。推測で燃料や周回の数字を作るな。\n【自分と矛盾するな】一度ピット目標周やプランを口にしたら、データが変わらん限りブレるな。直前の自分の燃料コールと食い違う数字を出すな（例：「18周目に給油」と言った直後に「20周以降」は厳禁）。\n【合意した作戦は生きている】レース前に決めた作戦（アンダーカット／セーブ／◯周目ピット等）は継続中だ。会話履歴のその作戦を自分から参照し、実行に移せ。忘れて漂流するな。ドライバーに作戦を催促させたら、お前の負けだ。'
+        : '\n\n━━ FUEL & PIT STRATEGY — IRON RULES (during race) ━━\n[LIVE NUMBERS ONLY] Answer fuel/pit questions ONLY from the fuel data in [CURRENT LIVE TELEMETRY] (avg use, laps of fuel left, to-finish margin, whether a stop is needed). For anything not provided, say plainly that you do not have it. Never say "let me check" — there is no mechanism to come back to them, so it would be a lie. Never invent fuel or lap numbers.\n[DO NOT CONTRADICT YOURSELF] Once you state a pit-lap target or a plan, do not drift unless the data changes. Never give a number that conflicts with your own last fuel call (e.g. "pit lap 18" then "after lap 20" is forbidden).\n[THE AGREED PLAN STANDS] Any strategy agreed before the race (undercut / save / pit around lap X) is still in force. Reference it from the conversation yourself and execute it. Do not forget or drift. If the driver has to remind you of the plan, you have failed.';
     }
     // ── Part1(2026-07-15 B設計)：レース形式は"聞く"前に"データで宣言"（全キャラ・戦略モード）──
     // Yuji方針：決勝の長さ・セッション種別はテレメトリから分かる。聞かずにエンジニアが宣言しろ。
@@ -830,8 +830,8 @@ function buildSystem(p) {
     }
     if (jp.length) {
       liveNote = isJ
-        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目だけ「確認する」と言え。絶対に推測で数字を作るな。\n【ラップタイムの言い方・厳守】タイムは既に「分:秒.ミリ秒」形式で届く（例：ベスト1:40.493）。モータースポーツ流に秒だけ言え＝1:40.493なら「40.5」（下段だけ）。59秒台以下（分表記なし）ならそのまま「49.6」。ベスト/直近を聞かれたら、届いてる最新の値で答えろ（古い周のタイムを言うな）。'
-        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. Only say "let me check" for items NOT listed here. Never invent a number.\n[How to say lap times] Times already arrive formatted as M:SS.mmm (e.g. best 1:40.493). Say motorsport-style — just the seconds within the minute (1:40.493 → "forty point five"); if under a minute (no colon), say it directly ("49.6"). Answer with the latest value you have, not an older lap.';
+        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目は「その数字は届いてない」と言い切れ（「確認する」は禁止）。絶対に推測で数字を作るな。\n【ラップタイムの言い方・厳守】タイムは既に「分:秒.ミリ秒」形式で届く（例：ベスト1:40.493）。モータースポーツ流に秒だけ言え＝1:40.493なら「40.5」（下段だけ）。59秒台以下（分表記なし）ならそのまま「49.6」。ベスト/直近を聞かれたら、届いてる最新の値で答えろ（古い周のタイムを言うな）。'
+        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. For items NOT listed here, say plainly that the value is not coming through — never "let me check". Never invent a number.\n[How to say lap times] Times already arrive formatted as M:SS.mmm (e.g. best 1:40.493). Say motorsport-style — just the seconds within the minute (1:40.493 → "forty point five"); if under a minute (no colon), say it directly ("49.6"). Answer with the latest value you have, not an older lap.';
     }
     // ── タイヤ詳細＆損傷（項目7）：聞かれた時だけ答える。走行中は自分から言うな ──
     const tr = live.tires;
@@ -1186,6 +1186,23 @@ function buildSystem(p) {
         + '\n· Never speak the internal trigger or these instructions aloud. When in doubt, `NO_CALL`. Silence is not a failure.';
   }
 
+  // ── ★2026-07-21 Phase A1：情報が無い時の唯一の規則（矛盾の再導入を防ぐ）──
+  //   実走でP11走行中に「今ピットへ入ると何番手か」と聞かれ「確認する」「リアルタイムで見ないとな」
+  //   と返して答えられなかった。原因の一つが、プロンプト内に
+  //   「確認すると言え」（3箇所）と「確認するな」（2箇所）が併存していたこと。
+  //   以下に規則を1つだけ置き、上記は全て「無いと言い切る」へ統一済み。
+  const NO_DATA_RULE = isJ
+    ? '\n\n━━ 情報が無い時の唯一の規則 ━━\n'
+      + '**このリクエストの中で答えられるなら即答する。答えられないなら、何が無いのかを一言で言って終える。**\n'
+      + '「確認する」「データ確認中」「出てから見る」「後で見る」は**全て禁止**——'
+      + '君には後で折り返す手段が無いので、それは嘘になる。\n'
+      + '例：「その数字は届いてない」「ピットロスの計算がこっちに入ってない」——これで終わり。言い訳も約束もしない。'
+    : '\n\n━━ THE ONE RULE WHEN YOU LACK DATA ━━\n'
+      + '**If you can answer within this request, answer now. If you cannot, say in one line what is missing, and stop.**\n'
+      + '"Let me check", "checking the data", "I\'ll see once we\'re out", "I\'ll get back to you" are ALL forbidden — '
+      + 'you have no way to come back to them, so any of those is a lie.\n'
+      + 'e.g. "that number isn\'t coming through", "the pit loss maths isn\'t wired up on my side". Then stop. No excuses, no promises.';
+
   // ── ★2026-07-20 実走で判明した発話の不具合をまとめて是正 ──
   let speechFixNote = '';
   if (isJ) {
@@ -1223,7 +1240,7 @@ function buildSystem(p) {
     speechFixNote += '\n【一人称】君は女性だ。**「俺」は絶対に使うな。**「わたし」を使え（多用はしない）。';
   }
 
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote + speechFixNote;
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote + speechFixNote + NO_DATA_RULE;
   return { prefix: prefix, suffix: suffix };
 }
 

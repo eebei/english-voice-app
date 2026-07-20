@@ -35,6 +35,9 @@ if node tests-speak-priority.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── 非同期割り込みテスト（本番コードを抽出して実行）"
 if node tests-speak-async.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speak-async.js 2>&1|tail -6; fail=1; fi
 
+echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
+if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const strategyGuard = require('./strategy-guard');
 const { buildSystem } = require('./prompts');
 const auth = require('./auth');
 
@@ -308,6 +309,39 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
     // クライアントが system を送ってこない場合はサーバー側でキャラのプロンプトを構築する
     // （crown jewels をサーバーに保持。デスクトップ/RaceVoice双方に自動適用）。
+    // ★★2026-07-21 Phase A1：戦略質問の構造化拒否（Codexレビュー反映）★★
+    //   実走で「今ピットへ入ると何番手で復帰するか」に対し「確認する」「リアルタイムで見ないとな」
+    //   と返し、復帰順位も根拠も出せなかった。原因は①計算器が無い ②プロンプトに
+    //   「確認すると言え」と「確認するな」が併存、の2つ。
+    //   ここでは①に対し、**計算できない戦略質問を自由文LLMへ渡さず**、
+    //   構造化された理由から正直な返答をコード側で組む。
+    //   ※分類は狭い（ピットに入る意図×順位を問う の両方が揃った時だけ）。
+    //     通常会話を禁止語で置換するようなことはしない。
+    try {
+      const _msgs = Array.isArray(req.body.messages) ? req.body.messages : [];
+      const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
+      const _q = _lastUser && typeof _lastUser.content === 'string'
+        ? strategyGuard.classifyStrategyQuestion(_lastUser.content) : null;
+      if (_q) {
+        const _live = req.body.liveData || {};
+        const _avail = strategyGuard.evaluateAvailability(_q.topic, {
+          // Phase A：復帰順位の計算器はまだ存在しない。Phase C 完了時にここが true になる。
+          hasRejoinCalculator: false,
+          isRaceSession: _live.session_type ? /race/i.test(String(_live.session_type)) : undefined,
+        });
+        if (!_avail.available) {
+          const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
+          const _reply = strategyGuard.buildUnavailableReply(_avail.reason, _lang);
+          if (_reply) {
+            console.log(`[strategy_guard] topic=${_q.topic} reason=${_avail.reason} -> structured reply`);
+            return res.json({ content: [{ type: 'text', text: _reply }] });
+          }
+        }
+      }
+    } catch (e) {
+      console.log('[strategy_guard] skipped: ' + e.message);   // 失敗しても通常経路を止めない
+    }
+
     // ★2026-07-20 判断コールの二重防御（Codexレビュー反映）
     //   判断コールなのに状況説明(judgeCallNote)を組めない条件が揃うと、モデルは内部合図だけを
     //   受け取って「はい、ここにいます」と返事してしまう（Interlagos実走で約18回発生）。
