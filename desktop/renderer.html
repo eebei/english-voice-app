@@ -2184,7 +2184,9 @@ function recentCallSummary(){
     .map(c=> c.label+' ('+Math.round((now-c.ts)/1000)+'s ago)');
 }
 async function judgeAndSpeak(data){
-  if(selMode!=='race') return;
+  // ★2026-07-19 ベスト更新とタイムロスは練習/テストでも意味があるのでレースモード限定にしない
+  //   （判断コール化で練習中のベスト更新が無音になる回帰を防ぐ）
+  if(selMode!=='race' && !['best_lap','time_loss'].includes(data.kind)) return;
   const authToken = localStorage.getItem('pw_auth_token');
   const headers = {'Content-Type':'application/json'};
   const body = {

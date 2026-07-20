@@ -975,8 +975,9 @@ def poll_iracing():
     fuel_strategy = None        # 直近算出した燃料戦略(dict)。telemetry_liveで毎回同送する
     session_check_counter = 0
     last_session_sig = None
-    consecutive_slow = 0
-    consistent_lap_count = 0   # lap_consistentを3周に1回だけ発話するためのカウンター
+    consecutive_slow = 0       # (旧lap_slow用・2026-07-19のタイム読み上げ再設計で未使用化)
+    consistent_lap_count = 0   # (旧lap_consistent用・同上)
+    pace_check_last_lap = -99  # ペース判断を最後に投げた周回（3周に1回までに制限＝連呼防止）
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
     tow_active = False         # トーイング中フラグ（開始時に1回だけ声かけ・終了でリセット）
@@ -1021,6 +1022,7 @@ def poll_iracing():
             personal_best       = None
             consecutive_slow    = 0
             consistent_lap_count = 0
+            pace_check_last_lap = -99
 
         # 切断は15秒間ずっと非アクティブな時だけ（セッション移行・ロード中を含むブリップで初期化しない）
         if not active and ir_was_connected:
@@ -1548,8 +1550,10 @@ def poll_iracing():
                 if is_personal_best:
                     if personal_best is not None:
                         diff = personal_best - lapTime
-                        broadcast({'type': 'radio', 'trigger': 'personal_best', 'time': t, 'diff': round(diff, 2),
-                            'message': 'Personal best. ' + t + '. Plus ' + str(round(diff, 3)) + '.'})
+                        # ★2026-07-19 テンプレ→LLMへ（Yuji「ベストラップ更新はコールして」＝言う事は確定、
+                        #   言い方だけLLMに委ねる。定型「Personal best. 24.594. Plus 0.46」の機械音を卒業）
+                        broadcast({'type': 'judge_call', 'kind': 'best_lap', 'best_kind': 'personal',
+                            'time': t, 'gain': round(diff, 3)})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
                             'message': t + '. Baseline lap.'})
@@ -1557,9 +1561,7 @@ def poll_iracing():
                     session_best = lapTime
 
                 elif is_session_best:
-                    diff = lapTime - (personal_best or lapTime)
-                    broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t, 'diff': round(diff, 2),
-                        'message': 'Session best. ' + t + '.'})
+                    broadcast({'type': 'judge_call', 'kind': 'best_lap', 'best_kind': 'session', 'time': t})
                     session_best = lapTime
 
                 else:
@@ -1573,11 +1575,27 @@ def poll_iracing():
                     # 直近3周平均 vs その前3周平均で、はっきり速くなってる時だけ声をかける対象にする
                     # （1周だけの偶然でなく、本当に上げてきてるかを均して判定）。
                     # ここも固定の褒め言葉でなく、文脈込みでClaudeに「褒める価値があるか」判断させる。
-                    if len(lap_delta_hist) >= 6:
+                    # ★★2026-07-19 タイム読み上げの全面再設計（Yuji・F1TVを見ての判断）★★
+                    #   旧：0.3〜1.0秒落ちの"全周"で lap_time が発火＝毎周かならず何か喋る機械。
+                    #       まーぼー(Indy)「毎回言われると結構うるさい」／Yuji「F1でも読み上げは要らない」。
+                    #   新：毎周の読み上げ(lap_time/lap_slow/lap_consistent)を全廃し、
+                    #       ①3周平均 vs その前3周平均で"本物の傾向"が出た時だけ pace_check(LLM判断)
+                    #       ②単発の大きなタイムロス(ミス/トラブル)は"尋ねる"側に回る
+                    #       ③ベスト更新は言う(上の best_lap)
+                    #   → 「読み上げ機」から「気づいて聞いてくるエンジニア」へ。
+                    _paced = False
+                    if len(lap_delta_hist) >= 6 and (lap - pace_check_last_lap) >= 3:
                         recent3 = sum(lap_delta_hist[-3:]) / 3
                         prev3 = sum(lap_delta_hist[-6:-3]) / 3
-                        if prev3 - recent3 >= 0.3:  # 3周平均で0.3秒以上速くなってる＝本物の向上傾向
-                            broadcast({'type': 'pace_check', 'direction': 'improving',
+                        _dir = None
+                        if prev3 - recent3 >= 0.3:      # 3周平均で0.3秒以上速い＝本物の向上
+                            _dir = 'improving'
+                        elif recent3 - prev3 >= 0.3:    # 3周平均で0.3秒以上遅い＝本物の劣化
+                            _dir = 'degrading'          # (旧「2周連続スロー」より誤検知に強い)
+                        if _dir:
+                            _paced = True
+                            pace_check_last_lap = lap
+                            broadcast({'type': 'pace_check', 'direction': _dir,
                                 'recent_deltas': lap_delta_hist[:],
                                 'pos': pos, 'class_pos': class_pos,
                                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
@@ -1585,34 +1603,16 @@ def poll_iracing():
                                 'fuel_strategy': fuel_strategy,
                             })
 
-                    if diff < 0.3:
-                        consecutive_slow = 0
-                        consistent_lap_count += 1
-                        if consistent_lap_count >= 3:  # 3周連続安定してから1回だけ
-                            broadcast({'type': 'radio', 'trigger': 'lap_consistent', 'time': t,
-                                'message': t + '. Consistent.'})
-                            consistent_lap_count = 0
-                    elif diff < 1.0:
-                        broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t, 'diff': round(diff, 2),
-                            'message': t + '. ' + str(round(diff, 1)) + ' off.'})
-                    else:
-                        consecutive_slow += 1
-                        if consecutive_slow >= 2:
-                            # ⚠️2026/7/5改修：固定ルール("2周連続スロー")で即座に定型文を喋らせるのは
-                            # 「一般的なエンジニア」止まり(文脈無視)。ここでは判断そのものをClaudeに渡し、
-                            # タイヤ劣化か単なる誤差/トラフィックか文脈込みで判断させる(pace_check)。
-                            # 喋る価値なしとClaudeが判断したら無音のまま(renderer側でNO_CALL処理)。
-                            broadcast({'type': 'pace_check', 'direction': 'degrading',
-                                'recent_deltas': lap_delta_hist[:],
-                                'pos': pos, 'class_pos': class_pos,
-                                'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
-                                'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
-                                'fuel_strategy': fuel_strategy,
-                            })
-                            consecutive_slow = 0
-                        else:
-                            broadcast({'type': 'radio', 'trigger': 'lap_slow', 'time': t,
-                                'message': t + '. Pace down. Status?'})
+                    # ②単発の大きなタイムロス＝ミスかトラブル。データで気づけるので"尋ねる"
+                    #   （Yuji「ミスしたりタイムロスした際はデータ来てるんだよね？それ尋ねてもいい」）。
+                    #   直近4周の平均より1.5秒以上落ちた1周だけを拾う（傾向劣化とは別物）。
+                    if not _paced:
+                        _prev = lap_delta_hist[:-1][-4:]
+                        if _prev:
+                            _typ = sum(_prev) / len(_prev)
+                            if (diff - _typ) >= 1.5:
+                                broadcast({'type': 'judge_call', 'kind': 'time_loss',
+                                    'lost': round(diff - _typ, 1), 'time': t})
 
                 last_lap_time = lapTime
                 # ── セッションサマリー用にラップデータを積算 ──

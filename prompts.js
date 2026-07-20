@@ -944,7 +944,9 @@ function buildSystem(p) {
   // "判断候補"（誰が・前後・ギャップ・ペース傾向・直近で自分が何を言ったか）を送り、ここで文脈を組む。
   // 前後はクラス順位ベースの正しい値（[[bug_race_call_frontback_estimetime]]で根絶済）＝AIに前後を再導出させない。
   let judgeCallNote = '';
-  if (isRacing && judgeCall && ['catchup', 'defend', 'battle', 'multiclass', 'danger', 'towing'].includes(judgeCall.kind)) {
+  const _anyModeKinds = ['best_lap', 'time_loss'];   // 練習/テストでも成立する（レース限定にしない）
+  if (judgeCall && (isRacing || _anyModeKinds.includes(judgeCall.kind))
+      && ['catchup', 'defend', 'battle', 'multiclass', 'danger', 'towing', 'best_lap', 'time_loss'].includes(judgeCall.kind)) {
     const j = judgeCall;
     const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
                                 : (isJ ? '同クラスの車' : 'a same-class car');
@@ -952,7 +954,40 @@ function buildSystem(p) {
     // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
     const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
     let eventJ, eventE;
-    if (j.kind === 'towing') {
+    if (j.kind === 'best_lap') {
+      // ベスト更新＝言う事は確定（Yuji「ベストラップ更新はコールして」）。委ねるのは"言い方"だけ。
+      const isPB = j.best_kind === 'personal';
+      judgeCallNote = isJ
+        ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】'
+          + (isPB ? '自己ベスト更新。タイム' + j.time + (j.gain != null ? '（' + j.gain + '秒短縮）' : '') + '。'
+                  : 'このセッションのベスト更新。タイム' + j.time + '。')
+          + '\n直近で君はこう言った：' + recent + '。'
+          + '\n【指示】これは**必ず伝える**（黙るな・NO_CALLは使うな）。ただし定型文は禁止——タイムは正確に、'
+          + '言い方は今の流れに合わせて君の言葉で1文。毎回同じ言い回しにならないよう変えろ。'
+          + (isPB ? '短縮幅が大きければその手応えに触れてもいい。' : '') + '褒めすぎず、淡々と、でも人間らしく。'
+        : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] '
+          + (isPB ? 'Personal best. Time ' + j.time + (j.gain != null ? ' (' + j.gain + 's faster)' : '') + '.'
+                  : 'Session best. Time ' + j.time + '.')
+          + '\nRecently you said: ' + recent + '.'
+          + '\n[INSTRUCTION] You MUST pass this on (do not stay silent, never reply NO_CALL). But no canned phrasing — '
+          + 'keep the time exact and say it in your own words, one line, fitted to the moment. Vary it so it never sounds like the same script twice. '
+          + (isPB ? 'If the gain is big you may acknowledge the feel of it. ' : '') + 'Do not over-praise — matter-of-fact, but human.';
+    } else if (j.kind === 'time_loss') {
+      // 単発の大きなタイムロス＝ミスかトラブル。データで気づける＝"尋ねる"側に回る（Yuji方針）。
+      judgeCallNote = isJ
+        ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】直前の1周だけ、直近の平均から'
+          + j.lost + '秒落ちた（タイム' + j.time + '）。傾向的な劣化ではなく単発＝ミス、コースオフ、トラフィック、'
+          + '譲り、接触などが考えられる。\n直近で君はこう言った：' + recent + '。'
+          + '\n【判断】原因はデータからは分からない。**決めつけるな**（「ミスしたな」と断定するのは最悪）。'
+          + 'ここは"教える"場面ではなく"聞く"場面だ——気づいたことを示して短く尋ねろ（例「今の1周、少し落ちた。何かあった？」）。'
+          + 'ただしバトル中や忙しそうなら黙っていい。直近で似た事を聞いたばかりなら繰り返すな。価値が無ければ「NO_CALL」だけ返せ。'
+        : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] That single lap dropped '
+          + j.lost + 's below their recent average (time ' + j.time + '). It is a one-off, not a trend — a mistake, an off, traffic, '
+          + 'letting someone by, or contact are all possible.\nRecently you said: ' + recent + '.'
+          + '\n[JUDGE] The data cannot tell you the cause. **Do not assume** (declaring "you made a mistake" is the worst move). '
+          + 'This is a moment to ASK, not to teach — show you noticed and ask briefly (e.g. "that lap dropped a bit — anything happen?"). '
+          + 'Stay silent if they are mid-battle or clearly busy, and do not repeat if you just asked something similar. If it adds nothing, reply with only "NO_CALL".';
+    } else if (j.kind === 'towing') {
       // レッカー牽引中＝走行不能。原因(当てられた/自滅)は分からないので決め打ちの慰めも説教もしない。
       judgeCallNote = isJ
         ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】車が走行不能になり、レッカーでピットまで牽引されている。時間は進み続ける。'
@@ -1017,7 +1052,7 @@ function buildSystem(p) {
       eventE = carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE;
     }
     // 共通末尾（catchup/defend/battle）。multiclass/dangerは上で専用noteを組み済みなので上書きしない。
-    if (j.kind !== 'multiclass' && j.kind !== 'danger' && j.kind !== 'towing') judgeCallNote = isJ
+    if (!['multiclass','danger','towing','best_lap','time_loss'].includes(j.kind)) judgeCallNote = isJ
       ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
         + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この状況がドライバーにとって本当に意味のある局面か——残り周回・順位・リードの余裕を踏まえて判断しろ。'
         + '意味が薄いなら黙れ（後ろで勝手にやってるだけのバトルや、まだ遠い差は無視していい。沈黙も一流の仕事だ）。直前に言ったことは繰り返すな。'
