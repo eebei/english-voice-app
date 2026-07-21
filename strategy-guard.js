@@ -78,7 +78,16 @@ function classifyStrategyQuestion(text) {
  * @param {{hasRejoinCalculator?:boolean, isRaceSession?:boolean}} ctx
  * @returns {{available:boolean, reason:string|null}}
  */
+// ★テスト専用のフォールト注入（2026-07-21・Codexレビュー再指摘）。
+//   server.jsのfail-closed経路（対象質問と分かった後にevaluate/replyが例外を投げても
+//   自由文LLMへ絶対に流れないこと）をHTTP統合テストで実際に確認するためのフック。
+//   STRATEGY_GUARD_TEST_FAULT環境変数を明示的に設定した時だけ有効。本番では未設定＝無効。
+const _TEST_FAULT = process.env.STRATEGY_GUARD_TEST_FAULT;
+
 function evaluateAvailability(topic, ctx) {
+  if (_TEST_FAULT === 'evaluate') {
+    throw new Error('TEST_FAULT_INJECTION: evaluateAvailability');
+  }
   const c = ctx || {};
   if (topic === TOPIC.REJOIN_POSITION) {
     if (c.isRaceSession === false) return { available: false, reason: REASON.NOT_RACE_SESSION };
@@ -97,7 +106,10 @@ const REPLY = {
     [REASON.NO_CALCULATOR]:
       '復帰順位はまだ出せない。ピットロスの計算がこっちに入ってないんだ。今わかるのは現在の順位と燃料だけ。',
     [REASON.NO_PIT_LOSS_CALIBRATION]:
-      '復帰順位は出せない。このコースのピットロスをまだ実測できてないんだ。一度ピットに入れば次から出せる。',
+      // ★P1-4（Codexレビュー）：「一度入れば次から出せる」は過剰な約束。
+      //   1サンプルはlow confidence（給油量・タイヤ・修理条件が異なれば比較できない）。
+      //   約束ではなく、今何が足りないかだけを述べる。
+      'この条件のピットロス実測が足りない。今は復帰順位を出せない。',
     [REASON.NOT_RACE_SESSION]:
       '今はレースじゃないから、復帰順位は意味がないな。',
   },
@@ -105,7 +117,7 @@ const REPLY = {
     [REASON.NO_CALCULATOR]:
       "I can't give you a rejoin position — the pit loss maths isn't wired up on my side yet. What I do have is your current position and fuel.",
     [REASON.NO_PIT_LOSS_CALIBRATION]:
-      "I can't give you a rejoin position yet — I haven't measured the pit loss for this track. Once you've made one stop, I can.",
+      "I can't give you a rejoin position — I don't have enough pit loss data for this condition yet.",
     [REASON.NOT_RACE_SESSION]:
       "We're not racing, so a rejoin position wouldn't mean anything.",
   },
@@ -118,6 +130,9 @@ const REPLY = {
  * @returns {string|null} 理由が未知なら null（＝呼び出し側は通常経路へ）
  */
 function buildUnavailableReply(reason, lang) {
+  if (_TEST_FAULT === 'reply') {
+    throw new Error('TEST_FAULT_INJECTION: buildUnavailableReply');
+  }
   const table = REPLY[lang === 'ja' ? 'ja' : 'en'];
   return table[reason] || null;
 }

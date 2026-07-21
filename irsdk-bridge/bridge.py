@@ -13,7 +13,6 @@ import json
 import re
 import mmap
 import ctypes
-from ctypes import wintypes
 import struct
 import time
 import math
@@ -32,20 +31,10 @@ try:
 except Exception:
     pass
 
-IRSDK_MEMMAPFILE = "Local\\IRSDKMemMapFileName"
-MEM_SIZE = 1164 * 1024
-FILE_MAP_READ = 0x0004
-
-try:
-    _k32 = ctypes.windll.kernel32
-    _k32.OpenFileMappingW.restype = wintypes.HANDLE
-    _k32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
-    _k32.MapViewOfFile.restype = ctypes.c_void_p
-    _k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
-    _k32.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
-    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
-except Exception:
-    _k32 = None
+# ★2026-07-21（Codexレビュー P0-2）：ヘッダーオフセット定数・共有メモリreaderは irsdk_mem.py が
+#   唯一の真実源。log_strategy_timeseries.py が独自定義とズレて共有メモリを誤読した事故と、
+#   独自FFI実装がargtypesを欠いていた事故の再発防止。
+import irsdk_mem
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
 BUILD_VERSION = "2026-07-07-B (gap/fuel/autoflow/stream)"
@@ -685,18 +674,20 @@ async def _broadcast_async(msg):
     connected_clients.difference_update(dead)
 
 class IRacingReader:
-    H_STATUS = 4
+    # ヘッダーオフセットは irsdk_mem.py（共有・実走確認済み）から参照する。
+    H_STATUS = irsdk_mem.H_STATUS
     H_SESSION_INFO_LEN = 16
     H_SESSION_INFO_OFFSET = 20
-    H_NUM_VARS = 24
-    H_VAR_HEADER_OFFSET = 28
-    H_NUM_BUF = 32
-    VARBUF_BASE = 48
-    VARBUF_STRIDE = 16
-    VAR_HEADER_SIZE = 144
-    VAR_NAME_OFF = 16
+    H_NUM_VARS = irsdk_mem.H_NUM_VARS
+    H_VAR_HEADER_OFFSET = irsdk_mem.H_VAR_HEADER_OFFSET
+    H_NUM_BUF = irsdk_mem.H_NUM_BUF
+    VARBUF_BASE = irsdk_mem.VARBUF_BASE
+    VARBUF_STRIDE = irsdk_mem.VARBUF_STRIDE
+    VAR_HEADER_SIZE = irsdk_mem.VAR_HEADER_SIZE
+    VAR_NAME_OFF = irsdk_mem.VAR_NAME_OFF
 
     def __init__(self):
+        self._k32 = None
         self._handle = None
         self._ptr = None
         self.var_cache = {}
@@ -705,28 +696,18 @@ class IRacingReader:
         return self._ptr is not None
 
     def open(self):
-        # iRacingが作った既存メモリに接続する（自分で作らない＝空マップ誤作成を防ぐ）
-        if _k32 is None:
-            return False
-        h = _k32.OpenFileMappingW(FILE_MAP_READ, False, IRSDK_MEMMAPFILE)
-        if not h:
-            return False  # iRacing未起動
-        ptr = _k32.MapViewOfFile(h, FILE_MAP_READ, 0, 0, 0)
+        # 共有メモリの開閉は irsdk_mem.py に一本化（argtypes欠落によるFFI破損の再発防止）。
+        k32, h, ptr = irsdk_mem.open_shared_mem()
         if not ptr:
-            _k32.CloseHandle(h)
-            return False
+            return False  # iRacing未起動、または非Windows
+        self._k32 = k32
         self._handle = h
         self._ptr = ptr
         return True
 
     def close(self):
-        try:
-            if self._ptr:
-                _k32.UnmapViewOfFile(ctypes.c_void_p(self._ptr))
-            if self._handle:
-                _k32.CloseHandle(self._handle)
-        except Exception:
-            pass
+        irsdk_mem.close_shared_mem(self._k32, self._handle, self._ptr)
+        self._k32 = None
         self._ptr = None
         self._handle = None
         self.var_cache = {}
@@ -747,17 +728,8 @@ class IRacingReader:
 
     def get_buf_offset(self):
         try:
-            num_buf = self._read_int(self.H_NUM_BUF)
-            best_tick = -1
-            best_off = 0
-            for i in range(min(num_buf, 4)):
-                base = self.VARBUF_BASE + i * self.VARBUF_STRIDE
-                tick = self._read_int(base)
-                off = self._read_int(base + 4)
-                if tick > best_tick:
-                    best_tick = tick
-                    best_off = off
-            return best_off
+            off, _tick = irsdk_mem.get_buf_offset(self._ptr)
+            return off
         except Exception:
             return 0
 

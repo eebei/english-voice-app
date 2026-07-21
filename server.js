@@ -291,6 +291,19 @@ const ttsLimiter = rateLimit({
   message: { error: 'tts_rate_limited' },
 });
 
+// ── ガード早期returnの応答契約（2026-07-21 Codexレビュー P0-1 修正）──────────
+//   デスクトップ側は stream:true の時、本文を text/plain のプレーンテキストとして
+//   読み、そのまま吹き出し・TTSへ渡す。ガードがここを無視して常にJSONを返すと、
+//   stream経路では拒否文の代わりに生JSON文字列が喋られてしまう。
+//   非stream経路は既存のAnthropic互換JSON形（{content:[{type:'text',text}]}）を維持する。
+function sendGuardReply(req, res, text) {
+  if (req.body.stream) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end(text);
+  }
+  return res.json({ content: [{ type: 'text', text }] });
+}
+
 // ── Chat proxy ──────────────────────────────────────────────────────────────
 app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
@@ -317,29 +330,46 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     //   構造化された理由から正直な返答をコード側で組む。
     //   ※分類は狭い（ピットに入る意図×順位を問う の両方が揃った時だけ）。
     //     通常会話を禁止語で置換するようなことはしない。
+    let _strategyQ = null;
     try {
       const _msgs = Array.isArray(req.body.messages) ? req.body.messages : [];
       const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
-      const _q = _lastUser && typeof _lastUser.content === 'string'
+      _strategyQ = _lastUser && typeof _lastUser.content === 'string'
         ? strategyGuard.classifyStrategyQuestion(_lastUser.content) : null;
-      if (_q) {
-        const _live = req.body.liveData || {};
-        const _avail = strategyGuard.evaluateAvailability(_q.topic, {
+    } catch (e) {
+      console.log('[strategy_guard] classify skipped: ' + e.message);   // 分類前の失敗のみ通常経路へ
+    }
+    if (_strategyQ) {
+      // ★P1-2（Codexレビュー）：対象質問だと分かった後は fail-closed。
+      //   評価／返答生成で例外が起きても自由文LLMへは絶対に流さない
+      //   （＝計算できないのに答えたふりをする経路を、ガード自身の不具合で復活させない）。
+      try {
+        // sessionTypeはトップレベルで送られる（liveData配下ではない・P1-5修正）
+        const _sessionType = req.body.sessionType;
+        const _avail = strategyGuard.evaluateAvailability(_strategyQ.topic, {
           // Phase A：復帰順位の計算器はまだ存在しない。Phase C 完了時にここが true になる。
           hasRejoinCalculator: false,
-          isRaceSession: _live.session_type ? /race/i.test(String(_live.session_type)) : undefined,
+          isRaceSession: _sessionType ? /race/i.test(String(_sessionType)) : undefined,
         });
         if (!_avail.available) {
           const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
-          const _reply = strategyGuard.buildUnavailableReply(_avail.reason, _lang);
-          if (_reply) {
-            console.log(`[strategy_guard] topic=${_q.topic} reason=${_avail.reason} -> structured reply`);
-            return res.json({ content: [{ type: 'text', text: _reply }] });
-          }
+          const _reply = strategyGuard.buildUnavailableReply(_avail.reason, _lang)
+            || strategyGuard.buildUnavailableReply(strategyGuard.REASON.NO_CALCULATOR, _lang);
+          console.log(`[strategy_guard] topic=${_strategyQ.topic} reason=${_avail.reason} -> structured reply`);
+          return sendGuardReply(req, res, _reply);
         }
+      } catch (e) {
+        // ★P1-2再指摘（Codexレビュー）：ここで strategyGuard.buildUnavailableReply を再度呼ぶと、
+        //   その関数自体が壊れて例外を投げた場合に fail-closed が機能しない
+        //   （catch内の呼び出しがまた投げ、fail-openに戻ってしまう）。
+        //   最終フォールバックは strategy-guard.js に一切依存しない固定文字列にする。
+        console.error('[strategy_guard] evaluate/reply FAILED (fail-closed): ' + e.message);
+        const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
+        const _fixedFallback = _lang === 'ja'
+          ? '復帰順位はまだ出せない。ピットロスの計算がこっちに入ってないんだ。'
+          : "I can't give you a rejoin position — the pit loss maths isn't wired up on my side yet.";
+        return sendGuardReply(req, res, _fixedFallback);
       }
-    } catch (e) {
-      console.log('[strategy_guard] skipped: ' + e.message);   // 失敗しても通常経路を止めない
     }
 
     // ★2026-07-20 判断コールの二重防御（Codexレビュー反映）
@@ -353,7 +383,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const missing = !REQ[_jc.kind] || REQ[_jc.kind].some(f => _jc[f] === undefined || _jc[f] === null);
       if (missing) {
         console.log(`[judge_call] forced silence: kind=${_jc.kind}`);
-        return res.json({ content: [{ type: 'text', text: 'NO_CALL' }] });
+        return sendGuardReply(req, res, 'NO_CALL');
       }
     }
 
@@ -442,7 +472,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     logUsage(response.usage);
     res.json(response);
   } catch (err) {
-    console.error(`[/api/chat ERROR] char=${character}, mode=${mode}`);
+    // ★2026-07-21（Codexレビュー・変異テストで実証）：character/modeはtryブロック内で
+    //   letされておりcatchのスコープ外。ReferenceErrorで再クラッシュし、意図したエラー
+    //   レスポンスが返らずソケットが切断されていた。req.bodyから直接参照する。
+    console.error(`[/api/chat ERROR] char=${req.body?.character}, mode=${req.body?.mode}`);
     console.error(`  Type: ${err.constructor.name}`);
     console.error(`  Message: ${err.message}`);
     console.error(`  Status: ${err.status || 'none'}`);

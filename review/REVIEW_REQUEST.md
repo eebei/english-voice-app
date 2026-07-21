@@ -172,3 +172,174 @@ $ node tests-strategy-guard.js
    A2の実測で確定するのは 2〜3 と認識している）
 
 **Phase B/C は未着手。** A2 の実測結果が出てから、あなたの着手条件7項目を満たす設計を提出する。
+
+---
+
+## 2026-07-21 再訪：再レビュー条件10件の対応 + 変異テスト証拠
+
+前回レビューの再レビュー条件10件（P0-1/P0-2/P1-1/P1-2/P1-4/P1-5/P2-1）を実装し、
+その後の再指摘4件（fixtureの自己参照・共有メモリreaderのFFI未統一・fail-closedフォールバックの
+buildUnavailableReply依存・変異テスト証拠の未提示）も対応した。
+
+### 実装内容
+
+- `server.js`：`sendGuardReply()` を新設し、strategy guard / judge_call の早期returnを
+  `stream` フラグで分岐（stream時はtext/plain・非streamは既存JSON）
+- `strategy-guard.js`：`evaluateAvailability` / `buildUnavailableReply` にテスト専用フォールト注入
+  （`STRATEGY_GUARD_TEST_FAULT` 環境変数、本番では未設定＝無効）を追加。NO_PIT_LOSS_CALIBRATION
+  から「一度入れば次から出せる」という約束を削除
+- `irsdk-bridge/irsdk_mem.py`（新規）：ヘッダーオフセット定数 **と** 共有メモリreader
+  （`open_shared_mem` / `close_shared_mem` / `get_buf_offset` / `build_index`）を一本化。
+  `open_shared_mem`/`close_shared_mem` は bridge.py の実走確認済みargtypes指定をそのまま移設
+  （log_strategy_timeseries.py が独自実装しargtypesを欠いていたFFI破損リスクを解消）
+- `bridge.py` / `dump_all_vars.py` / `log_strategy_timeseries.py`：全て `irsdk_mem.py` の
+  定数とreader関数をimportし、独自定義を削除
+- `log_strategy_timeseries.py`：tick整合性チェック（読取前後でtickが変わったら破棄・最大5回再試行）
+  と `SessionState` の記録を追加
+- `tests-chat-http.js`（新規）：実サーバーを3インスタンス起動（通常／evaluateフォールト／replyフォールト）し、
+  stream・non-stream双方のContent-Type/本文を検証（計23アサーション）
+- `irsdk-bridge/tests_irsdk_mem.py`（新規）：合成メモリバッファ（Windows/iRacing不要）で
+  ヘッダー定数の絶対値と、最新tick選択・変数索引・値読取を検証（計18アサーション）。
+  fixtureは `irsdk_mem` の定数を一切参照せず、ハードコードした絶対オフセットで書く
+  （自己参照の排除・Yuji指摘）
+
+### 変異テスト証拠（Yuji指摘：3種をそれぞれ変異させ、対象テストの失敗を示す）
+
+**① HTTP応答形式を変異（`sendGuardReply` の stream分岐を削除し、常にJSONを返すよう戻す）**
+
+```diff
+ function sendGuardReply(req, res, text) {
+-  if (req.body.stream) {
+-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+-    return res.end(text);
+-  }
+   return res.json({ content: [{ type: 'text', text }] });
+ }
+```
+
+```
+$ node tests-chat-http.js
+  ❌ ③stream judge_call: Content-Typeがtext/plain  → application/json; charset=utf-8
+  ❌ ③stream judge_call: 本文がそのまま NO_CALL  → {"content":[{"type":"text","text":"NO_CALL"}]}
+  ❌ [evaluateAvailabilityがthrow] stream: Content-Typeがtext/plain  → application/json; charset=utf-8
+  ❌ [evaluateAvailabilityがthrow] stream: 本文がJSONに包まれていない  → {"content":[...]}
+  ❌ [buildUnavailableReplyがthrow] stream: Content-Typeがtext/plain  → application/json; charset=utf-8
+  ❌ [buildUnavailableReplyがthrow] stream: 本文がJSONに包まれていない  → {"content":[...]}
+[/api/chat HTTP統合] 合格 15 / 不合格 8
+```
+8ケースが失敗し、事故の再現（stream時にJSON文字列が本文に出る）を検出した。
+
+**② ヘッダー絶対値を変異（`irsdk_mem.py` の `H_STATUS` を 4 → 8 に戻す＝元のP0-2バグ）**
+
+```diff
+-H_STATUS = 4
++H_STATUS = 8
+```
+
+```
+$ python3 irsdk-bridge/tests_irsdk_mem.py
+  ❌ H_STATUS == 4  → actual=8
+  ❌ H_STATUS: アクティブ(1)と読める
+[irsdk_mem] 合格 16 / 不合格 2
+```
+定数の絶対値assertと、独立fixture（irsdk_mem定数を参照しない絶対オフセット書込み）の
+読取assertの両方が落ちた＝自己参照ではないことの証明でもある。
+
+**③ fail-closedを変異（catch内で `buildUnavailableReply` を再度呼ぶ旧実装に戻す）**
+
+```diff
+       } catch (e) {
+         console.error('[strategy_guard] evaluate/reply FAILED (fail-closed): ' + e.message);
+         const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
+-        const _fixedFallback = _lang === 'ja'
+-          ? '復帰順位はまだ出せない。ピットロスの計算がこっちに入ってないんだ。'
+-          : "I can't give you a rejoin position — the pit loss maths isn't wired up on my side yet.";
+-        return sendGuardReply(req, res, _fixedFallback);
++        return sendGuardReply(req, res, strategyGuard.buildUnavailableReply(strategyGuard.REASON.NO_CALCULATOR, _lang));
+       }
+```
+
+```
+$ node tests-chat-http.js
+[server] ReferenceError: character is not defined
+    at server.js:472
+[server] ✅ ...(baseline 11件は合格)
+❌ テスト実行自体が失敗: socket hang up
+```
+`buildUnavailableReply` フォールトモードの2本目のリクエストで、catch内の再呼び出しが再度throwし、
+Expressの例外ハンドラ側の既存バグ（`character is not defined`、本レビュー範囲外）を誘発して
+プロセスごと落ちた。テストランナーが「テスト実行自体が失敗」として exit 1 で検出した。
+
+以上、3種の変異それぞれで対象テストが失敗することを確認済み。修正後は3件とも `git checkout` で
+元に戻し、`./preflight.sh` が再度グリーンであることを確認した。
+
+### 実行結果（現在のHEAD）
+
+```
+$ ./preflight.sh
+── Python: 未定義変数・構文（pyflakes）              ✅
+── JavaScript: 構文（prompts.js / server.js）        ✅
+── renderer.html 内のスクリプト構文                   ✅
+── 発話ディレクターの競合テスト                       ✅ 全ケース合格
+── 非同期割り込みテスト（本番コードを抽出して実行）     ✅ 全ケース合格
+── 戦略質問ガード（Phase A1・静的＋実コード）          ✅ 全ケース合格
+── /api/chat HTTP統合テスト（stream/non-stream応答契約・P0-1再発防止）  ✅ 全ケース合格（23）
+── iRSDK共有メモリヘッダー定数（合成メモリ・P0-2再発防止）              ✅ 全ケース合格（18）
+✅ 出荷可
+```
+
+未対応のまま残した項目（意図的にスコープ外）：
+- P1-3（分類器のprecision/recall実測）：実走ログが必要なため次の実走後に着手
+
+---
+
+## 2026-07-21 三訪：outer catchのReferenceError修正（Yuji指摘・本番エラー経路の実欠陥）
+
+前回の報告で「別チップ（本レビュー範囲外）」として切り出した `server.js` の
+`character is not defined` を、Yujiから「変異試験で実証された本番エラー経路の欠陥」として
+差し戻された。指摘の通り、非ガード経路（通常会話）でAnthropic API呼び出しが失敗すると
+**常に**このReferenceErrorが起き、意図したJSONエラーが返らずソケットが切断される実欠陥だった
+（fail-closedの変異テストで偶発的に踏んだのではなく、独立した既存バグ）。範囲外扱いを撤回し、
+指摘どおり修正した。
+
+### 修正
+
+```diff
+   } catch (err) {
+-    console.error(`[/api/chat ERROR] char=${character}, mode=${mode}`);
++    console.error(`[/api/chat ERROR] char=${req.body?.character}, mode=${req.body?.mode}`);
+```
+
+### 変異テスト証拠（無効なAPIキーで実際にAnthropicへ届かせ、本物の401を発生させる）
+
+`tests-chat-http.js` に `testApiFailureRecovery()` を追加。guard対象外の通常会話メッセージを
+非stream・ダミーAPIキーで送信し、Anthropicから実際の401（`AuthenticationError`）を受け取らせる。
+
+```
+$ node tests-chat-http.js
+[server] [/api/chat ERROR] char=LunaJP, mode=undefined
+[server]   Type: AuthenticationError
+  Message: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}...}
+  ✅ API失敗: HTTPエラーが伝播する(200ではない)
+  ✅ API失敗: Content-Typeがapplication/json
+  ✅ API失敗: JSON形式でerrorフィールドを返す（ReferenceErrorでクラッシュしない）
+  ✅ API失敗後もサーバープロセスが生存している（後続リクエストに正常応答）
+[/api/chat HTTP統合] 合格 27 / 不合格 0
+```
+
+**修正を戻して同じテストを実行**（`req.body?.character` → `character` に戻す）：
+
+```
+$ node tests-chat-http.js
+[server] server.js:478
+    console.error(`[/api/chat ERROR] char=${character}, mode=${mode}`);
+                                            ^
+ReferenceError: character is not defined
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+❌ テスト実行自体が失敗: socket hang up
+```
+プロセスが未捕捉例外で落ち、テストランナーが「テスト実行自体が失敗」として検出した。
+修正後はexit 0・27/27合格。以降 `git checkout` で確認用の変異を元に戻し、`./preflight.sh` も再度グリーン。
+
+以上で再レビュー条件をすべて満たしたと考えている。Phase A1のコミット可否とPhase A2実走採取着手の
+判定をお願いしたい。

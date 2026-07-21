@@ -10,7 +10,7 @@ set -u
 fail=0
 
 echo "── Python: 未定義変数・構文（pyflakes）"
-if python3 -m pyflakes irsdk-bridge/bridge.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
+if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
   echo "   ❌ 致命的な問題あり"; fail=1
 else
   echo "   ✅ 未定義変数なし"
@@ -37,6 +37,12 @@ if node tests-speak-async.js >/dev/null 2>&1; then echo "   ✅ 全ケース合�
 
 echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
 if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── /api/chat HTTP統合テスト（stream/non-stream応答契約・P0-1再発防止）"
+if node tests-chat-http.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-chat-http.js 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── iRSDK共有メモリヘッダー定数（合成メモリ・P0-2再発防止）"
+if python3 irsdk-bridge/tests_irsdk_mem.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_irsdk_mem.py 2>&1|grep "❌"|head -5; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi

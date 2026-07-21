@@ -15,7 +15,6 @@ OMORAY PITWALL - iRacing SDK 全変数ダンプツール
 """
 
 import ctypes
-from ctypes import wintypes
 import struct
 import time
 import csv
@@ -23,59 +22,28 @@ import re
 import os
 import sys
 
-IRSDK_MEMMAPFILE = "Local\\IRSDKMemMapFileName"
-MEM_SIZE = 1164 * 1024
-FILE_MAP_READ = 0x0004
-
-# ── iRSDK ヘッダー定数(bridge.pyと同一) ──
-H_STATUS = 4
-H_NUM_VARS = 24
-H_VAR_HEADER_OFFSET = 28
-H_NUM_BUF = 32
-VARBUF_BASE = 48
-VARBUF_STRIDE = 16
-VAR_HEADER_SIZE = 144
-VAR_NAME_OFF = 16   # name(32) の開始位置
-VAR_DESC_OFF = 48   # desc(64) の開始位置 = name_off(16) + 32
-VAR_UNIT_OFF = 112  # unit(32) の開始位置 = desc_off(48) + 64
-
-# 変数の型番号 → 読み方
-# iRSDK: 0=char,1=bool,2=int,3=bitField,4=float,5=double
-TYPE_NAMES = {0: 'char', 1: 'bool', 2: 'int', 3: 'bitField', 4: 'float', 5: 'double'}
-TYPE_SIZE  = {0: 1, 1: 1, 2: 4, 3: 4, 4: 4, 5: 8}
-TYPE_FMT   = {0: 'b', 1: '?', 2: 'i', 3: 'I', 4: 'f', 5: 'd'}
+# ★2026-07-21（Codexレビュー P0-2）：ヘッダー定数・共有メモリreaderは irsdk_mem.py が唯一の真実源。
+#   独自のOpenFileMappingW/MapViewOfFile実装はargtypes欠落によるFFI破損の危険があるため使わない。
+from irsdk_mem import (
+    H_STATUS, H_NUM_VARS, H_VAR_HEADER_OFFSET,
+    VAR_HEADER_SIZE,
+    VAR_NAME_OFF, VAR_DESC_OFF, VAR_UNIT_OFF,
+    TYPE_NAMES, TYPE_SIZE, TYPE_FMT,
+    read_int_at,
+    open_shared_mem,
+    close_shared_mem,
+    get_buf_offset as _shared_get_buf_offset,
+)
 
 
 def open_mem():
-    k32 = ctypes.windll.kernel32
-    k32.OpenFileMappingW.restype = wintypes.HANDLE
-    k32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
-    k32.MapViewOfFile.restype = ctypes.c_void_p
-    k32.MapViewOfFile.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t]
-    h = k32.OpenFileMappingW(FILE_MAP_READ, False, IRSDK_MEMMAPFILE)
-    if not h:
-        return None, None, None
-    ptr = k32.MapViewOfFile(h, FILE_MAP_READ, 0, 0, MEM_SIZE)
-    if not ptr:
-        k32.CloseHandle(h)
-        return None, None, None
-    return k32, h, ptr
-
-
-def read_int_at(ptr, off):
-    return struct.unpack('i', ctypes.string_at(ptr + off, 4))[0]
+    """後方互換のラッパー。実体は irsdk_mem.open_shared_mem()。"""
+    return open_shared_mem()
 
 
 def get_buf_offset(ptr):
-    num_buf = read_int_at(ptr, H_NUM_BUF)
-    best_tick, best_off = -1, 0
-    for i in range(min(num_buf, 4)):
-        base = VARBUF_BASE + i * VARBUF_STRIDE
-        tick = read_int_at(ptr, base)
-        off = read_int_at(ptr, base + 4)
-        if tick > best_tick:
-            best_tick, best_off = tick, off
-    return best_off
+    off, _tick = _shared_get_buf_offset(ptr)
+    return off
 
 
 def decode_str(raw):
@@ -201,11 +169,7 @@ def dump():
         mark = '✅ある' if kn in found_names else '❌ない'
         print(f"  {mark:8} {kn}")
 
-    try:
-        k32.UnmapViewOfFile(ctypes.c_void_p(ptr))
-        k32.CloseHandle(h)
-    except Exception:
-        pass
+    close_shared_mem(k32, h, ptr)
 
 
 if __name__ == '__main__':
