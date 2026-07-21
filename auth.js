@@ -637,15 +637,33 @@ async function unsetMemberByCustomer(stripeCustomerId, status) {
   if (!ready || !stripeCustomerId) return;
   const { rows } = await pool.query(
     `UPDATE users SET is_member = false, subscription_status = $2 WHERE stripe_customer_id = $1
-     RETURNING exe_code`,
+     RETURNING exe_code, email`,
     [stripeCustomerId, status || 'canceled']
   );
   log('member unset (customer ' + stripeCustomerId + ')');
-  // exe起動コードも同時に無効化（解約後も永久にアプリが使えてしまう穴を塞ぐ）
   const exeCode = rows[0] && rows[0].exe_code;
   if (exeCode) {
     await pool.query('UPDATE beta_tokens SET active = false WHERE code = $1', [exeCode]);
     log('exe code revoked on cancellation: ' + exeCode);
+  }
+  const email = rows[0] && rows[0].email;
+  if (email) {
+    const isTrial = (status === 'incomplete_expired');
+    try {
+      await sendEmail({
+        to: email,
+        subject: 'OMORAY PITWALL — Your subscription has ended',
+        text: isTrial
+          ? 'Hi,\n\nYour PITWALL free trial has ended. We hope you enjoyed having an engineer in your ear.\n\nIf you want to come back, Founding Season pricing is still available — your spot is open:\nhttps://omoraypitwall.com\n\nSee you on track.\n— Yuji, OMORAY PITWALL'
+          : 'Hi,\n\nYour PITWALL subscription has been canceled and your access has been deactivated.\n\nIf you ever want to come back, we\'ll be here:\nhttps://omoraypitwall.com\n\nThank you for racing with us.\n— Yuji, OMORAY PITWALL',
+        html: isTrial
+          ? '<p>Hi,</p><p>Your PITWALL free trial has ended. We hope you enjoyed having an engineer in your ear.</p><p>If you want to come back, Founding Season pricing is still available — your spot is open:<br><a href="https://omoraypitwall.com">omoraypitwall.com</a></p><p>See you on track.<br>— Yuji, OMORAY PITWALL</p>'
+          : '<p>Hi,</p><p>Your PITWALL subscription has been canceled and your access has been deactivated.</p><p>If you ever want to come back, we\'ll be here:<br><a href="https://omoraypitwall.com">omoraypitwall.com</a></p><p>Thank you for racing with us.<br>— Yuji, OMORAY PITWALL</p>',
+      });
+      log('cancellation email sent to ' + email + ' (status=' + status + ')');
+    } catch (e) {
+      log('cancellation email failed: ' + e.message);
+    }
   }
 }
 
