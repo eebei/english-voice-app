@@ -35,6 +35,8 @@ except Exception:
 #   唯一の真実源。log_strategy_timeseries.py が独自定義とズレて共有メモリを誤読した事故と、
 #   独自FFI実装がargtypesを欠いていた事故の再発防止。
 import irsdk_mem
+import race_lifecycle
+import class_map
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
 BUILD_VERSION = "2026-07-07-B (gap/fuel/autoflow/stream)"
@@ -475,7 +477,7 @@ PRIORITY = {
     # ★ベスト更新は祝う瞬間。予算で消されないようP2に置く（実走で沈黙しドライバーが落胆した）
     'personal_best': 2, 'session_best': 2,
     # P3 戦略
-    'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'first_lap': 3,
+    'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'final_lap_notice': 3, 'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
     # P4 情報
     'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
@@ -489,6 +491,12 @@ BUDGET_MAX = {3: 5, 4: 2, 5: 1}       # 窓内の最大発話回数（P3=戦略/
 QUIET_FACTOR = 0.4                    # ドライバーが「静かにして」と言った時に予算へ掛ける係数
 
 _director = {'last_by_prio': {}, 'recent': [], 'quiet_until': 0.0}
+
+# ★P0（2026-07-21 Codexレビュー再指摘）：director_gateはbroadcast()の唯一の関門なので、
+#   race_lifecycle.director_active()もここに配線する。走行中ディレクター（レース無線）は
+#   DEBRIEFで停止するが、終了案内（checker_out_notice等）は許可リストで個別に通す。
+_lifecycle_state = race_lifecycle.RACING
+DEBRIEF_ALLOWED_TRIGGERS = {'checker_out_notice'}
 
 def set_quiet_mode(seconds=600):
     """ドライバーが『あんまり喋らなくていい』と言った時に呼ぶ。
@@ -527,13 +535,113 @@ def director_commit(prio, kind='radio'):
     except Exception:
         pass
 
+# ★P0（2026-07-21 Codexレビュー再々指摘・四度目の指摘で拡張）：SessionNum変更時に一括resetすべき
+#   「セッション限定状態」をここに集約する。個別変数をmaybe_reset_on_session_num_changeへ都度書き足す
+#   方式だと、新しい状態変数を追加した時に"resetし忘れ"が再発する——実際に二度起きた
+#   （1回目：fuel_strategy_warned/fuel_per_lap_hist/fuel_at_lap_start/lap_time_hist/fuel_strategy。
+#    2回目：pace_check_last_lap/lap_delta_hist/leader_lap_time_hist/leader_last_laptime_seen/
+#    prev_session_state/race_start_time/pit_enter_time/pit_enter_pos——特にペース履歴と
+#    リーダー周回履歴は、新セッションのペース判断・残り周回推定へ前セッションの値を混入させていた）。
+#   新しいセッション限定状態を追加する時は、**必ずこの辞書にも足すこと**（単一の真実源）。
+def _session_scoped_reset_values():
+    return {
+        'checker_out_notice_sent': False,
+        'last_laps_remaining_est': None,
+        'final_lap_notice_sent': {5: False, 3: False, 1: False},
+        'fuel_strategy_warned': False,
+        'fuel_per_lap_hist': [],
+        'fuel_at_lap_start': None,
+        'lap_time_hist': [],
+        'fuel_strategy': None,
+        'pit_this_lap': False,
+        # ★2026-07-21 四度目の指摘で追加
+        'pace_check_last_lap': -99,             # 初期値と同じ（3周に1回のペース判断間引きの基準）
+        'lap_delta_hist': [],                   # 前セッションのペース傾向データを混入させない
+        'leader_lap_time_hist': [],             # 前セッションのリーダー周回履歴を混入させない
+        'leader_last_laptime_seen': None,
+        'prev_session_state': 0,                # 初期値と同じ
+        'race_start_time': None,
+        'pit_enter_time': None,
+        'pit_enter_pos': None,
+        # ★2026-07-21 五度目の指摘で追加
+        'summary_sent': False,
+        'checkered_pending': False,
+        'session_racing_started': False,
+        'session_laps': [],
+    }
+
+
+def maybe_reset_on_session_num_change(cur_snum, last_session_num, race_lifecycle_fsm):
+    """★P0（2026-07-21 Codexレビュー・再々指摘で拡張）：SessionNumが変わっていたら
+    race_lifecycle_fsmと、セッションをまたいではいけない全状態（_session_scoped_reset_values参照）を
+    一括resetする。保留中(gate待ち)のradioイベントも前セッションの内容を持ち越さないよう捨てる。
+    poll_iracing()から毎フレーム呼ばれる本番コード。単体テストからも直接呼べる。
+
+    Returns: (changed: bool, reset_values: dict|None)
+             changed=Trueの時、呼び出し側はreset_valuesの各キーで対応するローカル変数を上書きする
+             こと。changed=Falseの時はNone（既存値をそのまま使う）。
+    """
+    if cur_snum is not None and last_session_num is not None and cur_snum != last_session_num:
+        log("SESSION NUM CHANGED: %s -> %s — session-scoped state reset" % (last_session_num, cur_snum))
+        race_lifecycle_fsm.reset()
+        # ★保留中(gate待ち＝コーナー/ブレーキ中で発話を待たされているradio)も前セッションの内容。
+        #   次のセッションへ持ち越すと、無関係になったタイミングで古い無線が飛ぶ事故になる。
+        _gate_state['pending'] = None
+        _gate_state['since'] = 0.0
+        return True, _session_scoped_reset_values()
+    return False, None
+
+
+def check_final_lap_milestones(laps_remaining_est, lifecycle_state, final_lap_notice_sent):
+    """★P1（2026-07-21 Codexレビュー再々指摘で修正）：Last 5/3/1の一度きり通知。RACING中のみ判定する。
+    poll_iracing()から毎フレーム呼ばれる本番コード（切り出しただけ・ロジックは同一）。
+
+    ★同一フレームで複数発話しない：閾値を一度に飛び越えた場合（例：初回有効値がいきなり1、
+    または6→1のようにジャンプ）、通過した閾値は全て"sent"扱いにするが、実際に発話するのは
+    その時点で最も適切な（＝一番小さい＝一番緊急な）1件だけ。初回有効値が1ならFinal lapだけを言う。
+
+    Args:
+      final_lap_notice_sent: dict {5: bool, 3: bool, 1: bool}（呼び出し側の現在値。書き換えない）
+    Returns: (fired: (milestone:int, message:str)|None, updated_final_lap_notice_sent: dict)
+    """
+    updated = dict(final_lap_notice_sent)
+    if laps_remaining_est is None or lifecycle_state != race_lifecycle.RACING:
+        return None, updated
+
+    crossed = [m for m in (5, 3, 1) if laps_remaining_est <= m and not updated[m]]
+    if not crossed:
+        return None, updated
+
+    for m in crossed:
+        updated[m] = True   # 通過済みの古い閾値も含めて全部sent扱い＝後から発話しない
+
+    milestone = min(crossed)   # 一番緊急な閾値だけを実際に発話する
+    msg = 'Final lap.' if milestone == 1 else ('%d laps to go.' % milestone)
+    return (milestone, msg), updated
+
+
+SPEECH_EVENT_TYPES = ('radio', 'judge_call', 'pace_check')
+# ★P0（2026-07-21 Codexレビュー再々指摘）：発話につながる全イベント種別をここに列挙する。
+#   旧実装は('radio','judge_call')のみで、'pace_check'（rendererのcheckPaceJudgmentがspeak()を
+#   直接呼ぶ）がdirector_gate自体を素通りしていた＝DEBRIEF中でもpace判断の無線が発話されうる穴。
+#   'driver_state'/'iracing_connected'/'session_info'/'lap_sectors'/'pit_timing'/mic系/ptt系/vol系は
+#   データ通知またはUI操作で発話に繋がらないため対象外（renderer.htmlのws onmessage分岐で確認済み）。
+#   'iracing_disconnected'/'ptt_mismatch'はbridgeVoice()経由で発話するが、レース内容ではなく
+#   システム状態の通知のため、DEBRIEF中でも案内できる方が安全側と判断し対象外のまま。
+
+
 def director_gate(event):
     """broadcast() の入口で全イベントを裁く。True=通す / False=捨てる。"""
     try:
         et = event.get('type')
-        if et not in ('radio', 'judge_call'):
+        if et not in SPEECH_EVENT_TYPES:
             return True                          # テレメトリ等の非発話イベントは対象外
         kind = event.get('trigger') or event.get('kind') or ''
+        # ★P0（2026-07-21 Codexレビュー再指摘）：DEBRIEFでは走行中ディレクターを停止する。
+        #   許可リスト外のtrigger（通常のレース無線）は理由付きで捨てる。
+        if not race_lifecycle.director_active(_lifecycle_state) and kind not in DEBRIEF_ALLOWED_TRIGGERS:
+            log("DIRECTOR drop: %s reason=debrief_state" % kind)
+            return False
         prio = PRIORITY.get(kind, DEFAULT_PRIORITY)
         # ★2026-07-20 Codexレビュー P0-1：bridgeで決めた優先度が renderer に伝わっておらず、
         #   crash_check以外の安全コールが全て既定のP4扱いになっていた（＝安全保証が成立していない）。
@@ -869,7 +977,15 @@ class IRacingReader:
             si_offset = self._read_int(self.H_SESSION_INFO_OFFSET)
             if si_len <= 0 or si_offset <= 0:
                 return None
-            raw = self._bytes(si_offset, min(si_len, 200000))
+            _cap = 200000
+            raw = self._bytes(si_offset, min(si_len, _cap))
+            # ★2026-07-21 Codex指示R2「原因修正」：read-only診断（PowerShell不要・本体組み込み）。
+            #   2026-07-21のMonza AIレース(約40台)でbridgeログが"drivers:1 / class空"を報告した。
+            #   原因を推測せず、次回実走で①si_lenが200000キャップに達している(＝末尾切り詰めの疑い)
+            #   ②実際にDrivers:ブロック内で何件parseできたかを突き合わせられるよう、生の長さを記録する。
+            if si_len >= _cap:
+                log("SESSION INFO DIAG: si_len=%d >= cap(%d) — 末尾が切り詰められている可能性がある" % (si_len, _cap))
+            self._last_si_len = si_len
             return raw.decode('utf-8', errors='ignore')
         except Exception:
             return None
@@ -925,6 +1041,17 @@ def parse_session_info(yaml_str):
                 in_drivers = True
                 continue
             if in_drivers:
+                # ★2026-07-21 Codex指示R2「原因修正」：このブロックには終端検出が無く、YAMLの
+                #   最後まで in_drivers=True のままだった。Drivers:より後のトップレベルキー
+                #   （インデント無し行）に達したら抜ける。次の行が別セクションの同名フィールド
+                #   （例：他のリストのIRating:等）を最後のdriverへ誤って上書きする事故を防ぐ
+                #   （SplitTimeInfo:ブロックの終端検出＝この関数の別の場所と同じパターン）。
+                if line and stripped and not line[0].isspace() and ':' in stripped and not stripped.startswith('-'):
+                    in_drivers = False
+                    if current_driver:
+                        drivers.append(current_driver)
+                        current_driver = {}
+                    continue
                 if stripped.startswith('- CarIdx:'):
                     if current_driver:
                         drivers.append(current_driver)
@@ -1069,7 +1196,7 @@ reader = IRacingReader()
 session_info_sent = False
 
 def poll_iracing():
-    global session_info_sent
+    global session_info_sent, _lifecycle_state
     ir_was_connected = False
     last_lap_time = None
     session_best = None
@@ -1135,6 +1262,15 @@ def poll_iracing():
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
+    # ★2026-07-21 Codex指示R1：レース終了状態機械（RACING/CHECKER_OUT/PLAYER_FINISHED/DEBRIEF）。
+    #   詳細はrace_lifecycle.py参照。リーダーのチェッカーと自分の完走を区別できていなかった
+    #   2026-07-21 Monza実走の誤発話（燃料警告誤爆・レース終了訂正）を受けて新設。
+    race_lifecycle_fsm = race_lifecycle.RaceLifecycle()
+    checker_out_notice_sent = False   # CHECKER_OUT中の一度きり通知（Codex指示§3）
+    last_laps_remaining_est = None    # State5以後、残り周回推定値を増加させないためのクランプ基準
+    _car_idx_lap_completed_checked = False  # CarIdxLapCompletedの実在確認（診断は1回だけ）
+    last_session_num = None           # ★P0(2026-07-21 Codex再指示)：SessionNum変更検知の基準値
+    final_lap_notice_sent = {5: False, 3: False, 1: False}  # ★P1：Last 5/3/1の一度きり通知
     fuel_at_lap_start = None    # 直近ラップ開始時点の燃料残量（ラップ消費量算出用）
     fuel_per_lap_hist = []      # 直近ラップ毎の消費量（外れ値を均すため直近5周の平均を使う）
     pit_this_lap = False        # この周でピットを通ったか（アウト/インラップは燃料学習から除外）
@@ -1234,6 +1370,17 @@ def poll_iracing():
             yaml_str = reader.read_session_info()
             if yaml_str:
                 info = parse_session_info(yaml_str)
+                # ★2026-07-21 Codex指示R2「原因修正」：read-only診断。DriverInfoから解析できた人数と、
+                #   実テレメトリ上に car_idx が見えている数を突き合わせる。大きく食い違えば
+                #   YAML解析側（parse_session_info）の問題、一致していれば「iRatingフィルタで
+                #   AI車が除外される」側の問題、と次回1回の実走ログで切り分けられる。
+                try:
+                    _diag_cls_pos = reader.read_int_array('CarIdxClassPosition', 64)
+                    _diag_live_cars = sum(1 for v in (_diag_cls_pos or []) if v and v > 0)
+                    log("SESSION INFO DIAG: parsed_drivers=%d (real_drivers filter=%d) vs live_telemetry_cars=%d"
+                        % (len(info.get('drivers', [])), info.get('num_drivers', 0), _diag_live_cars))
+                except Exception as _e:
+                    log("SESSION INFO DIAG error: " + str(_e))
                 if info.get('player_irating'):
                     # シグネチャは「セッションを定義する安定値」のみ（SOF/人数は他車ジョインで変動するため除外）
                     sig = str(info.get('event_type', '')) + '|' + str(info.get('track', ''))
@@ -1265,10 +1412,31 @@ def poll_iracing():
                                     + "." + str(_dd.get('lic_sublevel', '?')) + "(SR " + str(_srv) + ")"
                                     + " iR=" + str(_dd.get('irating', '?')) + " class=" + str(_dd.get('class_name', '?')))
                         last_session_sig = sig
-                        summary_sent = False            # サマリーリセット
-                        checkered_pending = False       # チェッカー待機フラグもリセット
-                        session_racing_started = False  # 走行開始フラグもリセット
-                        session_laps = []               # 前セッションのラップ記録クリア
+                        race_lifecycle_fsm.reset()
+                        _sig_reset = _session_scoped_reset_values()
+                        checker_out_notice_sent = _sig_reset['checker_out_notice_sent']
+                        last_laps_remaining_est = _sig_reset['last_laps_remaining_est']
+                        final_lap_notice_sent = _sig_reset['final_lap_notice_sent']
+                        fuel_strategy_warned = _sig_reset['fuel_strategy_warned']
+                        fuel_per_lap_hist = _sig_reset['fuel_per_lap_hist']
+                        fuel_at_lap_start = _sig_reset['fuel_at_lap_start']
+                        lap_time_hist = _sig_reset['lap_time_hist']
+                        fuel_strategy = _sig_reset['fuel_strategy']
+                        pit_this_lap = _sig_reset['pit_this_lap']
+                        pace_check_last_lap = _sig_reset['pace_check_last_lap']
+                        lap_delta_hist = _sig_reset['lap_delta_hist']
+                        leader_lap_time_hist = _sig_reset['leader_lap_time_hist']
+                        leader_last_laptime_seen = _sig_reset['leader_last_laptime_seen']
+                        prev_session_state = _sig_reset['prev_session_state']
+                        race_start_time = _sig_reset['race_start_time']
+                        pit_enter_time = _sig_reset['pit_enter_time']
+                        pit_enter_pos = _sig_reset['pit_enter_pos']
+                        summary_sent = _sig_reset['summary_sent']
+                        checkered_pending = _sig_reset['checkered_pending']
+                        session_racing_started = _sig_reset['session_racing_started']
+                        session_laps = _sig_reset['session_laps']
+                        _gate_state['pending'] = None
+                        _gate_state['since'] = 0.0
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
@@ -1324,6 +1492,39 @@ def poll_iracing():
         cur_sess_type   = sessions_map.get(cur_snum, '') if cur_snum is not None else ''
         is_race_session = ('race' in cur_sess_type.lower())
 
+        # ★P0（2026-07-21 Codexレビュー再指摘・再々指摘で拡張）：SessionNum変更を直接検知して
+        #   race_lifecycle_fsmと燃料/ラップ計測のセッション限定状態を一括resetする。
+        #   旧実装は event_type|track の"sig"が変わった時にしかresetしておらず、同じイベント内での
+        #   セッション遷移（Practice→Qualify→Race、耐久のレース1→レース2等）でSessionNumだけが
+        #   変わるケースを取りこぼしていた。さらに再々指摘：FSMと通知フラグしかresetしておらず、
+        #   fuel_strategy_warned等の燃料状態が前セッションから持ち越されていた。
+        _changed, _reset = maybe_reset_on_session_num_change(
+            cur_snum, last_session_num, race_lifecycle_fsm)
+        if _changed:
+            checker_out_notice_sent = _reset['checker_out_notice_sent']
+            last_laps_remaining_est = _reset['last_laps_remaining_est']
+            final_lap_notice_sent = _reset['final_lap_notice_sent']
+            fuel_strategy_warned = _reset['fuel_strategy_warned']
+            fuel_per_lap_hist = _reset['fuel_per_lap_hist']
+            fuel_at_lap_start = _reset['fuel_at_lap_start']
+            lap_time_hist = _reset['lap_time_hist']
+            fuel_strategy = _reset['fuel_strategy']
+            pit_this_lap = _reset['pit_this_lap']
+            pace_check_last_lap = _reset['pace_check_last_lap']
+            lap_delta_hist = _reset['lap_delta_hist']
+            leader_lap_time_hist = _reset['leader_lap_time_hist']
+            leader_last_laptime_seen = _reset['leader_last_laptime_seen']
+            prev_session_state = _reset['prev_session_state']
+            race_start_time = _reset['race_start_time']
+            pit_enter_time = _reset['pit_enter_time']
+            pit_enter_pos = _reset['pit_enter_pos']
+            summary_sent = _reset['summary_sent']
+            checkered_pending = _reset['checkered_pending']
+            session_racing_started = _reset['session_racing_started']
+            session_laps = _reset['session_laps']
+        if cur_snum is not None:
+            last_session_num = cur_snum
+
         # SessionState: 3=ParadeLaps(formation/rolling), 4=Racing
         if cur_ss == 4 and prev_session_state != 4:
             race_start_time = time.time()
@@ -1345,6 +1546,27 @@ def poll_iracing():
             driver_state = 'track'
         else:
             driver_state = 'garage'
+
+        # ★2026-07-21 Codex指示R1：レース終了状態機械を毎フレーム更新する。
+        #   CarIdxLapCompletedは実在未確認の変数のため、find_varで存在を確認できた時だけ使う
+        #   （「存在を記憶で断定しない」Codex指示）。1回だけ結果をログに残す。
+        if not _car_idx_lap_completed_checked:
+            _clc_info = reader.find_var('CarIdxLapCompleted')
+            log("SDK VAR CHECK: CarIdxLapCompleted " + ("exists" if _clc_info else "NOT FOUND") +
+                " (race_lifecycleの補助判定はNoneのまま安全にフォールバックする)")
+            _car_idx_lap_completed_checked = True
+        _car_idx_lap_completed = None
+        try:
+            _clc_arr = reader.read_int_array('CarIdxLapCompleted', 64)
+            if _clc_arr and 0 <= player_car_idx < len(_clc_arr):
+                _car_idx_lap_completed = _clc_arr[player_car_idx]
+        except Exception:
+            pass
+        lifecycle_state = race_lifecycle_fsm.update(
+            session_state=cur_ss, lap_last_lap_time=lapTime, telemetry_active=active,
+            driver_state=driver_state, car_idx_lap_completed=_car_idx_lap_completed)
+        _lifecycle_state = lifecycle_state  # ★P0：director_gate（module-level）から参照できるようにする
+
         if driver_state != prev_driver_state:
             broadcast({'type': 'driver_state', 'state': driver_state})
             # ガレージから復帰＝新しいスティント開始（耐久レースのドライバー交代・給油の可能性が高い）。
@@ -1703,7 +1925,32 @@ def poll_iracing():
                         laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
                         finish_basis = 'own_pace_no_leader_data'
 
-                if laps_remaining_est is not None and avg_fuel_lap > 0:
+                # ★2026-07-21 Codex指示R1：State5(チェッカー)以後、残り周回推定値を増加させない。
+                #   2026-07-21 Monza実走で「残り推定が7周へ跳ね」燃料不足を誤発話した実例の再発防止。
+                #   RACING中に一度でも計算できた最小の推定値でクランプする（増加のみ禁止・減少は許可）。
+                if laps_remaining_est is not None:
+                    if not race_lifecycle.remaining_laps_may_increase(lifecycle_state) \
+                            and last_laps_remaining_est is not None \
+                            and laps_remaining_est > last_laps_remaining_est:
+                        laps_remaining_est = last_laps_remaining_est
+                    last_laps_remaining_est = laps_remaining_est
+
+                # ★P1（2026-07-21 Codex再指示・再々指摘で単一発火に修正）：Last 5/3/1の一度きり通知。
+                #   RACING中のみ。同一フレームで複数の閾値を飛び越えても、発話するのは一番緊急な
+                #   1件だけ（旧final_lapトリガーもここへ統合済み・上のコメント参照）。
+                #   チェッカー後（CHECKER_OUT以降）はrace_lifecycle_fsm.reset()されるまで再発火しない
+                #   （final_lap_notice_sentはSessionNum変更時にresetされる。上のP0修正参照）。
+                _fired_milestone, final_lap_notice_sent = check_final_lap_milestones(
+                    laps_remaining_est, lifecycle_state, final_lap_notice_sent)
+                if _fired_milestone is not None:
+                    _milestone, _msg = _fired_milestone
+                    broadcast({'type': 'radio', 'trigger': 'final_lap_notice',
+                        'laps_remaining': _milestone, 'pos': pos, 'message': _msg})
+
+                # ★Codex指示R1：PLAYER_FINISHED/DEBRIEFではピット計画・残り周回計算そのものを禁止。
+                #   CHECKER_OUTは（新規戦略は出さないが）上のクランプで増加だけ防ぎつつ計算は続ける。
+                if laps_remaining_est is not None and avg_fuel_lap > 0 \
+                        and lifecycle_state not in (race_lifecycle.PLAYER_FINISHED, race_lifecycle.DEBRIEF):
                     fuel_needed = avg_fuel_lap * (laps_remaining_est + 1)  # +1周分の安全マージン込み
                     margin_laps = round((fuel - fuel_needed) / avg_fuel_lap, 1)
                     fuel_strategy['laps_remaining_est'] = laps_remaining_est
@@ -1730,13 +1977,25 @@ def poll_iracing():
                     # ⚠️厳格化(2026-07-15 B-Part3)：margin<0だと僅差ノイズや実測不足でも早すぎ発火し、
                     #   会話中のエンジニアと矛盾する固定文が独立して飛んでいた(IMSA実走で判明)。明確に不足
                     #   (margin<-0.5)かつ実測が足りてる(クリーン3周以上)時だけ1回鳴らす。文言もデータ根拠型に。
-                    if margin_laps < -0.5 and len(fuel_per_lap_hist) >= 3 and not fuel_strategy_warned and not onPit:
+                    # ★2026-07-21 Codex指示R1：fuel_strategy_warningはRACINGでのみ許可。
+                    #   CHECKER_OUT/PLAYER_FINISHEDでは「レース終わってる」のに燃料警告が飛ぶ事故
+                    #   （2026-07-21 Monza実走・14:28:19にYujiが訂正した誤発話）を再発させない。
+                    if margin_laps < -0.5 and len(fuel_per_lap_hist) >= 3 and not fuel_strategy_warned \
+                            and not onPit and race_lifecycle.fuel_strategy_allowed(lifecycle_state):
                         broadcast({'type': 'radio', 'trigger': 'fuel_strategy_warning',
                             'margin_laps': margin_laps,
                             'message': 'By the numbers, fuel won\'t reach the finish at this pace. Let\'s lock in the pit plan.'})
                         fuel_strategy_warned = True
                     elif margin_laps >= 0:
                         fuel_strategy_warned = False  # ピット等で給油後、再度不足すれば再警告できるようリセット
+
+                # ★Codex指示R1：CHECKER_OUTでは新規戦略の代わりに一度だけ簡潔な通知を出す。
+                if race_lifecycle.checker_out_notice_allowed(lifecycle_state, checker_out_notice_sent):
+                    _notice_fuel = round(fuel, 1) if fuel is not None else None
+                    broadcast({'type': 'radio', 'trigger': 'checker_out_notice', 'fuel': _notice_fuel,
+                        'message': ('Checkered flag is out. Fuel remaining ' + str(_notice_fuel) + '.')
+                                   if _notice_fuel is not None else 'Checkered flag is out.'})
+                    checker_out_notice_sent = True
 
         if lap_time_changed and onTrack:
             t = fmt_radio(lapTime)
@@ -1878,10 +2137,16 @@ def poll_iracing():
             if car_est_times_roll and player_car_idx < len(car_est_times_roll):
                 player_t = car_est_times_roll[player_car_idx]
                 best_ahead = None  # 同クラスで最も近い前方車のギャップ
+                # ★2026-07-21 Codex指示R2：同クラス判定はclass_map.evaluate_class_map経由でfail-closed。
+                #   旧実装は car_class_map.get(idx2,-1) != player_class_id で、両者ともClassID不明(-1)の
+                #   時に「同クラス」と誤判定する穴があった。
+                _active_roll = set(i for i, et in enumerate(car_est_times_roll) if et and et > 0)
+                _same_class_roll = class_map.evaluate_class_map(
+                    _active_roll, player_car_idx, car_class_map)['same_class_car_idxs'] or set()
                 for idx2, et2 in enumerate(car_est_times_roll):
                     if idx2 == player_car_idx or et2 <= 0:
                         continue
-                    if car_class_map.get(idx2, -1) != player_class_id:
+                    if idx2 not in _same_class_roll:
                         continue
                     d2 = et2 - player_t  # 前方はマイナス(est_timeが小さい)
                     if -30 < d2 < 0:    # 前方30秒以内
@@ -1999,10 +2264,11 @@ def poll_iracing():
         # Tyre temps: 自動警告は無効化（読んでる変数がカーカス温度で不正確。較正後に復活予定）
         # データ自体は将来デブリーフで参照可能にする
 
-        # Final lap（レースのみ）
-        if is_race_session and lapsTot and lap and lapsTot > 0 and lap == lapsTot and lap != prev['lapsTot']:
-            broadcast({'type': 'radio', 'trigger': 'final_lap', 'pos': pos,
-                'message': 'Final lap. P' + str(pos) + '.'})
+        # ★P1（2026-07-21 Codexレビュー再々指摘）：旧'final_lap'トリガー（lap==lapsTotの瞬間に発火、
+        #   周回制セッションのみ対応）は、下のcheck_final_lap_milestones()（laps_remaining_est<=1、
+        #   周回制・時間制どちらにも対応）と同じ「残り1周」を別々に検出しており、二重発話の恐れが
+        #   あった。check_final_lap_milestones()の1周閾値(final_lap_notice)へ一本化し、この個別
+        #   トリガーは削除した。
 
         # ── セッションサマリー：チェッカーは「見えた」だけ記録し、送信は自分の完走まで待つ ──
         # SessionState 5=Checkered/6=Cooldownはセッション全体で共有される値——リーダーがチェッカーを
@@ -2240,6 +2506,7 @@ def poll_iracing():
                                 stopped_warned[idx] = _now2
                                 last_battle_global = _now2
 
+            _same_class_main = set()  # ★R2：下のstandings_gapsブロックからも参照するため、分岐の外で既定値を持つ
             if car_f2_times and player_car_idx < len(car_f2_times):
                 player_time     = car_f2_times[player_car_idx]
                 player_last_lap = car_last_laps[player_car_idx] if car_last_laps else 0
@@ -2250,6 +2517,15 @@ def poll_iracing():
                 player_est = car_est_times[player_car_idx] if (car_est_times and player_car_idx < len(car_est_times)) else None
                 # クラス内順位（車の識別をゼッケンでなく「クラス名+順位」で言うため・Yuji方針2026-07-14）
                 car_class_pos_arr = reader.read_int_array('CarIdxClassPosition', 64)
+
+                # ★2026-07-21 Codex指示R2：同クラス集合はclass_map.evaluate_class_map経由でfail-closed。
+                #   CarIdxClassPositionの値そのもの(順位番号)は使わず、「値がある＝アクティブな車」の
+                #   判定だけに使う（クラスごとに1,2,3...と重複するため、順位番号から所属クラスは
+                #   推測できない＝Codex指示）。旧実装のother_class==player_class_idは、両者が
+                #   ClassID不明(-1)の時に誤って「同クラス」と判定する穴があった。
+                _active_main = set(i for i, v in enumerate(car_class_pos_arr or []) if v and v > 0)
+                _class_map_result = class_map.evaluate_class_map(_active_main, player_car_idx, car_class_map)
+                _same_class_main = _class_map_result['same_class_car_idxs'] or set()
 
                 for idx, f2_time in enumerate(car_f2_times):
                     if idx == player_car_idx or f2_time <= 0:
@@ -2275,7 +2551,6 @@ def poll_iracing():
                     delta = _d
                     est_time = f2_time  # 後続コードの互換性のため（未使用でも残す）
 
-                    other_class = car_class_map.get(idx, -1)
                     other_rel   = car_relspeed_map.get(idx, 0)
 
                     # ── マルチクラス(速いクラス)接近警告は、このループの外で別ロジックに移設 ──
@@ -2291,7 +2566,7 @@ def poll_iracing():
                     # ★同時に「直前＆直後の1台だけ」に限定（同クラスでクラス順位が隣接）。
                     #   離れた順位の危険ドライバーまで拾うと結局うるさくなる＝Yuji方針「少ない方がいい」。
                     _dpos_pre = (car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None)
-                    _adjacent = (other_class == player_class_id and _dpos_pre is not None
+                    _adjacent = (idx in _same_class_main and _dpos_pre is not None
                                  and class_pos is not None and abs(_dpos_pre - class_pos) == 1)
                     if is_risky and _adjacent and not in_start_rush and idx not in danger_ever_warned:
                         # 危険ドライバーは早めの安全予告なので3秒圏内で1回（バトルの0.3秒より広い）
@@ -2313,7 +2588,7 @@ def poll_iracing():
                                 #   別クラスは物差し(LapDistPct)の符号がコード内で未確定なためEstTime差のまま暫定とし、
                                 #   下の診断ログで実走の実値を残す→次ラウンドで別クラス方向も確定させる。
                                 _dpos = (car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None)
-                                _same_cls = (other_class == player_class_id)
+                                _same_cls = (idx in _same_class_main)
                                 if _same_cls and _dpos is not None and class_pos is not None:
                                     _behind = _dpos > class_pos          # 順位が下＝後方（真実・符号推測不要）
                                 else:
@@ -2343,7 +2618,7 @@ def poll_iracing():
                     #   言えるレベルまで閾値を上げて、ただの車間の揺らぎでは再武装しないようにした。
                     #   同じ相手が一度クリアな状態を経て再接近した場合(＝ミスで下がって終盤また来た等)は
                     #   "再接近"として言い方を変える(battle_ever_warned)。
-                    if is_race_session and other_class == player_class_id and not in_start_rush and delta > 0:
+                    if is_race_session and idx in _same_class_main and not in_start_rush and delta > 0:
                         if delta > 3.0:
                             behind_armed[idx] = True  # 本当に引き離した＝次の接近で警告できる状態に
                         elif delta <= 0.3 and behind_armed.get(idx, False):
@@ -2388,7 +2663,7 @@ def poll_iracing():
                     other_cls_pos = car_class_pos_arr[idx] if car_class_pos_arr and idx < len(car_class_pos_arr) else None
                     is_adjacent_rival = (other_cls_pos is not None and class_pos is not None
                                           and other_cls_pos in (class_pos - 1, class_pos + 1))
-                    if is_race_session and other_class == player_class_id and not in_start_rush and is_adjacent_rival:
+                    if is_race_session and idx in _same_class_main and not in_start_rush and is_adjacent_rival:
                         other_last_lap2 = car_last_laps[idx] if car_last_laps else 0
                         pace_diff2 = (other_last_lap2 - player_last_lap
                                       if other_last_lap2 > 0 and player_last_lap > 0 else None)
@@ -2461,7 +2736,9 @@ def poll_iracing():
                 if car_dist_pct and player_car_idx < len(car_dist_pct) and player_last_lap and player_last_lap > 0:
                     _ppct = car_dist_pct[player_car_idx]
                     _cls_pos_mc = reader.read_int_array('CarIdxClassPosition', 64)
-                    if _ppct is not None and _ppct >= 0:
+                    # ★2026-07-21 Codex指示R2：自車のClassIDが不明ならマルチクラス判定そのものを
+                    #   行わない（"速いクラス"かどうかは自車のクラスが分かって初めて言える）。
+                    if _ppct is not None and _ppct >= 0 and player_class_id != -1:
                         _mc_groups = {}     # クラス名 -> {'gap':最近接の秒, 'count':近接台数, 'pos':代表の順位}
                         for _mi in range(len(car_dist_pct)):
                             if _mi == player_car_idx:
@@ -2527,7 +2804,8 @@ def poll_iracing():
                 if _player_f2 is not None and _player_f2 >= 0:
                     standings_gaps = {}
                     for _si, _spos in enumerate(_cls_pos_arr):
-                        if not _spos or _spos <= 0 or car_class_map.get(_si, -1) != player_class_id:
+                        # ★2026-07-21 Codex指示R2：同クラス判定はfail-closedな_same_class_mainを使う。
+                        if not _spos or _spos <= 0 or _si not in _same_class_main:
                             continue
                         if _si >= len(_f2_arr) or _f2_arr[_si] is None or _f2_arr[_si] < 0:
                             continue

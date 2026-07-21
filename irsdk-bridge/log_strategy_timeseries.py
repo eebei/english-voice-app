@@ -147,10 +147,16 @@ def main():
                         f'strategy_ts-{stamp}{("-" + label) if label else ""}.csv')
 
     # tickを列頭に置く。読取前後で不変だったスナップショットの識別子（同一tick保証の証拠）。
-    cols = (['wall_clock', 'tick'] + SELF_SCALARS + PIT_SERVICE_VARS
+    # ★P2（Codex指示・2026-07-21）：event列を追加。SessionNum変更／tick巻き戻りを区間イベントとして
+    #   その行にだけ記録する（通常行はevent=''）。
+    cols = (['wall_clock', 'tick', 'event'] + SELF_SCALARS + PIT_SERVICE_VARS
             + [f'{a}[{i}]' for a in CAR_ARRAYS for i in range(64)])
-    n = 0
-    dropped = 0   # ★P1-1：tick不整合で破棄した行数（実走後に必ず確認する）
+    n = 0                # 書き込んだ行数
+    dropped = 0          # tick不整合(読取前後でtickが変わった)で破棄した行数
+    inactive_skipped = 0  # telemetry非アクティブでCSVへ書かなかった回数
+    duplicate_skipped = 0  # 直前と同一tickだったため書かなかった回数
+    last_written_tick = None
+    last_session_num = None
     print(f"\n記録開始 → {os.path.basename(path)}   （Ctrl+C で終了）")
     print("  ※ 周回遅れ混在・他車ピット中・S/F通過を含むよう、数周は走ってください")
     try:
@@ -158,13 +164,37 @@ def main():
             w = csv.writer(fp)
             w.writerow(cols)
             while True:
+                # ★P2：telemetry非アクティブなら書かない（ガレージ待機中の無意味な固定値行を防ぐ）。
+                if read_int_at(ptr, H_STATUS) != 1:
+                    inactive_skipped += 1
+                    time.sleep(0.2)
+                    continue
+
                 result = read_row(ptr, idx)
                 if result is None:
                     dropped += 1
                     time.sleep(0.2)
                     continue
                 self_vals, car_vals, tick = result
-                row = [time.strftime('%H:%M:%S') + f'.{int(time.time()*10)%10}', tick]
+
+                # ★P2：直前と同一tickなら重複行として書かない（iRacingが同じフレームをまだ
+                #   更新していないだけ・DEBRIEF直後のガレージ待機等で頻発する）。
+                if last_written_tick is not None and tick == last_written_tick:
+                    duplicate_skipped += 1
+                    time.sleep(0.2)
+                    continue
+
+                # ★P2：SessionNum変更／tick巻き戻りは区間イベントとして「その行にだけ」記録する。
+                event = ''
+                cur_session_num = self_vals.get('SessionNum')
+                if last_session_num is not None and cur_session_num != last_session_num:
+                    event = 'session_num_change'
+                elif last_written_tick is not None and tick < last_written_tick:
+                    event = 'tick_rollback'
+                last_session_num = cur_session_num
+                last_written_tick = tick
+
+                row = [time.strftime('%H:%M:%S') + f'.{int(time.time()*10)%10}', tick, event]
                 row += [self_vals[nm] for nm in SELF_SCALARS + PIT_SERVICE_VARS]
                 for arr in CAR_ARRAYS:
                     row += car_vals[arr]
@@ -172,12 +202,13 @@ def main():
                 n += 1
                 if n % 50 == 0:
                     fp.flush()
-                    print(f"  {n} 行  ({row[0]}, tick={tick}, 破棄={dropped})", end='\r')
+                    print(f"  {n} 行  ({row[0]}, tick={tick}, 破棄={dropped}, 非アクティブ省略={inactive_skipped}, 重複省略={duplicate_skipped})", end='\r')
                 time.sleep(0.2)          # 5Hz。F2Timeの不連続を捉えるには十分
     except KeyboardInterrupt:
         pass
     finally:
-        print(f"\n✅ {n} 行を保存: {path}（tick不整合で破棄={dropped}行）")
+        print(f"\n✅ 書込={n}行  tick不整合破棄={dropped}行  非アクティブ省略={inactive_skipped}行  重複tick省略={duplicate_skipped}行")
+        print(f"   保存先: {path}")
         close_shared_mem(k32, h, ptr)
 
 

@@ -2047,6 +2047,11 @@ function oishiRadio(d){
     //   フォールバック("Box here. Slow." 等)をそのまま喋ってしまう(LunaJP実走で確認)。
     case 'pit_box_here':   return sel==='LunaJP' ? `ボックスここだよ。減速して。` : `ボックスここだ。減速。`;
     case 'pit_box_stop':   return sel==='LunaJP' ? `止まって。ボックス位置。` : `停止。ボックス位置。`;
+    // ★2026-07-21 Codex指示R1：新規トリガー。既存の未翻訳箇所とは別に、新設分はここで併せて対応する。
+    case 'checker_out_notice':
+      return (d.fuel != null) ? `チェッカー出た。残り燃料${d.fuel}。` : `チェッカーが出た。`;
+    case 'final_lap_notice':
+      return (d.laps_remaining === 1) ? `ファイナルラップだ。` : `残り${d.laps_remaining}周。`;
     case 'multiclass': {
       // ★2026-07-20 ドライバー要求：クラス名＋秒数＋**隊列の形**を伝える。
       //   「2台が3秒以内で接近時とか。3台が10秒以内でも2+1台で来てるとか。
@@ -2131,6 +2136,10 @@ function kanbeRadio(d){
     case 'pit_box_countdown': return `${d.meters}メートルじゃ。`;
     case 'pit_box_here':   return `ボックスここじゃ。減速せえ。`;
     case 'pit_box_stop':   return `停止じゃ。ボックス位置。`;
+    case 'checker_out_notice':
+      return (d.fuel != null) ? `チェッカー出たで。残り燃料${d.fuel}。` : `チェッカーが出たで。`;
+    case 'final_lap_notice':
+      return (d.laps_remaining === 1) ? `ファイナルラップじゃ。` : `残り${d.laps_remaining}周じゃ。`;
     case 'multiclass': {
       const cls = d.class_name || '速えクラス';
       const sec = (d.delta != null) ? `${d.delta}秒後ろ` : '後ろ';
@@ -2211,6 +2220,10 @@ function matthiasRadio(d){
     case 'pit_box_countdown': return `${d.meters} Meter.`;
     case 'pit_box_here':   return `Box hier. Langsam.`;
     case 'pit_box_stop':   return `Stopp. Boxenposition.`;
+    case 'checker_out_notice':
+      return (d.fuel != null) ? `Zielflagge ist draußen. Resttreibstoff ${d.fuel}.` : `Zielflagge ist draußen.`;
+    case 'final_lap_notice':
+      return (d.laps_remaining === 1) ? `Letzte Runde.` : `Noch ${d.laps_remaining} Runden.`;
     case 'multiclass_approaching': return `${classIdTxtDE(d.class_name, d.class_pos)} dahinter, ${d.delta} Sekunden. Bereit machen.`;
     case 'multiclass_imminent':    return `${classIdTxtDE(d.class_name, d.class_pos)} direkt hinter dir. Platz machen.`;
     case 'battle_behind': {

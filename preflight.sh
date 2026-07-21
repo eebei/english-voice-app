@@ -10,7 +10,7 @@ set -u
 fail=0
 
 echo "── Python: 未定義変数・構文（pyflakes）"
-if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
+if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
   echo "   ❌ 致命的な問題あり"; fail=1
 else
   echo "   ✅ 未定義変数なし"
@@ -43,6 +43,18 @@ if node tests-chat-http.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格
 
 echo "── iRSDK共有メモリヘッダー定数（合成メモリ・P0-2再発防止）"
 if python3 irsdk-bridge/tests_irsdk_mem.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_irsdk_mem.py 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── レース終了状態機械（R1・2026-07-21 Codex指示）"
+if python3 irsdk-bridge/tests_race_lifecycle.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_race_lifecycle.py 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── 同クラスfail-closedゲート（R2・2026-07-21 Codex指示）"
+if python3 irsdk-bridge/tests_class_map.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_class_map.py 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── F2Time入力契約（R3・2026-07-21 Codex指示）"
+if python3 irsdk-bridge/tests_f2time_contract.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_f2time_contract.py 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── bridge.py 本番配線（director_active/SessionNum reset/Last5-3-1・2026-07-21 Codex再指摘）"
+if python3 irsdk-bridge/tests_bridge_lifecycle_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_bridge_lifecycle_wiring.py 2>&1|grep "❌"|head -8; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
