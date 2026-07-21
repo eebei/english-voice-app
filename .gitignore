@@ -4,3 +4,4 @@ node_modules/
 __pycache__/
 *.pyc
 irsdk-bridge/bridge_log.txt
+/bridge_log.txt
