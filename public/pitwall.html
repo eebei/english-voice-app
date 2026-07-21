@@ -50,6 +50,9 @@ nav{position:sticky;top:0;z-index:100;background:rgba(7,8,15,.9);backdrop-filter
 .hero .wrap{max-width:760px;margin:0 auto}
 .hero .tag{display:inline-block;font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--blue);border:1px solid rgba(157,78,221,.35);padding:5px 16px;border-radius:99px;margin-bottom:28px;text-transform:uppercase}
 .hero h1{font-size:clamp(36px,6.5vw,68px);font-weight:900;line-height:1.0;margin-bottom:22px}
+/* ★2026-07-21：日本語見出しは全角文字幅が広く、英語版と同じclampだと3行に折り返して窮屈になる
+   (Yuji実機スクリーンショットで発覚)。JP版だけ一回り小さくする。 */
+.hero h1.jp-h1{font-size:clamp(24px,6.4vw,54px);line-height:1.3}
 .hero h1 .blue{color:var(--blue)}
 .hero p.sub{font-size:clamp(16px,2.2vw,20px);color:var(--silver);max-width:580px;margin:0 auto 40px}
 .hero .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
@@ -252,11 +255,20 @@ function setPageLang(lang){
   document.documentElement.lang = (lang === 'jp') ? 'ja' : 'en';
   try { localStorage.setItem('pw_page_lang', lang); } catch(e){}
 }
-(function initPageLang(){
+// ★2026-07-21バグ修正：このscriptタグはnav直後＝hero以降のdata-lang要素がまだDOMに
+//   存在しない時点で実行される。ここで即setPageLangすると対象0件で何も切り替わらず、
+//   ナビのボタンだけJPが点灯して本文は英語のまま、という状態になっていた
+//   （Yuji実機スクリーンショットで発覚）。DOMContentLoadedまで復元を遅らせる。
+function initPageLang(){
   let lang = 'en';
   try { lang = localStorage.getItem('pw_page_lang') || 'en'; } catch(e){}
   setPageLang(lang);
-})();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initPageLang);
+} else {
+  initPageLang();
+}
 </script>
 
 <!-- ═══ HERO ═══ -->
@@ -301,8 +313,8 @@ function setPageLang(lang){
   </div>
   <div class="wrap" data-lang="jp" style="display:none">
     <div class="tag">iRacing向け · AIレースエンジニア</div>
-    <h1>あなたのレースエンジニア。<br><span class="blue">レース前も、走行中も、レース後も。</span></h1>
-    <p class="sub">スタート前に戦略を話し合う。<br>レース中は、落ち着いた的確なサポートを。<br>結果をデブリーフして、次への課題を一つ持ち帰る。</p>
+    <h1 class="jp-h1">あなたのレースエンジニア<br><span class="blue">レース前、走行中、レース後<br>そのすべて</span></h1>
+    <p class="sub">スタート前に戦略を話し合う。<br>レース中は落ち着いた的確なサポート。<br>結果をデブリーフして、次への課題を明確にして次に向かう。</p>
     <div class="cta-row">
       <button class="btn-primary" onclick="openApp()">セッションを始める →</button>
       <a href="#engineers" class="btn-ghost">エンジニアを見る</a>
