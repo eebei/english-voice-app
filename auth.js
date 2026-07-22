@@ -138,6 +138,43 @@ async function init() {
     );
   `);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS founding_applications (
+      id              BIGSERIAL PRIMARY KEY,
+      program         TEXT NOT NULL DEFAULT 'general',
+      email           TEXT NOT NULL,
+      discord         TEXT,
+      series          TEXT NOT NULL,
+      discipline      TEXT NOT NULL,
+      language        TEXT NOT NULL,
+      expectations    TEXT,
+      referral_source TEXT,
+      page_lang       TEXT,
+      consent_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status          TEXT NOT NULL DEFAULT 'pending',
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      reviewed_at     TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`ALTER TABLE founding_applications ADD COLUMN IF NOT EXISTS program TEXT NOT NULL DEFAULT 'general';`);
+  await pool.query(`ALTER TABLE founding_applications ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ NOT NULL DEFAULT now();`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS funnel_events (
+      id              BIGSERIAL PRIMARY KEY,
+      event           TEXT NOT NULL,
+      idempotency_key TEXT UNIQUE,
+      anon_id         TEXT,
+      lang            TEXT,
+      utm_source      TEXT,
+      utm_medium      TEXT,
+      utm_campaign    TEXT,
+      referrer        TEXT,
+      extra           JSONB,
+      is_test         BOOLEAN NOT NULL DEFAULT false,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
   if (BREVO_API_KEY) {
     mailer = 'brevo';
     // 診断：鍵の長さと頭だけログ（秘密は出さない）。正しいv3鍵は xkeysib- で始まり約89文字。
@@ -667,6 +704,31 @@ async function unsetMemberByCustomer(stripeCustomerId, status) {
   }
 }
 
+// Founding Checkout Session作成（LP CTAから直接Stripe Checkoutへ。匿名IDをmetadataに載せてファネル接続）。
+const STRIPE_FOUNDING_PRICE_ID = process.env.STRIPE_FOUNDING_PRICE_ID || null;
+// customer: テスト専用。Test Clockに紐付けた顧客IDを渡すとトライアル進行を早送りできる。
+//   本番の /api/founding/checkout ルートはこの引数を絶対にクライアント入力から渡さない
+//   （渡してしまうと他人のStripe顧客IDへ本番決済をなりすませる脆弱性になる）。
+async function createFoundingCheckout({ anon_id, lang, referral_code, customer } = {}) {
+  if (!stripe) throw new Error('stripe_unavailable');
+  if (!STRIPE_FOUNDING_PRICE_ID) throw new Error('price_not_configured');
+  const params = {
+    mode: 'subscription',
+    line_items: [{ price: STRIPE_FOUNDING_PRICE_ID, quantity: 1 }],
+    subscription_data: { trial_period_days: 5, metadata: { source: 'founding_lp', anon_id: anon_id || '' } },
+    success_url: `${BASE_URL}/welcome.html?checkout=success`,
+    cancel_url: `${BASE_URL}/pitwall.html#pricing`,
+    metadata: { anon_id: anon_id || '', lang: lang || '' },
+    custom_fields: [{
+      key: 'referral_code', label: { type: 'custom', custom: 'Referral code (optional)' },
+      type: 'text', optional: true,
+    }],
+  };
+  if (customer) params.customer = customer;
+  const session = await stripe.checkout.sessions.create(params);
+  return { url: session.url, session_id: session.id };
+}
+
 // 自己解約用のStripe Billing Portalセッションを作る（メンバー本人が支払い方法変更・解約を自分でできる）。
 // Stripeダッシュボード側で一度だけ「顧客ポータル」を有効化しておく必要あり（設定 → 課金 → 顧客ポータル）。
 async function createBillingPortalSession(rawEmail) {
@@ -781,14 +843,63 @@ async function attachUser(req, _res, next) {
   next();
 }
 
+// ── Founding応募 ──
+async function createFoundingApplication(data) {
+  if (!ready) throw new Error('unavailable');
+  const { rows } = await pool.query(
+    `INSERT INTO founding_applications (program, email, discord, series, discipline, language, expectations, referral_source, page_lang)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, created_at`,
+    [data.program || 'general', data.email, data.discord, data.series, data.discipline, data.language, data.expectations, data.referral_source, data.page_lang]
+  );
+  return rows[0];
+}
+
+async function listFoundingApplications() {
+  if (!ready) return [];
+  const { rows } = await pool.query('SELECT * FROM founding_applications ORDER BY created_at DESC');
+  return rows;
+}
+
+// ── ファネルイベント ──
+async function recordFunnelEvent(data) {
+  if (!ready) return null;
+  const key = data.idempotency_key || null;
+  if (key) {
+    const dup = await pool.query('SELECT id FROM funnel_events WHERE idempotency_key = $1', [key]);
+    if (dup.rows.length) return { id: dup.rows[0].id, deduplicated: true };
+  }
+  const extra = data.extra ? JSON.stringify(data.extra) : null;
+  const { rows } = await pool.query(
+    `INSERT INTO funnel_events (event, idempotency_key, anon_id, lang, utm_source, utm_medium, utm_campaign, referrer, extra, is_test)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [data.event, key, data.anon_id || null, data.lang || null,
+     data.utm_source || null, data.utm_medium || null, data.utm_campaign || null,
+     data.referrer || null, extra, !!data.is_test]
+  );
+  return { id: rows[0].id, deduplicated: false };
+}
+
+async function getFunnelStats() {
+  if (!ready) return [];
+  const { rows } = await pool.query(
+    `SELECT event, date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+     FROM funnel_events WHERE is_test = false
+     GROUP BY event, day ORDER BY day DESC, event`
+  );
+  return rows;
+}
+
 module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
   setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, foundingStatus,
   recordReferralAttribution, countReferralConversion,
+  createFoundingCheckout,
   createBillingPortalSession,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
+  createFoundingApplication, listFoundingApplications,
+  recordFunnelEvent, getFunnelStats,
   FOUNDING_CAP,
   _pool: () => pool,
 };

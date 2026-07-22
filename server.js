@@ -82,13 +82,17 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
         displayName,
       });
       console.log('[stripe] checkout completed → member:', email, 'justActivated:', result.justActivated);
-      // ウェルカムメールは新規会員化の時だけ（Stripeのwebhook再送で二重送信しないためのガード）。
-      // 失敗してもwebhook自体は成功扱いにする（会員化は既に完了しているため、Stripeに再送させない）。
+      const anonId = (s.metadata && s.metadata.anon_id) || '';
+      const isTest = !event.livemode;
+      try {
+        await auth.recordFunnelEvent({ event: 'checkout_completed', anon_id: anonId, extra: { stripe_customer: s.customer }, idempotency_key: 'checkout_' + s.id, is_test: isTest });
+        if (result.justActivated) {
+          await auth.recordFunnelEvent({ event: 'trial_started', anon_id: anonId, extra: { stripe_customer: s.customer }, idempotency_key: 'trial_' + s.id, is_test: isTest });
+        }
+      } catch (e) { console.error('[stripe] funnel event failed:', e.message); }
       if (result.justActivated) {
         auth.sendWelcomeEmail(email, result.plan).catch((e) => console.error('[stripe] welcome email failed:', e.message));
       }
-      // Grow the Grid：チェックアウトのカスタムフィールド（Referral code欄）から帰属を記録。
-      // 失敗しても会員化は完了しているので、握りつぶしてログだけ残す（webhook 500でStripeに再送させない）。
       try {
         const cf = Array.isArray(s.custom_fields) ? s.custom_fields.find(f => f.text && f.text.value) : null;
         if (cf) await auth.recordReferralAttribution(email, cf.text.value);
@@ -98,7 +102,18 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       // amount_paid > 0 が実課金の証（トライアル開始時の$0請求は billing_reason=subscription_create かつ 0円）。
       // 2ヶ月目以降の請求もここを通るが、referral_conversionsのPRIMARY KEYで二重加算は起きない。
       const inv = event.data.object;
-      if (inv.amount_paid > 0 && inv.customer) {
+      const isTestInv = !event.livemode;
+      if (inv.amount_paid > 0 && inv.customer && inv.billing_reason === 'subscription_cycle') {
+        let invAnonId = '';
+        try {
+          if (inv.subscription && stripe) {
+            const sub = await stripe.subscriptions.retrieve(inv.subscription);
+            invAnonId = (sub.metadata && sub.metadata.anon_id) || '';
+          }
+        } catch {}
+        try {
+          await auth.recordFunnelEvent({ event: 'first_paid_invoice', anon_id: invAnonId, extra: { stripe_customer: inv.customer, amount: inv.amount_paid }, idempotency_key: 'first_paid_' + inv.customer, is_test: isTestInv });
+        } catch (e) { console.error('[stripe] funnel paid event failed:', e.message); }
         try {
           const r = await auth.countReferralConversion(inv.customer);
           if (r && r.ok) console.log('[stripe] grow-the-grid conversion:', JSON.stringify(r));
@@ -179,6 +194,82 @@ app.post('/api/beta/admin/revoke', requireAdmin, express.json(), async (req, res
     const r = await auth.setBetaActive(code, active === true);
     res.json(r);
   } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+
+// ── Founding Checkout（LP→Stripe Checkout直行・5日トライアル付き） ──
+app.post('/api/founding/checkout', express.json(), async (req, res) => {
+  try {
+    const { anon_id, lang, referral_code } = req.body || {};
+    const r = await auth.createFoundingCheckout({ anon_id, lang, referral_code });
+    res.json({ ok: true, url: r.url });
+  } catch (err) {
+    console.error('[founding] checkout creation failed:', err.message);
+    res.status(503).json({ ok: false, error: err.message === 'price_not_configured' ? 'price_not_configured' : 'unavailable' });
+  }
+});
+
+// ── テスター応募（Super Formula / IndyCar / GTP / 言語開発など、選考が必要なプログラム専用） ──
+const applyLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const VALID_DISCIPLINES = ['road', 'oval', 'dirt_road', 'dirt_oval'];
+const VALID_LANGUAGES = ['en', 'ja', 'de', 'other'];
+const VALID_PROGRAMS = ['open_wheel', 'prototype', 'german_language', 'portuguese_language', 'general'];
+app.post('/api/tester/apply', applyLimiter, express.json(), async (req, res) => {
+  try {
+    if (!auth.isReady()) return res.status(503).json({ ok: false, error: 'unavailable' });
+    const d = req.body || {};
+    if (!d.email || !d.series || !d.discipline || !d.language || !d.program) {
+      return res.status(400).json({ ok: false, error: 'missing_fields' });
+    }
+    if (d.consent !== true) {
+      return res.status(400).json({ ok: false, error: 'consent_required' });
+    }
+    if (typeof d.email !== 'string' || !d.email.includes('@') || d.email.length > 320) {
+      return res.status(400).json({ ok: false, error: 'invalid_email' });
+    }
+    if (!VALID_DISCIPLINES.includes(d.discipline)) {
+      return res.status(400).json({ ok: false, error: 'invalid_discipline' });
+    }
+    if (!VALID_LANGUAGES.includes(d.language)) {
+      return res.status(400).json({ ok: false, error: 'invalid_language' });
+    }
+    if (!VALID_PROGRAMS.includes(d.program)) {
+      return res.status(400).json({ ok: false, error: 'invalid_program' });
+    }
+    if (d.series && d.series.length > 200) d.series = d.series.slice(0, 200);
+    if (d.expectations && d.expectations.length > 1000) d.expectations = d.expectations.slice(0, 1000);
+    if (d.discord && d.discord.length > 100) d.discord = d.discord.slice(0, 100);
+    const row = await auth.createFoundingApplication(d);
+    res.json({ ok: true, id: row.id });
+  } catch (err) { res.status(500).json({ ok: false, error: 'server_error' }); }
+});
+app.get('/api/tester/applications', requireAdmin, async (_req, res) => {
+  try { res.json({ ok: true, applications: await auth.listFoundingApplications() }); }
+  catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+
+// ── ファネルイベント ──
+const CLIENT_EVENTS = [
+  'lp_view', 'primary_cta_click', 'checkout_started',
+  'founding_apply_start', 'founding_apply_complete', 'discord_click',
+  'app_download_click',
+  'share_page_open', 'share_copy_click',
+];
+const funnelLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
+app.post('/api/funnel/event', funnelLimiter, express.json(), async (req, res) => {
+  try {
+    if (!auth.isReady()) return res.status(204).end();
+    const d = req.body || {};
+    if (!d.event || !CLIENT_EVENTS.includes(d.event)) return res.status(400).json({ ok: false });
+    if (d.anon_id && (typeof d.anon_id !== 'string' || d.anon_id.length > 64)) {
+      return res.status(400).json({ ok: false });
+    }
+    await auth.recordFunnelEvent(d);
+    res.json({ ok: true });
+  } catch { res.status(204).end(); }
+});
+app.get('/api/funnel/stats', requireAdmin, async (_req, res) => {
+  try { res.json({ ok: true, stats: await auth.getFunnelStats() }); }
+  catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
 
 // ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
