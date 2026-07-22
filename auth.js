@@ -889,6 +889,21 @@ async function getFunnelStats() {
   return rows;
 }
 
+// CTA位置別の内訳（Hero/Manifesto/Pricingのどこが起点になったか）。既存 getFunnelStats() の形は変えず、別関数として追加。
+async function getFunnelStatsByCtaLocation() {
+  if (!ready) return [];
+  // イベント名・cta_location値ともホワイトリストで防御。APIの入力検証が効く前に混入した不正値を集計から除外する。
+  const { rows } = await pool.query(
+    `SELECT event, extra->>'cta_location' AS cta_location, date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+     FROM funnel_events
+     WHERE is_test = false
+       AND event IN ('primary_cta_click', 'checkout_started')
+       AND extra->>'cta_location' IN ('hero', 'manifesto', 'pricing')
+     GROUP BY event, cta_location, day ORDER BY day DESC, event, cta_location`
+  );
+  return rows;
+}
+
 module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
@@ -899,7 +914,7 @@ module.exports = {
   createBillingPortalSession,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   createFoundingApplication, listFoundingApplications,
-  recordFunnelEvent, getFunnelStats,
+  recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
   FOUNDING_CAP,
   _pool: () => pool,
 };
