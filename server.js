@@ -258,6 +258,8 @@ const CLIENT_EVENTS = [
   'app_download_click',
   'share_page_open', 'share_copy_click',
 ];
+const CTA_LOCATION_EVENTS = ['primary_cta_click', 'checkout_started'];
+const CTA_LOCATIONS = ['hero', 'manifesto', 'pricing'];
 const funnelLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
 app.post('/api/funnel/event', funnelLimiter, express.json(), async (req, res) => {
   try {
@@ -270,6 +272,11 @@ app.post('/api/funnel/event', funnelLimiter, express.json(), async (req, res) =>
     if (d.extra !== undefined) {
       if (typeof d.extra !== 'object' || d.extra === null || Array.isArray(d.extra) || JSON.stringify(d.extra).length > 500) {
         return res.status(400).json({ ok: false });
+      }
+      if (d.extra.cta_location !== undefined) {
+        if (!CTA_LOCATION_EVENTS.includes(d.event) || !CTA_LOCATIONS.includes(d.extra.cta_location)) {
+          return res.status(400).json({ ok: false });
+        }
       }
     }
     await auth.recordFunnelEvent(d);
