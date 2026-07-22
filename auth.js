@@ -211,6 +211,7 @@ async function init() {
       kind          TEXT NOT NULL,
       char_count    INTEGER,
       audio_bytes   INTEGER,
+      audio_seconds NUMERIC(8, 3),
       voice         TEXT,
       language      TEXT,
       success       BOOLEAN NOT NULL,
@@ -978,13 +979,13 @@ async function recordApiUsage({ userId, sessionId, character, mode, source, trig
   return { id: rows[0].id };
 }
 
-async function recordGoogleUsage({ userId, sessionId, kind, charCount, audioBytes, voice, language, success, environment }) {
+async function recordGoogleUsage({ userId, sessionId, kind, charCount, audioBytes, audioSeconds, voice, language, success, environment }) {
   if (!ready) return null;
   const is_test = (environment || 'production') !== 'production';
   const { rows } = await pool.query(
-    `INSERT INTO google_usage_log (user_id, session_id, kind, char_count, audio_bytes, voice, language, success, environment, is_test)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-    [userId || null, sessionId || null, kind, charCount ?? null, audioBytes ?? null,
+    `INSERT INTO google_usage_log (user_id, session_id, kind, char_count, audio_bytes, audio_seconds, voice, language, success, environment, is_test)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    [userId || null, sessionId || null, kind, charCount ?? null, audioBytes ?? null, audioSeconds ?? null,
      voice || null, language || null, !!success, environment || null, is_test]
   );
   return { id: rows[0].id };

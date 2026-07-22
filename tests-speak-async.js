@@ -53,6 +53,10 @@ const sandbox = {
   phonetify: t => t, stripMarkdown: t => t, stripParens: t => t, stripEmoji: t => t,
   pickVoice: () => null,
   irBridge: { readyState: 1, send: (j) => spokeReports.push(JSON.parse(j)) },
+  // ★2026-07-23 speak()がusageSessionId計測のためlocalStorage.getItem('pw_auth_token')を
+  //   参照するようになった（Codexレビュー対応）。本番同様に未ログイン状態を模擬する。
+  localStorage: { getItem: () => null, setItem: () => {} },
+  usageSessionId: 'test-usage-session-id',
   AbortController: class { constructor(){ this.signal={aborted:false}; } abort(){ this.signal.aborted=true; } },
   // TTS取得：テストが好きなタイミングで完了させられる
   fetch: () => new Promise((res, rej) => { ttsResolve = { res, rej }; }),

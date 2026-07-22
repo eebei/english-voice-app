@@ -1030,17 +1030,25 @@ function getDeviceId(){
 // 同じ走行中(=同じiRacing接続)は同じID。新しいiRacing接続('iracing_connected')で新しいIDを発行する。
 // 認証には使わない・64文字以内(サーバー側でも検証)。アプリ起動直後はまだ接続前でも会話できるため、
 // 起動時に仮IDを1つ発行しておく。
-let usageSessionId = newUsageSessionId();
+// ★2026-07-23 Codex再指摘：宣言未完了のletへ関数内から代入するとTDZでReferenceError。
+//   宣言を空文字で完了させてから、明示的にnewUsageSessionId()を呼ぶ構造にする。
+let usageSessionId = '';
 function newUsageSessionId(){
-  usageSessionId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+  const id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
     : ('usess-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+  usageSessionId = id;
   try{
-    // bridge_log.txt（Yujiが日常的に確認できる場所）へ出力＝明日の試走でsession_idを追える。
-    if(irBridge && irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'log_line', text:'[USAGE_SESSION] '+usageSessionId}));
+    if(irBridge && irBridge.readyState===1){
+      // Bridge側にも保持させ、bridge.py自身が呼ぶ/api/sttへ同じIDを載せられるようにする。
+      irBridge.send(JSON.stringify({cmd:'usage_session', session_id:id}));
+      // bridge_log.txt（Yujiが日常的に確認できる場所）へ出力＝明日の試走でsession_idを追える。
+      irBridge.send(JSON.stringify({cmd:'log_line', text:'[USAGE_SESSION] '+id}));
+    }
   }catch(e){}
-  console.log('[USAGE_SESSION]', usageSessionId);
-  return usageSessionId;
+  console.log('[USAGE_SESSION]', id);
+  return id;
 }
+newUsageSessionId();
 
 async function verifyBeta(code){
   try{
@@ -1774,9 +1782,13 @@ async function drainQueue(){
     const ctrl = new AbortController();
     speakFetchCtrl = ctrl;                                  // 割り込み時にabortできるよう保持
     const fetchTimer = setTimeout(()=>ctrl.abort(), 8000);  // TTS取得が固まらないようタイムアウト
+    const ttsAuthToken = localStorage.getItem('pw_auth_token');
+    const ttsHeaders = {'Content-Type':'application/json'};
+    const ttsBody = { text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch, usageSessionId };
+    if(ttsAuthToken){ ttsHeaders['Authorization']='Bearer '+ttsAuthToken; ttsBody.product='pitwall'; }
     const r = await fetch(API_BASE+'/api/tts',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch }),
+      method:'POST', headers:ttsHeaders,
+      body:JSON.stringify(ttsBody),
       signal: ctrl.signal
     });
     clearTimeout(fetchTimer);
@@ -1936,12 +1948,26 @@ function connectBridge(){
   try{
     irBridge=new WebSocket('ws://localhost:8765');
     updateBridgeStatus();
-    irBridge.onopen=()=>{ bridgeConnected=true; updateBridgeStatus(); bridgeVoice('bridge_up'); };
+    irBridge.onopen=()=>{
+      bridgeConnected=true; updateBridgeStatus(); bridgeVoice('bridge_up');
+      // Bridge接続時点で既にrenderer側に発行済みのsession_idがあれば渡す
+      // （iRacing接続前でもPTTは使われうるため、iracing_connectedを待たない）。
+      try{ irBridge.send(JSON.stringify({cmd:'usage_session', session_id:usageSessionId})); }catch(e){}
+    };
     irBridge.onmessage=(e)=>{
       let data; try{data=JSON.parse(e.data);}catch{return;}
       if(data.type==='iracing_connected'){
+        const _wasLive = iracingLive;
         iracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live');
-        newUsageSessionId();  // 新しいiRacing接続＝新しい走行としてコスト計測を区切る
+        // ★2026-07-23 Codex再指摘：iracing_connectedが同じ接続中に重複通知されるケースがあるため、
+        //   false→trueへ遷移した最初の1回だけ新規発行する（重複では再発行しない）。
+        //   暫定仕様：切断→再接続は新session_idとして扱う（同一SessionNum維持は今回スコープ外）。
+        //   前IDをログへ残すことで、bridge_log.txt上で前後のIDを人力で結合できるようにする。
+        if(!_wasLive){
+          const _prevId = usageSessionId;
+          newUsageSessionId();
+          try{ if(irBridge && irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'log_line', text:'[USAGE_SESSION] prev='+_prevId+' -> new='+usageSessionId})); }catch(e){}
+        }
         // ★2026-07-20 Codexレビュー P1-5：以前は別分岐に書いており、上のreturnで到達しなかった。
         if(!window.__memDumped){ window.__memDumped=true; setTimeout(()=>dumpLearnedMemory('iRacing接続時'),1200); }
         return;

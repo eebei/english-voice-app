@@ -768,6 +768,12 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
     if (!audio || typeof audio !== 'string') {
       return res.status(400).json({ error: 'audio is required' });
     }
+    // bridge.pyがraw PCMから逆算した実測秒数（LINEAR16経路のみ送られる）。数値・0以上・現実的な
+    // PTT録音上限(120秒)以内のみ採用。推測で埋めない＝範囲外や非数値はNULLのままにする。
+    const MAX_PTT_SECONDS = 120;
+    const rawDuration = req.body.audioDurationSeconds;
+    const audioDurationSeconds = (typeof rawDuration === 'number' && Number.isFinite(rawDuration)
+      && rawDuration >= 0 && rawDuration <= MAX_PTT_SECONDS) ? rawDuration : null;
     const lang = languageCode || 'en-US';
     const isJapanese = lang.startsWith('ja');
     const racingPhrases = isJapanese
@@ -800,17 +806,18 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
         body: JSON.stringify(sttBody),
       }
     );
-    // Google課金は音声秒数ベースだが、圧縮音声(WEBM_OPUS等)のbyte数から秒数を正確には逆算できない。
-    // 秒数を仮定で捏造するより、実測可能なbyte数を保存してGoogle Cloud請求と後から照合する。
+    // audio_bytesは常に実測できる診断用の補助値（主単位ではない）。
+    // audio_secondsはbridge.pyがLINEAR16 raw PCMから逆算した実測秒数がある時だけ埋める。
+    // WEBM_OPUS等の圧縮音声経路ではNULLのまま＝推測で秒数を作らない。
     const audioBytes = Buffer.byteLength(audio, 'base64');
     if (!r.ok) {
       const errText = await r.text();
       console.error('Google STT error:', r.status, errText);
-      recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, language: lang, success: false });
+      recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, audioSeconds: audioDurationSeconds, language: lang, success: false });
       return res.status(502).json({ error: 'stt_failed', detail: errText.slice(0, 200) });
     }
     const data = await r.json();
-    recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, language: lang, success: true });
+    recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, audioSeconds: audioDurationSeconds, language: lang, success: true });
     const text = (data.results || [])
       .map(x => x.alternatives && x.alternatives[0] && x.alternatives[0].transcript)
       .filter(Boolean).join(' ').trim();
