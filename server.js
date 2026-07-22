@@ -104,13 +104,17 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       const inv = event.data.object;
       const isTestInv = !event.livemode;
       if (inv.amount_paid > 0 && inv.customer && inv.billing_reason === 'subscription_cycle') {
-        let invAnonId = '';
-        try {
-          if (inv.subscription && stripe) {
-            const sub = await stripe.subscriptions.retrieve(inv.subscription);
+        // invoiceオブジェクト自身にsubscriptionのmetadataが埋め込まれている（Stripe API 2026-06-24〜の invoice.parent.subscription_details）。
+        //   まずここから読む。無ければ古い形の inv.subscription 経由で取得にフォールバック。
+        let invAnonId = (inv.parent && inv.parent.subscription_details && inv.parent.subscription_details.metadata
+          && inv.parent.subscription_details.metadata.anon_id) || '';
+        const subId = inv.subscription || (inv.parent && inv.parent.subscription_details && inv.parent.subscription_details.subscription);
+        if (!invAnonId && subId && stripe) {
+          try {
+            const sub = await stripe.subscriptions.retrieve(subId);
             invAnonId = (sub.metadata && sub.metadata.anon_id) || '';
-          }
-        } catch {}
+          } catch (e) { console.error('[stripe] subscription retrieve for anon_id failed:', e.message); }
+        }
         try {
           await auth.recordFunnelEvent({ event: 'first_paid_invoice', anon_id: invAnonId, extra: { stripe_customer: inv.customer, amount: inv.amount_paid }, idempotency_key: 'first_paid_' + inv.customer, is_test: isTestInv });
         } catch (e) { console.error('[stripe] funnel paid event failed:', e.message); }
