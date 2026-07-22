@@ -267,12 +267,23 @@ app.post('/api/funnel/event', funnelLimiter, express.json(), async (req, res) =>
     if (d.anon_id && (typeof d.anon_id !== 'string' || d.anon_id.length > 64)) {
       return res.status(400).json({ ok: false });
     }
+    if (d.extra !== undefined) {
+      if (typeof d.extra !== 'object' || d.extra === null || Array.isArray(d.extra) || JSON.stringify(d.extra).length > 500) {
+        return res.status(400).json({ ok: false });
+      }
+    }
     await auth.recordFunnelEvent(d);
     res.json({ ok: true });
   } catch { res.status(204).end(); }
 });
 app.get('/api/funnel/stats', requireAdmin, async (_req, res) => {
-  try { res.json({ ok: true, stats: await auth.getFunnelStats() }); }
+  try {
+    const [stats, statsByCtaLocation] = await Promise.all([
+      auth.getFunnelStats(),
+      auth.getFunnelStatsByCtaLocation(),
+    ]);
+    res.json({ ok: true, stats, statsByCtaLocation });
+  }
   catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
 
