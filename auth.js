@@ -174,6 +174,23 @@ async function init() {
       created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_usage_log (
+      id                  BIGSERIAL PRIMARY KEY,
+      user_name           TEXT,
+      character           TEXT,
+      mode                TEXT,
+      model               TEXT NOT NULL,
+      input_tokens        INTEGER NOT NULL DEFAULT 0,
+      output_tokens       INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd  NUMERIC(12, 8) NOT NULL DEFAULT 0,
+      is_test             BOOLEAN NOT NULL DEFAULT false,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_created_at ON api_usage_log (created_at);`);
 
   if (BREVO_API_KEY) {
     mailer = 'brevo';
@@ -889,6 +906,57 @@ async function getFunnelStats() {
   return rows;
 }
 
+// ── APIコストログ ──
+// per-1M-token USD rates. Haiku 4.5 / Sonnet 4.5 のみ対応（PITWALLが実際に使うモデル）。
+const MODEL_RATES_PER_MTOK = {
+  'claude-haiku-4-5-20251001': { input: 1.00, output: 5.00, cacheWrite: 1.25, cacheRead: 0.10 },
+  'claude-sonnet-4-5': { input: 3.00, output: 15.00, cacheWrite: 3.75, cacheRead: 0.30 },
+};
+
+function estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }) {
+  const rates = MODEL_RATES_PER_MTOK[model];
+  if (!rates) return 0;
+  const cost =
+    (input_tokens || 0) * rates.input +
+    (output_tokens || 0) * rates.output +
+    (cache_read_tokens || 0) * rates.cacheRead +
+    (cache_write_tokens || 0) * rates.cacheWrite;
+  return cost / 1_000_000;
+}
+
+async function recordApiUsage({ userName, character, mode, model, usage, is_test }) {
+  if (!ready || !usage) return null;
+  const input_tokens = usage.input_tokens || 0;
+  const output_tokens = usage.output_tokens || 0;
+  const cache_read_tokens = usage.cache_read_input_tokens || 0;
+  const cache_write_tokens = usage.cache_creation_input_tokens || 0;
+  const estimated_cost_usd = estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens });
+  const { rows } = await pool.query(
+    `INSERT INTO api_usage_log (user_name, character, mode, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, is_test)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [userName || null, character || null, mode || null, model,
+     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+     estimated_cost_usd, !!is_test]
+  );
+  return { id: rows[0].id };
+}
+
+async function getApiUsageStats() {
+  if (!ready) return [];
+  const { rows } = await pool.query(
+    `SELECT date_trunc('day', created_at)::date AS day, model, mode,
+            COUNT(*)::int AS calls,
+            SUM(input_tokens)::bigint AS input_tokens,
+            SUM(output_tokens)::bigint AS output_tokens,
+            SUM(cache_read_tokens)::bigint AS cache_read_tokens,
+            SUM(cache_write_tokens)::bigint AS cache_write_tokens,
+            ROUND(SUM(estimated_cost_usd)::numeric, 4) AS estimated_cost_usd
+     FROM api_usage_log WHERE is_test = false
+     GROUP BY day, model, mode ORDER BY day DESC, model, mode`
+  );
+  return rows;
+}
+
 // CTA位置別の内訳（Hero/Manifesto/Pricingのどこが起点になったか）。既存 getFunnelStats() の形は変えず、別関数として追加。
 async function getFunnelStatsByCtaLocation() {
   if (!ready) return [];
@@ -915,6 +983,7 @@ module.exports = {
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   createFoundingApplication, listFoundingApplications,
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
+  recordApiUsage, getApiUsageStats,
   FOUNDING_CAP,
   _pool: () => pool,
 };

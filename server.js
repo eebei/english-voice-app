@@ -293,6 +293,13 @@ app.get('/api/funnel/stats', requireAdmin, async (_req, res) => {
   }
   catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
+app.get('/api/usage/stats', requireAdmin, async (_req, res) => {
+  try {
+    const stats = await auth.getApiUsageStats();
+    res.json({ ok: true, stats });
+  }
+  catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
 
 // ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
 //   POST /api/admin/member/revoke {email}            → 即座にis_member=false
@@ -537,10 +544,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Race mode: Haiku (2-3x faster, sufficient for short radio calls)
     const model = (mode === 'race') ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5';
 
-    // 実測コストログ（Railwayログで確認可能。粗利率の実測に使う）
+    // 実測コストログ（Railwayログは7日で消えるため、DBにも永続化する。粗利率の実測に使う）
     const logUsage = (usage) => {
       if (!usage) return;
       console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
+      if (auth.isReady()) {
+        auth.recordApiUsage({ userName, character, mode, model, usage })
+          .catch(err => console.error('[USAGE] DB write failed:', err.message));
+      }
     };
 
     // ── ストリーミング：文字が生成された端からクライアントへ流す（体感レスポンス短縮）──
