@@ -174,23 +174,52 @@ async function init() {
       created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // ★2026-07-23 Codexレビュー（P0-1〜P0-4, P1-1〜P1-2）：1レース・1ユーザー・経路別に原価を
+  //   測れるよう、session_id/user_id/source/trigger/environmentを追加。user_nameは
+  //   クライアント申告値のため原価帰属の主キーにしない（認証済みuser_idを正とする）。
+  //   本テーブルは本番未デプロイのためALTER TABLEでなくCREATE TABLE定義を直接更新する。
   await pool.query(`
     CREATE TABLE IF NOT EXISTS api_usage_log (
       id                  BIGSERIAL PRIMARY KEY,
-      user_name           TEXT,
+      user_id             BIGINT,
+      session_id          TEXT,
       character           TEXT,
       mode                TEXT,
+      source              TEXT NOT NULL DEFAULT 'other',
+      "trigger"           TEXT,
       model               TEXT NOT NULL,
       input_tokens        INTEGER NOT NULL DEFAULT 0,
       output_tokens       INTEGER NOT NULL DEFAULT 0,
       cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
       cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
-      estimated_cost_usd  NUMERIC(12, 8) NOT NULL DEFAULT 0,
+      estimated_cost_usd  NUMERIC(12, 8),
+      environment         TEXT,
       is_test             BOOLEAN NOT NULL DEFAULT false,
       created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_created_at ON api_usage_log (created_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_session_id ON api_usage_log (session_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_user_id ON api_usage_log (user_id);`);
+
+  // Google TTS/STT の生課金単位（正確な単価はまだ固定せず、Google Cloud請求と後から照合する）。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS google_usage_log (
+      id            BIGSERIAL PRIMARY KEY,
+      user_id       BIGINT,
+      session_id    TEXT,
+      kind          TEXT NOT NULL,
+      char_count    INTEGER,
+      audio_bytes   INTEGER,
+      voice         TEXT,
+      language      TEXT,
+      success       BOOLEAN NOT NULL,
+      environment   TEXT,
+      is_test       BOOLEAN NOT NULL DEFAULT false,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_google_usage_log_created_at ON google_usage_log (created_at);`);
 
   if (BREVO_API_KEY) {
     mailer = 'brevo';
@@ -913,9 +942,14 @@ const MODEL_RATES_PER_MTOK = {
   'claude-sonnet-4-5': { input: 3.00, output: 15.00, cacheWrite: 3.75, cacheRead: 0.30 },
 };
 
+// 未知モデル（レート表未登録）はコストを黙って0にしない＝過少計上の温床になる。
+// NULLで保存し、statsのunknown_rate_callsで検知できるようにする（P1-2）。
 function estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens }) {
   const rates = MODEL_RATES_PER_MTOK[model];
-  if (!rates) return 0;
+  if (!rates) {
+    console.error(`[USAGE] unknown model "${model}" — rate table not updated, cost NOT estimated (row still saved)`);
+    return null;
+  }
   const cost =
     (input_tokens || 0) * rates.input +
     (output_tokens || 0) * rates.output +
@@ -924,37 +958,77 @@ function estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tok
   return cost / 1_000_000;
 }
 
-async function recordApiUsage({ userName, character, mode, model, usage, is_test }) {
+// environment !== 'production' は自動でis_test扱い（本番以外の実験を顧客集計に混ぜない）。
+// 本番上でのYujiの明示的コスト試験は、後からsession_id単位でis_test=trueへ変更する運用。
+async function recordApiUsage({ userId, sessionId, character, mode, source, trigger, model, usage, environment }) {
   if (!ready || !usage) return null;
   const input_tokens = usage.input_tokens || 0;
   const output_tokens = usage.output_tokens || 0;
   const cache_read_tokens = usage.cache_read_input_tokens || 0;
   const cache_write_tokens = usage.cache_creation_input_tokens || 0;
   const estimated_cost_usd = estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens });
+  const is_test = (environment || 'production') !== 'production';
   const { rows } = await pool.query(
-    `INSERT INTO api_usage_log (user_name, character, mode, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, is_test)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-    [userName || null, character || null, mode || null, model,
+    `INSERT INTO api_usage_log (user_id, session_id, character, mode, source, "trigger", model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, environment, is_test)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+    [userId || null, sessionId || null, character || null, mode || null, source || 'other', trigger || null, model,
      input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-     estimated_cost_usd, !!is_test]
+     estimated_cost_usd, environment || null, is_test]
   );
   return { id: rows[0].id };
 }
 
-async function getApiUsageStats() {
-  if (!ready) return [];
+async function recordGoogleUsage({ userId, sessionId, kind, charCount, audioBytes, voice, language, success, environment }) {
+  if (!ready) return null;
+  const is_test = (environment || 'production') !== 'production';
   const { rows } = await pool.query(
-    `SELECT date_trunc('day', created_at)::date AS day, model, mode,
-            COUNT(*)::int AS calls,
-            SUM(input_tokens)::bigint AS input_tokens,
-            SUM(output_tokens)::bigint AS output_tokens,
-            SUM(cache_read_tokens)::bigint AS cache_read_tokens,
-            SUM(cache_write_tokens)::bigint AS cache_write_tokens,
-            ROUND(SUM(estimated_cost_usd)::numeric, 4) AS estimated_cost_usd
-     FROM api_usage_log WHERE is_test = false
-     GROUP BY day, model, mode ORDER BY day DESC, model, mode`
+    `INSERT INTO google_usage_log (user_id, session_id, kind, char_count, audio_bytes, voice, language, success, environment, is_test)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+    [userId || null, sessionId || null, kind, charCount ?? null, audioBytes ?? null,
+     voice || null, language || null, !!success, environment || null, is_test]
   );
-  return rows;
+  return { id: rows[0].id };
+}
+
+// 既存の日別集計は後方互換のため残し、任意フィルタ＋source/trigger/session別の内訳を追加。
+async function getApiUsageStats({ from, to, userId, sessionId, source } = {}) {
+  if (!ready) return { byDay: [], bySource: [], byTrigger: [], bySession: [], unknownRateCalls: 0 };
+  const where = ['is_test = false'];
+  const params = [];
+  if (from) { params.push(from); where.push(`created_at >= $${params.length}`); }
+  if (to) { params.push(to); where.push(`created_at < $${params.length}`); }
+  if (userId) { params.push(userId); where.push(`user_id = $${params.length}`); }
+  if (sessionId) { params.push(sessionId); where.push(`session_id = $${params.length}`); }
+  if (source) { params.push(source); where.push(`source = $${params.length}`); }
+  const whereSql = where.join(' AND ');
+
+  const [byDay, bySource, byTrigger, bySession, unknownRate] = await Promise.all([
+    pool.query(
+      `SELECT date_trunc('day', created_at)::date AS day, model, mode,
+              COUNT(*)::int AS calls,
+              SUM(input_tokens)::bigint AS input_tokens,
+              SUM(output_tokens)::bigint AS output_tokens,
+              SUM(cache_read_tokens)::bigint AS cache_read_tokens,
+              SUM(cache_write_tokens)::bigint AS cache_write_tokens,
+              ROUND(SUM(estimated_cost_usd)::numeric, 4) AS estimated_cost_usd
+       FROM api_usage_log WHERE ${whereSql}
+       GROUP BY day, model, mode ORDER BY day DESC, model, mode`, params),
+    pool.query(
+      `SELECT source, COUNT(*)::int AS calls, ROUND(SUM(estimated_cost_usd)::numeric, 4) AS estimated_cost_usd
+       FROM api_usage_log WHERE ${whereSql} GROUP BY source ORDER BY calls DESC`, params),
+    pool.query(
+      `SELECT source, "trigger", COUNT(*)::int AS calls, ROUND(SUM(estimated_cost_usd)::numeric, 4) AS estimated_cost_usd
+       FROM api_usage_log WHERE ${whereSql} AND "trigger" IS NOT NULL GROUP BY source, "trigger" ORDER BY calls DESC`, params),
+    pool.query(
+      `SELECT session_id, COUNT(*)::int AS calls, ROUND(SUM(estimated_cost_usd)::numeric, 4) AS estimated_cost_usd
+       FROM api_usage_log WHERE ${whereSql} AND session_id IS NOT NULL GROUP BY session_id ORDER BY estimated_cost_usd DESC NULLS LAST LIMIT 200`, params),
+    pool.query(
+      `SELECT COUNT(*)::int AS unknown_rate_calls FROM api_usage_log WHERE ${whereSql} AND estimated_cost_usd IS NULL`, params),
+  ]);
+  return {
+    byDay: byDay.rows, bySource: bySource.rows, byTrigger: byTrigger.rows, bySession: bySession.rows,
+    unknownRateCalls: unknownRate.rows[0] ? unknownRate.rows[0].unknown_rate_calls : 0,
+  };
 }
 
 // CTA位置別の内訳（Hero/Manifesto/Pricingのどこが起点になったか）。既存 getFunnelStats() の形は変えず、別関数として追加。
@@ -983,7 +1057,7 @@ module.exports = {
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
   createFoundingApplication, listFoundingApplications,
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
-  recordApiUsage, getApiUsageStats,
+  recordApiUsage, getApiUsageStats, recordGoogleUsage,
   FOUNDING_CAP,
   _pool: () => pool,
 };
