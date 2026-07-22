@@ -27,9 +27,9 @@ Yuji「これオフィシャルレースじゃないからまだ対応できる�
 ## SHIPPED
 *実購入・本番・実走で確認済み*
 
-- **Founding Driver Program（2026-07-11〜）**：**$29.99/月・Locked In＝永久固定**。Stripe 本番稼働。決済→会員化→exeコード発行→welcomeメール→解約まで**実購入で全経路実証**。実顧客あり（テスター含む）。
-- **紹介システム**：33/66/100%OFF、コード自動発行・メール送信・失効処理まで実購入で実証。Founding 加入者だけの永続特典。
-- **ホームページ** omoraypitwall.com：Cloudflare 経由で apex/www 両方 HTTPS。Web Analytics 稼働（Cookie 不要）。申請制 CTA・トライアル5日。
+- **Founding Driver Program（2026-07-11〜）**：**$29.99/月・Locked In＝永久固定**。Stripe 本番稼働。決済→会員化→exeコード発行→welcomeメール→解約まで**テスト決済で全経路実証**。**純粋な顧客購入は0件**（2026-07-22 Yuji確認）。テスター（まーぼー・ダート）は初月無料コードで招待、課金実績なし。
+- **紹介システム**：33/66/100%OFF、コード自動発行・メール送信・失効処理まで**テスト決済で技術経路を実証**。顧客間の紹介実績は0件。Founding 加入者だけの永続特典。
+- **ホームページ** omoraypitwall.com：Cloudflare 経由で apex/www 両方 HTTPS。Web Analytics 稼働（Cookie 不要）。Foundingは5日トライアル付き決済直行、開発テスターは申請制。
 - **Desktop exe 配布**：GitHub Actions で自動ビルド→Release 公開。DLリンクは常に最新を指す（`OMORAY-PITWALL-Desktop-latest.exe`）。
 - **exe 起動コード**：購入時に自動発行（`PITWALL-氏名-XXXXXX`）。1台LRU方式で共有を防止。
 - **走行中UI**：レースオーバーレイ（無線チャット専用・非アクティブ窓でFFB喪失を回避）、常時最前面。

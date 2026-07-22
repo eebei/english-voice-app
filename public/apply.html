@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apply — OMORAY PITWALL Development Tester Program</title>
+<meta name="description" content="Apply to join a PITWALL development tester program — help shape the AI race engineer for iRacing.">
+<link rel="icon" type="image/png" href="/PITWALL_logo_mark.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Oxanium:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07080f;--panel:#0d0e1a;--panel2:#11121f;
+  --blue:#9D4EDD;--blue-dim:rgba(157,78,221,0.15);
+  --text:#f0f4ff;--muted:#64748b;--silver:#94a3b8;--border:#1e2235;
+  --red:#e10600;--green:#19d36b;
+}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:40px 20px}
+.logo{width:48px;height:48px;margin-bottom:8px}
+h1{font-family:'Oxanium';font-size:22px;font-weight:700;margin-bottom:4px;text-align:center}
+.subtitle{color:var(--silver);font-size:14px;text-align:center;margin-bottom:32px;max-width:480px;line-height:1.7}
+form{width:100%;max-width:520px}
+.field{margin-bottom:20px}
+label{display:block;font-size:13px;font-weight:600;color:var(--silver);margin-bottom:6px;letter-spacing:0.3px}
+label .req{color:var(--blue);margin-left:2px}
+input[type="text"],input[type="email"],textarea,select{
+  width:100%;padding:10px 14px;background:var(--panel);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:15px;font-family:'Inter',sans-serif;
+  transition:border-color .2s;outline:none;
+}
+input:focus,textarea:focus,select:focus{border-color:var(--blue)}
+textarea{resize:vertical;min-height:80px}
+select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center}
+select option{background:var(--panel);color:var(--text)}
+.radio-group{display:flex;gap:12px;flex-wrap:wrap}
+.radio-group label{display:flex;align-items:center;gap:6px;font-weight:400;color:var(--text);font-size:14px;cursor:pointer}
+.radio-group input{accent-color:var(--blue);width:16px;height:16px}
+.consent{display:flex;align-items:flex-start;gap:10px;margin:24px 0;padding:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px}
+.consent input{margin-top:3px;accent-color:var(--blue);width:18px;height:18px;flex-shrink:0}
+.consent span{font-size:13px;color:var(--silver);line-height:1.65}
+.btn-submit{
+  display:block;width:100%;padding:14px;background:var(--blue);color:#fff;
+  font-family:'Oxanium';font-weight:700;font-size:16px;border:none;border-radius:10px;
+  cursor:pointer;letter-spacing:0.5px;transition:opacity .2s;
+}
+.btn-submit:hover{opacity:0.9}
+.btn-submit:disabled{opacity:0.5;cursor:not-allowed}
+.msg{text-align:center;padding:12px;border-radius:8px;margin-top:16px;font-size:14px;display:none}
+.msg.err{display:block;background:rgba(225,6,0,0.15);color:#ff6b6b}
+.msg.ok{display:block;background:rgba(25,211,107,0.15);color:var(--green)}
+.success-box{text-align:center;max-width:520px}
+.success-box h2{font-family:'Oxanium';font-size:20px;margin:16px 0 12px}
+.success-box p{color:var(--silver);font-size:14px;line-height:1.7;margin-bottom:16px}
+.discord-link{display:inline-block;padding:12px 28px;background:#5865F2;color:#fff;font-weight:700;border-radius:10px;text-decoration:none;font-size:15px;transition:opacity .2s}
+.discord-link:hover{opacity:0.9}
+.lang-toggle{position:absolute;top:20px;right:20px;font-size:13px}
+.lang-toggle button{background:none;border:1px solid var(--border);color:var(--silver);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:13px}
+.lang-toggle button.active{color:var(--text);border-color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="lang-toggle">
+  <button id="btn-en" class="active" onclick="setLang('en')">EN</button>
+  <button id="btn-jp" onclick="setLang('jp')">JP</button>
+</div>
+
+<img src="/PITWALL_logo_mark.png" alt="PITWALL" class="logo">
+
+<!-- ─── FORM ─── -->
+<div id="form-section">
+<h1 data-en="Apply for Development Tester Access" data-jp="開発テスターアクセスを申請">Apply for Development Tester Access</h1>
+<p class="subtitle" data-en="Help tune PITWALL for specific categories. Every application is reviewed by the developer — you'll hear back within a day." data-jp="特定カテゴリー向けにPITWALLを調整する開発テスタープログラムです。応募は開発者が確認し、通常1日以内にご連絡します。">Help tune PITWALL for specific categories. Every application is reviewed by the developer — you'll hear back within a day.</p>
+
+<form id="apply-form" novalidate>
+  <div class="field">
+    <label data-en="Email address" data-jp="メールアドレス"><span class="req">*</span> <span class="t">Email address</span></label>
+    <input type="email" name="email" required autocomplete="email">
+  </div>
+
+  <div class="field">
+    <label data-en="Discord username (optional)" data-jp="Discordユーザー名（任意）"><span class="t">Discord username (optional)</span></label>
+    <input type="text" name="discord" autocomplete="off" placeholder="e.g. driver123">
+  </div>
+
+  <div class="field">
+    <label data-en="Main series / car" data-jp="主なシリーズ・車種"><span class="req">*</span> <span class="t">Main series / car</span></label>
+    <input type="text" name="series" required placeholder="e.g. GT3 Sprint, IMSA, Ferrari Fixed">
+  </div>
+
+  <div class="field">
+    <label data-en="Racing discipline" data-jp="レースカテゴリー"><span class="req">*</span> <span class="t">Racing discipline</span></label>
+    <div class="radio-group">
+      <label><input type="radio" name="discipline" value="road" required> Road</label>
+      <label><input type="radio" name="discipline" value="oval"> Oval</label>
+      <label><input type="radio" name="discipline" value="dirt_road"> Dirt Road</label>
+      <label><input type="radio" name="discipline" value="dirt_oval"> Dirt Oval</label>
+    </div>
+  </div>
+
+  <div class="field">
+    <label data-en="Preferred language" data-jp="希望言語"><span class="req">*</span> <span class="t">Preferred language</span></label>
+    <select name="language" required>
+      <option value="" disabled selected data-en="Select…" data-jp="選択…">Select…</option>
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+      <option value="de">Deutsch</option>
+      <option value="other" data-en="Other" data-jp="その他">Other</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label data-en="What do you expect from PITWALL?" data-jp="PITWALLに何を期待しますか？"><span class="t">What do you expect from PITWALL?</span></label>
+    <textarea name="expectations" rows="3" maxlength="1000"></textarea>
+  </div>
+
+  <div class="field">
+    <label data-en="How did you hear about PITWALL?" data-jp="PITWALLをどこで知りましたか？"><span class="t">How did you hear about PITWALL?</span></label>
+    <select name="referral_source">
+      <option value="" data-en="Select…" data-jp="選択…">Select…</option>
+      <option value="iracing_forum" data-en="iRacing Forum" data-jp="iRacingフォーラム">iRacing Forum</option>
+      <option value="discord" data-en="Discord" data-jp="Discord">Discord</option>
+      <option value="youtube" data-en="YouTube" data-jp="YouTube">YouTube</option>
+      <option value="twitter" data-en="X / Twitter" data-jp="X / Twitter">X / Twitter</option>
+      <option value="tiktok" data-en="TikTok" data-jp="TikTok">TikTok</option>
+      <option value="instagram" data-en="Instagram" data-jp="Instagram">Instagram</option>
+      <option value="friend" data-en="Friend / word of mouth" data-jp="友人・口コミ">Friend / word of mouth</option>
+      <option value="search" data-en="Search engine" data-jp="検索エンジン">Search engine</option>
+      <option value="other" data-en="Other" data-jp="その他">Other</option>
+    </select>
+  </div>
+
+  <div class="consent">
+    <input type="checkbox" id="consent-cb" name="consent" required>
+    <span data-en="I understand PITWALL is in active development. It's not a finished product — it's a program where early drivers and the developer build the engineer together through real racing and honest feedback." data-jp="PITWALLが開発中であることを理解しています。完成品ではなく、実際のレースと率直なフィードバックを通じて、初期ドライバーと開発者が一緒にエンジニアを作り上げるプログラムです。">I understand PITWALL is in active development. It's not a finished product — it's a program where early drivers and the developer build the engineer together through real racing and honest feedback.</span>
+  </div>
+
+  <button type="submit" class="btn-submit" data-en="Submit Application" data-jp="申請を送信">Submit Application</button>
+  <div id="form-msg" class="msg"></div>
+</form>
+</div>
+
+<!-- ─── SUCCESS ─── -->
+<div id="success-section" class="success-box" style="display:none">
+  <img src="/PITWALL_logo_mark.png" alt="PITWALL" class="logo">
+  <h2 data-en="Application received!" data-jp="申請を受け付けました！">Application received!</h2>
+  <p data-en="We'll review your application and send your access link to the email you provided — usually within a day." data-jp="申請を確認し、ご記入いただいたメールアドレスにアクセスリンクをお送りします——通常1日以内です。">We'll review your application and send your access link to the email you provided — usually within a day.</p>
+  <p data-en="In the meantime, join our Discord to connect with other drivers:" data-jp="その間、Discordで他のドライバーと交流できます：">In the meantime, join our Discord to connect with other drivers:</p>
+  <a href="https://discord.gg/3R3ssGmhdm" target="_blank" rel="noopener" class="discord-link" id="discord-btn" data-en="Join PITWALL Discord" data-jp="PITWALL Discordに参加">Join PITWALL Discord</a>
+</div>
+
+<script>
+let lang = 'en';
+function setLang(l) {
+  lang = l;
+  document.getElementById('btn-en').classList.toggle('active', l==='en');
+  document.getElementById('btn-jp').classList.toggle('active', l==='jp');
+  document.querySelectorAll('[data-en]').forEach(el => {
+    const txt = el.getAttribute('data-' + l);
+    if (txt) {
+      if (el.tagName === 'OPTION') el.textContent = txt;
+      else if (el.querySelector('.t')) el.querySelector('.t').textContent = txt;
+      else el.textContent = txt;
+    }
+  });
+}
+// detect from URL param or browser
+const sp = new URLSearchParams(location.search);
+const urlLang = sp.get('lang');
+if (urlLang === 'jp' || urlLang === 'ja') setLang('jp');
+else if (!urlLang && navigator.language.startsWith('ja')) setLang('jp');
+
+const program = sp.get('program') || 'general';
+var aid = sessionStorage.getItem('_pw_aid');
+if (!aid) { aid = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2); sessionStorage.setItem('_pw_aid', aid); }
+
+function funnelEvent(name, extra) {
+  try { fetch('/api/funnel/event', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({event: name, anon_id: aid, lang, ...extra})
+  }).catch(()=>{}); } catch {}
+}
+funnelEvent('founding_apply_start');
+
+const form = document.getElementById('apply-form');
+const msg = document.getElementById('form-msg');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  msg.className = 'msg'; msg.style.display = 'none';
+  const btn = form.querySelector('.btn-submit');
+  btn.disabled = true;
+
+  const fd = new FormData(form);
+  const data = {
+    program,
+    email: fd.get('email'),
+    discord: fd.get('discord') || null,
+    series: fd.get('series'),
+    discipline: fd.get('discipline'),
+    language: fd.get('language'),
+    expectations: fd.get('expectations') || null,
+    referral_source: fd.get('referral_source') || null,
+    consent: !!fd.get('consent'),
+    page_lang: lang,
+  };
+
+  if (!data.email || !data.series || !data.discipline || !data.language || !data.consent) {
+    msg.className = 'msg err';
+    msg.textContent = lang === 'jp' ? '必須項目を入力してください。' : 'Please fill in all required fields.';
+    msg.style.display = 'block';
+    btn.disabled = false;
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/tester/apply', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(data),
+    });
+    const r = await res.json();
+    if (r.ok) {
+      funnelEvent('founding_apply_complete', {application_id: r.id});
+      document.getElementById('form-section').style.display = 'none';
+      document.getElementById('success-section').style.display = 'block';
+      document.getElementById('discord-btn').addEventListener('click', () => {
+        funnelEvent('discord_click', {application_id: r.id});
+      });
+    } else {
+      msg.className = 'msg err';
+      msg.textContent = r.error || (lang === 'jp' ? '送信に失敗しました。' : 'Submission failed.');
+      msg.style.display = 'block';
+      btn.disabled = false;
+    }
+  } catch {
+    msg.className = 'msg err';
+    msg.textContent = lang === 'jp' ? '接続エラー。もう一度お試しください。' : 'Connection error. Please try again.';
+    msg.style.display = 'block';
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
