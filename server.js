@@ -25,6 +25,43 @@ const client = new Anthropic({
   httpClient: require('@anthropic-ai/sdk').defaultHttpClient,
 });
 
+// ── コスト計測: 環境判定（クライアントに決めさせない。サーバー環境変数のみを正とする）──
+const PITWALL_ENVIRONMENT = process.env.RAILWAY_ENVIRONMENT_NAME || 'local';
+
+// ── コスト計測: source/triggerをサーバー側で導出する（クライアント申告を無条件に信用しない）──
+// 許可source: auto_judge / auto_pace / ptt / typed / translate / other
+const USAGE_INPUT_SOURCES = new Set(['ptt', 'typed']);
+function deriveUsageSourceTrigger(body) {
+  if (body.judgeCall && typeof body.judgeCall === 'object') {
+    return { source: 'auto_judge', trigger: String(body.judgeCall.kind || 'unknown').slice(0, 64) };
+  }
+  if (body.paceCheck && typeof body.paceCheck === 'object') {
+    return { source: 'auto_pace', trigger: 'pace_check' };
+  }
+  if (body.driverInsight === true) {
+    return { source: 'other', trigger: 'driver_insight' };
+  }
+  if (body.briefingKickoff === true) {
+    return { source: 'other', trigger: 'briefing_kickoff' };
+  }
+  // PTT/typedはサーバー側で判別できないため、ホワイトリスト検証したクライアント申告のみ許可。
+  if (typeof body.inputSource === 'string' && USAGE_INPUT_SOURCES.has(body.inputSource)) {
+    return { source: body.inputSource, trigger: null };
+  }
+  return { source: 'other', trigger: null };
+}
+
+// Google TTS/STTの生課金単位を記録（DB書込失敗で音声を止めない・非同期fire-and-forget）。
+function recordGoogleUsageSafe(req, fields) {
+  if (!auth.isReady()) return;
+  const usageSessionId = (typeof req.body.usageSessionId === 'string' && req.body.usageSessionId.length <= 64)
+    ? req.body.usageSessionId : null;
+  auth.recordGoogleUsage({
+    userId: req.user ? req.user.id : null, sessionId: usageSessionId,
+    environment: PITWALL_ENVIRONMENT, ...fields,
+  }).catch(err => console.error('[USAGE] Google usage DB write failed:', err.message));
+}
+
 // ── Stripe（課金）──未設定でもサイトは動く ──
 let stripe = null;
 try {
@@ -293,6 +330,22 @@ app.get('/api/funnel/stats', requireAdmin, async (_req, res) => {
   }
   catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
+// user_id/session_id/source等の識別子のみを扱う。メールアドレスや表示名は一切返さない。
+app.get('/api/usage/stats', requireAdmin, async (req, res) => {
+  try {
+    const q = req.query || {};
+    const filters = {
+      from: q.from || undefined,
+      to: q.to || undefined,
+      userId: q.user_id ? parseInt(q.user_id, 10) : undefined,
+      sessionId: q.session_id || undefined,
+      source: q.source || undefined,
+    };
+    const stats = await auth.getApiUsageStats(filters);
+    res.json({ ok: true, stats });
+  }
+  catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
 
 // ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
 //   POST /api/admin/member/revoke {email}            → 即座にis_member=false
@@ -422,6 +475,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
     let { system, messages, max_tokens = 300, userName, character, mode } = req.body;
 
+    // コスト計測用session_id（クライアント値。認証には使わない。長さ・型のみサーバー側で検証）。
+    const usageSessionId = (typeof req.body.usageSessionId === 'string' && req.body.usageSessionId.length <= 64)
+      ? req.body.usageSessionId : null;
+
     // ── PITWALL課金ゲート ──
     // exe(PITWALL)は product:'pitwall' を送る。課金者(is_member)のみ許可。
     // RaceVoice(無料)や旧クライアントは product を送らない → 従来通り通す。
@@ -537,10 +594,18 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Race mode: Haiku (2-3x faster, sufficient for short radio calls)
     const model = (mode === 'race') ? 'claude-haiku-4-5-20251001' : 'claude-sonnet-4-5';
 
-    // 実測コストログ（Railwayログで確認可能。粗利率の実測に使う）
+    // 実測コストログ（Railwayログは7日で消えるため、DBにも永続化する。粗利率の実測に使う）
+    const { source: usageSource, trigger: usageTrigger } = deriveUsageSourceTrigger(req.body);
     const logUsage = (usage) => {
       if (!usage) return;
-      console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
+      console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} source=${usageSource} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
+      if (auth.isReady()) {
+        auth.recordApiUsage({
+          userId: req.user ? req.user.id : null, sessionId: usageSessionId,
+          character, mode, source: usageSource, trigger: usageTrigger, model, usage,
+          environment: PITWALL_ENVIRONMENT,
+        }).catch(err => console.error('[USAGE] DB write failed:', err.message));
+      }
     };
 
     // ── ストリーミング：文字が生成された端からクライアントへ流す（体感レスポンス短縮）──
@@ -610,12 +675,23 @@ app.post('/api/translate', ttsLimiter, async (req, res) => {
     const target = req.body.target === 'ja' ? 'Japanese' : 'English';
     if (!text.trim()) return res.json({ text: '' });
 
+    const translateModel = 'claude-haiku-4-5-20251001';
     const r = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: translateModel,
       max_tokens: 200,
       system: `You are a subtitle translator for a motorsport race-engineer radio overlay. Translate the user's line into ${target}. Keep it terse and natural, like a real radio call. Preserve driver/car numbers, positions (P3), lap/sector terms, and units (°C, L). Output ONLY the translation — no quotes, no notes, no romaji.`,
       messages: [{ role: 'user', content: text }],
     });
+    // 失敗時（例外側）はusageが無いので記録しない。成功時のみusageが存在する。
+    if (r.usage && auth.isReady()) {
+      const usageSessionId = (typeof req.body.usageSessionId === 'string' && req.body.usageSessionId.length <= 64)
+        ? req.body.usageSessionId : null;
+      auth.recordApiUsage({
+        userId: req.user ? req.user.id : null, sessionId: usageSessionId,
+        source: 'translate', trigger: null, model: translateModel, usage: r.usage,
+        environment: PITWALL_ENVIRONMENT,
+      }).catch(err => console.error('[USAGE] DB write failed (translate):', err.message));
+    }
     const out = (r.content || []).map(b => b.text || '').join('').trim();
     res.json({ text: out });
   } catch (err) {
@@ -669,9 +745,11 @@ app.post('/api/tts', ttsLimiter, async (req, res) => {
     if (!r.ok) {
       const errText = await r.text();
       console.error('Google TTS error:', r.status, errText);
+      recordGoogleUsageSafe(req, { kind: 'tts', charCount: text.length, voice: ttsBody.voice.name, language: ttsBody.voice.languageCode, success: false });
       return res.status(502).json({ error: 'tts_failed' });
     }
     const data = await r.json();
+    recordGoogleUsageSafe(req, { kind: 'tts', charCount: text.length, voice: ttsBody.voice.name, language: ttsBody.voice.languageCode, success: true });
     res.json({ audioContent: data.audioContent });  // base64 MP3
   } catch (err) {
     console.error('TTS proxy error:', err.message);
@@ -690,6 +768,12 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
     if (!audio || typeof audio !== 'string') {
       return res.status(400).json({ error: 'audio is required' });
     }
+    // bridge.pyがraw PCMから逆算した実測秒数（LINEAR16経路のみ送られる）。数値・0以上・現実的な
+    // PTT録音上限(120秒)以内のみ採用。推測で埋めない＝範囲外や非数値はNULLのままにする。
+    const MAX_PTT_SECONDS = 120;
+    const rawDuration = req.body.audioDurationSeconds;
+    const audioDurationSeconds = (typeof rawDuration === 'number' && Number.isFinite(rawDuration)
+      && rawDuration >= 0 && rawDuration <= MAX_PTT_SECONDS) ? rawDuration : null;
     const lang = languageCode || 'en-US';
     const isJapanese = lang.startsWith('ja');
     const racingPhrases = isJapanese
@@ -722,12 +806,18 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
         body: JSON.stringify(sttBody),
       }
     );
+    // audio_bytesは常に実測できる診断用の補助値（主単位ではない）。
+    // audio_secondsはbridge.pyがLINEAR16 raw PCMから逆算した実測秒数がある時だけ埋める。
+    // WEBM_OPUS等の圧縮音声経路ではNULLのまま＝推測で秒数を作らない。
+    const audioBytes = Buffer.byteLength(audio, 'base64');
     if (!r.ok) {
       const errText = await r.text();
       console.error('Google STT error:', r.status, errText);
+      recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, audioSeconds: audioDurationSeconds, language: lang, success: false });
       return res.status(502).json({ error: 'stt_failed', detail: errText.slice(0, 200) });
     }
     const data = await r.json();
+    recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, audioSeconds: audioDurationSeconds, language: lang, success: true });
     const text = (data.results || [])
       .map(x => x.alternatives && x.alternatives[0] && x.alternatives[0].transcript)
       .filter(Boolean).join(' ').trim();

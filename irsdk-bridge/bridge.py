@@ -71,6 +71,9 @@ ptt_pressed = False       # 現在押下中か
 ptt_lang = "ja-JP"        # STT言語（選択キャラに追従。English勢=en-GB/en-US、日本語勢=ja-JP）
 ptt_mismatch_warned = False  # 登録デバイスが見つからない事を通知済みか（毎スキャンで連呼しない）
 
+# ── コスト計測用session_id（rendererから受け取りメモリ保持。認証には使わない）──
+usage_session_id = None
+
 # ── 音量ボタン（ステアリングのダイヤル/ボタンで走行中に音量上下）──
 vol_binding = {"up": None, "down": None}   # 各 {"joy": int, "button": int}
 vol_capturing = None       # 設定モード中の対象 'up' | 'down' | None
@@ -397,28 +400,36 @@ def record_ptt_audio():
             except Exception as _ge:
                 log("PTT auto-gain skipped: " + str(_ge))
             try:
+                sample_width = ptt_audio.get_sample_size(FORMAT)
+                # rawはLINEAR16のraw PCM(gain調整後)なので、byte数から正確な秒数を逆算できる
+                # （WEBM_OPUS等の圧縮音声と違い、ここは推測不要の実測値）。
+                duration_seconds = len(raw) / float(RATE * CHANNELS * sample_width)
                 with wave.open(wav_file, 'wb') as wf:
                     wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(ptt_audio.get_sample_size(FORMAT))
+                    wf.setsampwidth(sample_width)
                     wf.setframerate(RATE)
                     wf.writeframes(raw)
                 with open(wav_file, 'rb') as f:
                     b64 = base64.b64encode(f.read()).decode()
-                log("PTT: wav saved (%d bytes), sending to STT" % len(b64))
-                asyncio.run_coroutine_threadsafe(send_stt_request(b64), loop)
+                log("PTT: wav saved (%d bytes, %.2fs), sending to STT" % (len(b64), duration_seconds))
+                asyncio.run_coroutine_threadsafe(send_stt_request(b64, duration_seconds), loop)
             except Exception as e:
                 log("PTT wav/stt error: " + str(e))
 
-async def send_stt_request(audio_b64):
+async def send_stt_request(audio_b64, duration_seconds=None):
     """RailwayのSTTプロキシにマイク音声を送信 (LINEAR16/16kHz WAV)"""
     try:
         import urllib.request
-        stt_body = json.dumps({
+        stt_payload = {
             "audio": audio_b64,
             "encoding": "LINEAR16",
             "sampleRateHertz": 16000,
             "languageCode": ptt_lang,
-        }).encode("utf-8")
+            "usageSessionId": usage_session_id,
+        }
+        if duration_seconds is not None:
+            stt_payload["audioDurationSeconds"] = duration_seconds
+        stt_body = json.dumps(stt_payload).encode("utf-8")
         req = urllib.request.Request(
             RAILWAY_URL + "/api/stt",
             data=stt_body,
@@ -3040,7 +3051,7 @@ def poll_joystick():
 
 
 async def handler(websocket):
-    global ptt_capturing, ptt_lang, vol_capturing, selected_mic_index, ptt_test_active
+    global ptt_capturing, ptt_lang, vol_capturing, selected_mic_index, ptt_test_active, usage_session_id
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
@@ -3076,6 +3087,13 @@ async def handler(websocket):
                     continue
                 if cmd == 'log_line':
                     log("CONVO " + str(msg.get('text', '')))
+                    continue
+                if cmd == 'usage_session':
+                    # コスト計測用session_id。64文字以内・認証やログ機微情報には使わない。
+                    sid = msg.get('session_id')
+                    if isinstance(sid, str) and 0 < len(sid) <= 64:
+                        usage_session_id = sid
+                        log("USAGE_SESSION " + sid)
                     continue
                 log("CMD received: " + str(cmd))
                 if cmd == "ptt_start":
