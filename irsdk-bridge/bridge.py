@@ -683,6 +683,36 @@ MC_PACK_SEC    = 3.0      # この秒数以内に続いていれば「固まっ�
 MC_REARM_SEC   = 8.0      # 発火は5秒。再武装はここまで離れた時だけ（境界振動での連呼防止）
 MC_TRAIN_TOLERANCE = 0.5  # 等間隔判定：車間のばらつきが平均のこの割合以内なら「列車」
 
+# ★2026-07-23 Codex設計：LLM頭脳・自動発火(judge_call)のコスト間引き。
+#   各判定(danger/battle/catchup/defend等)には既に車単位の重複防止(再武装・段階管理)があるが、
+#   パックレースで複数の異なる車が同時多発すると、車ごとの重複防止をすり抜けてLLM問い合わせが
+#   積み上がる。ここでは「発話予算」でなく「LLMへ問い合わせる回数」自体に全体の上限を設ける
+#   （NO_CALLで終わってもAPI課金は発生するため、間引きはLLMを呼ぶ前が本丸）。
+#   dangerは安全直結の予告なので間引き対象外＝常に通す。
+JUDGE_LLM_BUDGET_MAX = 6      # 直近JUDGE_LLM_BUDGET_WINDOW秒間に、間引き対象kindで最大この回数までLLMへ問い合わせる
+JUDGE_LLM_BUDGET_WINDOW = 60.0
+JUDGE_LLM_NEVER_THROTTLE = {'danger'}  # 安全直結：間引き対象外（常にLLMへ通す）
+
+
+def _judge_llm_gate(kind, call_times, now):
+    """judge_call broadcast直前のローカル間引き（_director_allowsと同じくnowを引数で受け取りテスト可能にする）。
+    dangerは安全直結のため常にTrue（間引き対象外）。call_timesは呼び出し元が持つ直近呼び出し時刻のlist
+    （破壊的に操作する＝リストそのものを状態として使う）。
+    True=このままLLMへ送ってよい。False=ローカルで沈黙(LLMを一切呼ばない=課金なし)。
+    broadcast()自体を素通りする既存のdirector_gateとは別の関門（LLMを呼ぶ前 vs 喋る前）。"""
+    if kind in JUDGE_LLM_NEVER_THROTTLE:
+        return True
+    while call_times and now - call_times[0] > JUDGE_LLM_BUDGET_WINDOW:
+        call_times.pop(0)
+    if len(call_times) >= JUDGE_LLM_BUDGET_MAX:
+        log("JUDGE_LLM_GATE skip kind=%s (budget %d/%ds reached, LLM not called)"
+            % (kind, JUDGE_LLM_BUDGET_MAX, int(JUDGE_LLM_BUDGET_WINDOW)))
+        return False
+    call_times.append(now)
+    log("JUDGE_LLM_GATE allow kind=%s (%d/%d used this window)"
+        % (kind, len(call_times), JUDGE_LLM_BUDGET_MAX))
+    return True
+
 def _describe_traffic(gaps):
     """後方車のギャップ列(昇順)から形を返す。 -> (shape, clusters)
        shape: single / pack / split / train
@@ -1250,6 +1280,7 @@ def poll_iracing():
     stopped_warned = {}         # car_idx -> last warned time
     catchup_stage = {}          # car_idx -> 前方車両への段階的キャッチアップコール、直近で知らせた段階(0=未・1=7秒・2=4秒・3=3秒・4=1.5秒)
     defend_stage = {}           # car_idx -> 後方車両への段階的ディフェンスコール、同上
+    judge_llm_call_times = []   # judge_call(間引き対象kind)がLLMへ問い合わせた直近の時刻（JUDGE_LLM_BUDGET_MAX判定用）
     gap_pace_hist = {}          # car_idx -> 直前ラップでのpace_diff（トレンド判定・確度の高低に使う）
     dir_fix_seen = {}           # car_idx -> 直近ログ済みの前後食い違い状態（DIR FIX診断のログ肥大を防ぐ間引き用）
     in_corner = False           # コーナー単位サイドバイサイド検知：今コーナー中か
@@ -2083,7 +2114,7 @@ def poll_iracing():
                         _prev = lap_delta_hist[:-1][-4:]
                         if _prev:
                             _typ = sum(_prev) / len(_prev)
-                            if (diff - _typ) >= 1.5:
+                            if (diff - _typ) >= 1.5 and _judge_llm_gate('time_loss', judge_llm_call_times, time.time()):
                                 broadcast({'type': 'judge_call', 'kind': 'time_loss',
                                     'lost': round(diff - _typ, 1), 'time': t})
 
@@ -2212,7 +2243,8 @@ def poll_iracing():
                 tow_active = True
                 # ★2026-07-19 固定文→LLMへ（Yuji「簡単な声掛けでいい。当てられた時も、その逆もある」）。
                 #   当てられたのか自分のミスかは分からない＝決め打ちの慰めも説教も外す。短く一言だけ。
-                broadcast({'type': 'judge_call', 'kind': 'towing', 'tow_time': round(tow_time, 1)})
+                if _judge_llm_gate('towing', judge_llm_call_times, time.time()):
+                    broadcast({'type': 'judge_call', 'kind': 'towing', 'tow_time': round(tow_time, 1)})
         else:
             tow_active = False
 
@@ -2613,6 +2645,7 @@ def poll_iracing():
                                 # ★2026-07-19 反射テンプレ→LLM判断へ卒業。旧文言は「気をつけろ」の命令調で
                                 #   Yujiの「命令口調をやめる」方針に反していた（実走ログで4回発話）。
                                 #   危険予告は数秒かけて接近する＝判断の"間"がある。セッション中1台1回のまま。
+                                _judge_llm_gate('danger', judge_llm_call_times, time.time())  # 安全直結＝常にTrue。計測のためだけに通す
                                 broadcast({'type': 'judge_call', 'kind': 'danger',
                                     'behind': bool(_behind), 'gap': round(abs(delta), 1),
                                     'reason': reason, 'car_number': num})
@@ -2646,12 +2679,14 @@ def poll_iracing():
                                 #   前後はクラス順位で確認（EstTime符号事故の防止）。位置が前方＝誤検知なら送らない。
                                 _bpos = car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None
                                 _pos_says_ahead = (_bpos is not None and class_pos is not None and _bpos < class_pos)
-                                if not _pos_says_ahead:
+                                if not _pos_says_ahead and _judge_llm_gate('battle', judge_llm_call_times, time.time()):
                                     broadcast({'type': 'judge_call', 'kind': 'battle',
                                         'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
                                         'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
                                         'car_number': num, 'class_pos': _bpos,
                                         'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '.'})
+                                # ★間引きでLLMを呼ばなかった場合も再武装は進める（同じ車を毎フレーム
+                                #   問い合わせ続けない＝間引きの意味が無くなるのを防ぐ）。
                                 behind_armed[idx] = False   # 1回判断に回したら再武装まで黙る
                                 battle_ever_warned.add(idx)
                                 last_battle_global = now
@@ -2714,9 +2749,10 @@ def poll_iracing():
                                     catchup_stage[idx] = stage
                                     # ★2026-07-19 LLM判断層へ：完成文でなく"判断候補"を送る。AIが言うか黙るか決める。
                                     #   前後はクラス順位ベースの正しい値。messageはLLM失敗時のフォールバック用に残す。
-                                    broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
-                                        'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
-                                        'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
+                                    if _judge_llm_gate('catchup', judge_llm_call_times, time.time()):
+                                        broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
+                                            'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                            'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                     last_battle_global = now
                         else:  # 相手が後方（順位が1つ下）＝ディフェンス対象
                             if gap > 15.0:
@@ -2729,9 +2765,10 @@ def poll_iracing():
                                 if stage > defend_stage.get(idx, 0):
                                     defend_stage[idx] = stage
                                     # ★2026-07-19 LLM判断層へ（上のcatchupと同じ）
-                                    broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
-                                        'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
-                                        'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
+                                    if _judge_llm_gate('defend', judge_llm_call_times, time.time()):
+                                        broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
+                                            'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                            'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                     last_battle_global = now
 
                 # ══ マルチクラス(速いクラス)接近警告 ══
