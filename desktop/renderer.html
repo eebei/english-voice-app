@@ -1793,6 +1793,20 @@ async function drainQueue(){
   // Cloud TTSが使えない/設定なしなら即Web Speech
   if(Date.now() < ttsDisabledUntil || !c.gVoice){ reportSpoke(); playWebSpeech(clean, c, myGen); return; }
 
+  // ★2026-07-23 Codex再指摘 P0：onerrorとplay rejectが同じAudioで両方発火するケースがある。
+  //   両方でplayWebSpeech()を呼ぶと二重フォールバック＝重複再生・reportSpoke二重計上に
+  //   なるため、_fellBack guard 1本で厳密に「1回きり」を担保する。
+  //   （旧実装で試したonended/onerrorのnull cleanupは guard と役割が被り、変異試験で
+  //    guard 単独の効きが検出できなくなるため意図的に外している。guard が真実の関門。）
+  let _fellBack = false;
+  const _fallbackOnce = (where, detail)=>{
+    if(_fellBack || myGen !== speakGeneration) return;
+    _fellBack = true;
+    ttsFailLog(where, detail+' chars='+clean.length+' lang='+c.gLang+' → WebSpeechへフォールバック');
+    ttsAudio = null;   // 再生中フラグのハウスキーピング（drainQueue次サイクルで誤って参照されない）
+    reportSpoke();
+    playWebSpeech(clean, c, myGen);
+  };
   try{
     const ctrl = new AbortController();
     speakFetchCtrl = ctrl;                                  // 割り込み時にabortできるよう保持
@@ -1808,19 +1822,22 @@ async function drainQueue(){
     });
     clearTimeout(fetchTimer);
     if(myGen !== speakGeneration) return;                   // ★割り込まれた＝この発話は破棄
+    // ★2026-07-23 Codex再指摘 P1：HTTP/空audioでthrowするとcatchでcloud_tts_fetch_errorとして
+    //   二重ログされていた。throwせず早期returnで正確に1kindだけログする設計へ変更。
     if(r.status===503){
-      ttsFailLog('cloud_tts_503', 'chars='+clean.length+' lang='+c.gLang+' voice='+c.gVoice+' → WebSpeechへフォールバック（60秒間Cloud TTSを無効化）');
-      ttsDisabledUntil = Date.now()+60000; reportSpoke(); playWebSpeech(clean, c, myGen); return;
+      ttsDisabledUntil = Date.now()+60000;
+      _fallbackOnce('cloud_tts_503', 'voice='+c.gVoice+' (60秒間Cloud TTSを無効化)');
+      return;
     }
     if(!r.ok){
-      ttsFailLog('cloud_tts_http', 'status='+r.status+' chars='+clean.length+' lang='+c.gLang);
-      throw new Error('tts '+r.status);
+      _fallbackOnce('cloud_tts_http', 'status='+r.status);
+      return;
     }
     const data = await r.json();
     if(myGen !== speakGeneration) return;                   // ★json待ちの間の割り込みも捨てる
     if(!data.audioContent){
-      ttsFailLog('cloud_tts_empty_audio', 'chars='+clean.length+' lang='+c.gLang);
-      throw new Error('empty audio');
+      _fallbackOnce('cloud_tts_empty_audio', '');
+      return;
     }
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
     audio.volume = pwVolume;   // ユーザー設定の音量を適用
@@ -1829,31 +1846,28 @@ async function drainQueue(){
     audio.onended = ()=>{ if(myGen!==speakGeneration) return; ttsAudio=null; onUtteranceDone(); };
     // ★2026-07-23 診断計装：audio.onerrorは従来ログ無し・フォールバック無しで沈黙終了していた。
     //   Yuji報告「字幕は出たが音が来ない」の最有力容疑者。証拠を残す＋WebSpeechへフォールバック。
-    audio.onerror = (ev)=>{
-      if(myGen!==speakGeneration) return;
+    //   _fallbackOnceで両方経路の重複発火を抑止。
+    audio.onerror = ()=>{
       const err = audio.error ? ('code='+audio.error.code+' msg='+(audio.error.message||'')) : 'no-audio.error';
-      ttsFailLog('audio_element_onerror', err+' chars='+clean.length+' lang='+c.gLang+' → WebSpeechへフォールバック');
-      ttsAudio=null;
-      playWebSpeech(clean, c, myGen);   // 従来はonUtteranceDone()で即終了＝完全沈黙。字幕だけ残る現象の原因候補。
+      _fallbackOnce('audio_element_onerror', err);
     };
     try{
       await audio.play();
     }catch(playErr){
       if(myGen !== speakGeneration) return;                 // 割り込みでabortしたのは正常
-      ttsFailLog('audio_play_reject', (playErr && (playErr.name+': '+playErr.message))+' chars='+clean.length+' lang='+c.gLang+' → WebSpeechへフォールバック');
-      ttsAudio=null;
-      reportSpoke();
-      playWebSpeech(clean, c, myGen);
+      _fallbackOnce('audio_play_reject', (playErr && (playErr.name+': '+playErr.message)));
       return;
     }
+    // audio.play()が解決した後、上のawait中に onerror が同期発火してフォールバック済みなら
+    // reportSpokeは打たない（_fallbackOnce内で既に打っている）。
+    if(_fellBack) return;
     reportSpoke();                                          // ★再生が始まってから計上
   }catch(e){
     if(myGen !== speakGeneration) return;                   // 割り込みによるabortは既にここで抜ける（診断対象外）
-    // 上のgen照合を通過した＝ユーザ割り込みではない。AbortErrorならfetchの8秒タイムアウト。
+    // ここへ来るのはfetchが例外を投げた場合のみ（HTTP/空audioは早期returnで到達しない）。
+    //   AbortError → タイムアウト（明示割り込みはgen照合で上で除外済み）／それ以外 → ネットワーク等。
     const kind = (e && e.name === 'AbortError') ? 'cloud_tts_timeout_8s' : 'cloud_tts_fetch_error';
-    ttsFailLog(kind, (e && (e.name+': '+e.message))+' chars='+clean.length+' lang='+c.gLang+' → WebSpeechへフォールバック');
-    reportSpoke();
-    playWebSpeech(clean, c, myGen);  // ネットワークエラー等 → Web Speechにフォールバック
+    _fallbackOnce(kind, (e && (e.name+': '+e.message)));
   }
 }
 
