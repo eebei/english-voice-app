@@ -579,6 +579,10 @@ def _session_scoped_reset_values():
         'checkered_pending': False,
         'session_racing_started': False,
         'session_laps': [],
+        # ★2026-07-23 Codex再指摘 P1：予選で予算満杯のままレース開始→最初の警告が通らない
+        #   事故を防ぐ。SessionNum変更時に候補予算をリセット（judge_llm_call_timesは他の
+        #   セッション限定状態と同じくセッション毎に独立させる）。
+        'judge_llm_call_times': [],
     }
 
 
@@ -691,25 +695,39 @@ MC_TRAIN_TOLERANCE = 0.5  # 等間隔判定：車間のばらつきが平均の�
 #   dangerは安全直結の予告なので間引き対象外＝常に通す。
 JUDGE_LLM_BUDGET_MAX = 6      # 直近JUDGE_LLM_BUDGET_WINDOW秒間に、間引き対象kindで最大この回数までLLMへ問い合わせる
 JUDGE_LLM_BUDGET_WINDOW = 60.0
-JUDGE_LLM_NEVER_THROTTLE = {'danger'}  # 安全直結：間引き対象外（常にLLMへ通す）
+# ★2026-07-23 Codex再指摘 P0：セッション中1回きり・間引くと永久消失する種類は対象外にする。
+#   dangerは危険ドライバー予告（同一車1回のみdanger_ever_warnedで永久ロック）。
+#   towingは牽引中の一声で、tow_activeフラグで1回だけ発火・以降は解除まで再発火しない。
+#   どちらも間引くと通知そのものが失われるため常にTrueで通す（実API課金はサーバー側api_usage_log
+#   が正・こちらは"候補予算"としてattempt回数を絞るだけ）。
+JUDGE_LLM_NEVER_THROTTLE = {'danger', 'towing'}
 
 
 def _judge_llm_gate(kind, call_times, now):
-    """judge_call broadcast直前のローカル間引き（_director_allowsと同じくnowを引数で受け取りテスト可能にする）。
-    dangerは安全直結のため常にTrue（間引き対象外）。call_timesは呼び出し元が持つ直近呼び出し時刻のlist
-    （破壊的に操作する＝リストそのものを状態として使う）。
-    True=このままLLMへ送ってよい。False=ローカルで沈黙(LLMを一切呼ばない=課金なし)。
-    broadcast()自体を素通りする既存のdirector_gateとは別の関門（LLMを呼ぶ前 vs 喋る前）。"""
+    """judge_call broadcast直前のローカル"候補"間引き（_director_allowsと同じくnowを引数で受け取りテスト可能にする）。
+
+    True=このままLLMへ送ってよい / False=ローカルで沈黙(LLMを一切呼ばない=課金なし)。
+
+    ★"候補"予算：本関数はbroadcast()の直前で消費する。broadcast()内のdirector_gate()が
+      その後sendを破棄した場合、実際にはLLMは呼ばれないがcall_timesには残る。
+      実API原価の集計はサーバー側api_usage_log（server.jsのrecordApiUsage）を正とし、
+      本ゲートは「Bridge側がLLM呼び出しをattemptする回数」の候補予算として扱う。
+      broadcast()自体を素通りする既存のdirector_gateとは別の関門（LLMを呼ぶ前 vs 喋る前）。
+
+    call_timesは呼び出し元が持つ直近呼び出し時刻のlist（破壊的に操作する＝リストそのものを
+    状態として使う）。SessionNum変更時は_session_scoped_reset_values()で[]へリセットされる
+    （前セッションの候補予算を持ち越してレース最初のcallが通らなくなる事故を防ぐ）。
+    """
     if kind in JUDGE_LLM_NEVER_THROTTLE:
         return True
     while call_times and now - call_times[0] > JUDGE_LLM_BUDGET_WINDOW:
         call_times.pop(0)
     if len(call_times) >= JUDGE_LLM_BUDGET_MAX:
-        log("JUDGE_LLM_GATE skip kind=%s (budget %d/%ds reached, LLM not called)"
+        log("JUDGE_LLM_GATE candidate-skip kind=%s (budget %d/%ds reached, no LLM attempt)"
             % (kind, JUDGE_LLM_BUDGET_MAX, int(JUDGE_LLM_BUDGET_WINDOW)))
         return False
     call_times.append(now)
-    log("JUDGE_LLM_GATE allow kind=%s (%d/%d used this window)"
+    log("JUDGE_LLM_GATE candidate-allow kind=%s (%d/%d used this window)"
         % (kind, len(call_times), JUDGE_LLM_BUDGET_MAX))
     return True
 
@@ -1564,6 +1582,7 @@ def poll_iracing():
             checkered_pending = _reset['checkered_pending']
             session_racing_started = _reset['session_racing_started']
             session_laps = _reset['session_laps']
+            judge_llm_call_times = _reset['judge_llm_call_times']
         if cur_snum is not None:
             last_session_num = cur_snum
 
@@ -2243,6 +2262,9 @@ def poll_iracing():
                 tow_active = True
                 # ★2026-07-19 固定文→LLMへ（Yuji「簡単な声掛けでいい。当てられた時も、その逆もある」）。
                 #   当てられたのか自分のミスかは分からない＝決め打ちの慰めも説教も外す。短く一言だけ。
+                # ★2026-07-23 Codex再指摘 P0：towingはJUDGE_LLM_NEVER_THROTTLE入り＝常に通す
+                #   （セッション中tow_activeで1回のみ発火・間引くと永久消失）。呼び出し形は
+                #   他のjudge_callと揃えておき、配線テストがブランチ削除の変異を検出できるようにする。
                 if _judge_llm_gate('towing', judge_llm_call_times, time.time()):
                     broadcast({'type': 'judge_call', 'kind': 'towing', 'tow_time': round(tow_time, 1)})
         else:
@@ -2679,17 +2701,19 @@ def poll_iracing():
                                 #   前後はクラス順位で確認（EstTime符号事故の防止）。位置が前方＝誤検知なら送らない。
                                 _bpos = car_class_pos_arr[idx] if (car_class_pos_arr and idx < len(car_class_pos_arr)) else None
                                 _pos_says_ahead = (_bpos is not None and class_pos is not None and _bpos < class_pos)
-                                if not _pos_says_ahead and _judge_llm_gate('battle', judge_llm_call_times, time.time()):
-                                    broadcast({'type': 'judge_call', 'kind': 'battle',
-                                        'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
-                                        'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
-                                        'car_number': num, 'class_pos': _bpos,
-                                        'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '.'})
-                                # ★間引きでLLMを呼ばなかった場合も再武装は進める（同じ車を毎フレーム
-                                #   問い合わせ続けない＝間引きの意味が無くなるのを防ぐ）。
-                                behind_armed[idx] = False   # 1回判断に回したら再武装まで黙る
-                                battle_ever_warned.add(idx)
-                                last_battle_global = now
+                                if not _pos_says_ahead:
+                                    # ★2026-07-23 Codex再指摘 P1：段階消費(behind_armed=False等)は
+                                    #   ゲート通過時のみ行う。間引きで送れなかったcandidateを
+                                    #   永久消失させない＝予算復活後に最新状態でリトライされる。
+                                    if _judge_llm_gate('battle', judge_llm_call_times, time.time()):
+                                        broadcast({'type': 'judge_call', 'kind': 'battle',
+                                            'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
+                                            'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
+                                            'car_number': num, 'class_pos': _bpos,
+                                            'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '.'})
+                                        behind_armed[idx] = False   # 1回判断に回したら再武装まで黙る
+                                        battle_ever_warned.add(idx)
+                                        last_battle_global = now
 
                     # ── 段階的キャッチアップ/ディフェンスコール（2026-07-14 Yuji設計→同日実走で再調整）──
                     # 単純な車間だけでなく「本当に追いつけそうか」をペース差(pace_diff)で判定してから、
@@ -2746,14 +2770,18 @@ def poll_iracing():
                                 confident = prev_pace is not None and prev_pace > 0.3
                                 stage = _catchup_stage_of(gap)
                                 if stage > catchup_stage.get(idx, 0):
-                                    catchup_stage[idx] = stage
                                     # ★2026-07-19 LLM判断層へ：完成文でなく"判断候補"を送る。AIが言うか黙るか決める。
                                     #   前後はクラス順位ベースの正しい値。messageはLLM失敗時のフォールバック用に残す。
+                                    # ★2026-07-23 Codex再指摘 P1：段階消費(catchup_stage[idx]=stage)は
+                                    #   ゲート通過時のみ。予算満杯で保留された段階は失われず、予算復活後の
+                                    #   次フレームで最新のstageで送り直される（gapが7→3→1.5と進んだ場合、
+                                    #   復活時は最新の1.5秒段階が最大1回送られる＝Codex受入条件の実現）。
                                     if _judge_llm_gate('catchup', judge_llm_call_times, time.time()):
                                         broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
                                             'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                             'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
-                                    last_battle_global = now
+                                        catchup_stage[idx] = stage
+                                        last_battle_global = now
                         else:  # 相手が後方（順位が1つ下）＝ディフェンス対象
                             if gap > 15.0:
                                 defend_stage[idx] = 0
@@ -2763,13 +2791,14 @@ def poll_iracing():
                                 confident = prev_pace is not None and prev_pace < -0.3
                                 stage = _catchup_stage_of(gap)
                                 if stage > defend_stage.get(idx, 0):
-                                    defend_stage[idx] = stage
                                     # ★2026-07-19 LLM判断層へ（上のcatchupと同じ）
+                                    # ★2026-07-23 Codex再指摘 P1：段階消費はゲート通過時のみ（catchupと同じ理由）。
                                     if _judge_llm_gate('defend', judge_llm_call_times, time.time()):
                                         broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
                                             'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                             'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
-                                    last_battle_global = now
+                                        defend_stage[idx] = stage
+                                        last_battle_global = now
 
                 # ══ マルチクラス(速いクラス)接近警告 ══
                 # ⚠️2026-07-14：EstTimeはクラス毎の想定ラップで秒換算する値でクロスクラスでは狂うため、
