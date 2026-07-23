@@ -57,6 +57,9 @@ const sandbox = {
   //   参照するようになった（Codexレビュー対応）。本番同様に未ログイン状態を模擬する。
   localStorage: { getItem: () => null, setItem: () => {} },
   usageSessionId: 'test-usage-session-id',
+  // ★2026-07-23 診断計装：ttsFailLogは本番でrenderer.htmlにdefineされているが、
+  //   このテストではspeak/drainQueue/playWebSpeechしか抽出しないためスタブが必要。
+  ttsFailLog: () => {},
   AbortController: class { constructor(){ this.signal={aborted:false}; } abort(){ this.signal.aborted=true; } },
   // TTS取得：テストが好きなタイミングで完了させられる
   fetch: () => new Promise((res, rej) => { ttsResolve = { res, rej }; }),
