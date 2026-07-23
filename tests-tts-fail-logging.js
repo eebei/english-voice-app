@@ -120,18 +120,29 @@ const check = (name, cond, detail) => {
 };
 
 // Audio共通スタブ（テストごとに挙動を分岐）
-function makeAudio({ playRejects, fireOnError }) {
+function makeAudio({ playRejects, fireOnError, fireOnended, fireOnendedThenOnError }) {
   return class {
     constructor(url) {
       this.src = url; this.volume = 1; this.onended = null; this.onerror = null;
       this._playRejects = playRejects;
       this._fireOnError = fireOnError;
-      if (fireOnError) this.error = { code: 4, message: 'MEDIA_ELEMENT_ERROR: unsupported' };
+      this._fireOnended = fireOnended;
+      this._fireOnendedThenOnError = fireOnendedThenOnError;
+      if (fireOnError || fireOnendedThenOnError) this.error = { code: 4, message: 'MEDIA_ELEMENT_ERROR: unsupported' };
     }
     async play() {
       // onerror発火オプションがあれば、play()の内側で発火させる（実ブラウザで両方起きるケースを模擬）
       if (this._fireOnError) {
         setTimeout(() => { if (this.onerror) this.onerror(new Event('error')); }, 0);
+      }
+      // 正常完了(onended)を発火させるオプション
+      if (this._fireOnended) {
+        setTimeout(() => { if (this.onended) this.onended(); }, 1);
+      }
+      // 正常完了 → その直後に遅延 onerror が来るケース（_completed guard の検証用）
+      if (this._fireOnendedThenOnError) {
+        setTimeout(() => { if (this.onended) this.onended(); }, 1);
+        setTimeout(() => { if (this.onerror) this.onerror(new Event('error')); }, 2);
       }
       if (this._playRejects) {
         throw new Error(this._playRejects);
@@ -220,10 +231,39 @@ async function runCase(label, opts, verify) {
   }, (s) => {
     check('WebSpeech呼び出しは1回だけ (二重フォールバックしない)', s.webSpeechCalls.length === 1, s.webSpeechCalls.length);
     check('spokeReportは1回だけ (二重計上しない)', s.spokeReports.length === 1, s.spokeReports.length);
+    check('utteranceDoneCalls === 1 (完了通知も1回だけ・キュー二重進行なし)', s.utteranceDoneCalls === 1, s.utteranceDoneCalls);
     // ログはaudio_element_onerror と audio_play_reject のどちらか片方だけ (先着1件のみ_fallbackOnceが受理)
     const kinds = s.ttsFails.map(l => l.split(' | ')[0].replace('[TTS_FAIL] ', ''));
     const audioKinds = kinds.filter(k => k === 'audio_element_onerror' || k === 'audio_play_reject');
     check('audio失敗ログは1件のみ (二重ログしない)', audioKinds.length === 1, audioKinds);
+  });
+
+  // ケース6b: audio.onerror のみ発火 (play() は resolve・遅延onerror) → 完了は1回 (Codex追加要求)
+  //   実ブラウザで「play() は成功したが再生中にデコード失敗」で起きる状況を模擬。
+  //   ここでフォールバックが2重に走ったり utteranceDone が2回呼ばれるとキュー二重進行になる。
+  await runCase('audio.onerror のみ発火 (play resolve後の遅延onerror) → 各回数=1 (Codex追加要求)', {
+    fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ audioContent: 'BASE64DATA' }) }),
+    AudioImpl: makeAudio({ fireOnError: true }),   // playRejectsなし＝play()はresolve
+  }, (s) => {
+    const kinds = s.ttsFails.map(l => l.split(' | ')[0].replace('[TTS_FAIL] ', ''));
+    check('audio_element_onerror が1回だけ', kinds.filter(k => k === 'audio_element_onerror').length === 1, kinds);
+    check('audio_play_reject は出ない (play()はresolveしている)', !kinds.includes('audio_play_reject'), kinds);
+    check('WebSpeech呼び出しは1回だけ (フォールバック1回)', s.webSpeechCalls.length === 1, s.webSpeechCalls.length);
+    check('spokeReportは1回だけ', s.spokeReports.length === 1, s.spokeReports.length);
+    check('utteranceDoneCalls === 1 (キュー二重進行なし)', s.utteranceDoneCalls === 1, s.utteranceDoneCalls);
+  });
+
+  // ケース6c: 正常完了(onended) → その直後の遅延onerror でも utteranceDone は1回 (_completed guard の検証)
+  await runCase('正常完了(onended)後の遅延onerror → utteranceDoneCalls === 1 (_completed guard の効き)', {
+    fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ audioContent: 'BASE64DATA' }) }),
+    AudioImpl: makeAudio({ fireOnendedThenOnError: true }),
+  }, (s) => {
+    // audio.onendedで完了扱い後、遅延onerrorは_completed guardで無視されるべき
+    check('spokeReportは1回だけ (play resolveで1回計上)', s.spokeReports.length === 1, s.spokeReports.length);
+    check('utteranceDoneCalls === 1 (完了後の遅延onerrorで二重発火しない)', s.utteranceDoneCalls === 1, s.utteranceDoneCalls);
+    check('WebSpeechは呼ばれない (既に完了しているのでフォールバック不要)', s.webSpeechCalls.length === 0, s.webSpeechCalls.length);
+    const kinds = s.ttsFails.map(l => l.split(' | ')[0].replace('[TTS_FAIL] ', ''));
+    check('audio_element_onerrorログは出ない (完了済みで無視)', !kinds.includes('audio_element_onerror'), kinds);
   });
 
   // ケース7: audio.play rejectのみ (onerror発火なし) → audio_play_reject
@@ -235,6 +275,7 @@ async function runCase(label, opts, verify) {
     check('audio_play_reject が1回だけ', kinds.filter(k => k === 'audio_play_reject').length === 1, kinds);
     check('audio_element_onerror は出ない', !kinds.includes('audio_element_onerror'), kinds);
     check('WebSpeech呼び出しは1回だけ', s.webSpeechCalls.length === 1, s.webSpeechCalls.length);
+    check('utteranceDoneCalls === 1', s.utteranceDoneCalls === 1, s.utteranceDoneCalls);
   });
 
   // ケース8: WebSpeech no-voice → webspeech_no_voice
