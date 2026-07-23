@@ -146,7 +146,7 @@ def test_removing_gate_call_would_break_wiring_test():
     src = _bridge_source()
     # 実ソースを1箇所だけ改変（メモリ上・ディスクは触らない）：battle broadcastの直前のゲートを削除
     mutation = src.replace(
-        "if _judge_llm_gate('battle', judge_llm_call_times, time.time()):\n"
+        "if _judge_llm_gate('battle', judge_llm_call_times, time.time(), judge_llm_skip_log_last):\n"
         "                                        broadcast({'type': 'judge_call', 'kind': 'battle',",
         "if True:\n"
         "                                        broadcast({'type': 'judge_call', 'kind': 'battle',",
@@ -185,6 +185,114 @@ def test_session_num_change_resets_llm_budget():
     check('SessionNum不変ならリセットしない(reset=None)', changed2 is False and reset2 is None)
 
 
+def test_sig_reset_path_resets_llm_budget():
+    print('\n══ 本番配線：sig(event_type|track)変更経路でもjudge_llm_call_timesがリセットされる ══')
+    # 本番のsig変更ブロック(SESSION INFO受信時)の該当行を、bridge.pyのソースから抽出して検証。
+    # SessionNum経路とは別の第二のリセット経路。ここが漏れると、trackやevent_typeが変わった
+    # 瞬間に前セッションの予算満杯を持ち越す。
+    src = _bridge_source()
+    # sig経路のunpackブロック（"last_session_sig = sig" の後にある一連の代入）
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,3000}?_gate_state\['pending'\]\s*=\s*None", src)
+    check('sig経路のunpackブロックが見つかる', m is not None)
+    if m:
+        block = m.group(0)
+        check('sig経路にjudge_llm_call_timesのunpackがある(P1・2回目指摘の効き)',
+              "judge_llm_call_times = _sig_reset['judge_llm_call_times']" in block)
+        check('sig経路にjudge_llm_skip_log_lastのunpackもある(セッション越えでログ状態を持ち越さない)',
+              "judge_llm_skip_log_last = _sig_reset['judge_llm_skip_log_last']" in block)
+
+
+def test_removing_sig_unpack_would_break_wiring_test():
+    print('\n══ 変異試験：sig経路のjudge_llm_call_timesのunpackを削除するとテストが失敗する ══')
+    src = _bridge_source()
+    line = "                        judge_llm_call_times = _sig_reset['judge_llm_call_times']\n"
+    check('変異対象の行がソースに存在する', line in src)
+    mutation = src.replace(line, "", 1)
+    check('変異が実際にソースを変更した', mutation != src)
+    # 変異後のsigブロックにjudge_llm_call_timesのunpackが無いことを、上のテストと同じロジックで検証
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,3000}?_gate_state\['pending'\]\s*=\s*None", mutation)
+    block = m.group(0) if m else ""
+    check('変異後はsig経路にjudge_llm_call_timesのunpackが無い(配線テストが本番のバグを検出できる証明)',
+          "judge_llm_call_times = _sig_reset['judge_llm_call_times']" not in block)
+
+
+def test_removing_session_num_unpack_would_break_wiring_test():
+    print('\n══ 変異試験：SessionNum経路のjudge_llm_call_timesのunpackを削除するとテストが失敗する ══')
+    src = _bridge_source()
+    line = "            judge_llm_call_times = _reset['judge_llm_call_times']\n"
+    check('変異対象の行がソースに存在する', line in src)
+    mutation = src.replace(line, "", 1)
+    check('変異が実際にソースを変更した', mutation != src)
+    # 変異後のSessionNum reset適用ブロックを、"if _changed:"から始めて調べる
+    m = re.search(r"if _changed:[\s\S]{0,2500}?judge_llm_skip_log_last = _reset\['judge_llm_skip_log_last'\]", mutation)
+    if not m:
+        m = re.search(r"if _changed:[\s\S]{0,2500}", mutation)
+    block = m.group(0) if m else ""
+    check('変異後はSessionNum経路にjudge_llm_call_timesのunpackが無い(配線テストが本番のバグを検出できる証明)',
+          "judge_llm_call_times = _reset['judge_llm_call_times']" not in block)
+
+
+def test_skip_log_dedup_prevents_per_poll_spam():
+    print('\n══ 予算切れ60秒相当でもcandidate-skipログが毎ポーリングでは発生しない(運用問題対策) ══')
+    # log()を差し替えてログ回数を数える。実際のcandidate-skipログだけを対象にする。
+    call_times = []
+    skip_log_last = {}
+    t0 = 7000.0
+    # まず予算を使い切る
+    for i in range(bridge.JUDGE_LLM_BUDGET_MAX):
+        bridge._judge_llm_gate('battle', call_times, t0 + i, skip_log_last)
+
+    captured = []
+    orig_log = bridge.log
+    def _capture(msg):
+        captured.append(msg)
+    bridge.log = _capture
+    try:
+        # 50秒間、0.1秒毎に候補が再判定される想定(=500回)。ウィンドウ(60秒)未満なので
+        # 全期間予算満杯のまま推移＝毎回skipで返る想定。
+        skip_calls = 0
+        for i in range(500):
+            allowed = bridge._judge_llm_gate('battle', call_times, t0 + 10 + i * 0.1, skip_log_last)
+            if allowed is False:
+                skip_calls += 1
+    finally:
+        bridge.log = orig_log
+    check('500回のうち全てcandidate-skipで判定は返っている(判定は毎回行われる)', skip_calls == 500)
+    skip_logs = [m for m in captured if 'candidate-skip' in m]
+    # 50秒間・10秒に1回の想定 → 最大でも約5〜6回
+    check(f'candidate-skipログの実出力回数が判定回数の5%未満に抑えられる(spam抑止・実測{len(skip_logs)}回)',
+          len(skip_logs) < 25, f'skip logs={len(skip_logs)}, expected≪500')
+    check('少なくとも1回はログが出ている(完全沈黙で運用不能にならない)', len(skip_logs) >= 1)
+
+    # 予算復活後にallowされたら、次にskipになった時は改めてログが出るはずの状態に戻る
+    revived = bridge._judge_llm_gate('battle', call_times, t0 + 10 + bridge.JUDGE_LLM_BUDGET_WINDOW * 3, skip_log_last)
+    check('ウィンドウ経過後にallowが返る', revived is True)
+    check('allow成功でskip_log_lastの該当kindがクリアされる(次のskip時に改めてログが出る)',
+          'battle' not in skip_log_last)
+
+
+def test_skip_log_dedup_is_per_kind():
+    print('\n══ skipログの間引きはkind単位（別kindが混じっても互いに影響しない） ══')
+    call_times = []
+    skip_log_last = {}
+    t0 = 8000.0
+    for i in range(bridge.JUDGE_LLM_BUDGET_MAX):
+        bridge._judge_llm_gate('battle', call_times, t0 + i, skip_log_last)
+
+    captured = []
+    orig_log = bridge.log
+    bridge.log = lambda m: captured.append(m)
+    try:
+        bridge._judge_llm_gate('battle', call_times, t0 + 10, skip_log_last)   # log 1
+        bridge._judge_llm_gate('catchup', call_times, t0 + 10, skip_log_last)  # log 1 (別kind)
+        bridge._judge_llm_gate('battle', call_times, t0 + 10.5, skip_log_last) # dedup, no log
+        bridge._judge_llm_gate('catchup', call_times, t0 + 10.5, skip_log_last)# dedup, no log
+    finally:
+        bridge.log = orig_log
+    skips = [m for m in captured if 'candidate-skip' in m]
+    check('別kindは独立してログが出る(battle 1回・catchup 1回)', len(skips) == 2, skips)
+
+
 def test_qualifying_full_budget_then_race_first_call_passes():
     print('\n══ 本番配線：予選で予算満杯→SessionNum変更→レース最初のcatchupが通る ══')
     # 予選(SessionNum=0)で予算を使い切る
@@ -219,8 +327,10 @@ def test_throttled_catchup_does_not_consume_stage_wiring():
     ]:
         # kind別に、broadcast()呼び出し箇所を特定し、その先100行以内にstate_exprが
         # 「gate通過ブランチの中」にあるか（＝broadcast()と同じインデントレベル以下）を検証。
+        # ★シグネチャは引数4つ以上を許容する（引数リストは非貪欲マッチで`time.time()`の`()`を跨ぐ
+        #   ＝将来のシグネチャ追加でテストが偽陰性にならない）。
         broadcast_pat = re.compile(
-            r"if _judge_llm_gate\('" + kind + r"', judge_llm_call_times, time\.time\(\)\):\s*\n"
+            r"if _judge_llm_gate\('" + kind + r"',.*?\):\s*\n"
             r"(?:.*\n)*?"                         # 途中は任意
             r"[^\S\n]+" + re.escape(state_expr)   # 同一ifブロック内の代入
         )
@@ -255,6 +365,11 @@ def run_all():
     test_all_judge_call_broadcasts_have_gate_wired()
     test_removing_gate_call_would_break_wiring_test()
     test_session_num_change_resets_llm_budget()
+    test_sig_reset_path_resets_llm_budget()
+    test_removing_sig_unpack_would_break_wiring_test()
+    test_removing_session_num_unpack_would_break_wiring_test()
+    test_skip_log_dedup_prevents_per_poll_spam()
+    test_skip_log_dedup_is_per_kind()
     test_qualifying_full_budget_then_race_first_call_passes()
     test_throttled_catchup_does_not_consume_stage_wiring()
     print(f"\n[judge llm gate] 合格 {pass_n} / 不合格 {fail_n}")
