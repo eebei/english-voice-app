@@ -1688,6 +1688,21 @@ const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる�
 //   優先度は bridge 側 PRIORITY と同じ意味：P0安全即時 / P1安全文脈 / P2手順 /
 //   P3戦略 / P4情報 / P5雑談。会話の返事は P2 相当（重要だが安全より下）。
 const SPEAK_PRIO = { P0_SAFETY:0, P1_HAZARD:1, P2_PROCEDURE:2, P3_STRATEGY:3, P4_INFO:4, P5_CHAT:5 };
+// ★2026-07-23 診断計装：TTS/Audio失敗の証拠残し。
+//   Road America実走で「字幕は出たが音が来ない」現象が2〜3回発生（Yuji報告）。
+//   現状のコードはaudio.onerror発火時にログを一切出さず沈黙するため、事後の原因追跡ができなかった。
+//   全ての失敗経路（TTS API失敗・Audio.play拒否・Audio onerror・WebSpeech失敗）を
+//   bridge_log.txtへ [TTS_FAIL] として残す。判定・再生ロジックには一切影響しない。
+function ttsFailLog(where, detail){
+  try{
+    const msg = '[TTS_FAIL] ' + where + ' | ' + (detail || '');
+    console.error(msg);
+    if(irBridge && irBridge.readyState===1){
+      irBridge.send(JSON.stringify({cmd:'log_line', text: msg}));
+    }
+  }catch(_){}
+}
+
 function speak(text, opts){
   if(!voiceOn || !text) return;
   // 後方互換：speak(text, true) は「会話の返事」＝P2扱い（旧仕様の"全部止める"はやめる）
@@ -1763,10 +1778,23 @@ async function drainQueue(){
   currentSpeakPrio = (typeof _it === 'object' && typeof _it.prio === 'number') ? _it.prio : 9;
   // ★2026-07-20 Codex再レビュー P1-3：'spoke'は取り出し直後でなく**実際に再生を始めた時**に送る。
   //   取り出し直後だと、割り込まれて再生されなかった分やTTS失敗分まで予算を消費していた。
+  // ★2026-07-23 Codex再指摘 (P0/P1補完)：play() resolve後の遅延onerror等でreportSpokeが
+  //   2回呼ばれうる（1回目=play成功時、2回目=WebSpeechフォールバック内）ため一回性を保証。
+  let _reportSpokeCalled = false;
   const reportSpoke = ()=>{
-    if(myGen !== speakGeneration) return;      // 古い世代は計上しない
+    if(_reportSpokeCalled || myGen !== speakGeneration) return;    // 古い世代・既呼び出しは計上しない
+    _reportSpokeCalled = true;
     try{ if(irBridge && irBridge.readyState===1)
       irBridge.send(JSON.stringify({cmd:'spoke', prio:currentSpeakPrio, kind:(_it&&_it.kind)||'radio'})); }catch(e){}
+  };
+  // ★同じ発話の完了通知(onUtteranceDone)も、audio.onended + 遅延onerror、フォールバック経由の
+  //   utt.onend 等で複数回呼ばれうるため guard で1回きりに絞る。キューが二重に進むのを防ぐ。
+  let _completed = false;
+  const _completeOnce = ()=>{
+    if(_completed || myGen !== speakGeneration) return;
+    _completed = true;
+    ttsAudio = null;
+    onUtteranceDone();
   };
   const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
 
@@ -1776,8 +1804,22 @@ async function drainQueue(){
   speakWatchdog = setTimeout(()=>{ if(myGen!==speakGeneration) return; try{stopCurrentAudio();}catch(e){} onUtteranceDone(); }, watchMs);
 
   // Cloud TTSが使えない/設定なしなら即Web Speech
-  if(Date.now() < ttsDisabledUntil || !c.gVoice){ reportSpoke(); playWebSpeech(clean, c, myGen); return; }
+  if(Date.now() < ttsDisabledUntil || !c.gVoice){ reportSpoke(); playWebSpeech(clean, c, myGen, _completeOnce); return; }
 
+  // ★2026-07-23 Codex再指摘 P0：onerrorとplay rejectが同じAudioで両方発火するケースがある。
+  //   両方でplayWebSpeech()を呼ぶと二重フォールバック＝重複再生・reportSpoke二重計上に
+  //   なるため、_fellBack guard 1本で厳密に「1回きり」を担保する。
+  //   （旧実装で試したonended/onerrorのnull cleanupは guard と役割が被り、変異試験で
+  //    guard 単独の効きが検出できなくなるため意図的に外している。guard が真実の関門。）
+  let _fellBack = false;
+  const _fallbackOnce = (where, detail)=>{
+    if(_fellBack || _completed || myGen !== speakGeneration) return;   // 既に完了通知済みならフォールバック不要
+    _fellBack = true;
+    ttsFailLog(where, detail+' chars='+clean.length+' lang='+c.gLang+' → WebSpeechへフォールバック');
+    ttsAudio = null;
+    reportSpoke();    // reportSpokeは_reportSpokeCalled guardで1回きり
+    playWebSpeech(clean, c, myGen, _completeOnce);   // done を _completeOnce に集約(utteranceDone 1回)
+  };
   try{
     const ctrl = new AbortController();
     speakFetchCtrl = ctrl;                                  // 割り込み時にabortできるよう保持
@@ -1793,43 +1835,90 @@ async function drainQueue(){
     });
     clearTimeout(fetchTimer);
     if(myGen !== speakGeneration) return;                   // ★割り込まれた＝この発話は破棄
-    if(r.status===503){ ttsDisabledUntil = Date.now()+60000; reportSpoke(); playWebSpeech(clean, c, myGen); return; }
-    if(!r.ok) throw new Error('tts '+r.status);
+    // ★2026-07-23 Codex再指摘 P1：HTTP/空audioでthrowするとcatchでcloud_tts_fetch_errorとして
+    //   二重ログされていた。throwせず早期returnで正確に1kindだけログする設計へ変更。
+    if(r.status===503){
+      ttsDisabledUntil = Date.now()+60000;
+      _fallbackOnce('cloud_tts_503', 'voice='+c.gVoice+' (60秒間Cloud TTSを無効化)');
+      return;
+    }
+    if(!r.ok){
+      _fallbackOnce('cloud_tts_http', 'status='+r.status);
+      return;
+    }
     const data = await r.json();
     if(myGen !== speakGeneration) return;                   // ★json待ちの間の割り込みも捨てる
-    if(!data.audioContent) throw new Error('empty audio');
+    if(!data.audioContent){
+      _fallbackOnce('cloud_tts_empty_audio', '');
+      return;
+    }
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
     audio.volume = pwVolume;   // ユーザー設定の音量を適用
     ttsAudio = audio;
     // callbackも世代を照合してから状態を触る（遅れて届いた旧世代がP0を解除しないように）
-    audio.onended = ()=>{ if(myGen!==speakGeneration) return; ttsAudio=null; onUtteranceDone(); };
-    audio.onerror = ()=>{ if(myGen!==speakGeneration) return; ttsAudio=null; onUtteranceDone(); };
-    await audio.play();
+    // ★_completeOnceに集約：完了(onended)・遅延onerror・フォールバック経由のutt.onendのどれか
+    //   1回だけonUtteranceDoneを呼ぶ（キュー二重進行防止）。
+    audio.onended = _completeOnce;
+    // ★2026-07-23 診断計装：audio.onerrorは従来ログ無し・フォールバック無しで沈黙終了していた。
+    //   Yuji報告「字幕は出たが音が来ない」の最有力容疑者。証拠を残す＋WebSpeechへフォールバック。
+    //   _fallbackOnceで両方経路の重複発火を抑止。
+    audio.onerror = ()=>{
+      const err = audio.error ? ('code='+audio.error.code+' msg='+(audio.error.message||'')) : 'no-audio.error';
+      _fallbackOnce('audio_element_onerror', err);
+    };
+    try{
+      await audio.play();
+    }catch(playErr){
+      if(myGen !== speakGeneration) return;                 // 割り込みでabortしたのは正常
+      _fallbackOnce('audio_play_reject', (playErr && (playErr.name+': '+playErr.message)));
+      return;
+    }
+    // audio.play()が解決した後、上のawait中に onerror が同期発火してフォールバック済みなら
+    // reportSpokeは打たない（_reportSpokeCalled guardで内部的に弾かれるが、明示的にearly returnで意図を示す）。
+    if(_fellBack) return;
     reportSpoke();                                          // ★再生が始まってから計上
   }catch(e){
-    if(myGen !== speakGeneration) return;                   // 割り込みによるabortはフォールバックしない
-    reportSpoke();
-    playWebSpeech(clean, c, myGen);  // ネットワークエラー等 → Web Speechにフォールバック
+    if(myGen !== speakGeneration) return;                   // 割り込みによるabortは既にここで抜ける（診断対象外）
+    // ここへ来るのはfetchが例外を投げた場合のみ（HTTP/空audioは早期returnで到達しない）。
+    //   AbortError → タイムアウト（明示割り込みはgen照合で上で除外済み）／それ以外 → ネットワーク等。
+    const kind = (e && e.name === 'AbortError') ? 'cloud_tts_timeout_8s' : 'cloud_tts_fetch_error';
+    _fallbackOnce(kind, (e && (e.name+': '+e.message)));
   }
 }
+
+// ★2026-07-23 Codex再指摘対応：完了通知の集約先(onDone)を受け取り、utteranceDone重複を防ぐ。
+//   従来はonUtteranceDoneを直接呼んでおり、フォールバック時にaudio側のonended/onerrorと合わせて
+//   2回呼ばれる余地があった。onDoneが渡されればそちらへ集約（drainQueue側で_completeOnce guard済み）。
 
 // ★2026-07-20 Codex再レビュー P0-1：cancel()後に遅れて届く旧utteranceの onend/onerror が
 //   現在再生中のP0に対して onUtteranceDone() を実行し、isSpeaking/draining を誤って解除しうる。
 //   世代IDを受け取り、自分の世代でなければ状態に一切触れない。
-function playWebSpeech(text, c, gen){
+function playWebSpeech(text, c, gen, onDone){
   const myGen = (typeof gen === 'number') ? gen : speakGeneration;
-  const done = ()=>{ if(myGen !== speakGeneration) return; onUtteranceDone(); };
+  // ★2026-07-23 Codex再指摘：フォールバック元で_completeOnceを渡す設計に変更。
+  //   従来はonUtteranceDoneを直接呼び、audio側のonended/onerrorと合わせて2回呼ばれうるバグがあった。
+  const finalize = (typeof onDone === 'function') ? onDone : onUtteranceDone;
+  const done = ()=>{ if(myGen !== speakGeneration) return; finalize(); };
   try{
+    // ★2026-07-23 診断計装：Cloud TTS失敗時の最終フォールバック。ここも沈黙で終わると
+    //   Yuji体験「字幕は出たが音が来ない」になる。WebSpeech本体の失敗経路も証拠を残す。
     window.speechSynthesis.cancel();
     if(myGen !== speakGeneration) return;      // cancel中に割り込まれていたら喋らない
     const utt = new SpeechSynthesisUtterance(text);
     utt.lang=c.voiceLang; utt.pitch=c.pitch; utt.rate=c.rate; utt.volume=pwVolume;
     const voice = pickVoice(c.voiceLang,c.voiceNames);
     if(voice) utt.voice=voice;
+    else ttsFailLog('webspeech_no_voice', 'lang='+c.voiceLang+' names='+(c.voiceNames||[]).join(',')+' → システム既定音声を使用（言語が違えば無音になり得る）');
     utt.onend=done;
-    utt.onerror=done;
+    utt.onerror=(ev)=>{
+      ttsFailLog('webspeech_onerror', 'error='+(ev && ev.error)+' lang='+c.voiceLang+' chars='+text.length);
+      done();
+    };
     window.speechSynthesis.speak(utt);
-  }catch(e){ done(); }
+  }catch(e){
+    ttsFailLog('webspeech_throw', (e && (e.name+': '+e.message))+' lang='+c.voiceLang);
+    done();
+  }
 }
 function toggleVoice(){
   voiceOn=!voiceOn;
