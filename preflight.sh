@@ -47,6 +47,9 @@ if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── /api/chat HTTP統合テスト（stream/non-stream応答契約・P0-1再発防止）"
 if node tests-chat-http.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-chat-http.js 2>&1|grep "❌"|head -5; fail=1; fi
 
+echo "── requireAdminテスト（?secret=廃止・timingSafeEqual・2026-07-23 Codexレビュー）"
+if node tests-require-admin.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-require-admin.js 2>&1|grep "❌"|head -10; fail=1; fi
+
 echo "── iRSDK共有メモリヘッダー定数（合成メモリ・P0-2再発防止）"
 if python3 irsdk-bridge/tests_irsdk_mem.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_irsdk_mem.py 2>&1|grep "❌"|head -5; fail=1; fi
 

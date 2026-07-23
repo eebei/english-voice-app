@@ -1,4 +1,5 @@
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const helmet = require('helmet');
@@ -211,12 +212,30 @@ app.post('/api/beta/verify', betaLimiter, express.json(), async (req, res) => {
 //   無効化: POST /api/beta/admin/revoke {code}   / 再有効化: {code,active:true}
 // (removed) one-time /api/beta/bootstrap seeder and /api/beta/admin/_debug diagnostic —
 //   beta tokens are already seeded in the DB; these launch-prep helpers are no longer needed.
+// ★2026-07-23 Codexレビュー：URLクエリ(?secret=)はアクセスログ・ブラウザ履歴・リファラに
+//   秘密値が残るため廃止。ヘッダーのみ受け付ける。timingSafeEqualで比較タイミングからの
+//   推測を防ぐが、型・長さが不一致でも例外にせず安全にfalse扱いする。
 function requireAdmin(req, res, next) {
   const secret = process.env.ADMIN_SECRET;
   if (!secret) return res.status(503).json({ error: 'admin_disabled (set ADMIN_SECRET)' });
-  const given = req.headers['x-admin-secret'] || (req.query && req.query.secret);
-  if (given !== secret) return res.status(401).json({ error: 'unauthorized' });
+  const given = req.headers['x-admin-secret'];
+  if (typeof given !== 'string' || !constantTimeEquals(given, secret)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
   next();
+}
+
+function constantTimeEquals(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  // 長さが違うと timingSafeEqual 自体が例外を投げるため、長さ不一致は先に安全にfalseで弾く
+  // （長さ比較自体は秘密の中身を漏らさないので、フェイルクローズドとして問題ない）。
+  if (bufA.length !== bufB.length) return false;
+  try {
+    return crypto.timingSafeEqual(bufA, bufB);
+  } catch {
+    return false;
+  }
 }
 app.post('/api/beta/admin/create', requireAdmin, express.json(), async (req, res) => {
   try {
