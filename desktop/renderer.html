@@ -2145,47 +2145,57 @@ function oishiRadio(d){
   const pos=(d.pos!==undefined)?d.pos:'';
   switch(d.trigger){
     case 'personal_best':  return `ベスト更新。${t}。${diff}アップ。`;
-    case 'first_lap':      return `${t}。基準ラップだ。`;
+    case 'first_lap':      return `${t}。基準ラップ。`;
     case 'session_best':   return `セッションベスト。${t}。`;
     case 'lap_consistent': return `${t}。安定している。`;
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
-    case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しろ。焦るな、まだ戦える。確実に持ち帰ろう。`;
-    case 'crash_check':
-      if(sel==='LunaJP') return ['大丈夫！？手、痛めてない？…深呼吸して。車は動きそう？無理ならトーイングで戻ってきて、そこから立て直そう。','今の大きかった…身体は無事？…ゆっくりでいい。マシン走れる？ダメならトーイングで帰ってきて、わたしがついてる。','大丈夫？ケガしてない？…落ち着いて。走れるならピットまで、無理ならトーイングでいいよ。'][Math.floor(Math.random()*3)];
-      if(sel==='HajimeJP') return ['無事か。手は大丈夫か。…車は動くか？ダメならトーイングで戻せ。状況はそれから見る。','でかいのを食らったな。身体は。…マシンは走れるか？無理ならトーイング。まず戻ることだ。','大丈夫か。ケガはないか。…走れるならピットへ、動かないならトーイングで戻せ。'][Math.floor(Math.random()*3)];
-      return ['大丈夫か。ケガはないか。…落ち着け。車は走れそうか？動かないならトーイングで戻ろう。まずは無事に戻ることだ。','今のは大きかった。身体は無事か。…深呼吸だ。マシンは動くか？無理ならトーイングで帰ってこい。','手は痛めていないか。…焦るな。走れるならピットまで、不能ならトーイングだ。それから立て直す。'][Math.floor(Math.random()*3)];
-    case 'towing':
-      if(sel==='LunaJP') return ['トーイング中だね。時間が過ぎるまでピット作業もできないんだ。今はどうしようもないから、深呼吸して待とう。戻ったら一緒に立て直そ。','牽引で戻ってるとこ。焦っても仕方ないよ、時間が過ぎるのを待つだけ。気持ち切り替えていこ。'][Math.floor(Math.random()*2)];
-      if(sel==='HajimeJP') return ['トーイング中だ。時間が過ぎるまでピット作業もできない。今は打つ手がない。深呼吸して待て。戻ったら立て直す。','牽引で戻っている。焦るな。時間の経過を待つしかない。頭を切り替えろ。'][Math.floor(Math.random()*2)];
-      return ['トーイング中だ。時間が過ぎるまではピット作業もできない。今は打つ手がない、深呼吸して待とう。戻ってから立て直す。','牽引で戻っている。焦らなくていい。時間が過ぎるのを待つだけだ。気持ちを整えておけ。'][Math.floor(Math.random()*2)];
+    case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しよう。焦らず、まだ戦える。確実に持ち帰ろう。`;
+    // ★2026-07-24 Yuji方針：ドライバー名を呼びかけに入れて呼吸を作る（{name}、大丈夫？…）。
+    //   キャラ別バリエーション（LunaJP=優しく／HajimeJP=硬く／Default=中立）は個人感が含まれてるので残す。
+    //   YujiパターンA（接触→停止→再走行できない）の入口。走行継続なら post_contact_ok が5秒後に続く。
+    case 'crash_check': {
+      const nm = userName || '';
+      const npfx = nm ? nm + '、' : '';
+      if(sel==='LunaJP') return [`${npfx}大丈夫！？手、痛めてない？…深呼吸して。車は動く？無理ならトーイングで戻ってきて、そこから立て直そう。`,`${npfx}今のは大きかった…身体は無事？…ゆっくりでいい。マシン走れる？ダメならトーイングで戻ってきて、一緒に立て直そう。`,`${npfx}大丈夫？ケガしてない？…落ち着いて。走れるならピットまで、無理ならトーイングでいいよ。`][Math.floor(Math.random()*3)];
+      if(sel==='HajimeJP') return [`${npfx}無事か。手は大丈夫か。…車は動くか？無理ならトーイングで戻ってきて。状況はそれから見る。`,`${npfx}でかいのを食らったな。身体は無事か。…マシンは走れるか？無理ならトーイングで戻ってきて、まず戻ろう。`,`${npfx}大丈夫か。ケガはないか。…走れるならピットへ、動かないならトーイングで戻ってきて。`][Math.floor(Math.random()*3)];
+      return [`${npfx}大丈夫？ケガはない？…落ち着いて。車は走れる？動かないならトーイングで戻ってきて、まず無事に戻ろう。`,`${npfx}今のは大きかった。身体は無事？…深呼吸。マシンは動く？無理ならトーイングで戻ってきて。`,`${npfx}手は痛めていない？…焦らず。走れるならピットまで、無理ならトーイングで戻ってきて。そこから立て直そう。`][Math.floor(Math.random()*3)];
+    }
+    // ★2026-07-24 towing 削除（Yuji方針）：牽引中はドライバー自発の会話に任せる。反射も判定も廃止。
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
-      if(r3) return ['インシデントが多い。落ち着け。順位より完走だ。','もう十分だ。頭を冷やせ。確実に持ち帰ろう。','これ以上リスクを取るな。まず一台、無事に戻す。'][Math.floor(Math.random()*3)];
-      if(d4) return ['接触だ。落ち着け。これ以上リスクを取るな。','大きいのを受けたな。冷静に。今あるものを守ろう。','一度リセットしろ。ここからクリーンにいく。'][Math.floor(Math.random()*3)];
-      return ['気をつけろ。立て直せ。','スピンか。落ち着け、まだ大丈夫だ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
+      if(r3) return ['インシデントが多い。落ち着いて。順位より完走。','もう十分。頭を冷やそう。確実に持ち帰ろう。','これ以上リスクを取らずに。まず一台、無事に戻そう。'][Math.floor(Math.random()*3)];
+      if(d4) return ['接触。落ち着いて。これ以上リスクを取らずに。','大きいのを受けた。冷静に。今あるものを守ろう。','一度リセット。ここからクリーンにいこう。'][Math.floor(Math.random()*3)];
+      return ['気をつけて。立て直そう。','スピンか。落ち着いて、まだ大丈夫。','焦らず。整えていこう。'][Math.floor(Math.random()*3)];
     }
-    case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパスだ。`,`順位上げた。P${pos}。`][Math.floor(Math.random()*3)];
-    case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれたが、まだ取り返せる。`,`P${pos}。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
+    case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパス。`,`順位アップ。P${pos}。`][Math.floor(Math.random()*3)];
+    case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれたけど、まだ取り返せる。`,`P${pos}。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
     case 'fuel_strategy_warning': return `データ上、このままだと燃料が最後まで持たない。ピット計画を決めよう。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return [`リミッターオン。もうすぐ制限ラインだ。`,`ピットインだな。リミッターオン。`,`了解、ボックスへ。`][Math.floor(Math.random()*3)];
-    case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていけ。`,`コースイン了解。まずは1周慣らしていこう。`][Math.floor(Math.random()*3)];
-    case 'limiter_off':    return `リミッターオフ。全開でいい。`;
+    case 'pit_entry':      return `Box、制限ライン注意、リミッターオン！`;
+    case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていこう。`,`コースイン了解。まずは1周慣らそう。`][Math.floor(Math.random()*3)];
+    case 'limiter_off':    return `リミッターオフ。タイヤ温度注意してペースアップ！`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     // ★2026-07-21 実走ログで発覚：ここにケースが無いとinjectRadioがbridge.pyの英語
     //   フォールバック("Box here. Slow." 等)をそのまま喋ってしまう(LunaJP実走で確認)。
-    case 'pit_box_here':   return sel==='LunaJP' ? `ボックスここだよ。減速して。` : `ボックスここだ。減速。`;
-    case 'pit_box_stop':   return sel==='LunaJP' ? `止まって。ボックス位置。` : `停止。ボックス位置。`;
+    case 'pit_box_here':   return `ボックスここ。減速。`;
+    case 'pit_box_stop':   return `停止。ボックス位置。`;
+    // ★2026-07-24 post_contact_ok（Yuji設計）：crash_check の5秒後に走行継続確認できたら発火。
+    //   Pattern B（走行継続）の第二声。Pattern A（停止）は bridge 側で自動抑止＝ここには来ない。
+    case 'post_contact_ok': {
+      const nm = userName || '';
+      const npfx = nm ? nm + '、' : '';
+      return `${npfx}走ってるね。アライメントや車の挙動、影響出てない？`;
+    }
     // ★2026-07-21 Codex指示R1：新規トリガー。既存の未翻訳箇所とは別に、新設分はここで併せて対応する。
     case 'checker_out_notice':
       return (d.fuel != null) ? `チェッカー出た。残り燃料${d.fuel}。` : `チェッカーが出た。`;
     case 'final_lap_notice':
-      return (d.laps_remaining === 1) ? `ファイナルラップだ。` : `残り${d.laps_remaining}周。`;
+      return (d.laps_remaining === 1) ? `ファイナルラップ。` : `残り${d.laps_remaining}周。`;
     case 'multiclass': {
       // ★2026-07-20 ドライバー要求：クラス名＋秒数＋**隊列の形**を伝える。
       //   「2台が3秒以内で接近時とか。3台が10秒以内でも2+1台で来てるとか。
@@ -2195,7 +2205,7 @@ function oishiRadio(d){
       const sec = (d.delta != null) ? `${d.delta}秒後方` : '後方';
       const cl  = Array.isArray(d.clusters) ? d.clusters : [];
       const yield_ = (d.stage >= 2) ? '譲ろう。' : '';
-      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来てる。先頭${sec}。${yield_}`;
+      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来ている。先頭${sec}。${yield_}`;
       if(d.shape === 'pack')   return `${cls}${d.count}台、固まって${sec}。${yield_}`;
       if(d.shape === 'split')  return `${cls}${cl[0]}台が${sec}、その後に${cl.slice(1).join('＋')}台。${yield_}`;
       return `${cls}、${sec}。${yield_}`;
@@ -2204,31 +2214,31 @@ function oishiRadio(d){
     case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン譲ろう。`;
     case 'battle_behind': {
       const num = d.car_number ? `${d.car_number}号車、` : '';
-      return d.repeat ? `また${num}詰めてきてる。${d.delta}秒。` : `後ろ、${num}${d.delta}秒。詰めてきてるよ。`;
+      return d.repeat ? `また${num}詰めてきている。${d.delta}秒。` : `後ろ、${num}${d.delta}秒。詰めてきている。`;
     }
     case 'battle_behind_faster': {
       const num = d.car_number ? `${d.car_number}号車、` : '';
-      return d.repeat ? `また${num}来てる。${d.delta}秒。相手の方がペース速い、先に行かせよう。` : `後ろ、${num}${d.delta}秒。相手の方がペース速いよ、先に行かせよう。`;
+      return d.repeat ? `また${num}来ている。${d.delta}秒。相手の方がペース速い、先に行かせよう。` : `後ろ、${num}${d.delta}秒。相手の方がペース速い、先に行かせよう。`;
     }
-    case 'danger_behind': return `注意しろ。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーだ（${d.reason}）。`;
-    case 'danger_ahead':  return `抜く時気をつけろ。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーだ（${d.reason}）。`;
+    case 'danger_behind': return `注意。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバー（${d.reason}）。`;
+    case 'danger_ahead':  return `抜く時気をつけて。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバー（${d.reason}）。`;
     case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
-    case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意しろ。`;
+    case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意。`;
     case 'damage_report':
       return d.mandatory ? `ダメージ確認。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そう。`
-                          : `見た目だけの軽い損傷だ。車は問題ない、そのまま行こう。`;
+                          : `そこまで支障なければ続けよう、ただ状態見ながら、これ以上のインシデントは防ぎたいね。`;
     case 'catchup_ahead': {
       const id = sameClassIdJP(d) + '、';
       let stageTxt = '';
-      if (d.stage === 3) stageTxt = d.confident ? '詰めてきてる。' : 'まだ読めない。';
-      else if (d.stage === 4) stageTxt = '勝負どころだ。';
+      if (d.stage === 3) stageTxt = d.confident ? '詰めてきている。' : 'まだ読めない。';
+      else if (d.stage === 4) stageTxt = '勝負どころ。';
       return `${id}前方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'defend_behind': {
       const id = sameClassIdJP(d) + '、';
       let stageTxt = '';
-      if (d.stage === 3) stageTxt = d.confident ? '詰められてきてる。' : 'まだ読めない。';
-      else if (d.stage === 4) stageTxt = 'ミラー見ておこう。';
+      if (d.stage === 3) stageTxt = d.confident ? '詰められている。' : 'まだ読めない。';
+      else if (d.stage === 4) stageTxt = 'ミラー確認。';
       return `${id}後方${d.delta}秒圏内。${stageTxt}`;
     }
     case 'side_by_side': return {left:'左に車。',right:'右に車。',both:'両側に車。'}[d.side] || '横に車。';
@@ -2236,90 +2246,9 @@ function oishiRadio(d){
     default: return null;
   }
 }
-function kanbeRadio(d){
-  const t=d.time||'';
-  const diff=(d.diff!==undefined)?d.diff:'';
-  const pos=(d.pos!==undefined)?d.pos:'';
-  switch(d.trigger){
-    case 'personal_best':  return `ベスト更新。${t}。${diff}アップ。`;
-    case 'first_lap':      return `${t}。基準ラップじゃ。`;
-    case 'session_best':   return `セッションベスト。${t}。`;
-    case 'lap_consistent': return `${t}。揃っとる。`;
-    case 'lap_time':       return `${t}。${diff}落ち。`;
-    case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
-    case 'pace_unstable':  return `2周続けて落ちとる。一回深呼吸せえ。慌てんでええ、まだ戦えとる。確実に持って帰るで。`;
-    case 'crash_check':    return ['おい、大丈夫か！？手ぇ痛めとらんか？…落ち着け。車は走れるか？無理ならトーイングで帰ってええで。それから状況見るで。','でかいの食らったな。身体は無事か？…深呼吸せえ。マシンは動くか？ダメならトーイングじゃ、まず戻ろうや。','大丈夫か！ケガはないか？…慌てんでええ。走れるならピットまで、無理ならトーイングで帰ってこい。'][Math.floor(Math.random()*3)];
-    case 'towing':         return ['トーイング中じゃ。時間が過ぎるまでピット作業もできん。今はどうしようもない、深呼吸して待っとけ。戻ったら立て直すで。','牽引で戻りよる。焦ってもおえん、時間が過ぎるまで待つしかないんじゃ。気持ち切り替えとけ。'][Math.floor(Math.random()*2)];
-    case 'incident': {
-      const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
-      if(r3) return ['インシデント多すぎる。落ち着け、順位より完走じゃ。','もうええ。頭冷やせ。確実に持って帰るで。','これ以上リスク取るな。一台持って帰るんが先じゃ。'][Math.floor(Math.random()*3)];
-      if(d4) return ['接触じゃ。落ち着け。これ以上リスク取るな。','でかいの食らったな。冷静になれ。今あるもん守るで。','一回リセットせえ。ここからクリーンに行くで。'][Math.floor(Math.random()*3)];
-      return ['気をつけえ。立て直せ。','スピンか。落ち着け、まだ大丈夫じゃ。','焦るな。整えていけ。'][Math.floor(Math.random()*3)];
-    }
-    case 'position_up':    return [`P${pos}。`,`P${pos}。ええパスじゃ。`,`順位上げたのう。P${pos}。`][Math.floor(Math.random()*3)];
-    case 'position_down':  return [`P${pos}。1つダウン。`,`P${pos}。抜かれたが、まだ取り返せるで。`,`P${pos}まで下がったのう。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
-    case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
-    case 'fuel_strategy_warning': return `データ上、このままじゃ燃料が最後まで持たん。ピット計画を決めようや。`;
-    case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
-    case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
-    case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return [`リミッターオンにせえ。もうすぐ制限ラインじゃ。`,`ピットインじゃな。リミッターオンや。`,`了解、ボックスへ入れ。`][Math.floor(Math.random()*3)];
-    case 'pit_exit':       return [`コースイン。コース状況の確認とタイヤの熱入れ、していこうや。`,`出たで。タイヤ温めていけ。`,`コースイン了解。まず1周慣らしていこうや。`][Math.floor(Math.random()*3)];
-    case 'limiter_off':    return `リミッターオフ。踏んでいけぇ。`;
-    case 'rolling_gap':    return `前と${d.gap}秒。じわじわ詰めていこうや。`;
-    case 'pit_box_countdown': return `${d.meters}メートルじゃ。`;
-    case 'pit_box_here':   return `ボックスここじゃ。減速せえ。`;
-    case 'pit_box_stop':   return `停止じゃ。ボックス位置。`;
-    case 'checker_out_notice':
-      return (d.fuel != null) ? `チェッカー出たで。残り燃料${d.fuel}。` : `チェッカーが出たで。`;
-    case 'final_lap_notice':
-      return (d.laps_remaining === 1) ? `ファイナルラップじゃ。` : `残り${d.laps_remaining}周じゃ。`;
-    case 'multiclass': {
-      const cls = d.class_name || '速えクラス';
-      const sec = (d.delta != null) ? `${d.delta}秒後ろ` : '後ろ';
-      const cl  = Array.isArray(d.clusters) ? d.clusters : [];
-      const y   = (d.stage >= 2) ? '譲れ。' : '';
-      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来とる。先頭${sec}。${y}`;
-      if(d.shape === 'pack')   return `${cls}${d.count}台、固まって${sec}。${y}`;
-      if(d.shape === 'split')  return `${cls}${cl[0]}台が${sec}、その後に${cl.slice(1).join('＋')}台。${y}`;
-      return `${cls}、${sec}。${y}`;
-    }
-    case 'multiclass_approaching': return `後方${classIdTxtJP(d.class_name, d.class_pos)}、${d.delta}秒。備えとけ。`;
-    case 'multiclass_imminent':    return `${classIdTxtJP(d.class_name, d.class_pos)}、真後ろ${d.delta}秒。道を空けえ。`;
-    case 'battle_behind': {
-      const num = d.car_number ? `${d.car_number}号車、` : '';
-      return d.repeat ? `また${num}接近じゃ。${d.delta}。` : `後ろ注意じゃ。${num}${d.delta}。詰めてきとる。`;
-    }
-    case 'battle_behind_faster': {
-      const num = d.car_number ? `${d.car_number}号車、` : '';
-      return d.repeat ? `また${num}来とる。${d.delta}。相手が速い、先に行かせえ。` : `後ろ注意じゃ。${num}${d.delta}。相手が速い、先に行かせえ。`;
-    }
-    case 'danger_behind': return `気を付けえ。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーじゃ（${d.reason}）。`;
-    case 'danger_ahead':  return `抜く時気を付けえ。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバーじゃ（${d.reason}）。`;
-    case 'stopped_behind': return `後ろに停止車両じゃ。${d.delta}秒。`;
-    case 'stopped_ahead':  return `前方に停止車両じゃ。${d.delta}秒。気を付けえ。`;
-    case 'damage_report':
-      return d.mandatory ? `ダメージ確認じゃ。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そうや。`
-                          : `見た目だけの軽い損傷じゃ。車は大丈夫、そのまま行けえ。`;
-    case 'catchup_ahead': {
-      const id = sameClassIdJP(d) + '、';
-      let stageTxt = '';
-      if (d.stage === 3) stageTxt = d.confident ? '詰めてきとる。' : 'まだ読めん。';
-      else if (d.stage === 4) stageTxt = '勝負どころじゃ。';
-      return `${id}前方${d.delta}秒圏内。${stageTxt}`;
-    }
-    case 'defend_behind': {
-      const id = sameClassIdJP(d) + '、';
-      let stageTxt = '';
-      if (d.stage === 3) stageTxt = d.confident ? '詰められとる。' : 'まだ読めん。';
-      else if (d.stage === 4) stageTxt = 'ミラー確認。';
-      return `${id}後方${d.delta}秒圏内。${stageTxt}`;
-    }
-    case 'side_by_side': return {left:'左に車じゃ。',right:'右に車じゃ。',both:'両側に車じゃ。'}[d.side] || '横に車じゃ。';
-    case 'multi_car_straight': return '3台並走じゃ。スペース注意。';
-    default: return null;
-  }
-}
+// ★2026-07-24 kanbeRadio削除：反射は全キャラ共通の oishiRadio に統合（Yuji方針）。
+//   官兵衛の岡山弁は LLM 会話側（system prompt）だけで維持し、反射は標準語・中立で統一。
+//   「反射は皆共通・LLM で個性」の分業に整理。injectRadio 側で sel==='Kanbe' も oishiRadio へルーティング済み。
 function matthiasRadio(d){
   const t=d.time||'';
   const diff=(d.diff!==undefined)?d.diff:'';
@@ -2333,7 +2262,7 @@ function matthiasRadio(d){
     case 'lap_slow':       return `${t}. Tempo runter. Status?`;
     case 'pace_unstable':  return `Zwei Runden in Folge langsamer. Kurz durchatmen. Kein Stress, wir sind noch dabei.`;
     case 'crash_check':    return ['Alles okay? Sind deine Hände unverletzt? Kann das Auto noch fahren? Wenn nicht, lass abschleppen — wir sehen dann weiter.','Das war heftig. Bist du unverletzt? Fährt der Wagen noch? Sonst per Abschleppen zurück, wir sammeln uns neu.','Alles in Ordnung? Keine Verletzung? Wenn das Auto nicht mehr fährt, nimm das Abschleppen — erst sicher zurück.'][Math.floor(Math.random()*3)];
-    case 'towing':         return ['Wir werden abgeschleppt. Die Zeit läuft gegen uns, bis es vorbei ist — vorher kein Boxenstopp. Du kannst nichts tun, durchatmen. Wir sammeln uns, wenn du drin bist.','Abschleppen läuft. Kein Stress, wir müssen nur warten, bis die Zeit durch ist. Kopf frei machen.'][Math.floor(Math.random()*2)];
+    // ★2026-07-24 towing 削除（Yuji方針）：牽引中はドライバー自発の会話に任せる。
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
       if(r3) return ['Zu viele Incidents. Ruhig bleiben. Ankommen vor Position.','Genug jetzt. Kopf freimachen. Sicher nach Hause.','Kein Risiko mehr. Erst mal ein Auto sicher zurückbringen.'][Math.floor(Math.random()*3)];
@@ -2347,13 +2276,18 @@ function matthiasRadio(d){
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
     case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
     case 'final_lap':      return `Letzte Runde. P${pos}.`;
-    case 'pit_entry':      return [`Begrenzer jetzt an. Linie kommt gleich.`,`Boxenstopp, verstanden. Begrenzer an.`,`Copy, rein in die Box.`][Math.floor(Math.random()*3)];
+    case 'pit_entry':      return `Box — Achtung Linie, Begrenzer an!`;
     case 'pit_exit':       return [`Auf der Strecke. Reifen und Bremsen aufwärmen.`,`Raus. Reifen aufwärmen.`,`Zurück auf der Strecke. Erst eine Runde eingewöhnen.`][Math.floor(Math.random()*3)];
-    case 'limiter_off':    return `Begrenzer aus. Vollgas.`;
+    case 'limiter_off':    return `Begrenzer aus. Achte auf die Reifentemperatur und leg zu.`;
     case 'rolling_gap':    return `Abstand ${d.gap} Sekunden. Stück für Stück ran.`;
     case 'pit_box_countdown': return `${d.meters} Meter.`;
     case 'pit_box_here':   return `Box hier. Langsam.`;
     case 'pit_box_stop':   return `Stopp. Boxenposition.`;
+    case 'post_contact_ok': {
+      const nm = userName || '';
+      const npfx = nm ? nm + ', ' : '';
+      return `${npfx}noch am Fahren? Ausrichtung oder Handling — merkst du was?`;
+    }
     case 'checker_out_notice':
       return (d.fuel != null) ? `Zielflagge ist draußen. Resttreibstoff ${d.fuel}.` : `Zielflagge ist draußen.`;
     case 'final_lap_notice':
@@ -2374,7 +2308,7 @@ function matthiasRadio(d){
     case 'stopped_ahead':  return `Stehendes Auto vorne. ${d.delta} Sekunden. Vorsicht.`;
     case 'damage_report':
       return d.mandatory ? `Schaden bestätigt — Pflichtreparatur, etwa ${Math.round(d.repair_mand)} Sekunden. Nächste Box.`
-                          : `Nur kosmetischer Schaden. Auto ist noch stabil, weiter pushen.`;
+                          : `Wenn es die Performance nicht beeinträchtigt, weiterfahren. Zustand im Auge behalten — einen weiteren Zwischenfall wollen wir vermeiden.`;
     case 'catchup_ahead': {
       const id = sameClassIdDE(d) + ', ';
       let stageTxt = '';
@@ -2398,8 +2332,7 @@ function matthiasRadio(d){
 function injectRadio(data){
   if(selMode!=='race') return;
   let text;
-  if(sel==='Kanbe')      text=kanbeRadio(data)||data.message||'';
-  else if(sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP') text=oishiRadio(data)||data.message||'';
+  if(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP') text=oishiRadio(data)||data.message||'';
   else if(sel==='Matthias') text=matthiasRadio(data)||data.message||'';
   else                   text=data.message||'';   // James/Luna/Hajime
   if(!text) return;
@@ -2475,7 +2408,7 @@ const JUDGE_REQUIRED = {           // kind別の必須フィールド（欠け�
   time_loss: ['lost','time'],
   danger:    ['reason'],
   multiclass:['stage'],
-  towing:    [],
+  // ★2026-07-24 towing 削除（Yuji方針）
   battle:    ['gap'], catchup:['gap'], defend:['gap']
 };
 let judgeQueue = [], judgeBusy = false;
@@ -2542,7 +2475,7 @@ async function runJudgeCall(data){
       gap:data.gap, stage:data.stage, confident:data.confident, faster:data.faster, repeat:data.repeat,
       behind:data.behind, reason:data.reason,              // danger用
       best_kind:data.best_kind, time:data.time, gain:data.gain,  // best_lap用
-      lost:data.lost, tow_time:data.tow_time,              // time_loss / towing用
+      lost:data.lost,                                       // time_loss 用（★2026-07-24 tow_time削除）
       recent:recentCallSummary()},
     max_tokens:80,
     usageSessionId
@@ -2560,8 +2493,9 @@ async function runJudgeCall(data){
   if(!speech){ console.log('judge_call silent ['+data.kind+']', reply.slice(0,60)); return; }
   addMsg('ai',speech);
   // ★kindごとの優先度で発話（会話がこれを止められないように・安全は最優先で割り込む）
+  // ★2026-07-24 towing 削除（Yuji方針）
   const JUDGE_PRIO = {multiclass:SPEAK_PRIO.P1_HAZARD, danger:SPEAK_PRIO.P3_STRATEGY,
-                      towing:SPEAK_PRIO.P4_INFO, battle:SPEAK_PRIO.P3_STRATEGY,
+                      battle:SPEAK_PRIO.P3_STRATEGY,
                       catchup:SPEAK_PRIO.P3_STRATEGY, defend:SPEAK_PRIO.P3_STRATEGY,
                       best_lap:SPEAK_PRIO.P4_INFO, time_loss:SPEAK_PRIO.P4_INFO};
   speak(speech, {prio:(JUDGE_PRIO[data.kind] ?? SPEAK_PRIO.P4_INFO), kind:data.kind,
@@ -2933,7 +2867,7 @@ const QUIET_RE = /(あんまり|あまり|そんなに)?\s*(喋ら|しゃべら|
 //   セッション開始時にデバッグログへ書き出し、いつでも人間が読める状態にする。
 function dumpLearnedMemory(reason){
   try{
-    const prof = JSON.parse(localStorage.getItem('pw_profile')||'{}');
+    const prof = JSON.parse(localStorage.getItem('pw_profile_'+sel)||'{}');
     const ct   = JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
     const hist = JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
     const lines = [];

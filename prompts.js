@@ -946,7 +946,7 @@ function buildSystem(p) {
   let judgeCallNote = '';
   const _anyModeKinds = ['best_lap', 'time_loss'];   // 練習/テストでも成立する（レース限定にしない）
   if (judgeCall && (isRacing || _anyModeKinds.includes(judgeCall.kind))
-      && ['catchup', 'defend', 'battle', 'multiclass', 'danger', 'towing', 'best_lap', 'time_loss'].includes(judgeCall.kind)) {
+      && ['catchup', 'defend', 'battle', 'multiclass', 'danger', 'best_lap', 'time_loss'].includes(judgeCall.kind)) {
     const j = judgeCall;
     const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
                                 : (isJ ? '同クラスの車' : 'a same-class car');
@@ -987,15 +987,7 @@ function buildSystem(p) {
           + '\n[JUDGE] The data cannot tell you the cause. **Do not assume** (declaring "you made a mistake" is the worst move). '
           + 'This is a moment to ASK, not to teach — show you noticed and ask briefly (e.g. "that lap dropped a bit — anything happen?"). '
           + 'Stay silent if they are mid-battle or clearly busy, and do not repeat if you just asked something similar. If it adds nothing, reply with exactly NO_CALL.';
-    } else if (j.kind === 'towing') {
-      // レッカー牽引中＝走行不能。原因(当てられた/自滅)は分からないので決め打ちの慰めも説教もしない。
-      judgeCallNote = isJ
-        ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】車が走行不能になり、レッカーでピットまで牽引されている。時間は進み続ける。'
-          + '\n【判断】原因は分からない——当てられたのかもしれないし、自分のミスかもしれない。**だから決めつけるな**（慰めすぎも説教も外す）。'
-          + '今できることは無い状況だから、事務的すぎず、重すぎず、**短く一言**。かける言葉が浮かばないなら「NO_CALL」でいい。'
-        : '\n\n[RACE EVENT (internal trigger — NOT something the driver said)] The car is undriveable and is being towed back to the pits. The clock keeps running.'
-          + '\n[JUDGE] You do NOT know the cause — they may have been hit, or it may have been their own mistake. **So do not assume either** (no over-consoling, no lecture). '
-          + 'Nothing can be done right now, so keep it short — one line, neither cold nor heavy. If nothing worth saying comes to mind, reply with exactly NO_CALL.';
+    // ★2026-07-24 towing 削除（Yuji方針）：牽引中はドライバー自発の会話に任せる。judge_callも廃止。
     } else if (j.kind === 'danger') {
       // 危険ドライバー（SR2.0以下/iR1300以下）が直前or直後。セッション中この相手には1回だけ。
       // ★命令調（「気をつけろ」）をやめ、LLMがその場に効く言い方を選ぶ。
@@ -1052,7 +1044,7 @@ function buildSystem(p) {
       eventE = carTag + ' is ' + (ahead ? 'ahead' : 'behind') + ', gap ' + gapTxt + '. ' + trendE + '. ' + urgencyE;
     }
     // 共通末尾（catchup/defend/battle）。multiclass/dangerは上で専用noteを組み済みなので上書きしない。
-    if (!['multiclass','danger','towing','best_lap','time_loss'].includes(j.kind)) judgeCallNote = isJ
+    if (!['multiclass','danger','best_lap','time_loss'].includes(j.kind)) judgeCallNote = isJ
       ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
         + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】今この状況がドライバーにとって本当に意味のある局面か——残り周回・順位・リードの余裕を踏まえて判断しろ。'
         + '意味が薄いなら黙れ（後ろで勝手にやってるだけのバトルや、まだ遠い差は無視していい。沈黙も一流の仕事だ）。直前に言ったことは繰り返すな。'
@@ -1158,7 +1150,7 @@ function buildSystem(p) {
   //   実走でマルチクラス接近を24回検知して0回しか喋らず、ドライバーが「なんでわかってねえんだよ」と怒った。
   //   Yuji仕様：「GT3は最も遅いクラス。速い車が来ると危険。必ずレポートしてほしい」＝安全であり、
   //   "今言う価値があるか"を問うてはいけない項目。ここでは NO_CALL 自体を選択肢から外す。
-  const SAFETY_KINDS = ['multiclass'];   // ★Codex提案でdanger(低SR/iR)=P3・towing=P4へ格下げ。
+  const SAFETY_KINDS = ['multiclass'];   // ★Codex提案でdanger(低SR/iR)=P3。towingは2026-07-24削除済み。
                                         //   物理的な即時危険は「速いクラスが迫っている」だけ。
   if (judgeCallNote && judgeCall && SAFETY_KINDS.includes(judgeCall.kind)) {
     judgeCallNote += isJ

@@ -481,10 +481,14 @@ PRIORITY = {
     'stopped_ahead': 0, 'side_by_side': 0, 'crash_check': 0, 'incident': 0, 'damage_report': 0,
     # P1 安全・文脈（Yuji仕様：GT3は最も遅いクラス＝速い車の接近は危険。必ず報告する）
     'multiclass': 1, 'multi_car_straight': 1, 'pit_box_here': 1,   # pit_box_hereは期限が極端に短い
-    # ↓Codex提案で格下げ：低SR/iRは物理的な即時危険ではない／towingは既に停止済みで回避不要
-    'danger': 3, 'towing': 4,
+    # ↓Codex提案で格下げ：低SR/iRは物理的な即時危険ではない
+    'danger': 3,
     # P2 手順（タイミングが命）
     'pit_entry': 2, 'pit_exit': 2, 'pit_box_stop': 2, 'limiter_off': 2, 'pit_box_countdown': 2,
+    # ★2026-07-24 Codex P0：post_contact_okはcrash_check(P0)発火の5秒後に必ず届かせたい"安否確認の第二声"。
+    #   P4ではP0発話後の10秒duck windowで落とされる（DUCK_WINDOW={3:6,4:10,5:12}）→P2に置く
+    #   （P2以上はduck対象外・かつ予算制限もない）。手順コールと同格＝タイミングを守る、で意味も揃う。
+    'post_contact_ok': 2,
     # ★ベスト更新は祝う瞬間。予算で消されないようP2に置く（実走で沈黙しドライバーが落胆した）
     'personal_best': 2, 'session_best': 2,
     # P3 戦略
@@ -587,6 +591,11 @@ def _session_scoped_reset_values():
         # クリアしないと、前セッションの「もう最近ログ出した」状態が残って、新セッションの
         # 最初のskipログが出ないことがある＝一貫してセッション限定状態として扱う。
         'judge_llm_skip_log_last': {},
+        # ★2026-07-24 Codex P1：接触監視状態はセッションを跨がないこと。
+        #   予選中に接触→レースへセッション遷移→前セッションのSessionTime基準がレースへ持ち越し
+        #   → 5秒後判定ロジックが破綻し誤発話 or 永久サイレント。ここに置いてsig/SessionNum両経路で強制リセット。
+        'post_contact_watch_start': None,
+        'post_contact_speed_ok': True,
     }
 
 
@@ -609,6 +618,38 @@ def maybe_reset_on_session_num_change(cur_snum, last_session_num, race_lifecycle
         _gate_state['since'] = 0.0
         return True, _session_scoped_reset_values()
     return False, None
+
+
+def evaluate_post_contact_watch(watch_start, speed_ok, now_time, current_speed,
+                                watch_duration_sec=5.0, min_speed_mps=8.33):
+    """★2026-07-24 Codex P0：post_contact_ok の5秒観察窓判定を純粋関数化。
+    poll_iracing()から毎フレーム呼ばれる本番コード（切り出しただけ・ロジックは同一）。
+    単体テストから直接呼べる。
+
+    Args:
+      watch_start:      監視開始時刻(SessionTime基準)。Noneで未監視
+      speed_ok:         監視中にSpeed>min_speed_mpsを維持できているかフラグ
+      now_time:         現在時刻(SessionTime)。Noneでデータ欠損
+      current_speed:    現在の車速(m/s)。Noneでデータ欠損
+      watch_duration_sec: 監視窓の長さ（デフォルト5秒＝Yuji仕様）
+      min_speed_mps:    走行継続と判定する下限車速（デフォルト8.33m/s=30km/h）
+
+    Returns:
+      (should_broadcast: bool, new_watch_start: float|None, new_speed_ok: bool)
+      - should_broadcast=True：呼び出し側は post_contact_ok radio を出す
+      - new_watch_start=None：監視終了（判定確定・欠損・リセット）
+      - new_speed_ok=True：次の crash_check 用にrearmされた状態
+    """
+    if watch_start is None:
+        return False, None, True                              # 未監視ならそのまま
+    if now_time is None or current_speed is None:
+        return False, None, True                              # データ欠損は監視破棄
+    if current_speed < min_speed_mps:
+        speed_ok = False                                      # 途中で失速＝Pattern A(停止)判定
+    elapsed = now_time - watch_start
+    if elapsed >= watch_duration_sec:
+        return speed_ok, None, True                           # 判定終了：Pattern Bだけ発話
+    return False, watch_start, speed_ok                       # 監視継続
 
 
 def check_final_lap_milestones(laps_remaining_est, lifecycle_state, final_lap_notice_sent):
@@ -701,10 +742,10 @@ JUDGE_LLM_BUDGET_MAX = 6      # 直近JUDGE_LLM_BUDGET_WINDOW秒間に、間引�
 JUDGE_LLM_BUDGET_WINDOW = 60.0
 # ★2026-07-23 Codex再指摘 P0：セッション中1回きり・間引くと永久消失する種類は対象外にする。
 #   dangerは危険ドライバー予告（同一車1回のみdanger_ever_warnedで永久ロック）。
-#   towingは牽引中の一声で、tow_activeフラグで1回だけ発火・以降は解除まで再発火しない。
-#   どちらも間引くと通知そのものが失われるため常にTrueで通す（実API課金はサーバー側api_usage_log
+#   間引くと通知そのものが失われるため常にTrueで通す（実API課金はサーバー側api_usage_log
 #   が正・こちらは"候補予算"としてattempt回数を絞るだけ）。
-JUDGE_LLM_NEVER_THROTTLE = {'danger', 'towing'}
+# ★2026-07-24 towing削除に伴い、towingをこのセットから除去。
+JUDGE_LLM_NEVER_THROTTLE = {'danger'}
 # ★2026-07-23 Codex再指摘（運用問題）：予算切れ中、上位ロジックは~0.1秒毎に候補を再判定するため
 #   1候補あたり最大約600回のcandidate-skipログになる。kind単位で最大この秒数に1回だけログを出す
 #   （初回のskip→JUDGE_LLM_SKIP_LOG_DEDUP_SEC経過→次のskipが出た時のみログ。判定・返り値は不変）。
@@ -1370,7 +1411,12 @@ def poll_iracing():
     track_length_m = None      # コース長(m)。ピット距離の換算用
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
-    tow_active = False         # トーイング中フラグ（開始時に1回だけ声かけ・終了でリセット）
+    # ★2026-07-24 tow_active 削除：towing機能廃止（Yuji方針・ドライバー自発会話に任せる）
+    # ★2026-07-24 post_contact_ok：crash_check発火から5秒間の走行継続監視
+    #   接触後、5秒間 Speed>30km/h(=8.33m/s) を維持できたら「アライメント影響ある？」の第二声。
+    #   途中で Speed<30km/h に落ちたら停止判定＝黙る（ドライバーの決定待ち）。
+    post_contact_watch_start = None   # クラッシュ検知時刻（SessionTime基準）。Noneで未監視
+    post_contact_speed_ok    = True   # 監視窓中に Speed>30 を維持できてるかフラグ
     prev_damage_s = 0.0        # 前回計測のdamage_s（義務+任意修理秒）。増えたら1回だけダメージ報告
     prev_incidents = None
     incident_times = []
@@ -1523,6 +1569,9 @@ def poll_iracing():
                         #   前セッションの予算満杯を持ち越して最初のcallが通らない事故になる。
                         judge_llm_call_times = _sig_reset['judge_llm_call_times']
                         judge_llm_skip_log_last = _sig_reset['judge_llm_skip_log_last']
+                        # ★2026-07-24 Codex P1：接触監視もsig変更で捨てる
+                        post_contact_watch_start = _sig_reset['post_contact_watch_start']
+                        post_contact_speed_ok = _sig_reset['post_contact_speed_ok']
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
                 if 'drivers' in info:
@@ -1612,6 +1661,9 @@ def poll_iracing():
             session_laps = _reset['session_laps']
             judge_llm_call_times = _reset['judge_llm_call_times']
             judge_llm_skip_log_last = _reset['judge_llm_skip_log_last']
+            # ★2026-07-24 Codex P1：接触監視もSessionNum変更で捨てる
+            post_contact_watch_start = _reset['post_contact_watch_start']
+            post_contact_speed_ok = _reset['post_contact_speed_ok']
         if cur_snum is not None:
             last_session_num = cur_snum
 
@@ -2272,6 +2324,13 @@ def poll_iracing():
                     # 順位やレース運びより先に、ドライバーの安否を確認するのが本物のエンジニア(Yuji方針)。
                     broadcast({'type': 'radio', 'trigger': 'crash_check', 'delta': delta, 'recent': recent,
                         'message': 'Are you okay? Any injury to your hands? Can the car still drive? If not, take the tow back and we will regroup from there.'})
+                    # ★2026-07-24 post_contact_ok 監視開始（Yuji方針）：
+                    #   5秒間の観察窓を開き、Speed>30km/h を維持できたら Pattern B（走行継続）と判定して
+                    #   「アライメント影響ある？」の第二声を出す。途中で減速したら Pattern A（停止）と判定して黙る。
+                    _pcs_now = reader.read_double('SessionTime')
+                    if _pcs_now is not None:
+                        post_contact_watch_start = _pcs_now
+                        post_contact_speed_ok = True
                 elif delta >= 2:
                     msg = random.choice([
                         'Watch it. Bring it back.',
@@ -2282,22 +2341,23 @@ def poll_iracing():
                 # delta==1（コースオフ）は基本黙る。連発時のみ上のrecent>=3で拾う
             prev_incidents = incidents
 
-        # ── トーイング検知（走行不能でiRacingが牽引→ピットワープ）──
-        # PlayerCarTowTime>0＝牽引中。事故地点からタイム積算＋ペナルティで、時間経過まで
-        # ピット作業も始まらないiRacite独自ルール。牽引が始まったら1回だけ「焦らず待とう」と声かけ。
-        tow_time = reader.read_float('PlayerCarTowTime')
-        if tow_time is not None and tow_time > 0:
-            if not tow_active:
-                tow_active = True
-                # ★2026-07-19 固定文→LLMへ（Yuji「簡単な声掛けでいい。当てられた時も、その逆もある」）。
-                #   当てられたのか自分のミスかは分からない＝決め打ちの慰めも説教も外す。短く一言だけ。
-                # ★2026-07-23 Codex再指摘 P0：towingはJUDGE_LLM_NEVER_THROTTLE入り＝常に通す
-                #   （セッション中tow_activeで1回のみ発火・間引くと永久消失）。呼び出し形は
-                #   他のjudge_callと揃えておき、配線テストがブランチ削除の変異を検出できるようにする。
-                if _judge_llm_gate('towing', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
-                    broadcast({'type': 'judge_call', 'kind': 'towing', 'tow_time': round(tow_time, 1)})
-        else:
-            tow_active = False
+        # ★2026-07-24 towing 完全削除（Yuji方針）──
+        # 走行できてないのに Luna が「トーイング中」と話しかけるのは奇妙、かつ
+        # 実観察で走行継続中でも tow_time が一瞬>0になり誤発話するケースが起きていた。
+        # 牽引中はドライバー側から自然に会話が始まる（「あー、やっちゃった」）＝AIは黙る設計。
+        # tow_active フラグと PlayerCarTowTime 読み取りごと廃止。post_contact_ok に責務移管。
+
+        # ── post_contact_ok（2026-07-24 Yuji設計）──
+        # crash_check 発火から5秒の観察窓。判定ロジックはevaluate_post_contact_watch()に切り出し済み
+        # （単体テスト対応）。ここは本番の"読み取り→評価→broadcast"の配線のみ。
+        if post_contact_watch_start is not None:
+            _pcs_now = reader.read_double('SessionTime')
+            _pcs_spd = reader.read_float('Speed')
+            _pcs_fire, post_contact_watch_start, post_contact_speed_ok = evaluate_post_contact_watch(
+                post_contact_watch_start, post_contact_speed_ok, _pcs_now, _pcs_spd)
+            if _pcs_fire:
+                broadcast({'type': 'radio', 'trigger': 'post_contact_ok',
+                    'message': 'Still driving? Alignment or handling — any effect?'})
 
         # ── ダメージレポート（2026-07-12マーボー要望：損傷度合い・走行継続可否を知りたい）──
         # crash_checkは「大丈夫か・車は動くか」という安否確認の問いかけであって実データではない。
@@ -2312,7 +2372,7 @@ def poll_iracing():
                 dmg_msg = ('Damage confirmed — mandatory repair, about ' +
                     str(round(repair_mand)) + ' seconds. Box next lap.')
             else:
-                dmg_msg = 'Cosmetic damage only. Car is still solid, keep pushing.'
+                dmg_msg = 'If it does not affect performance, keep going. Watch the state, but let us avoid another incident.'
             broadcast({'type': 'radio', 'trigger': 'damage_report', 'mandatory': mandatory,
                 'repair_mand': round(repair_mand or 0, 1), 'repair_opt': round(repair_opt or 0, 1),
                 'message': dmg_msg})
@@ -2378,20 +2438,45 @@ def poll_iracing():
         # ピットアウトでスピード制限解除ライン(=リミッターが切れる瞬間)に「リミッターオフ」を知らせる。
         # EngineWarningsのpitSpeedLimiterビット(0x10)がON→OFFに落ちた瞬間が実際の解除タイミングで、
         # OnPitRoad判定より正確。ビットが取れない環境でも下のピットアウト転移でフォールバック発火する。
+        # ★2026-07-24 誤発火ガード：ボックス出発直後にリミッタービットが一瞬OFFになる誤検知
+        #   （7/23実走 20:22:04: LapDistPct=0.0326・Speed=2.8m/s(10km/h)で「リミッターオフ」が誤発火）
+        #   を防ぐため、Speed>8.33m/s(=30km/h)を必須条件にする。正常発火は約20m/s(72km/h)なので影響なし。
         engine_warnings = reader.read_int('EngineWarnings')
         limiter_on = bool(engine_warnings & 0x10) if engine_warnings is not None else False
-        if prev_limiter_on and not limiter_on and onTrack and not limiter_off_announced_stop:
-            broadcast({'type': 'radio', 'trigger': 'limiter_off', 'message': 'Limiter off. Go.'})
+        _spd_limit = reader.read_float('Speed')
+        _spd_ok    = (_spd_limit is not None and _spd_limit > 8.33)   # 30 km/h ゲート
+        if prev_limiter_on and not limiter_on and onTrack and not limiter_off_announced_stop and _spd_ok:
+            broadcast({'type': 'radio', 'trigger': 'limiter_off',
+                'message': 'Limiter off. Watch tyre temps and pick up the pace.'})
             limiter_off_announced_stop = True
         prev_limiter_on = limiter_on
 
         # Pit in/out
-        if onPit and not prev['onPit']:
+        # ★2026-07-24 pit_entry 誤発火対策（Yuji方針）:
+        #   (1) 従来 `not prev['onPit']` は None→True（起動時spawn）でも発火して "ピットインだな" 誤爆。
+        #       `prev['onPit'] is False` に変更＝genuine False→True 遷移だけを許可。
+        #   (2) ボックス出発直後の onPit=True 継続中に一瞬 False→True が起きる場合の保険で
+        #       Speed>5m/s（≒18km/h以上）を"発話"の必須条件にする（7/23 Marboログ Speed=0.2 誤発火の根絶）。
+        #       ★2026-07-24 Codex P1：Speedガードは"radio broadcast"だけに適用。
+        #       状態更新（pit_enter_time / pit_enter_pos / limiter_off_announced_stop の再武装）は
+        #       低速の正規ピット進入（ダメージで這うように入るケース等）でも必ず走らせる。
+        #       これを忘れると limiter_off_announced_stopがTrueのまま次ストップに持ち越し＝リミッターオフ消失＋
+        #       pit_lane_secが計測不能＝ピットタイミング学習も消える連鎖崩壊が起きる。
+        #   (3) セリフを Yuji 新設計に統一：「Box、制限ライン注意、リミッターオン！」
+        #       （※SDKに"ピット意図"信号が無いため『制限ライン100m手前』の予告は将来アップデート扱い。
+        #         現在はピットレーン進入=onPit=True のジャストのタイミングで発話＝物理的には制限ラインの
+        #         30〜100m手前に相当（トラック依存）。学習ベースの100m予告は [[project_pitwall_indirect_damage_detection]] と
+        #         同じく将来課題としてメモ化）。
+        if onPit and prev['onPit'] is False:
+            # 状態更新は無条件（低速の正規進入でも必ず走らせる）
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
             limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
-            _pin_msg = random.choice(['Limiter now. Line is close.', 'Pit limiter on, line coming up.', 'Copy, into the box.'])
-            broadcast({'type': 'radio', 'trigger': 'pit_entry', 'message': _pin_msg})
+            # radio 発話のみ Speed>5m/s ガード（誤発火抑制）
+            _spd_pit = reader.read_float('Speed')
+            if _spd_pit is not None and _spd_pit > 5.0:
+                broadcast({'type': 'radio', 'trigger': 'pit_entry',
+                    'message': 'Box, watch the limit line, limiter on!'})
 
         if prev['onPit'] and not onPit and onTrack:
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
@@ -2405,7 +2490,8 @@ def poll_iracing():
             # ⑥ フォールバック：EngineWarningsのリミッタービットが未検知でこのストップでまだ鳴らして
             # いなければ、ピットレーン退出(OnPitRoad False)の瞬間に「リミッターオフ」を鳴らす。
             if not limiter_off_announced_stop:
-                broadcast({'type': 'radio', 'trigger': 'limiter_off', 'message': 'Limiter off. Go.'})
+                broadcast({'type': 'radio', 'trigger': 'limiter_off',
+                    'message': 'Limiter off. Watch tyre temps and pick up the pace.'})
                 limiter_off_announced_stop = True
             _pex_msg = random.choice(['Out. P' + str(pos) + '. Tyres one lap.', 'Back on track, P' + str(pos) + '. Warm the tyres up.',
                 'Copy, you\'re out. P' + str(pos) + '.'])
