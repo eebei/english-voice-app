@@ -921,6 +921,10 @@ class IRacingReader:
         self._handle = None
         self._ptr = None
         self.var_cache = {}
+        # ★2026-07-24 Codex差戻し対応 P1：_diag_last_signature はインスタンス属性。
+        #   クラス属性だと再接続時に前回セッションの署名が残り、新規セッションで初回診断が抑止される。
+        #   __init__ で必ずNone初期化し、Reader インスタンス生成の度に再診断できる契約を明示する。
+        self._diag_last_signature = None
 
     def is_open(self):
         return self._ptr is not None
@@ -941,6 +945,9 @@ class IRacingReader:
         self._ptr = None
         self._handle = None
         self.var_cache = {}
+        # ★2026-07-24 Codex差戻し対応 P1：再接続時の診断状態初期化。
+        #   close() で dedup 署名をリセット→次回接続で初回診断ログが必ず出る（契約）。
+        self._diag_last_signature = None
 
     def _bytes(self, offset, size):
         return ctypes.string_at(self._ptr + offset, size)
@@ -1108,9 +1115,242 @@ class IRacingReader:
             if si_len >= _cap:
                 log("SESSION INFO DIAG: si_len=%d >= cap(%d) — 末尾が切り詰められている可能性がある" % (si_len, _cap))
             self._last_si_len = si_len
+
+            # ★2026-07-24 Unit 0（Codex指示・診断計装）：
+            #   7/24 IMSA Road America 実走ログで si_len=524288 >= cap(200000) が連発したが、
+            #   524288が iRacing のバッファ最大サイズなのか実データ長なのかが不明。
+            #   実データが200KB内に収まっていて末尾がNULパディングなら現行cap で問題ないが、
+            #   200KB を超えて実データが続いているなら Positions/DriverInfo末尾が失われる。
+            #   ここでは cap を変えず、cap 超えの probe（診断のみ・上限400KB）で
+            #   ①先頭NUL位置 ②必須キーの実バイト位置 ③cap内外どちらに落ちてるかを判定して吐く。
+            #   probe結果が変化した時だけログ（毎フレームspamさせない）。
+            self._diag_session_info_extent(si_offset, si_len, _cap)
+
             return raw.decode('utf-8', errors='ignore')
         except Exception:
             return None
+
+    # ── Unit 0 診断状態 ─────────────────────────────
+    _DIAG_PROBE_MAX = 400000   # probeの上限バイト数（無条件si_len信用の防止・Codex指示）
+
+    def _diag_session_info_extent(self, si_offset, si_len, cap):
+        """Unit 0（Codex指示）診断専用：cap超えのprobeで実データ範囲と必須キー位置を確認する。
+        cap自体は変更しない・operational readは既存動作のまま。probeが失敗しても本流に影響なし。
+
+        ★2026-07-24 Codex差戻し対応 P0：共有メモリの物理境界を検証する。
+        壊れた/遷移中のヘッダー値でマップ外を ctypes.string_at() すると Python 例外ではなく
+        プロセスクラッシュになる（外側の try/except では守れない）。以下を全て検証してから probe：
+          - si_offset > 0 かつ < MEM_SIZE
+          - si_len > 0
+          - probe_size = min(si_len, _DIAG_PROBE_MAX, MEM_SIZE - si_offset) > 0
+        """
+        # ★P0：物理境界の悪性値を弾く。1つでも失敗したら _bytes() を呼ばず即return。
+        if si_offset is None or si_offset <= 0 or si_offset >= irsdk_mem.MEM_SIZE:
+            return
+        if si_len is None or si_len <= 0:
+            return
+        readable = irsdk_mem.MEM_SIZE - si_offset   # マップ内で残っている読み取り可能バイト数
+        probe_size = min(si_len, self._DIAG_PROBE_MAX, readable)
+        if probe_size <= 0:
+            return
+        try:
+            probe = self._bytes(si_offset, probe_size)
+            report = analyze_session_info_extent(probe, cap=cap, si_len_reported=si_len)
+            # ★P1 dedup 署名は診断項目を網羅：Positions・CarScreenName先頭/末尾・si_len・probe_size を含む。
+            #   PositionsがCap内→外へ移動したら新しい診断ログが出ること。
+            _csn = report['key_positions'].get('CarScreenName:', [])
+            sig = (
+                si_len,
+                probe_size,
+                report['first_nul_pos'],
+                report['content_ends_at'],
+                report['cap_verdict'],
+                report['key_positions'].get('DriverInfo:'),
+                report['key_positions'].get('SessionResults:'),
+                report['key_positions'].get('Sessions:'),
+                report['key_positions'].get('Positions:'),
+                _csn[0] if _csn else None,
+                _csn[-1] if _csn else None,
+                len(_csn),
+            )
+            if sig == self._diag_last_signature:
+                return
+            self._diag_last_signature = sig
+            log("SESSION INFO EXTENT DIAG: si_len=%d probe=%d first_nul=%s content_ends=%s cap=%d verdict=%s" % (
+                si_len, probe_size,
+                str(report['first_nul_pos']), str(report['content_ends_at']),
+                cap, report['cap_verdict']))
+            for key, pos in report['key_positions'].items():
+                if key == 'CarScreenName:':
+                    csn_verdict = key_list_within_cap_verdict(pos, cap)
+                    log("SESSION INFO EXTENT DIAG:   %s occurrences=%d first=%s last=%s within_cap=%s" % (
+                        key, len(pos),
+                        str(pos[0]) if pos else 'None',
+                        str(pos[-1]) if pos else 'None',
+                        csn_verdict))
+                else:
+                    log("SESSION INFO EXTENT DIAG:   %s pos=%s within_cap=%s" % (
+                        key, str(pos), key_within_cap_verdict(pos, cap)))
+        except Exception as _e:
+            log("SESSION INFO EXTENT DIAG error: " + str(_e))
+
+
+def key_within_cap_verdict(pos, cap):
+    """★2026-07-24 Codex差戻し対応 P1：単一キーの cap 境界判定を純粋関数化。
+    cap バイト読むと index 0..cap-1 が読める。position=cap のキーは範囲外なので p < cap で判定。
+
+    Args:
+      pos: キーの先頭バイト位置（None=未検出）
+      cap: operational read cap
+    Returns:
+      'not_found' | 'yes' | 'no'
+    """
+    if pos is None:
+        return 'not_found'
+    return 'yes' if pos < cap else 'no'
+
+
+def key_list_within_cap_verdict(positions, cap):
+    """★2026-07-24 Codex差戻し対応 P1/P2：複数出現キー（CarScreenName等）の cap 境界判定を純粋関数化。
+
+    P1：キー位置は < cap で判定（p=cap は cap 外）。
+    P2：0件は 'mixed' でなく 'not_found' を返す（誤解を招く表示を防ぐ）。
+
+    Args:
+      positions: キーの先頭バイト位置のリスト（[]=未検出）
+      cap: operational read cap
+    Returns:
+      'not_found' : 0件
+      'all'       : 全件 cap 内
+      'none'      : 全件 cap 外
+      'mixed'     : cap 内外が混在
+    """
+    if not positions:
+        return 'not_found'
+    if all(p < cap for p in positions):
+        return 'all'
+    if all(p >= cap for p in positions):
+        return 'none'
+    return 'mixed'
+
+
+def analyze_session_info_extent(raw_bytes, cap=200000, si_len_reported=None):
+    """★2026-07-24 Unit 0（Codex指示）：SessionInfo生バイト列の実データ範囲と必須キー位置を解析する純粋関数。
+    poll_iracing()/read_session_info()から呼ばれる本番コード。単体テストからも直接呼べる。
+
+    診断のみ。何も改変しない・何も判断しない（cap拡張や再読み取りはこの関数の責務外）。
+
+    ★2026-07-24 Codex差戻し対応：
+      P1：NUL終端後の古いメモリまでキー検索する誤動作を修正。検索対象は raw_bytes[:content_ends_at]
+          に限定する（前セッションの残骸が偽検出されないため）。
+      P2：cap境界のoff-by-one。content_ends_at == cap は raw[:cap] に実データが全部収まっているので
+          safe/padded 側に含める。< cap ではなく <= cap を安全境界とする。
+
+    Args:
+      raw_bytes: SessionInfo領域から probe した生バイト列（呼び出し側で上限を明示）
+      cap: 現行の operational read cap（200000）。判定にのみ使用
+      si_len_reported: iRacing 側が報告した si_len（int）。verdict の判定に使う
+
+    Returns:
+      dict {
+        'raw_bytes_analyzed': int,
+        'si_len_reported': int|None,
+        'first_nul_pos': int|None,     # 先頭NULの位置（None=raw内にNULが無い）
+        'last_nonzero_pos': int|None,  # 最後の非ゼロバイトの位置
+        'content_ends_at': int,        # 実データの終端推定
+                                       # (first_nul_posがあればそこ・無ければraw末尾)
+        'key_positions': {             # 必須キーの先頭バイト位置（content_ends_at 以降は検索対象外）
+          'DriverInfo:': int|None,
+          'SessionResults:': int|None,
+          'Sessions:': int|None,
+          'Positions:': int|None,
+          'CarScreenName:': [int]      # 複数出現の全リスト
+        },
+        'cap_verdict': str             # 'safe' / 'padded_after_cap' / 'truncated_at_cap' / 'no_content'
+      }
+
+    verdict の定義（<= 境界を採用・実データが raw[:cap] に完全に収まるかで判定）:
+      'safe'                 : content_ends_at <= cap かつ si_len_reported が cap 未満
+                              （実データが cap 内に収まっており、si_len も cap 未満）
+      'padded_after_cap'     : content_ends_at <= cap かつ si_len_reported >= cap
+                              （実データは cap 内で終わっており、cap超えは NUL パディング）
+      'truncated_at_cap'     : content_ends_at > cap（実データが cap を超えて続いている・末尾が失われている）
+      'no_content'           : rawが空、または最初のバイトが 0（実データなし）
+    """
+    result = {
+        'raw_bytes_analyzed': len(raw_bytes),
+        'si_len_reported': si_len_reported,
+        'first_nul_pos': None,
+        'last_nonzero_pos': None,
+        'content_ends_at': 0,
+        'key_positions': {
+            'DriverInfo:': None,
+            'SessionResults:': None,
+            'Sessions:': None,
+            'Positions:': None,
+            'CarScreenName:': [],
+        },
+        'cap_verdict': 'no_content',
+    }
+    if not raw_bytes:
+        return result
+
+    # 先頭NUL位置
+    nul_pos = raw_bytes.find(b'\x00')
+    result['first_nul_pos'] = nul_pos if nul_pos >= 0 else None
+
+    # 最後の非ゼロバイト位置（末尾からNUL連続をスキップして探す）
+    last_nz = None
+    for i in range(len(raw_bytes) - 1, -1, -1):
+        if raw_bytes[i] != 0:
+            last_nz = i
+            break
+    result['last_nonzero_pos'] = last_nz
+
+    # 実データの終端推定
+    if nul_pos == 0 and last_nz is None:
+        result['content_ends_at'] = 0
+    elif nul_pos is not None and nul_pos >= 0:
+        result['content_ends_at'] = nul_pos
+    else:
+        result['content_ends_at'] = len(raw_bytes)
+
+    # ★P1：キー検索は content_ends_at で切ったバイト列のみを対象にする。
+    #   NUL 以降に前セッションの残骸が残っていても、それは今の実データではないので偽検出を防ぐ。
+    content_bytes = raw_bytes[:result['content_ends_at']]
+
+    # 必須キーの位置探索（content_bytes 内のみ）
+    for key in ('DriverInfo:', 'SessionResults:', 'Sessions:', 'Positions:'):
+        pos = content_bytes.find(key.encode('ascii'))
+        result['key_positions'][key] = pos if pos >= 0 else None
+
+    # CarScreenName は複数車分あるので全出現位置を集める（content_bytes 内のみ）
+    csn_key = b'CarScreenName:'
+    positions = []
+    start = 0
+    while True:
+        p = content_bytes.find(csn_key, start)
+        if p < 0:
+            break
+        positions.append(p)
+        start = p + len(csn_key)
+    result['key_positions']['CarScreenName:'] = positions
+
+    # ★P2：cap verdict の判定（<= 境界を採用）。
+    #   content_ends_at == cap は raw[:cap] に実データが全部入っているので safe/padded 側に含める。
+    if result['content_ends_at'] == 0:
+        result['cap_verdict'] = 'no_content'
+    elif result['content_ends_at'] <= cap:
+        # 実データが cap 内で終わっている
+        if si_len_reported is not None and si_len_reported >= cap:
+            result['cap_verdict'] = 'padded_after_cap'
+        else:
+            result['cap_verdict'] = 'safe'
+    else:
+        # 実データが cap を超えて続いている
+        result['cap_verdict'] = 'truncated_at_cap'
+
+    return result
 
 
 def parse_session_info(yaml_str):
