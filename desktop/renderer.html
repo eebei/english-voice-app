@@ -1034,10 +1034,98 @@ function getDeviceId(){
 // ★2026-07-23 Codex再指摘：宣言未完了のletへ関数内から代入するとTDZでReferenceError。
 //   宣言を空文字で完了させてから、明示的にnewUsageSessionId()を呼ぶ構造にする。
 let usageSessionId = '';
+let usageBuild = 'unknown';
+let usageTelemetry = null;
+let usageIracingLive = false;
+let driverActivity = 'ACTIVE';
+let usageFlushInFlight = null;
+let usageFlushKeepaliveRequested = false;
+const USAGE_QUEUE_KEY = 'pw_usage_checkpoint_queue_v1';
+function usageNowIso(){ return new Date().toISOString(); }
+function usageNewRecord(id){
+  return {sessionId:id,sequence:0,startedAt:usageNowIso(),endedAt:null,totalSeconds:0,iracingSeconds:0,
+    pttCalls:0,typedCalls:0,autoJudgeCalls:0,autoPaceCalls:0,briefingCalls:0,insightCalls:0,
+    normalExit:false,reason:'start',_lastTickMs:Date.now()};
+}
+function usageTick(){
+  if(!usageTelemetry) return;
+  const now=Date.now(), delta=Math.max(0,Math.min(120,Math.floor((now-usageTelemetry._lastTickMs)/1000)));
+  usageTelemetry.totalSeconds += delta;
+  if(usageIracingLive) usageTelemetry.iracingSeconds += delta;
+  usageTelemetry._lastTickMs=now;
+}
+function usageCount(kind){
+  if(!usageTelemetry) return;
+  const key={ptt:'pttCalls',typed:'typedCalls',auto_judge:'autoJudgeCalls',auto_pace:'autoPaceCalls',
+    briefing:'briefingCalls',insight:'insightCalls'}[kind];
+  if(key) usageTelemetry[key]++;
+}
+function usagePublicRecord(reason, normalExit){
+  usageTick();
+  if(!usageTelemetry) return null;
+  usageTelemetry.sequence++;
+  usageTelemetry.reason=reason||'checkpoint';
+  usageTelemetry.normalExit=normalExit===true;
+  if(normalExit) usageTelemetry.endedAt=usageNowIso();
+  const out={...usageTelemetry,build:usageBuild,deviceId:getDeviceId(),
+    betaCode:localStorage.getItem('pw_beta_code')||''};
+  delete out._lastTickMs;
+  return out;
+}
+function usageLoadQueue(){
+  try{ const q=JSON.parse(localStorage.getItem(USAGE_QUEUE_KEY)||'[]'); return Array.isArray(q)?q:[]; }catch(e){ return []; }
+}
+function usageSaveQueued(record){
+  if(!record) return;
+  const q=usageLoadQueue().filter(x=>x&&x.sessionId!==record.sessionId);
+  q.push(record);
+  localStorage.setItem(USAGE_QUEUE_KEY,JSON.stringify(q.slice(-20)));
+}
+async function flushUsageTelemetry(reason='periodic', normalExit=false, keepalive=false){
+  const current=usagePublicRecord(reason,normalExit);
+  if(current) usageSaveQueued(current);
+  if(keepalive) usageFlushKeepaliveRequested=true;
+  // periodic/切断/終了が重なっても送信ドレーナーは1本だけにする。
+  // 後着レコードは先行ドレーナーがqueueを再読込して回収する。
+  if(usageFlushInFlight) return usageFlushInFlight;
+  usageFlushInFlight=(async()=>{
+    while(true){
+      const q=usageLoadQueue();
+      if(!q.length) break;
+      let progressed=false;
+      for(const record of q){
+        try{
+          const token=localStorage.getItem('pw_auth_token');
+          const headers={'Content-Type':'application/json'};
+          if(token) headers.Authorization='Bearer '+token;
+          const r=await fetch(API_BASE+'/api/usage/session-checkpoint',
+            {method:'POST',headers,body:JSON.stringify(record),keepalive:usageFlushKeepaliveRequested});
+          // 連続429で残り枠を消費せず、次の60秒周期へ持ち越す。
+          if(r.status===429) return;
+          if(!r.ok) throw new Error('http '+r.status);
+          const left=usageLoadQueue().filter(x=>!(x&&x.sessionId===record.sessionId&&x.sequence<=record.sequence));
+          localStorage.setItem(USAGE_QUEUE_KEY,JSON.stringify(left));
+          progressed=true;
+        }catch(e){ console.log('[USAGE_CHECKPOINT] queued',record.sessionId,e.message); }
+      }
+      // 全件が通信失敗した場合のbusy loopを防ぐ。
+      if(!progressed) break;
+    }
+  })();
+  try{ await usageFlushInFlight; }
+  finally{
+    usageFlushInFlight=null;
+    usageFlushKeepaliveRequested=false;
+  }
+}
 function newUsageSessionId(){
+  if(usageTelemetry && usageTelemetry.sessionId) {
+    flushUsageTelemetry('session_replaced',true,true).catch(()=>{});
+  }
   const id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
     : ('usess-' + Date.now() + '-' + Math.random().toString(36).slice(2));
   usageSessionId = id;
+  usageTelemetry = usageNewRecord(id);
   try{
     if(irBridge && irBridge.readyState===1){
       // Bridge側にも保持させ、bridge.py自身が呼ぶ/api/sttへ同じIDを載せられるようにする。
@@ -1050,6 +1138,9 @@ function newUsageSessionId(){
   return id;
 }
 newUsageSessionId();
+setInterval(()=>flushUsageTelemetry('periodic',false,false),60000);
+setTimeout(()=>flushUsageTelemetry('startup_retry',false,false),5000);
+window.addEventListener('beforeunload',()=>{ flushUsageTelemetry('app_exit',true,true); });
 
 async function verifyBeta(code){
   try{
@@ -1464,6 +1555,7 @@ window.pitwall?.onOverlayLockState?.((s)=>{
 // 現在のビルド番号を隅に小さく表示（テスターが「今どのBuildか」を一目で言える／伝えやすい）
 fetch('build-info.json').then(r=>r.json()).then(info=>{
   const n = (info && (info.buildNum!=null ? info.buildNum : info.buildTag));
+  usageBuild = String(n==null?'unknown':n);
   if(n==null) return;
   // スタート画面(アクセスコード)にも明示＝起動時に自分の版が分かる
   const gb = document.getElementById('gate-build');
@@ -1494,6 +1586,7 @@ async function sendMsg(inputSource){
 }
 
 async function callAPI(inputSource){
+  usageCount(inputSource==='ptt'?'ptt':'typed');
   isBusy=true;
   document.getElementById('busy-ind').classList.add('show');
   const telemetry = iracingLive?'live':(bridgeConnected?'bridge':'off');
@@ -1528,7 +1621,7 @@ async function callAPI(inputSource){
         liveData:lastTelemetry,
         sessionType:lastSessionType,
         sessionAuthority:lastSessionAuthority,
-        driverState,
+        driverState, driverActivity,
         carClass:lastCarClass,   // シリーズ検出用（例IMSA23→IMSAルール注入）
         carModel:lastCarModel,
         profileNote,
@@ -2050,7 +2143,7 @@ function connectBridge(){
       let data; try{data=JSON.parse(e.data);}catch{return;}
       if(data.type==='iracing_connected'){
         const _wasLive = iracingLive;
-        iracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live');
+        iracingLive=true; usageIracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live');
         // ★2026-07-23 Codex再指摘：iracing_connectedが同じ接続中に重複通知されるケースがあるため、
         //   false→trueへ遷移した最初の1回だけ新規発行する（重複では再発行しない）。
         //   暫定仕様：切断→再接続は新session_idとして扱う（同一SessionNum維持は今回スコープ外）。
@@ -2064,7 +2157,11 @@ function connectBridge(){
         if(!window.__memDumped){ window.__memDumped=true; setTimeout(()=>dumpLearnedMemory('iRacing接続時'),1200); }
         return;
       }
-      if(data.type==='iracing_disconnected'){ iracingLive=false; updateBridgeStatus(); bridgeVoice('iracing_lost'); return; }
+      if(data.type==='iracing_disconnected'){
+        usageTick(); iracingLive=false; usageIracingLive=false;
+        flushUsageTelemetry('iracing_disconnected',false,false);
+        updateBridgeStatus(); bridgeVoice('iracing_lost'); return;
+      }
       if(data.type==='radio') injectRadio(data);
       if(data.type==='session_info'){
         if(data.data){
@@ -2082,6 +2179,7 @@ function connectBridge(){
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
+      if(data.type==='driver_activity'){ driverActivity=String(data.state||'UNKNOWN'); return; }
       if(data.type==='session_summary'){ saveSessionSummary(data); if(data.is_race) scheduleAutoDebrief(data); }
       if(data.type==='pit_timing'){ savePitTiming(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
@@ -2374,6 +2472,7 @@ function injectRadio(data){
 // （エラー時にrole交互が壊れる問題を再発させないため・独立した単発リクエストとして扱う）。
 async function checkPaceJudgment(data){
   if(selMode!=='race') return;
+  usageCount('auto_pace');
   const authToken = localStorage.getItem('pw_auth_token');
   const headers = {'Content-Type':'application/json'};
   const body = {
@@ -2381,7 +2480,7 @@ async function checkPaceJudgment(data){
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
     liveData:lastTelemetry, sessionType:lastSessionType,
-    sessionAuthority:lastSessionAuthority, driverState,
+    sessionAuthority:lastSessionAuthority, driverState, driverActivity,
     paceCheck:{recent_deltas:data.recent_deltas, direction:data.direction, pos:data.pos, gap_ahead:data.gap_ahead,
       gap_behind:data.gap_behind, fuel_strategy:data.fuel_strategy},
     max_tokens:80,
@@ -2483,6 +2582,7 @@ function extractJudgeSpeech(reply, kind){
 }
 
 async function runJudgeCall(data){
+  usageCount('auto_judge');
   const authToken = localStorage.getItem('pw_auth_token');
   const headers = {'Content-Type':'application/json'};
   const body = {
@@ -2492,7 +2592,7 @@ async function runJudgeCall(data){
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
     liveData:lastTelemetry, sessionType:lastSessionType,
-    sessionAuthority:lastSessionAuthority, driverState,
+    sessionAuthority:lastSessionAuthority, driverState, driverActivity,
     carClass:lastCarClass,
     judgeCall:{kind:data.kind, car_number:data.car_number, class_name:data.class_name, class_pos:data.class_pos,
       gap:data.gap, stage:data.stage, confident:data.confident, faster:data.faster, repeat:data.repeat,
@@ -2555,6 +2655,7 @@ function injectBriefing(data){
 async function scheduleAutoBriefing(){
   setTimeout(async ()=>{
     if(selMode!=='strategy') return;  // その間に走り出してレースへ遷移してたら不要
+    usageCount('briefing');
     const authToken = localStorage.getItem('pw_auth_token');
     const headers = {'Content-Type':'application/json'};
     const profile = loadProfile()||{};
@@ -2563,7 +2664,7 @@ async function scheduleAutoBriefing(){
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
       liveData:lastTelemetry, sessionType:lastSessionType,
-      sessionAuthority:lastSessionAuthority, driverState,
+      sessionAuthority:lastSessionAuthority, driverState, driverActivity,
       carClass:lastCarClass, carModel:lastCarModel,
       profileNote: buildProfileNote(profile)+buildCarTrackMemory()+buildContractNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'),
       raceHistory: buildRaceHistoryContext(),   // カルテ（過去セッション・全キャラ共有）を能動ブリーフィングにも渡す
@@ -2737,6 +2838,7 @@ function buildProfileNote(profile){
 async function saveMemory(){
   if(memorySavedThisSession||messages.length<4) return;
   memorySavedThisSession=true;
+  usageCount('insight');
   const convo=messages.slice(-16).map(m=>`${m.role==='user'?'D':'E'}: ${String(m.content||'').slice(0,200)}`).join('\n');
   const profile=loadProfile()||{name:userName,sessions:1};
   let note='';
@@ -2746,7 +2848,7 @@ async function saveMemory(){
     const body={messages:[{role:'user',content:'[DRIVER_INSIGHT]\n'+convo}],
       character:sel, mode:selMode, level:'C2', userName, telemetry:'off',
       sessionAuthority:lastSessionAuthority,
-      driverInsight:true, profileNote:buildProfileNote(profile), max_tokens:180,
+      driverInsight:true, driverActivity, profileNote:buildProfileNote(profile), max_tokens:180,
       usageSessionId};
     if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
     const res=await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});

@@ -44,6 +44,9 @@ if node tests-usage-session-init.js >/dev/null 2>&1; then echo "   ✅ 全ケー
 echo "── Google使用量のレース帰属テスト（2026-07-23 Codex再指摘）"
 if node tests-usage-google-attribution.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-usage-google-attribution.js 2>&1|tail -15; fail=1; fi
 
+echo "── Cost Telemetry自動回収・再送・利用文脈分類（2026-07-26）"
+if node tests-cost-telemetry.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-cost-telemetry.js 2>&1|tail -15; fail=1; fi
+
 echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
 if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
 

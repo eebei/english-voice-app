@@ -567,7 +567,7 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'iracing_connected', 'iracing_disconnected',
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
-    'driver_state', 'lap_sectors', 'pit_timing',
+    'driver_state', 'driver_activity', 'lap_sectors', 'pit_timing',
     # session_summary は呼び出し側で should_fire_race_summary() ガード。
     # broadcast() は素通しし、broadcast() の戻り値で送信成功を確認する契約。
     'session_summary',
@@ -1683,6 +1683,7 @@ def poll_iracing():
     #   session_scoped_reset にも登録し SessionNum/sig 両経路でリセットする。
     _driver_activity_local = driver_activity_mod.ACTIVE
     _driver_activity_handoff_start = None
+    _force_driver_activity_broadcast = False
     # ★v3 Codex P0-4：summary pending 状態。broadcast() が dispatch 失敗した場合、
     #   payload をここに保持し、通常ポーリング位置で毎フレーム再試行する。
     #   trigger 条件が満たされた瞬間だけでなく、以降のフレームでも送信可能に。
@@ -1801,6 +1802,8 @@ def poll_iracing():
             session_info_sent = False
             reader.var_cache.clear()
             broadcast({'type': 'iracing_connected'})
+            # rendererの初期値ACTIVEを引きずらせず、このloopで評価した現状態を必ず続けて通知する。
+            _force_driver_activity_broadcast = True
             ir_was_connected = True
             inactive_since = None
             prev_current_lap = None   # セッション移行後の誤検知防止
@@ -1946,6 +1949,7 @@ def poll_iracing():
                         # ★2026-07-26 Unit E0：Driver Handoff 状態もsig変更で捨てる
                         _driver_activity_local = _sig_reset['_driver_activity_local']
                         _driver_activity_handoff_start = _sig_reset['_driver_activity_handoff_start']
+                        broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
                         # ★v3 Codex P0-4：pending summary もsig変更で破棄
                         _pending_summary = _sig_reset['_pending_summary']
                         _pending_non_race_summary = _sig_reset['_pending_non_race_summary']
@@ -2076,6 +2080,8 @@ def poll_iracing():
             # ★2026-07-26 Unit E0：Driver Handoff 状態もSessionNum変更で捨てる
             _driver_activity_local = _reset['_driver_activity_local']
             _driver_activity_handoff_start = _reset['_driver_activity_handoff_start']
+            broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+            _force_driver_activity_broadcast = False
             # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
             _pending_summary = _reset['_pending_summary']
             _pending_non_race_summary = _reset['_pending_non_race_summary']
@@ -2170,6 +2176,9 @@ def poll_iracing():
                 _driver_activity_local, _new_activity, _da_reason,
                 driver_state, lifecycle_state, _manual_resume_signal))
             _driver_activity_local = _new_activity
+            # Cost Telemetry とUIが「チーム車が走行中」と「本人が搭乗中」を混同しないための
+            # 非音声メタデータ。E0の権威状態をそのままrendererへ渡す。
+            broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
             # 非搭乗中もチーム車テレメトリは更新されるため、各候補のarmed/stage/historyを
             # そのまま残すと、本人復帰時に「チームメイト走行中に消費した段階」を引き継ぐ。
             # ACTIVE復帰を新しい本人スティント境界として、本人向け判断状態だけを初期化する。
@@ -2201,6 +2210,9 @@ def poll_iracing():
                 stopped_armed.clear()
                 stopped_warned.clear()
                 log("DRIVER ACTIVITY: new active stint — driver-scoped call state reset")
+        if _force_driver_activity_broadcast:
+            broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+            _force_driver_activity_broadcast = False
         _set_driver_activity(_driver_activity_local)
 
         if _pending_non_race_summary is not None:

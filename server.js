@@ -52,6 +52,20 @@ function deriveUsageSourceTrigger(body) {
   return { source: 'other', trigger: null };
 }
 
+function deriveUsageContext(body, source) {
+  const activity = String(body && body.driverActivity || '').toUpperCase();
+  const state = String(body && body.driverState || '').toLowerCase();
+  if ((source === 'ptt' || source === 'typed')
+      && (activity === 'DRIVER_HANDOFF' || activity === 'INACTIVE_DRIVER' || activity === 'FINISHED')) {
+    return 'team_engineer';
+  }
+  // Build 220以前との後方互換。新buildではdriverActivityを権威とする。
+  if (!activity && (source === 'ptt' || source === 'typed') && state === 'garage') return 'team_engineer';
+  if (source === 'ptt' || source === 'typed') return 'driver_support';
+  if (source === 'auto_judge' || source === 'auto_pace') return 'auto_driver_support';
+  return 'other';
+}
+
 // Google TTS/STTの生課金単位を記録（DB書込失敗で音声を止めない・非同期fire-and-forget）。
 function recordGoogleUsageSafe(req, fields) {
   if (!auth.isReady()) return;
@@ -365,6 +379,14 @@ app.get('/api/usage/stats', requireAdmin, async (req, res) => {
   }
   catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
+app.get('/api/usage/session-stats', requireAdmin, async (req, res) => {
+  try {
+    const stats = await auth.getUsageSessionStats({ from: req.query.from || undefined, to: req.query.to || undefined });
+    res.json({ ok: true, stats });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err.message || err) });
+  }
+});
 
 // ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
 //   POST /api/admin/member/revoke {email}            → 即座にis_member=false
@@ -380,6 +402,56 @@ app.post('/api/admin/member/revoke', requireAdmin, express.json(), async (req, r
 // ── 会員基盤（マジックリンク認証） ───────────────────────────────────────────
 // 現在ユーザーをreqに付与（未ログイン/未設定ならreq.user=null。既存機能は不変）。
 app.use(auth.attachUser);
+
+const usageCheckpointLimiter = rateLimit({ windowMs: 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false });
+app.post('/api/usage/session-checkpoint', usageCheckpointLimiter, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const sessionId = typeof b.sessionId === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(b.sessionId) ? b.sessionId : null;
+    const deviceId = typeof b.deviceId === 'string' ? b.deviceId.slice(0, 128) : '';
+    const betaCode = typeof b.betaCode === 'string' ? b.betaCode.slice(0, 128) : '';
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'invalid_session_id' });
+
+    let testerName = null;
+    let betaTokenHash = null;
+    if (betaCode) {
+      const verified = await auth.verifyBetaToken(betaCode, deviceId);
+      if (!verified.ok) return res.status(403).json({ ok: false, error: 'invalid_beta_code' });
+      testerName = String(verified.name || '').slice(0, 80) || null;
+      betaTokenHash = crypto.createHash('sha256').update(betaCode.trim().toUpperCase()).digest('hex');
+    } else if (!req.user) {
+      return res.status(401).json({ ok: false, error: 'identity_required' });
+    }
+
+    const int = (v, max = 2147483647) => Number.isInteger(v) && v >= 0 && v <= max ? v : 0;
+    const iso = v => typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null;
+    const result = await auth.recordUsageSessionCheckpoint({
+      sessionId,
+      userId: req.user ? req.user.id : null,
+      betaTokenHash,
+      testerName,
+      deviceIdHash: deviceId ? crypto.createHash('sha256').update(deviceId).digest('hex') : null,
+      build: typeof b.build === 'string' ? b.build.slice(0, 40) : null,
+      sequence: int(b.sequence, 1000000000),
+      startedAt: iso(b.startedAt),
+      endedAt: iso(b.endedAt),
+      totalSeconds: int(b.totalSeconds),
+      iracingSeconds: int(b.iracingSeconds),
+      pttCalls: int(b.pttCalls),
+      typedCalls: int(b.typedCalls),
+      autoJudgeCalls: int(b.autoJudgeCalls),
+      autoPaceCalls: int(b.autoPaceCalls),
+      briefingCalls: int(b.briefingCalls),
+      insightCalls: int(b.insightCalls),
+      normalExit: b.normalExit === true,
+      lastReason: typeof b.reason === 'string' ? b.reason.slice(0, 40) : null,
+    });
+    res.json({ ok: true, sessionId, sequence: result.sequence });
+  } catch (err) {
+    console.error('[USAGE_CHECKPOINT]', err.message);
+    res.status(500).json({ ok: false, error: 'checkpoint_failed' });
+  }
+});
 
 // メールアドレス → ログインリンクを送る
 const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
@@ -615,13 +687,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 
     // 実測コストログ（Railwayログは7日で消えるため、DBにも永続化する。粗利率の実測に使う）
     const { source: usageSource, trigger: usageTrigger } = deriveUsageSourceTrigger(req.body);
+    const usageContext = deriveUsageContext(req.body, usageSource);
     const logUsage = (usage) => {
       if (!usage) return;
       console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} source=${usageSource} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
       if (auth.isReady()) {
         auth.recordApiUsage({
           userId: req.user ? req.user.id : null, sessionId: usageSessionId,
-          character, mode, source: usageSource, trigger: usageTrigger, model, usage,
+          character, mode, source: usageSource, trigger: usageTrigger, usageContext, model, usage,
           environment: PITWALL_ENVIRONMENT,
         }).catch(err => console.error('[USAGE] DB write failed:', err.message));
       }

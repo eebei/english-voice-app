@@ -121,7 +121,8 @@ const auth = require('./auth');
   inserts.length = 0;
   await auth.recordApiUsage({
     userId: 42, sessionId: 'race-session-A', character: 'LunaJP', mode: 'race',
-    source: 'auto_judge', trigger: 'battle', model: 'claude-haiku-4-5-20251001',
+    source: 'auto_judge', trigger: 'battle', usageContext: 'auto_driver_support',
+    model: 'claude-haiku-4-5-20251001',
     usage: { input_tokens: 500, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
     environment: 'production',
   });
@@ -134,6 +135,23 @@ const auth = require('./auth');
     const googleRow = inserts.find(r => r.table === 'google_usage_log');
     check('同一session_idでapi_usage_logとgoogle_usage_logを結合できる',
       !!apiRow && !!googleRow && apiRow.params[1] === googleRow.params[1] && apiRow.params[1] === 'race-session-A');
+    check('Anthropicログへusage_contextが保存される', apiRow && apiRow.params[6] === 'auto_driver_support');
+  }
+
+  // ── シナリオ5b: Desktop累積チェックポイントの本番DB関数 ──
+  inserts.length = 0;
+  await auth.recordUsageSessionCheckpoint({
+    sessionId:'race-session-A',userId:null,betaTokenHash:'hash',testerName:'Dirt',
+    deviceIdHash:'device-hash',build:'220',sequence:7,startedAt:'2026-07-25T00:00:00Z',
+    endedAt:null,totalSeconds:3600,iracingSeconds:3500,pttCalls:12,typedCalls:1,
+    autoJudgeCalls:30,autoPaceCalls:4,briefingCalls:1,insightCalls:0,
+    normalExit:false,lastReason:'periodic',
+  });
+  {
+    const row=inserts.find(r=>r.table==='usage_session_checkpoints');
+    check('累積チェックポイントが専用表へINSERTされる',!!row);
+    check('チェックポイントsequenceが保存される',row&&row.params[6]===7);
+    check('古いsequenceで巻き戻さないUPSERT条件',row&&/EXCLUDED\.sequence >= usage_session_checkpoints\.sequence/.test(row.sql));
   }
 
   // ── シナリオ6: 未知モデルはコストをNULLで保存（過少計上しない）──
@@ -145,7 +163,7 @@ const auth = require('./auth');
   });
   {
     const row = inserts.find(r => r.table === 'api_usage_log');
-    const estimatedCost = row && row.params[11];
+    const estimatedCost = row && row.params[12]; // usage_context追加後もestimated_cost_usdを直接検証
     check('未知モデルはestimated_cost_usdがNULL(0円にしない)', estimatedCost === null);
   }
 
