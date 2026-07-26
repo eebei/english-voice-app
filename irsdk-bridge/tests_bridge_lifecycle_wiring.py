@@ -3,7 +3,7 @@ OMORAY PITWALL - bridge.py 本番配線の統合テスト（2026-07-21 Codex再�
   race_lifecycle/class_map/f2time_contractは純粋モジュール単体では緑でも、bridge.py側の配線が
   無ければ本番で効かない（director_active()未使用・SessionNum変更で確実にresetされない等、
   今回まさにそう指摘された）。ここではbridge.pyを実際にimportし、本番の関数
-  （director_gate / maybe_reset_on_session_num_change / check_final_lap_milestones）を
+  （director_gate / maybe_reset_on_session_num_change / final_lap.select_milestone）を
   直接呼んで検証する——別ロジックの再実装ではなく、poll_iracing()が呼ぶのと同じ関数。
 
   bridge.pyはWindows専用のctypes.windll呼び出しを含むが、いずれも try/except で保護されており
@@ -17,6 +17,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge  # noqa: E402  ★本番モジュールを直接import（写経しない）
 import race_lifecycle  # noqa: E402
+import final_lap  # noqa: E402
 
 pass_n, fail_n = 0, 0
 
@@ -111,6 +112,8 @@ def test_session_num_change_resets_production():
           reset_values['final_lap_notice_sent'] == {5: False, 3: False, 1: False}, reset_values)
     # ★Codex再々指摘で追加された対象。前セッションの燃費履歴・警告済み状態が残っていないこと。
     check('fuel_strategy_warnedがFalseにリセットされる', reset_values['fuel_strategy_warned'] is False, reset_values)
+    check('fuel_warning_bandがNoneにリセットされる',
+          reset_values['fuel_warning_band'] is None, reset_values)
     check('fuel_per_lap_histが空リストにリセットされる(前セッションの燃費実測を持ち越さない)',
           reset_values['fuel_per_lap_hist'] == [], reset_values)
     check('fuel_at_lap_startがNoneにリセットされる', reset_values['fuel_at_lap_start'] is None, reset_values)
@@ -174,6 +177,7 @@ def test_contaminated_locals_actually_overwritten():
     last_laps_remaining_est = 1
     final_lap_notice_sent = {5: True, 3: True, 1: True}
     fuel_strategy_warned = True
+    fuel_warning_band = 'critical'
     fuel_per_lap_hist = [3.1, 3.0, 2.9, 3.05]
     fuel_at_lap_start = 42.0
     lap_time_hist = [88.1, 87.9, 88.4]
@@ -205,6 +209,7 @@ def test_contaminated_locals_actually_overwritten():
         last_laps_remaining_est = _reset['last_laps_remaining_est']
         final_lap_notice_sent = _reset['final_lap_notice_sent']
         fuel_strategy_warned = _reset['fuel_strategy_warned']
+        fuel_warning_band = _reset['fuel_warning_band']
         fuel_per_lap_hist = _reset['fuel_per_lap_hist']
         fuel_at_lap_start = _reset['fuel_at_lap_start']
         lap_time_hist = _reset['lap_time_hist']
@@ -230,6 +235,8 @@ def test_contaminated_locals_actually_overwritten():
     check('final_lap_notice_sent: 汚染(全Trueで再発火不能)が残っていない',
           final_lap_notice_sent == {5: False, 3: False, 1: False}, final_lap_notice_sent)
     check('fuel_strategy_warned: 汚染(True)が残っていない', fuel_strategy_warned is False, fuel_strategy_warned)
+    check('fuel_warning_band: 汚染(critical)が残っていない',
+          fuel_warning_band is None, fuel_warning_band)
     check('fuel_per_lap_hist: 汚染(前セッションの燃費実測)が残っていない(=サマリーへ混入しない)',
           fuel_per_lap_hist == [], fuel_per_lap_hist)
     check('fuel_at_lap_start: 汚染(42.0)が残っていない', fuel_at_lap_start is None, fuel_at_lap_start)
@@ -264,42 +271,72 @@ def test_contaminated_locals_actually_overwritten():
 
 # ══ P1（再々指摘で修正）: Last 5/3/1が同一フレームで複数発話しないか ══
 def test_final_lap_milestones_production():
-    print('\n══ check_final_lap_milestones(): 本番関数が同一フレームで1件しか発火しないか ══')
+    print('\n══ final_lap.select_milestone(): 単一発火とdispatch後commit ══')
 
     # ① 通常遷移 6→5→4→3→2→1：各しきい値でちょうど1回ずつ、他は発火しない
     sent = {5: False, 3: False, 1: False}
-    for laps, expect in [(6, None), (5, (5, '5 laps to go.')), (4, None),
-                          (3, (3, '3 laps to go.')), (2, None), (1, (1, 'Final lap.'))]:
-        fired, sent = bridge.check_final_lap_milestones(laps, race_lifecycle.RACING, sent)
+    for laps, expect in [(6, None), (5, 5), (4, None),
+                          (3, 3), (2, None), (1, 1)]:
+        fired, crossed = final_lap.select_milestone(
+            laps, race_lifecycle.RACING, sent)
         check(f'①通常遷移: 残り{laps}周 → {expect}', fired == expect, fired)
-    fired, sent = bridge.check_final_lap_milestones(1, race_lifecycle.RACING, sent)
+        sent = final_lap.commit_milestone_after_dispatch(
+            sent, crossed, 'DISPATCHED')
+    fired, _ = final_lap.select_milestone(
+        1, race_lifecycle.RACING, sent)
     check('①Final lap後、同じ1周のままでは再発火しない', fired is None, fired)
 
     # ② ジャンプ 6→1：5周・3周は"sent"扱いになるが、発話するのはFinal lapの1件だけ
     sent2 = {5: False, 3: False, 1: False}
-    fired2a, sent2 = bridge.check_final_lap_milestones(6, race_lifecycle.RACING, sent2)
+    fired2a, crossed2a = final_lap.select_milestone(
+        6, race_lifecycle.RACING, sent2)
     check('②6周時点ではまだ何も発火しない', fired2a is None, fired2a)
-    fired2b, sent2 = bridge.check_final_lap_milestones(1, race_lifecycle.RACING, sent2)
-    check('②6→1へジャンプしても発火は1件だけ(Final lap)', fired2b == (1, 'Final lap.'), fired2b)
+    sent2 = final_lap.commit_milestone_after_dispatch(
+        sent2, crossed2a, 'DISPATCHED')
+    fired2b, crossed2b = final_lap.select_milestone(
+        1, race_lifecycle.RACING, sent2)
+    check('②6→1へジャンプしても発火は1件だけ(Final lap)', fired2b == 1, fired2b)
+    sent2 = final_lap.commit_milestone_after_dispatch(
+        sent2, crossed2b, 'DISPATCHED')
     check('②5周・3周も後から発話されないようsent済みになっている',
           sent2 == {5: True, 3: True, 1: True}, sent2)
-    fired2c, _ = bridge.check_final_lap_milestones(1, race_lifecycle.RACING, sent2)
+    fired2c, _ = final_lap.select_milestone(
+        1, race_lifecycle.RACING, sent2)
     check('②ジャンプ後、5周や3周の通知が遅れて発火することはない', fired2c is None, fired2c)
 
     # ③ 初回有効値が1（レース開始時点で既に残り1周＝短いレース）：Final lapだけを言う
     sent3 = {5: False, 3: False, 1: False}
-    fired3, sent3 = bridge.check_final_lap_milestones(1, race_lifecycle.RACING, sent3)
-    check('③初回有効値が1ならFinal lapだけ発火(5周・3周は言わない)', fired3 == (1, 'Final lap.'), fired3)
+    fired3, crossed3 = final_lap.select_milestone(
+        1, race_lifecycle.RACING, sent3)
+    check('③初回有効値が1ならFinal lapだけ発火(5周・3周は言わない)', fired3 == 1, fired3)
+    sent3 = final_lap.commit_milestone_after_dispatch(
+        sent3, crossed3, 'DISPATCHED')
     check('③5周・3周もsent済みになっている(取り消し済みの過去として扱う)',
           sent3 == {5: True, 3: True, 1: True}, sent3)
 
     # ④ CHECKER_OUT/PLAYER_FINISHEDでは新規発火しない（既存の確認を維持）
-    fired4, _ = bridge.check_final_lap_milestones(1, race_lifecycle.CHECKER_OUT,
-                                                    {5: False, 3: False, 1: False})
+    fired4, _ = final_lap.select_milestone(
+        1, race_lifecycle.CHECKER_OUT,
+        {5: False, 3: False, 1: False})
     check('④CHECKER_OUTでは新規発火しない', fired4 is None, fired4)
-    fired5, _ = bridge.check_final_lap_milestones(1, race_lifecycle.PLAYER_FINISHED,
-                                                    {5: False, 3: False, 1: False})
+    fired5, _ = final_lap.select_milestone(
+        1, race_lifecycle.PLAYER_FINISHED,
+        {5: False, 3: False, 1: False})
     check('④PLAYER_FINISHEDでは発火しない(RACING限定)', fired5 is None, fired5)
+
+    # ⑤ HELD/DROPPED は閾値を消費しない。次の成功時に同じ候補を再送できる。
+    sent5 = {5: False, 3: False, 1: False}
+    fired6, crossed6 = final_lap.select_milestone(
+        1, race_lifecycle.RACING, sent5)
+    held = final_lap.commit_milestone_after_dispatch(
+        sent5, crossed6, 'HELD')
+    check('⑤HELDではFinal Lap状態を消費しない', held == sent5, held)
+    fired7, crossed7 = final_lap.select_milestone(
+        1, race_lifecycle.RACING, held)
+    dropped = final_lap.commit_milestone_after_dispatch(
+        held, crossed7, 'DROPPED')
+    check('⑤DROPPEDでも同じFinal Lap候補を再評価できる',
+          fired6 == 1 and fired7 == 1 and dropped == sent5, dropped)
 
 
 def run_all():

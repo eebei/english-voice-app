@@ -192,12 +192,17 @@ def test_all_judge_call_broadcasts_have_gate_wired():
 def test_removing_gate_call_would_break_wiring_test():
     print('\n══ 変異試験：ゲート呼び出しを削除した源を作ると、上の配線テストが失敗することを提示 ══')
     src = _bridge_source()
-    # 実ソースを1箇所だけ改変（メモリ上・ディスクは触らない）：battle broadcastの直前のゲートを削除
+    # ★2026-07-26 Unit E0 v3 対応：battle broadcast 経路が
+    #   `if _judge_llm_gate(...)` → `_br = broadcast(...); if _br == BROADCAST_DISPATCHED:`
+    #   の3段構造に変わったため、変異パターンを再更新。
     mutation = src.replace(
         "if _judge_llm_gate('battle', judge_llm_call_times, time.time(), judge_llm_skip_log_last):\n"
-        "                                        broadcast({'type': 'judge_call', 'kind': 'battle',",
+        "                                        # ★v3 Codex P1：DISPATCHED のみ段階消費。HELD/DROPPED は消費しない。\n"
+        "                                        #   HELD は将来 flush_radio() が送るが judge_call は\n"
+        "                                        #   GATEABLE_TRIGGERS に含まれないため実際は HELD にならない。\n"
+        "                                        _br = broadcast({'type': 'judge_call', 'kind': 'battle',",
         "if True:\n"
-        "                                        broadcast({'type': 'judge_call', 'kind': 'battle',",
+        "                                        _br = broadcast({'type': 'judge_call', 'kind': 'battle',",
         1,
     )
     check('変異が実際にソースを変更した(パターンが見つかった)', mutation != src)
@@ -240,7 +245,7 @@ def test_sig_reset_path_resets_llm_budget():
     # 瞬間に前セッションの予算満杯を持ち越す。
     src = _bridge_source()
     # sig経路のunpackブロック（"last_session_sig = sig" の後にある一連の代入）
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,3000}?_gate_state\['pending'\]\s*=\s*None", src)
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,5000}?_gate_state\['pending'\]\s*=\s*None", src)
     check('sig経路のunpackブロックが見つかる', m is not None)
     if m:
         block = m.group(0)
@@ -258,7 +263,7 @@ def test_removing_sig_unpack_would_break_wiring_test():
     mutation = src.replace(line, "", 1)
     check('変異が実際にソースを変更した', mutation != src)
     # 変異後のsigブロックにjudge_llm_call_timesのunpackが無いことを、上のテストと同じロジックで検証
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,3000}?_gate_state\['pending'\]\s*=\s*None", mutation)
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,5000}?_gate_state\['pending'\]\s*=\s*None", mutation)
     block = m.group(0) if m else ""
     check('変異後はsig経路にjudge_llm_call_timesのunpackが無い(配線テストが本番のバグを検出できる証明)',
           "judge_llm_call_times = _sig_reset['judge_llm_call_times']" not in block)
@@ -492,7 +497,7 @@ def test_post_contact_ok_unpacked_in_both_reset_paths():
               "post_contact_speed_ok = _sig_reset['post_contact_speed_ok']" in block)
     # SessionNum経路
     m_snum = re.search(
-        r"if _changed:[\s\S]{0,3000}?last_session_num = cur_snum", src)
+        r"if _changed:[\s\S]{0,6000}?last_session_num = cur_snum", src)
     check('SessionNum経路のunpackブロックが見つかる', m_snum is not None)
     if m_snum:
         block = m_snum.group(0)

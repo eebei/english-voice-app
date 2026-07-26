@@ -933,7 +933,8 @@ let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
-let lastCarClass = '', lastTrack = '';   // 1階記憶のキー（コース×車種）用
+let lastCarClass = '', lastCarModel = '', lastTrack = '';
+let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, sessionBestLapStr = '';
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
@@ -1526,8 +1527,10 @@ async function callAPI(inputSource){
         sectors:lastSectors,
         liveData:lastTelemetry,
         sessionType:lastSessionType,
+        sessionAuthority:lastSessionAuthority,
         driverState,
         carClass:lastCarClass,   // シリーズ検出用（例IMSA23→IMSAルール注入）
+        carModel:lastCarModel,
         profileNote,
         raceHistory,
         max_tokens:maxTok,
@@ -2063,7 +2066,19 @@ function connectBridge(){
       }
       if(data.type==='iracing_disconnected'){ iracingLive=false; updateBridgeStatus(); bridgeVoice('iracing_lost'); return; }
       if(data.type==='radio') injectRadio(data);
-      if(data.type==='session_info'){ injectBriefing(data.data); if(data.data&&data.data.event_type) lastSessionType=data.data.event_type; if(data.data){ if(data.data.player_car_class) lastCarClass=data.data.player_car_class; if(data.data.track) lastTrack=data.data.track; if(data.data.player_irating) lastIrating=data.data.player_irating; if(data.data.safety_rating) lastSr=data.data.safety_rating; } }
+      if(data.type==='session_info'){
+        if(data.data){
+          const a=data.data.current_session_authority||null;
+          lastSessionAuthority=a;
+          lastSessionType=(a&&a.session_type&&a.session_type!=='unknown')?a.session_type:null;
+          if(data.data.player_car_class&&String(data.data.player_car_class).trim().toLowerCase()!=='unknown') lastCarClass=data.data.player_car_class;
+          if(a&&a.car_model&&a.car_model!=='unknown') lastCarModel=a.car_model;
+          if(a&&a.track&&a.track!=='unknown') lastTrack=a.track;
+          if(data.data.player_irating) lastIrating=data.data.player_irating;
+          if(data.data.safety_rating) lastSr=data.data.safety_rating;
+        }
+        injectBriefing(data.data);
+      }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live') lastTelemetry=data;
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
@@ -2171,7 +2186,10 @@ function oishiRadio(d){
     case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパス。`,`順位アップ。P${pos}。`][Math.floor(Math.random()*3)];
     case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれたけど、まだ取り返せる。`,`P${pos}。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
-    case 'fuel_strategy_warning': return `データ上、このままだと燃料が最後まで持たない。ピット計画を決めよう。`;
+    case 'fuel_strategy_warning':
+      return (d.fuel_band === 'tight')
+        ? `燃料マージン0.5リットル未満。セーブ開始。`
+        : `燃料${Math.abs(Number(d.margin_l)||0).toFixed(1)}リットル不足。ピットが必要。`;
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -2272,7 +2290,10 @@ function matthiasRadio(d){
     case 'position_up':    return [`P${pos}.`,`P${pos}. Guter Move.`,`Position gewonnen. P${pos}.`][Math.floor(Math.random()*3)];
     case 'position_down':  return [`P${pos}. Eine Position verloren.`,`P${pos}. Überholt worden — noch zu holen.`,`Zurück auf P${pos}. Alles ruhig, die Pace ist da.`][Math.floor(Math.random()*3)];
     case 'fuel_warning':   return `Resttreibstoff ${d.fuel}. Sparen jetzt.`;
-    case 'fuel_strategy_warning': return `Laut Daten reicht der Sprit so nicht bis ins Ziel. Lass uns den Boxenplan festlegen.`;
+    case 'fuel_strategy_warning':
+      return (d.fuel_band === 'tight')
+        ? `Kraftstoffreserve unter 0,5 Liter. Jetzt sparen.`
+        : `Kraftstoff fehlt ${Math.abs(Number(d.margin_l)||0).toFixed(1)} Liter. Boxenstopp nötig.`;
     case 'tyre_cold':      return `Vorne ${d.temp} Grad. Zu kalt.`;
     case 'tyre_hot':       return `Vorne überhitzt. Vorsicht bei den Kerbs.`;
     case 'final_lap':      return `Letzte Runde. P${pos}.`;
@@ -2359,7 +2380,8 @@ async function checkPaceJudgment(data){
     messages:[{role:'user', content:'[PACE_CHECK]'}],
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
-    liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+    liveData:lastTelemetry, sessionType:lastSessionType,
+    sessionAuthority:lastSessionAuthority, driverState,
     paceCheck:{recent_deltas:data.recent_deltas, direction:data.direction, pos:data.pos, gap_ahead:data.gap_ahead,
       gap_behind:data.gap_behind, fuel_strategy:data.fuel_strategy},
     max_tokens:80,
@@ -2469,7 +2491,8 @@ async function runJudgeCall(data){
     messages:[{role:'user', content:'(システム内部イベント。ドライバーは何も言っていない。system側の指示に従い、発話するなら SAY: で始め、しなければ NO_CALL とだけ返す)'}],
     character:sel, mode:selMode, level:'C2', userName,
     telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
-    liveData:lastTelemetry, sessionType:lastSessionType, driverState,
+    liveData:lastTelemetry, sessionType:lastSessionType,
+    sessionAuthority:lastSessionAuthority, driverState,
     carClass:lastCarClass,
     judgeCall:{kind:data.kind, car_number:data.car_number, class_name:data.class_name, class_pos:data.class_pos,
       gap:data.gap, stage:data.stage, confident:data.confident, faster:data.faster, repeat:data.repeat,
@@ -2539,7 +2562,9 @@ async function scheduleAutoBriefing(){
       messages:[{role:'user', content:'[BRIEFING_KICKOFF] iRacingに接続した。今わかっているコース・車種・セッション種別を踏まえ、ドライバーに戦略ブリーフィングを自分から短く切り出せ。まずレースかテストか、目標を一問だけ聞け。'}],
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
-      liveData:lastTelemetry, sessionType:lastSessionType, driverState, carClass:lastCarClass,
+      liveData:lastTelemetry, sessionType:lastSessionType,
+      sessionAuthority:lastSessionAuthority, driverState,
+      carClass:lastCarClass, carModel:lastCarModel,
       profileNote: buildProfileNote(profile)+buildCarTrackMemory()+buildContractNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'),
       raceHistory: buildRaceHistoryContext(),   // カルテ（過去セッション・全キャラ共有）を能動ブリーフィングにも渡す
       max_tokens: 150,
@@ -2720,6 +2745,7 @@ async function saveMemory(){
     const headers={'Content-Type':'application/json'};
     const body={messages:[{role:'user',content:'[DRIVER_INSIGHT]\n'+convo}],
       character:sel, mode:selMode, level:'C2', userName, telemetry:'off',
+      sessionAuthority:lastSessionAuthority,
       driverInsight:true, profileNote:buildProfileNote(profile), max_tokens:180,
       usageSessionId};
     if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
@@ -2733,20 +2759,30 @@ async function saveMemory(){
   while(notes.length>8) notes.shift();
   saveProfile({...loadProfile()||profile,notes});
 }
+function findCarTrackMemory(mem,track,carModel,carClass){
+  if(!mem||!track) return null;
+  if(carModel&&mem[carModel+'|'+track]) return mem[carModel+'|'+track];
+  if(carClass&&mem[carClass+'|'+track]) return mem[carClass+'|'+track];
+  return null;
+}
 function saveSessionSummary(data){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',car:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:data.finish_pos||null,irating:lastIrating||null,sr:lastSr||null});
+    history.push({date:new Date().toISOString().slice(0,10),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:data.finish_pos||null,irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
   // ── 1階記憶：コース×車種ごとのベスト・平均燃料を蓄積（全キャラ共有＝走行データは事実）──
   try{
-    const track=data.track||lastTrack||'', car=data.car_class||lastCarClass||'';
+    const track=data.track||lastTrack||'', car=data.car_model||lastCarModel||data.car_class||lastCarClass||'';
     if(track){
       const key=(car||'car')+'|'+track;
       const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
-      const prev=mem[key]||{sessions:0};
+      // New records use the exact model. A legacy class-key record remains
+      // usable as the seed and is naturally migrated into the model key.
+      const prev=findCarTrackMemory(
+        mem,track,data.car_model||lastCarModel||'',data.car_class||lastCarClass||''
+      )||{sessions:0};
       const bestLap=parseFloat(data.best_lap)||null;
       // ベストは「速い方（小さい方）」を残す。燃料は直近値で更新。
       const newBest=(bestLap&&(!prev.bestLap||bestLap<prev.bestLap))?bestLap:(prev.bestLap||null);
@@ -2764,11 +2800,13 @@ function saveSessionSummary(data){
 // ピットレーン所要時間を実測値として記憶（コース×車種）。耐久ピットウィンドウ予測の土台。
 function savePitTiming(data){
   try{
-    const track=data.track||lastTrack||'', car=data.car_class||lastCarClass||'';
+    const track=data.track||lastTrack||'', car=data.car_model||lastCarModel||data.car_class||lastCarClass||'';
     const sec=parseFloat(data.pit_lane_sec); if(!track||!(sec>0)) return;
     const key=(car||'car')+'|'+track;
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
-    const rec=mem[key]||{sessions:0};
+    const rec=findCarTrackMemory(
+      mem,track,data.car_model||lastCarModel||'',data.car_class||lastCarClass||''
+    )||{sessions:0};
     // 直近の実測値を保存（複数回入ればならして安定。ここでは直近優先＋回数を持つ）
     rec.car=car; rec.track=track;
     rec.pitLaneSec = (rec.pitLaneSec!=null) ? Math.round(((rec.pitLaneSec+sec)/2)*10)/10 : sec; // 過去との平均
@@ -2779,10 +2817,10 @@ function savePitTiming(data){
 // 現在のコース×車種について、過去の記憶があれば文脈テキストを返す（Driver's Briefing/レースで先回り）
 function buildCarTrackMemory(){
   try{
-    const track=lastTrack||'', car=lastCarClass||'';
+    const track=lastTrack||'', car=lastCarModel||lastCarClass||'';
     if(!track) return '';
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
-    const rec=mem[(car||'car')+'|'+track];
+    const rec=findCarTrackMemory(mem,track,lastCarModel||'',lastCarClass||'');
     if(!rec||!rec.sessions) return '';
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const parts=[];

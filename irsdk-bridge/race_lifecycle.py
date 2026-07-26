@@ -92,9 +92,18 @@ class RaceLifecycle:
             self._last_car_idx_lap_completed = car_idx_lap_completed
             return self.state
 
-        # ── DEBRIEF：telemetry非アクティブは常に最優先 ──
+        # ── DEBRIEF：真の完走証拠がある場合のみ ──
+        # ★2026-07-26 Unit E0 v3 (Codex P0-3)：telemetry_active=False で無条件に DEBRIEF へ進む
+        #   実装は、短時間 telemetry 断（iRacing 一時的な処理遅延等）で DEBRIEF に永久 lock され、
+        #   同一セッションで telemetry が復帰しても director_gate が全レース無線を落とす。
+        #   修正：CHECKER_OUT は「総合首位にチェッカー」であり自車完走の証拠ではない。
+        #        DEBRIEF は PLAYER_FINISHED 後の telemetry 断だけで許可。それ以外は現状態を保持し、
+        #        短時間断→復帰で自動発話が回復する。
         if not telemetry_active:
-            return _finish(DEBRIEF)
+            if self.state == PLAYER_FINISHED:
+                return _finish(DEBRIEF)
+            # 完走前の telemetry 断は現状態維持（RACING なら RACING のまま）→ 復帰で継続可
+            return _finish(self.state)
 
         # ── S/F通過シグナル（このフレームで起きたか）を先に計算 ──
         #   baselineは「直前フレームまでに観測した値」＝今フレームの値とここで比較して初めて意味を持つ。
@@ -113,7 +122,7 @@ class RaceLifecycle:
             return _finish(self.state)
 
         # ── ガレージ帰還＝レース終了後のみDEBRIEF（レース前の待機中ガレージは対象外） ──
-        if driver_state == 'garage' and self.state in (CHECKER_OUT, PLAYER_FINISHED):
+        if driver_state == 'garage' and self.state == PLAYER_FINISHED:
             return _finish(DEBRIEF)
 
         if self.state == RACING:

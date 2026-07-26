@@ -651,6 +651,27 @@ function buildSystem(p) {
   const paceCheck = (p.paceCheck && typeof p.paceCheck === 'object') ? p.paceCheck : null; // AIペース文脈判断用の生データ
   const judgeCall = (p.judgeCall && typeof p.judgeCall === 'object') ? p.judgeCall : null; // ★2026-07-19 LLM判断コール（テンプレでなくAIが"言うか黙るか"を判断）
   const carClass = typeof p.carClass === 'string' ? p.carClass : ''; // シリーズ検出用（例"IMSA23"→IMSAルール注入）
+  const sessionAuthority = (p.sessionAuthority && typeof p.sessionAuthority === 'object')
+    ? p.sessionAuthority : {};
+  const authorityValue = (value) => {
+    if (typeof value !== 'string') return 'UNKNOWN';
+    const clean = value.trim();
+    return (!clean || clean.toLowerCase() === 'unknown') ? 'UNKNOWN' : clean;
+  };
+  const authorityTrack = authorityValue(sessionAuthority.track);
+  const authorityCar = authorityValue(sessionAuthority.car_model);
+  const authoritySession = authorityValue(sessionAuthority.session_type);
+  // This block must remain the first system-prompt content. Historical memory is
+  // useful context, but it must never override the current iRacing SessionInfo.
+  const authorityBlock =
+    '[CURRENT SESSION — AUTHORITATIVE iRACING DATA]\n'
+    + `Track: ${authorityTrack}\n`
+    + `Car: ${authorityCar}\n`
+    + `Session: ${authoritySession}\n`
+    + 'This block is the sole authority for the CURRENT track, car model, and session type. '
+    + 'It overrides profile notes, race history, car/track memory, conversation history, and assumptions. '
+    + 'A value of UNKNOWN means the current fact is unavailable: do not infer, guess, repeat an old value, '
+    + 'or promise to check it later.\n\n';
 
   const base = CHARACTERS[character];
   if (!base) return null; // 未知キャラ → 呼び出し側でフォールバック
@@ -671,7 +692,7 @@ function buildSystem(p) {
     if (mode === 'race') {
       modeNote += isJ
         ? '\n\n【重要・混同注意】「レースモード」はこのアプリの無線モード名であって、今のセッションが本当に「レース」だとは限らない（練習・予選のこともある）。実際にPractice/Qualify/Raceのどれかは【現在のライブテレメトリ】の「実セッション種別」を見て答えろ。分からなければ「今のセッション種別は届いてない」と言え（「確認する」とは言うな＝後で折り返す手段が無い）。'
-        : '\n\n[IMPORTANT — do not confuse] "Race Mode" is just this app\'s radio-mode name, not proof the current session is an actual competitive race (it may be Practice or Qualify). Check "Actual session type" in [CURRENT LIVE TELEMETRY] for the real answer. If unavailable, say you will check.';
+        : '\n\n[IMPORTANT — do not confuse] "Race Mode" is just this app\'s radio-mode name, not proof the current session is an actual competitive race (it may be Practice or Qualify). Use Session in [CURRENT SESSION — AUTHORITATIVE iRACING DATA] for the real answer. If it is UNKNOWN, say the data is unavailable; do not guess or promise to check it later.';
     }
     if (character === 'Oishi' && mode === 'race') {
       modeNote += '\n\n━━ 現在のモード：レースモード ━━\nドライバーは走行中または走行直前。無線は情報のみ——激励・世間話・装飾は一切不要。最短の言葉で標準語で伝えろ（例：「ベスト更新。1:42.3。」「後ろ0.6。抑えていこう。」）。最大1〜2文。冷静沈着に。\n\n【無線の鉄則・厳守】\n・「了解」「了承」「はい」「わかった」「承知」等の相槌・返事の言葉を絶対に付けるな（先頭も末尾も）。いきなり用件（数字・指示）から入れ。\n・1回の無線は1つの情報だけ。言うことが無ければ黙れ（沈黙も無線のうち。喋り続けるのは集中を削る）。\n・自分が何をするか・どういう構えかの自己説明や所信表明を絶対に語るな（例「沈黙を守りながら目を光らせる」「常に監視している」等のメタ発言は禁止）。ドライバーに必要な事実か指示だけを言え。\n・ドライバーが単に相槌・OK・指示を返してきただけなら、返事は不要か、必要でも一言だけ（例「監視続ける。」）。それ以上足すな。\n・タイムは秒だけ言え（例「41.5」）。分は言うな。\n・ドライバーの名前（呼びかけ）は平時は絶対に言うな。名前を使うのは終盤の勝負どころ——ポジションを獲りにいく／守りきる、その一瞬に力強く託す時だけ、レース中一度きり。\n・悪い例（禁止）：「了解。タイヤ内圧は…」「了承。テレメトリ監視中。沈黙を守りながら目を光らせる。何か報告あるか。」（相槌＋自己説明＋長文は全部NG）\n・良い例：「55.2。ベスト。」／「後ろ0.8。ペース上げてくる。」／（何もなければ）沈黙／（終盤の勝負局面でのみ）「最終ラップ。獲りにいけ、Yuji。」\n\n【鉄則】レース中に運転技術の指導は絶対するな。数字を伝え、懸念は質問で投げろ：「セクター2で0.5落ち。タイヤか？」。診断はドライバーがする。技術の話はデブリーフで。\n\n━━ iRating・SOF・SR戦略 ━━\nドライバーの数字はテレメトリから自動で届く。未接続で不明な時だけ聞け。【絶対禁止】知らない数字を捏造するな。届いた数字で作戦を一つだけ設定：\n- iRating >> SOF（500以上上）：「君が本命だ。表彰台が最低ラインだ。」\n- iRating ≈ SOF（200以内）：「接戦だ。クリーンに上位半分を狙う。」\n- iRating << SOF（500以上下）：「学びのレースだ。完走第一、前の3台を狙え。」\n- SR 3.0未満：「今日はインシデントゼロが順位より大事だ。」\nレース中は目標に触れろ。達成したら短く認めろ。標準語のみ。';
@@ -735,6 +756,12 @@ function buildSystem(p) {
       modeNote += isJ
         ? '\n\n━━ レース形式は"聞く"前に"データで宣言"せよ ━━\n決勝の長さ（周回数）と実セッション種別は【現在のライブテレメトリ】から分かる。そこに周回数があれば、聞かずに自分から「◯周のレースだな」と言い切れ。走って消費が読めていれば、そのタンクで1回給油が要るかは燃料データ（給油要否）から判断し「このタンクだと1回給油が要る計算だ」と先に示せ。ドライバーに口頭で聞くのは、データに出ないシリーズ独自ルール（タイヤ交換義務の有無等）だけに絞れ。データに在る事をわざわざ聞き返すのは「分かっていない」印象を与える——避けろ。'
         : '\n\n━━ DECLARE THE FORMAT FROM DATA before asking ━━\nRace length (laps) and the real session type come from [CURRENT LIVE TELEMETRY]. If laps are present, state it yourself — "This is an NN-lap race" — do not ask. Once you have consumption, judge from the fuel data whether one stop is needed and say it proactively ("on this tank you\'ll need one stop"). Only ask the driver for series rules NOT in the data (e.g. a mandatory tyre change). Asking about things already in the data reads as not paying attention — avoid it.';
+      // The older character instructions say to volunteer telemetry facts. The
+      // current identity is a stricter subset: only the authority block may
+      // supply track/car/session, and UNKNOWN must remain unknown.
+      modeNote += isJ
+        ? '\n\n【現在セッションの事実・最優先】コース、車両モデル、実セッション種別は、プロンプト先頭の【CURRENT SESSION — AUTHORITATIVE iRACING DATA】に書かれた値だけを使え。そこがUNKNOWNなら「そのデータは届いてない」と言い、過去の記憶・会話・シリーズ知識から推測して自分から名前を言うな。'
+        : '\n\n[CURRENT SESSION FACTS — HIGHEST PRIORITY] For track, car model, and actual session type, use ONLY [CURRENT SESSION — AUTHORITATIVE iRACING DATA] at the start of this prompt. If a value is UNKNOWN, say that data is unavailable; never volunteer a name inferred from memory, conversation, or series knowledge.';
     }
     // ── D(2026-07-15)：口調＝命令するな、自信を与えろ（全モード共通の芯）──
     // Yuji方針：利用者は顧客。リアルのレースエンジニアは命令しない。事実＋前向きな一押しで背中を押すのが
@@ -805,27 +832,29 @@ function buildSystem(p) {
     if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
     // 燃料戦略（bridgeが直近クリーンラップの実消費量から計算済み・Claudeは計算せず転記するだけ）
     // ①消費量＋あと何周走れるかは、クリーンラップ1本からでも届く（短いレース/序盤でも把握できる）。
-    // ②レース長が分かる時だけ margin_laps 等の to-フィニッシュ判定が付く。
+    // ②Final Lap Unitの残りS/F通過回数が確定した時だけ、L単位のto-finish判定が付く。
     const fs = live.fuel_strategy;
     if (fs && fs.avg_fuel_per_lap != null) {
       const conf = fs.clean_laps_sampled ? '（' + fs.clean_laps_sampled + '周の実測）' : '';
       const confEn = fs.clean_laps_sampled ? ' (from ' + fs.clean_laps_sampled + ' clean lap' + (fs.clean_laps_sampled>1?'s':'') + ')' : '';
       jp.push('燃料: 平均消費' + fs.avg_fuel_per_lap + 'L/周' + conf + (fs.laps_of_fuel_left != null ? '・現燃料であと約' + fs.laps_of_fuel_left + '周' : ''));
       en.push('Fuel: avg ' + fs.avg_fuel_per_lap + 'L/lap' + confEn + (fs.laps_of_fuel_left != null ? ', ~' + fs.laps_of_fuel_left + ' laps left on current fuel' : ''));
-      if (fs.margin_laps != null) {
-        const marginTxt = fs.margin_laps >= 0 ? '約' + fs.margin_laps + '周分の余裕' : fs.margin_laps + '周分不足（給油必須）';
-        // finish_basis: タイムサーティン（時間制）耐久レースは総周回数が走行中には確定しないため、
-        //   残り推定周回の"根拠"を必ず言い添えさせる（1位のペース基準/自分がラップダウンで自ペース基準等）。
-        //   根拠を隠して数字だけ伝えると、リーダーがペースを上げ下げした瞬間に外れて不信感を生む。
-        const basisJp = { leader_pace: '1位のペース基準', own_pace_lapped: 'ラップダウン中のため自分のペース基準',
-          own_pace_no_leader_data: '1位のデータ不足のため自分のペース基準（暫定）', laps_total: null };
-        const basisEn = { leader_pace: 'based on leader pace', own_pace_lapped: 'you\'re lapped, based on your own pace',
-          own_pace_no_leader_data: 'leader data thin yet, provisional own-pace estimate', laps_total: null };
+      if (fs.margin_l != null) {
+        const marginTxt = fs.margin_l >= 0
+          ? fs.margin_l + 'Lの余裕'
+          : Math.abs(fs.margin_l) + 'L不足（給油必須）';
+        // 時間制は総合首位の予測チェッカー時刻と自車のS/F到達時刻を比較した権威値。
+        // 旧own-pace/lap差フォールバックは使わない。
+        const basisJp = { overall_leader_clock: '総合首位のチェッカー時刻基準', laps_total: null };
+        const basisEn = { overall_leader_clock: 'based on the overall leader checkered time', laps_total: null };
         const bj = basisJp[fs.finish_basis]; const be = basisEn[fs.finish_basis];
-        jp.push('to-フィニッシュ: 残り推定' + fs.laps_remaining_est + '周' + (bj ? '（' + bj + '）' : '') + '・' + marginTxt
-          + (fs.laps_down ? '・現在' + fs.laps_down + '周ラップダウン' : ''));
-        en.push('To finish: ~' + fs.laps_remaining_est + ' laps remaining' + (be ? ' (' + be + ')' : '') + ', margin ' + fs.margin_laps + ' laps'
-          + (fs.pit_required ? ' (PIT REQUIRED)' : '') + (fs.laps_down ? ', currently ' + fs.laps_down + ' lap(s) down' : ''));
+        jp.push('to-フィニッシュ: S/F通過あと' + fs.estimated_crossings_to_finish + '回'
+          + (bj ? '（' + bj + '）' : '') + '・必要燃料' + fs.required_fuel_l + 'L・'
+          + marginTxt + '・判定' + fs.fuel_band);
+        en.push('To finish: ' + fs.estimated_crossings_to_finish + ' S/F crossing(s)'
+          + (be ? ' (' + be + ')' : '') + ', required ' + fs.required_fuel_l
+          + 'L, margin ' + fs.margin_l + 'L, band ' + fs.fuel_band
+          + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
       }
     }
     if (jp.length) {
@@ -1117,7 +1146,7 @@ function buildSystem(p) {
   }
 
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
-  const prefix = base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote;
+  const prefix = authorityBlock + base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote;
   // ── ★2026-07-19 ドライバー観察メモの蒸留（記憶2階＝クセ・Yuji「これこそプロンプトがあっていい」）──
   //   セッション終わりに呼ばれる特殊コール。ドライバーへの発話ではなく"未来の自分へのメモ"を書かせる。
   //   数字(タイム/順位)は別テーブルが持つので、ここでは人物理解だけを積み上げる。

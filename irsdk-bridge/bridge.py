@@ -37,6 +37,10 @@ except Exception:
 import irsdk_mem
 import race_lifecycle
 import class_map
+import driver_activity as driver_activity_mod
+import final_lap
+import fuel_strategy as fuel_strategy_mod
+import session_authority as session_authority_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
 BUILD_VERSION = "2026-07-07-B (gap/fuel/autoflow/stream)"
@@ -491,8 +495,12 @@ PRIORITY = {
     'post_contact_ok': 2,
     # ★ベスト更新は祝う瞬間。予算で消されないようP2に置く（実走で沈黙しドライバーが落胆した）
     'personal_best': 2, 'session_best': 2,
+    # Final Lapは時刻判断。P2でduck/budgetによる消費を防ぐ。
+    'final_lap': 2, 'final_lap_notice': 2,
+    # 燃料不足は数値根拠のP0。band dedupで連呼を防ぐ。
+    'fuel_warning': 0, 'fuel_strategy_warning': 0,
     # P3 戦略
-    'fuel_warning': 3, 'fuel_strategy_warning': 3, 'final_lap': 3, 'final_lap_notice': 3, 'first_lap': 3,
+    'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
     # P4 情報
     'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
@@ -512,6 +520,70 @@ _director = {'last_by_prio': {}, 'recent': [], 'quiet_until': 0.0}
 #   DEBRIEFで停止するが、終了案内（checker_out_notice等）は許可リストで個別に通す。
 _lifecycle_state = race_lifecycle.RACING
 DEBRIEF_ALLOWED_TRIGGERS = {'checker_out_notice'}
+
+# ★2026-07-26 Unit E0 v3（Codex 再差戻し対応）：Driver Handoff/Inactive Driver 認識。
+#   非搭乗中の本人向け自動発話を抑止するため broadcast() の入り口で判定する。
+#   activity 計算本体は driver_activity.py の純粋関数で行い、ここでは結果保持のみ。
+_driver_activity = driver_activity_mod.ACTIVE
+
+# ★v3 Codex P0-1：手動「運転支援再開」シグナル。renderer からの WebSocket cmd
+#   'resume_driving_support' で set され、poll_iracing() が 1フレーム分消費する。
+#   PTT は非搭乗中の観戦者会話でも押されるため activity 判定源にできない
+#   → 通常 PTT とは別経路の明示 CMD で本人再搭乗を確定。
+_manual_resume_pending = False
+
+
+def _set_driver_activity(state):
+    """poll_iracing() から driver_activity 計算後に呼ぶ。module-level に保持し broadcast() から参照。"""
+    global _driver_activity
+    _driver_activity = state
+
+
+def _mark_manual_resume_signal():
+    """WebSocket cmd 'resume_driving_support' 受信時に呼ぶ。
+    HANDOFF/INACTIVE 中の本人再搭乗確定シグナル。poll_iracing() が消費してクリア。"""
+    global _manual_resume_pending
+    _manual_resume_pending = True
+
+
+def _consume_manual_resume_signal():
+    """poll_iracing() が毎フレーム呼ぶ。フラグを読んでクリアし、値を返す。"""
+    global _manual_resume_pending
+    v = _manual_resume_pending
+    _manual_resume_pending = False
+    return v
+
+
+# ★2026-07-26 Unit E0 v2 (Codex P0-4)：allow-list ゲート（deny-by-default）。
+#   activity!=ACTIVE 中に通す type だけを明示列挙。radio / judge_call / pace_check
+#   等の音声関連は全部 deny。PTT/接続/デバイス等の非音声メタと session_summary
+#   （呼び出し側 should_fire_race_summary で判定）だけ通す。
+ACTIVITY_ALLOWED_META_TYPES = frozenset({
+    # 物理ハードウェア・システム
+    'mic_error', 'mic_level',
+    'ptt', 'ptt_set', 'ptt_mismatch', 'ptt_config',
+    'vol_set',
+    # 接続状態
+    'iracing_connected', 'iracing_disconnected',
+    'session_info',
+    # データのみ（音声化されない・renderer 内部で消費）
+    'driver_state', 'lap_sectors', 'pit_timing',
+    # session_summary は呼び出し側で should_fire_race_summary() ガード。
+    # broadcast() は素通しし、broadcast() の戻り値で送信成功を確認する契約。
+    'session_summary',
+})
+
+
+def _activity_allows_broadcast(event):
+    """★2026-07-26 Unit E0 v2 (Codex P0-4)：allow-list ゲート。
+
+    ACTIVE は全許可。それ以外は ACTIVITY_ALLOWED_META_TYPES に含まれる type のみ通す。
+    radio/judge_call/pace_check 等の本人向け自動音声は deny-by-default で停止。
+    """
+    if driver_activity_mod.should_auto_fire(_driver_activity):
+        return True
+    etype = event.get('type')
+    return etype in ACTIVITY_ALLOWED_META_TYPES
 
 def set_quiet_mode(seconds=600):
     """ドライバーが『あんまり喋らなくていい』と言った時に呼ぶ。
@@ -568,6 +640,7 @@ def _session_scoped_reset_values():
         'fuel_at_lap_start': None,
         'lap_time_hist': [],
         'fuel_strategy': None,
+        'fuel_warning_band': None,
         'pit_this_lap': False,
         # ★2026-07-21 四度目の指摘で追加
         'pace_check_last_lap': -99,             # 初期値と同じ（3周に1回のペース判断間引きの基準）
@@ -596,6 +669,16 @@ def _session_scoped_reset_values():
         #   → 5秒後判定ロジックが破綻し誤発話 or 永久サイレント。ここに置いてsig/SessionNum両経路で強制リセット。
         'post_contact_watch_start': None,
         'post_contact_speed_ok': True,
+        # ★2026-07-26 Unit E0（Codex指示）：Driver Handoff 状態もセッションを跨がない。
+        #   前セッションで garage 帰還した状態が新セッションへ持ち越されると、レース開始時に
+        #   INACTIVE_DRIVER 誤判定で自動発話が全停止する事故になる。新セッションは ACTIVE から始める。
+        '_driver_activity_local': driver_activity_mod.ACTIVE,
+        '_driver_activity_handoff_start': None,
+        # ★v3 Codex P0-4：pending summary もセッションを跨がない。
+        #   前セッションで送信失敗した summary を新セッションで送ると誤情報になる。
+        '_pending_summary': None,
+        '_pending_non_race_summary': None,
+        '_pending_checker_notice': None,
     }
 
 
@@ -650,34 +733,6 @@ def evaluate_post_contact_watch(watch_start, speed_ok, now_time, current_speed,
     if elapsed >= watch_duration_sec:
         return speed_ok, None, True                           # 判定終了：Pattern Bだけ発話
     return False, watch_start, speed_ok                       # 監視継続
-
-
-def check_final_lap_milestones(laps_remaining_est, lifecycle_state, final_lap_notice_sent):
-    """★P1（2026-07-21 Codexレビュー再々指摘で修正）：Last 5/3/1の一度きり通知。RACING中のみ判定する。
-    poll_iracing()から毎フレーム呼ばれる本番コード（切り出しただけ・ロジックは同一）。
-
-    ★同一フレームで複数発話しない：閾値を一度に飛び越えた場合（例：初回有効値がいきなり1、
-    または6→1のようにジャンプ）、通過した閾値は全て"sent"扱いにするが、実際に発話するのは
-    その時点で最も適切な（＝一番小さい＝一番緊急な）1件だけ。初回有効値が1ならFinal lapだけを言う。
-
-    Args:
-      final_lap_notice_sent: dict {5: bool, 3: bool, 1: bool}（呼び出し側の現在値。書き換えない）
-    Returns: (fired: (milestone:int, message:str)|None, updated_final_lap_notice_sent: dict)
-    """
-    updated = dict(final_lap_notice_sent)
-    if laps_remaining_est is None or lifecycle_state != race_lifecycle.RACING:
-        return None, updated
-
-    crossed = [m for m in (5, 3, 1) if laps_remaining_est <= m and not updated[m]]
-    if not crossed:
-        return None, updated
-
-    for m in crossed:
-        updated[m] = True   # 通過済みの古い閾値も含めて全部sent扱い＝後から発話しない
-
-    milestone = min(crossed)   # 一番緊急な閾値だけを実際に発話する
-    msg = 'Final lap.' if milestone == 1 else ('%d laps to go.' % milestone)
-    return (milestone, msg), updated
 
 
 SPEECH_EVENT_TYPES = ('radio', 'judge_call', 'pace_check')
@@ -832,25 +887,60 @@ def _mc_message_en(cls, nearest, gaps, shape, clusters, stage):
                                           ' then '.join(str(c) for c in clusters) + ' in groups', tail)
     return '%s, %s behind.%s' % (cls, _fmt_gap(nearest), tail)
 
+# ★v3 Codex P1：broadcast() 戻り値の三値契約。段階状態消費 / summary_sent の判定に使う。
+BROADCAST_DISPATCHED = 'DISPATCHED'   # 実際に送信キューへ投入した
+BROADCAST_HELD = 'HELD'               # 間合いゲートで pending へ保留（後で flush_radio が送る）
+BROADCAST_DROPPED = 'DROPPED'         # 完全に破棄（activity/director/client 未接続）
+
+
+def dispatch_pending_summary(pending_summary, summary_sent, dispatch_fn):
+    """pending summaryを1回配送する純粋な状態遷移。
+
+    dispatch_fn(event) は broadcast() と同じ三値契約を返す。
+    DISPATCHEDの時だけ sent=True とpayload破棄を行い、HELD/DROPPEDなら同じpayloadを保持する。
+    """
+    if pending_summary is None or summary_sent:
+        return pending_summary, summary_sent, None
+    result = dispatch_fn(pending_summary)
+    if result == BROADCAST_DISPATCHED:
+        return None, True, result
+    return pending_summary, False, result
+
+
 def broadcast(event):
-    # ★2026-07-20 まず無線ディレクターが優先度・ダッキング・予算で裁く（全発話の単一の関門）
+    """★v3 Codex P1：戻り値を 3値化。保留と破棄を区別できる契約。
+
+    Returns:
+      BROADCAST_DISPATCHED : dispatch 成功（送信キューへ投入完了）
+      BROADCAST_HELD       : 間合いゲートで保留（flush_radio() が後で送る予定）
+      BROADCAST_DROPPED    : 完全破棄（activity ゲート / director / client 未接続）
+
+    段階状態消費（catchup_stage 等）は DISPATCHED のみで実施すべき。
+    HELD は後で送信可能性があるため、二重発火防止のため呼び出し側で扱いを決める
+    （現状 judge_call 系は GATEABLE_TRIGGERS に含まれないため HELD にならない）。
+
+    戻り値は全て非空文字列なので truthy。呼び出し側は必ず定数と明示比較する。
+    """
+    # ★2026-07-26 Unit E0（Codex指示）：使用者非搭乗中は本人向け自動発話を抑止（最優先ゲート）。
+    if not _activity_allows_broadcast(event):
+        return BROADCAST_DROPPED
+    # ★2026-07-20 director gate（優先度・ダッキング・予算）
     if not director_gate(event):
-        return
-    # ── 発話「間合い」ゲート：よく喋るプロアクティブ無線は、レース中に発話窓が閉じてたら保留する ──
-    #   （安全直結・非radio・窓が開いてる時は素通り。保留は最新1件のみ＝flush_radioが窓の開いた瞬間に送る）
+        return BROADCAST_DROPPED
+    # ── 発話「間合い」ゲート ──
     try:
         if (event.get('type') == 'radio' and event.get('trigger') in GATEABLE_TRIGGERS
-                and not event.get('_admitted')          # 保留から戻った分は再判定しない（二重計上防止）
+                and not event.get('_admitted')
                 and _gate_active and not _gate_window_ok):
-            event['_admitted'] = True                  # 次にflushされる時はディレクターを再通過させない
+            event['_admitted'] = True
             _gate_state['pending'] = event
             _gate_state['since'] = time.time()
             log("RADIO gate: hold %s (braking/cornering)" % event.get('trigger'))
-            return
+            return BROADCAST_HELD
     except Exception:
         pass
 
-    # 診断ログ：ラジオ発話とPTTイベントを記録（画面と突き合わせるため）
+    # 診断ログ
     try:
         et = event.get('type')
         if et == 'radio':
@@ -861,9 +951,10 @@ def broadcast(event):
     except Exception:
         pass
     if not connected_clients or loop is None:
-        return
+        return BROADCAST_DROPPED
     msg = json.dumps(event)
     asyncio.run_coroutine_threadsafe(_broadcast_async(msg), loop)
+    return BROADCAST_DISPATCHED
 
 # ── 発話タイミング「間合い」ゲート（Version A）──
 # broadcast()の一点でゲート：GATEABLE_TRIGGERS(=よく喋るプロアクティブ無線)は、レース中に発話窓が
@@ -871,7 +962,7 @@ def broadcast(event):
 # 安全直結(隣接車/クラッシュ/損傷等)や非radioイベントはゲート対象外＝常に即。窓状態はループが毎サイクル更新。
 GATEABLE_TRIGGERS = frozenset({
     'personal_best', 'first_lap', 'session_best', 'lap_consistent', 'lap_time', 'lap_slow',
-    'rolling_gap', 'fuel_strategy_warning',
+    'rolling_gap',
 })
 _gate_state = {'pending': None, 'since': 0.0}
 _gate_window_ok = True
@@ -883,13 +974,16 @@ def _set_speak_gate(window_ok, active):
     _gate_active = active
 
 def flush_radio():
-    """毎サイクル呼ぶ。窓が開いてて保留があれば送る。古すぎたら破棄（陳腐化防止）。"""
+    """毎サイクル呼ぶ。窓が開いてて保留があれば送る。古すぎたら破棄（陳腐化防止）。
+    ★v3 Codex P1：broadcast() が三値を返すようになったが、flush_radio() は
+    「ゲート通過済みの pending を送る」役割なので DISPATCHED 期待。HELD にはならない
+    （_admitted=True で二重ゲート判定を skip する既存契約）。"""
     p = _gate_state.get('pending')
     if not p:
         return
     if _gate_window_ok:
         _gate_state['pending'] = None
-        broadcast(p)                     # ゲートは通過済み扱い（下のbroadcast内チェックは窓ok時は素通り）
+        broadcast(p)                     # 通過済み扱い・戻り値は現状使わず
     elif time.time() - _gate_state.get('since', 0.0) > SPEAK_HOLD_MAX:
         log("RADIO gate: dropped stale %s" % p.get('trigger'))
         _gate_state['pending'] = None
@@ -1449,6 +1543,10 @@ def parse_session_info(yaml_str):
                         pass
                 elif stripped.startswith('CarClassShortName:'):
                     current_driver['class_name'] = stripped.split(':', 1)[1].strip()
+                elif stripped.startswith('CarScreenName:'):
+                    current_driver['car_model'] = (
+                        stripped.split(':', 1)[1].strip()
+                        .strip('"').strip("'"))
                 elif stripped.startswith('CarClassRelSpeed:'):
                     try:
                         current_driver['class_rel_speed'] = int(stripped.split(':')[1].strip())
@@ -1492,6 +1590,7 @@ def parse_session_info(yaml_str):
         if player:
             result['player_irating'] = player.get('irating', 0)
             result['player_car_class'] = player.get('class_name', '')  # 例"GT3"。記憶のキー(コース×車種)に使う
+            result['player_car_model'] = player.get('car_model', '')
             lic_level = player.get('lic_level', 0)
             lic_sublevel = player.get('lic_sublevel', 0)
             # Convert to SR display (e.g., B 4.50)
@@ -1579,6 +1678,18 @@ def poll_iracing():
     player_rel_speed = 0
     is_race_session = False
     inactive_since = None
+    # ★2026-07-26 Unit E0：Driver Handoff/Inactive Driver 状態管理。
+    #   純粋関数 driver_activity_mod.evaluate_driver_activity() の呼び出し用ローカル状態。
+    #   session_scoped_reset にも登録し SessionNum/sig 両経路でリセットする。
+    _driver_activity_local = driver_activity_mod.ACTIVE
+    _driver_activity_handoff_start = None
+    # ★v3 Codex P0-4：summary pending 状態。broadcast() が dispatch 失敗した場合、
+    #   payload をここに保持し、通常ポーリング位置で毎フレーム再試行する。
+    #   trigger 条件が満たされた瞬間だけでなく、以降のフレームでも送信可能に。
+    #   SessionNum 変更で破棄（次セッションへ持ち越さない）。summary_sent=True 後は None。
+    _pending_summary = None
+    _pending_non_race_summary = None
+    _pending_checker_notice = None
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
@@ -1618,6 +1729,7 @@ def poll_iracing():
     session_incidents_total = 0
     session_track = ''
     session_car_class = ''
+    session_car_model = ''
     session_event_type = ''
     session_num_in_class = 0
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
@@ -1626,6 +1738,7 @@ def poll_iracing():
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
+    fuel_warning_band = None
     # ★2026-07-21 Codex指示R1：レース終了状態機械（RACING/CHECKER_OUT/PLAYER_FINISHED/DEBRIEF）。
     #   詳細はrace_lifecycle.py参照。リーダーのチェッカーと自分の完走を区別できていなかった
     #   2026-07-21 Monza実走の誤発話（燃料警告誤爆・レース終了訂正）を受けて新設。
@@ -1703,6 +1816,7 @@ def poll_iracing():
             #   実走：レース終了直後に次セッションの時計(timeRem=678.5)が入り「あと7周」と誤認し、
             #   ファイナルラップで「燃料が持たない、ピット計画を決めよう」と誤警告した。
             fuel_strategy_warned = False
+            fuel_warning_band = None
             leader_lap_time_hist.clear()
             lap_delta_hist.clear()
 
@@ -1739,6 +1853,13 @@ def poll_iracing():
             yaml_str = reader.read_session_info()
             if yaml_str:
                 info = parse_session_info(yaml_str)
+                _authority_session_num = reader.read_int('SessionNum')
+                _session_authority, sig = (
+                    session_authority_mod.build_session_authority(
+                        info, _authority_session_num))
+                info['current_session_authority'] = _session_authority
+                info['current_session_num'] = _session_authority['session_num']
+                info['current_session_type'] = _session_authority['session_type']
                 # ★2026-07-21 Codex指示R2「原因修正」：read-only診断。DriverInfoから解析できた人数と、
                 #   実テレメトリ上に car_idx が見えている数を突き合わせる。大きく食い違えば
                 #   YAML解析側（parse_session_info）の問題、一致していれば「iRatingフィルタで
@@ -1750,23 +1871,32 @@ def poll_iracing():
                         % (len(info.get('drivers', [])), info.get('num_drivers', 0), _diag_live_cars))
                 except Exception as _e:
                     log("SESSION INFO DIAG error: " + str(_e))
-                if info.get('player_irating'):
-                    # シグネチャは「セッションを定義する安定値」のみ（SOF/人数は他車ジョインで変動するため除外）
-                    sig = str(info.get('event_type', '')) + '|' + str(info.get('track', ''))
+                if info.get('player_car_idx', -1) >= 0:
                     if info.get('sessions'):
                         sessions_map = info['sessions']   # {SessionNum: SessionType}
                         if info.get('track_length_m'):
                             track_length_m = info['track_length_m']
                     session_track = info.get('track', '')
                     session_car_class = info.get('player_car_class', '')
+                    session_car_model = info.get('player_car_model', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
                     session_info_sent = True
                     # ── 本当に新しいセッションの時だけ：briefing送信＋状態リセット ──
+                    if (sig != last_session_sig
+                            and last_session_sig is not None
+                            and sig[:2] == last_session_sig[:2]
+                            and _authority_session_num == last_session_num):
+                        broadcast({'type': 'session_info', 'data': info})
+                        log("Session authority transition sent without duplicate reset: "
+                            + str(last_session_sig) + " -> " + str(sig))
+                        last_session_sig = sig
                     if sig != last_session_sig:
                         broadcast({'type': 'session_info', 'data': info})
                         log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof'))
                             + " class:" + str(info.get('player_car_class')) + " drivers:" + str(info.get('num_drivers'))
+                            + " car:" + str(info.get('player_car_model'))
+                            + " currentSession:" + str(info.get('current_session_type'))
                             + " track:" + str(info.get('track')) + " iR:" + str(info.get('player_irating'))
                             + " SR:" + str(info.get('safety_rating')))
                         # ── 診断ログ：ゼッケンとSRの不一致調査（2026-07-14 Yuji IMSA実走）──────────
@@ -1787,6 +1917,7 @@ def poll_iracing():
                         last_laps_remaining_est = _sig_reset['last_laps_remaining_est']
                         final_lap_notice_sent = _sig_reset['final_lap_notice_sent']
                         fuel_strategy_warned = _sig_reset['fuel_strategy_warned']
+                        fuel_warning_band = _sig_reset['fuel_warning_band']
                         fuel_per_lap_hist = _sig_reset['fuel_per_lap_hist']
                         fuel_at_lap_start = _sig_reset['fuel_at_lap_start']
                         lap_time_hist = _sig_reset['lap_time_hist']
@@ -1812,8 +1943,16 @@ def poll_iracing():
                         # ★2026-07-24 Codex P1：接触監視もsig変更で捨てる
                         post_contact_watch_start = _sig_reset['post_contact_watch_start']
                         post_contact_speed_ok = _sig_reset['post_contact_speed_ok']
+                        # ★2026-07-26 Unit E0：Driver Handoff 状態もsig変更で捨てる
+                        _driver_activity_local = _sig_reset['_driver_activity_local']
+                        _driver_activity_handoff_start = _sig_reset['_driver_activity_handoff_start']
+                        # ★v3 Codex P0-4：pending summary もsig変更で破棄
+                        _pending_summary = _sig_reset['_pending_summary']
+                        _pending_non_race_summary = _sig_reset['_pending_non_race_summary']
+                        _pending_checker_notice = _sig_reset['_pending_checker_notice']
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
+                        last_session_num = _authority_session_num
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
                         if 'car_idx' in d and 'class_id' in d:
@@ -1867,6 +2006,7 @@ def poll_iracing():
         # EventTypeでなく SessionNum→SessionType で現在走行中のセッション種別を引く。
         cur_snum        = reader.read_int('SessionNum')
         cur_sess_type   = sessions_map.get(cur_snum, '') if cur_snum is not None else ''
+        _previous_is_race_session = is_race_session
         is_race_session = ('race' in cur_sess_type.lower())
 
         # ★P0（2026-07-21 Codexレビュー再指摘・再々指摘で拡張）：SessionNum変更を直接検知して
@@ -1875,13 +2015,42 @@ def poll_iracing():
         #   セッション遷移（Practice→Qualify→Race、耐久のレース1→レース2等）でSessionNumだけが
         #   変わるケースを取りこぼしていた。さらに再々指摘：FSMと通知フラグしかresetしておらず、
         #   fuel_strategy_warned等の燃料状態が前セッションから持ち越されていた。
+        _transition_summary = None
         _changed, _reset = maybe_reset_on_session_num_change(
             cur_snum, last_session_num, race_lifecycle_fsm)
         if _changed:
+            # Practice/Qualify summaryはgarageで確定しない。SessionNum変更だけを権威ある終了
+            # シグナルとして、reset前の旧セッション記録を一度送る。別ドライバーへのhandoff中でも
+            # セッションそのものが切り替わった事実は確定しているため、安全にsummary化できる。
+            if driver_activity_mod.should_finalize_non_race_summary(
+                    _changed, _previous_is_race_session, bool(session_laps),
+                    session_racing_started, summary_sent):
+                _old_times = [r['time'] for r in session_laps if r['time'] > 0]
+                if _old_times:
+                    _old_summary = {
+                        'type': 'session_summary',
+                        'track': session_track,
+                        'car_class': session_car_class,
+                        'car_model': session_car_model,
+                        'event_type': session_event_type,
+                        'is_race': False,
+                        'total_laps': len(session_laps),
+                        'finish_pos': class_pos,
+                        'best_lap': round(min(_old_times), 3),
+                        'worst_lap': round(max(_old_times), 3),
+                        'avg_lap': round(sum(_old_times) / len(_old_times), 3),
+                        'avg_fuel_per_lap': (
+                            round(sum(fuel_per_lap_hist) / len(fuel_per_lap_hist), 2)
+                            if fuel_per_lap_hist else None),
+                        'incidents': prev_incidents or 0,
+                        'laps': list(session_laps),
+                    }
+                    _transition_summary = _old_summary
             checker_out_notice_sent = _reset['checker_out_notice_sent']
             last_laps_remaining_est = _reset['last_laps_remaining_est']
             final_lap_notice_sent = _reset['final_lap_notice_sent']
             fuel_strategy_warned = _reset['fuel_strategy_warned']
+            fuel_warning_band = _reset['fuel_warning_band']
             fuel_per_lap_hist = _reset['fuel_per_lap_hist']
             fuel_at_lap_start = _reset['fuel_at_lap_start']
             lap_time_hist = _reset['lap_time_hist']
@@ -1904,6 +2073,17 @@ def poll_iracing():
             # ★2026-07-24 Codex P1：接触監視もSessionNum変更で捨てる
             post_contact_watch_start = _reset['post_contact_watch_start']
             post_contact_speed_ok = _reset['post_contact_speed_ok']
+            # ★2026-07-26 Unit E0：Driver Handoff 状態もSessionNum変更で捨てる
+            _driver_activity_local = _reset['_driver_activity_local']
+            _driver_activity_handoff_start = _reset['_driver_activity_handoff_start']
+            # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
+            _pending_summary = _reset['_pending_summary']
+            _pending_non_race_summary = _reset['_pending_non_race_summary']
+            _pending_checker_notice = _reset['_pending_checker_notice']
+            if _transition_summary is not None:
+                _pending_non_race_summary = _transition_summary
+                log("Non-race summary pending at SessionNum transition: %d laps"
+                    % _transition_summary.get('total_laps', 0))
         if cur_snum is not None:
             last_session_num = cur_snum
 
@@ -1944,10 +2124,187 @@ def poll_iracing():
                 _car_idx_lap_completed = _clc_arr[player_car_idx]
         except Exception:
             pass
+        _previous_lifecycle_state = race_lifecycle_fsm.state
         lifecycle_state = race_lifecycle_fsm.update(
             session_state=cur_ss, lap_last_lap_time=lapTime, telemetry_active=active,
             driver_state=driver_state, car_idx_lap_completed=_car_idx_lap_completed)
         _lifecycle_state = lifecycle_state  # ★P0：director_gate（module-level）から参照できるようにする
+        if final_lap.should_dispatch_checker_notice(
+                _previous_lifecycle_state, lifecycle_state,
+                bool(final_lap_notice_sent.get(1, False))):
+            _notice_fuel = round(fuel, 1) if fuel is not None else None
+            _pending_checker_notice = {
+                'type': 'radio',
+                'trigger': 'checker_out_notice',
+                'fuel': _notice_fuel,
+                'message': (
+                    'Checkered flag is out. Fuel remaining '
+                    + str(_notice_fuel) + '.'
+                    if _notice_fuel is not None
+                    else 'Checkered flag is out.'),
+            }
+
+        # ★2026-07-26 Unit E0 v2 (Codex差戻し対応)：Driver Handoff/Inactive Driver 認識。
+        #   使用者本人が非搭乗中（garage 中でチームメイトが走ってる）に本人向け自動発話を
+        #   抑止するため、activity を毎フレーム計算して module-level に保持する。
+        #   純粋関数 driver_activity_mod.evaluate_driver_activity() が状態遷移を担当。
+        try:
+            _da_now_time = reader.read_double('SessionTime')
+        except Exception:
+            _da_now_time = None
+        # ★v3 Codex P0-1：明示的「運転支援再開」CMD フラグを消費
+        #   （PTT は activity 判定源にしない・観戦者会話でも押されるため）
+        _manual_resume_signal = _consume_manual_resume_signal()
+        _new_activity, _driver_activity_handoff_start, _da_reason = (
+            driver_activity_mod.evaluate_driver_activity(
+                driver_state=driver_state,
+                prev_activity=_driver_activity_local,
+                lifecycle_state=lifecycle_state,
+                handoff_start_time_s=_driver_activity_handoff_start,
+                current_time_s=_da_now_time,
+                manual_resume_signal=_manual_resume_signal,
+            ))
+        if _new_activity != _driver_activity_local:
+            _activity_before = _driver_activity_local
+            log("DRIVER ACTIVITY: %s -> %s (reason=%s driver_state=%s lifecycle=%s manual_resume=%s)" % (
+                _driver_activity_local, _new_activity, _da_reason,
+                driver_state, lifecycle_state, _manual_resume_signal))
+            _driver_activity_local = _new_activity
+            # 非搭乗中もチーム車テレメトリは更新されるため、各候補のarmed/stage/historyを
+            # そのまま残すと、本人復帰時に「チームメイト走行中に消費した段階」を引き継ぐ。
+            # ACTIVE復帰を新しい本人スティント境界として、本人向け判断状態だけを初期化する。
+            if (_new_activity == driver_activity_mod.ACTIVE
+                    and _activity_before != driver_activity_mod.ACTIVE):
+                fuel_at_lap_start = None
+                fuel_per_lap_hist = []
+                fuel_strategy = None
+                fuel_strategy_warned = False
+                fuel_warning_band = None
+                checker_out_notice_sent = False
+                last_laps_remaining_est = None
+                final_lap_notice_sent = {5: False, 3: False, 1: False}
+                post_contact_watch_start = None
+                post_contact_speed_ok = True
+                multiclass_warned.clear()
+                multiclass_2s_warned.clear()
+                multiclass_armed.clear()
+                multiclass_stage.clear()
+                battle_warned.clear()
+                behind_armed.clear()
+                battle_ever_warned.clear()
+                catchup_stage.clear()
+                defend_stage.clear()
+                gap_pace_hist.clear()
+                danger_warned.clear()
+                danger_ever_warned.clear()
+                ahead_armed.clear()
+                stopped_armed.clear()
+                stopped_warned.clear()
+                log("DRIVER ACTIVITY: new active stint — driver-scoped call state reset")
+        _set_driver_activity(_driver_activity_local)
+
+        if _pending_non_race_summary is not None:
+            _non_race_result = broadcast(_pending_non_race_summary)
+            if _non_race_result == BROADCAST_DISPATCHED:
+                log("Non-race summary dispatched from transition pending: %d laps"
+                    % _pending_non_race_summary.get('total_laps', 0))
+                _pending_non_race_summary = None
+
+        # Checker fallback is retried throughout CHECKER_OUT. E0 may reject
+        # the edge frame while the user is inactive or no client is attached;
+        # only a real DISPATCHED result consumes it.
+        if (_pending_checker_notice is not None
+                and not checker_out_notice_sent
+                and lifecycle_state == race_lifecycle.CHECKER_OUT):
+            _checker_result = broadcast(_pending_checker_notice)
+            if _checker_result == BROADCAST_DISPATCHED:
+                checker_out_notice_sent = True
+                _pending_checker_notice = None
+        elif lifecycle_state != race_lifecycle.CHECKER_OUT:
+            _pending_checker_notice = None
+
+        # ★v3 Codex P0-4：session_summary の pending 化＋通常ポーリング位置での再試行。
+        #   従来は driver_state 変化ブロック内でのみ 1発 broadcast し、失敗しても再試行なし
+        #   （次フレームは driver_state 変化イベントが来ないため）。
+        #   ここで毎フレーム条件を判定し、pending payload を作って retry ループへ送る。
+
+        # pending race summary を必要なら生成（同じ payload を再送するのに使う）。
+        # Practice/Qualifyは上のSessionNum変更時だけ確定し、garage単独では生成しない。
+        if _pending_summary is None and not summary_sent and session_laps and session_racing_started:
+            _may_summary = False
+            if is_race_session:
+                # レース：真の完走のみ（activity=FINISHED × lifecycle=PLAYER_FINISHED）
+                # lifecycle は最終S/F通過を検出したフレームで先に PLAYER_FINISHED になるが、
+                # session_laps への最終ラップ追加はこの後の lap_time_changed ブロックで行われる。
+                # last_lap_time が現値へ追いつく次フレームまで待ち、最終ラップ欠落を防ぐ。
+                _latest_lap_recorded = bool(
+                    session_laps
+                    and session_laps[-1].get('lap') == lap
+                    and session_laps[-1].get('time') == round(lapTime, 3))
+                _may_summary = (
+                    driver_activity_mod.should_fire_race_summary(
+                        _driver_activity_local, lifecycle_state)
+                    and last_lap_time == lapTime
+                    and _latest_lap_recorded)
+            if _may_summary:
+                _times = [r['time'] for r in session_laps if r['time'] > 0]
+                if _times:
+                    _best_t = min(_times)
+                    _worst_t = max(_times)
+                    _avg_fuel_summary = (
+                        round(sum(fuel_per_lap_hist) / len(fuel_per_lap_hist), 2)
+                        if fuel_per_lap_hist else None)
+                    if is_race_session:
+                        _half = max(1, len(_times) // 2)
+                        _pace_first = round(sum(_times[:_half]) / _half, 3)
+                        _pace_last = round(sum(_times[_half:]) / max(1, len(_times) - _half), 3)
+                    else:
+                        _pace_first = _pace_last = None
+                    _pending_summary = {
+                        'type': 'session_summary',
+                        'track': session_track,
+                        'car_class': session_car_class,
+                        'car_model': session_car_model,
+                        'event_type': session_event_type,
+                        'is_race': is_race_session,
+                        'total_laps': len(session_laps),
+                        'finish_pos': class_pos,
+                        'best_lap': round(_best_t, 3),
+                        'worst_lap': round(_worst_t, 3),
+                        'avg_lap': round(sum(_times) / len(_times), 3),
+                        'avg_fuel_per_lap': _avg_fuel_summary,
+                        'pace_first_half': _pace_first,
+                        'pace_last_half': _pace_last,
+                        'incidents': prev_incidents or 0,
+                        'laps': session_laps,
+                    }
+                    log('Session summary pending: %d laps, best %s (route=%s)' % (
+                        len(session_laps), str(round(_best_t, 3)),
+                        'race' if is_race_session else 'non_race'))
+
+        # pending 再送ループ（毎フレーム走る・成功まで諦めない）
+        if _pending_summary is not None and not summary_sent:
+            # ★v3 Codex P1：DISPATCHED のみ成功。HELD/DROPPED は同じpayloadを保持。
+            _summary_snapshot = _pending_summary
+            _pending_summary, summary_sent, _summary_result = dispatch_pending_summary(
+                _pending_summary, summary_sent, broadcast)
+            if _summary_result == BROADCAST_DISPATCHED:
+                log('Session summary dispatched (from pending): %d laps' %
+                    _summary_snapshot.get('total_laps', 0))
+                if _summary_snapshot.get('is_race'):
+                    _rr_best = _summary_snapshot.get('best_lap')
+                    _rr_avg = _summary_snapshot.get('avg_lap')
+                    log('===== RACE RESULT ===== '
+                        + 'track=' + str(_summary_snapshot.get('track'))
+                        + ' finish_pos(class)=' + str(_summary_snapshot.get('finish_pos'))
+                        + ' laps=' + str(_summary_snapshot.get('total_laps'))
+                        + ' best=' + str(_rr_best)
+                        + ' avg=' + str(_rr_avg)
+                        + ' pace_first_half=' + str(_summary_snapshot.get('pace_first_half'))
+                        + ' pace_last_half=' + str(_summary_snapshot.get('pace_last_half'))
+                        + ' incidents=' + str(_summary_snapshot.get('incidents'))
+                        + ' ======================')
+                checkered_pending = False
 
         if driver_state != prev_driver_state:
             broadcast({'type': 'driver_state', 'state': driver_state})
@@ -1957,35 +2314,12 @@ def poll_iracing():
             #   （2026-07-11の耐久レースログで実際に発生：交代直後に燃料0/聞き返しが起きた）。
             #   ここでリセットすれば、以後はこのスティントの実測だけで再計算が始まる
             #   （clean_laps_sampledが2-3周の時点でも平均は出るので、5周貯まるのを待たず答えられる）。
-            if prev_driver_state == 'garage' and driver_state in ('track', 'pit'):
-                fuel_at_lap_start = None
-                fuel_per_lap_hist = []
-                fuel_strategy = None
-                log('new stint detected (garage -> ' + driver_state + ') — fuel history reset')
-            # ガレージ戻り＝セッション終了 → Practice/Qualifyでも1回サマリー送信
-            if driver_state == 'garage' and not summary_sent and session_laps and session_racing_started:
-                times = [r['time'] for r in session_laps if r['time'] > 0]
-                if times:
-                    best_t = min(times)
-                    avg_fuel_summary = round(sum(fuel_per_lap_hist)/len(fuel_per_lap_hist), 2) if fuel_per_lap_hist else None
-                    broadcast({
-                        'type': 'session_summary',
-                        'track': session_track,
-                        'car_class': session_car_class,   # 記憶キー(コース×車種)用
-                        'event_type': session_event_type,
-                        'is_race': is_race_session,        # クライアント側でデブリーフ自動誘導を出すかの判定に使う
-                        'total_laps': len(session_laps),
-                        'finish_pos': class_pos,
-                        'best_lap': round(best_t, 3),
-                        'worst_lap': round(max(times), 3),
-                        'avg_lap': round(sum(times)/len(times), 3),
-                        'avg_fuel_per_lap': avg_fuel_summary,  # 平均燃料消費(L/周)。1階記憶に保存
-                        'incidents': prev_incidents or 0,
-                        'laps': session_laps,
-                    })
-                    log('Session summary sent: ' + str(len(session_laps)) + ' laps, best ' + str(round(best_t, 3)))
-                    summary_sent = True
-                    checkered_pending = False
+            # 燃料履歴等の本人スティントresetは、上のdriver_activity ACTIVE復帰で一元実行する。
+            # 単純なgarage→pitは交代先ドライバーでも観測されるため、ここではresetしない。
+            # ★v3 Codex P0-2：garage 単独では Practice/Qualify の終了証拠にならない。
+            #   HANDOFF/INACTIVE で summary を出さない。ここでは payload の準備のみを
+            #   別ブロック（下記 session_end_confirmed 判定）に移す。
+            #   ドライバー交代の garage 遷移では summary_sent は立てない。
             log('driver state -> ' + driver_state)
             prev_driver_state = driver_state
 
@@ -2102,6 +2436,19 @@ def poll_iracing():
         # 自分のonTrack状態に関係なく毎周期更新する（下のfuel_strategy計算で使う）。
         car_positions = reader.read_int_array('CarIdxPosition', 64)
         car_laps_all  = reader.read_int_array('CarIdxLap', 64)
+        car_dist_all = reader.read_float_array('CarIdxLapDistPct', 64)
+        car_on_pitroad_all = reader.read_int_array('CarIdxOnPitRoad', 64)
+        car_surface_all = reader.read_int_array('CarIdxTrackSurface', 64)
+        # Final Lap authorityは総合順位1位のみ。クラス順位や
+        # max(CarIdxLap)フォールバックを混ぜると時間制混走で1周早くなる。
+        overall_leader_idx = None
+        if car_positions and car_laps_all:
+            for _pidx, _ppos in enumerate(car_positions):
+                if (_ppos == 1 and _pidx < len(car_laps_all)
+                        and car_laps_all[_pidx] is not None
+                        and car_laps_all[_pidx] > 0):
+                    overall_leader_idx = _pidx
+                    break
         # ★2026-07-19 リーダー検出の堅牢化：位置1が"幽霊"(CarIdxLap<=0=コース上に居ない)を指すことがある
         #   (Interlagos実走でleader_lap=-1が連発)。位置1でも周回が有効な車を優先し、ダメなら
         #   「コース上で最も進んでる車(max CarIdxLap)」を実質リーダーとして採用してNoneを避ける。
@@ -2234,16 +2581,17 @@ def poll_iracing():
         # ── 燃料to-フィニッシュ戦略計算（ラップ完了ごとに更新）──
         # 直近5周の平均消費量から、残り周回を走り切れるかを算出。数値は捏造せずここで計算した
         # 実測値のみをClaudeへ渡す(prompts.jsのliveNote経由)。
-        if lap_time_changed and onTrack and fuel is not None:
-            if fuel_at_lap_start is not None:
-                used = fuel_at_lap_start - fuel
-                # アウト/インラップ(ピット通過周)はピットレーン低速でクリーンラップより消費が
-                # 少なく、平均を過小評価する(2026/7/7実走で2.5L誤表示・実3.8Lの主因)。除外する。
-                if 0 < used < 20 and not pit_this_lap:
-                    fuel_per_lap_hist.append(used)
-                    if len(fuel_per_lap_hist) > 5:
-                        fuel_per_lap_hist.pop(0)
-            fuel_at_lap_start = fuel
+        if lap_time_changed and onTrack:
+            if fuel is not None:
+                if fuel_at_lap_start is not None:
+                    used = fuel_at_lap_start - fuel
+                    # アウト/インラップ(ピット通過周)はピットレーン低速でクリーンラップより消費が
+                    # 少なく、平均を過小評価する(2026/7/7実走で2.5L誤表示・実3.8Lの主因)。除外する。
+                    if 0 < used < 20 and not pit_this_lap:
+                        fuel_per_lap_hist.append(used)
+                        if len(fuel_per_lap_hist) > 5:
+                            fuel_per_lap_hist.pop(0)
+                fuel_at_lap_start = fuel
             pit_this_lap = False  # 次の周の判定用にリセット
 
             # ⚠️2026/7/5判明バグ：ラップ切り替わり直後の瞬間的なlapTime単発値をそのまま使うと、
@@ -2255,7 +2603,107 @@ def poll_iracing():
                 if len(lap_time_hist) > 5:
                     lap_time_hist.pop(0)
 
-            if fuel_per_lap_hist:
+            # ── Final Lap / Last 5-3-1（燃料履歴とは独立）────────────────
+            # 時間制マルチクラスでは総合首位のチェッカー時刻と、自車が次に
+            # S/Fを通る時刻を壁時計上で比較する。周回番号の差し引きや
+            # ceil(timeRemain / own pace) は、ラップダウン車を1周早くするため
+            # Final Lapの根拠には使わない。
+            _laps_total_ok = (
+                lap is not None and lapsTot is not None
+                and 0 < lapsTot < 3000 and lapsTot > lap + 1)
+            _is_time_race = bool(
+                is_race_session and not _laps_total_ok
+                and timeRemain is not None and 0 <= timeRemain < 100000)
+            _legacy_laps_remaining = (
+                max(0, lapsTot - lap) if _laps_total_ok else None)
+
+            _driver_dist = None
+            _leader_dist = None
+            if (car_dist_all and 0 <= player_car_idx < len(car_dist_all)):
+                _driver_dist = car_dist_all[player_car_idx]
+            if (car_dist_all and overall_leader_idx is not None
+                    and overall_leader_idx < len(car_dist_all)):
+                _leader_dist = car_dist_all[overall_leader_idx]
+
+            _leader_on_pit = True
+            if overall_leader_idx is not None:
+                _leader_pit_flag = (
+                    bool(car_on_pitroad_all[overall_leader_idx])
+                    if car_on_pitroad_all
+                    and overall_leader_idx < len(car_on_pitroad_all)
+                    else False)
+                _leader_surface = (
+                    car_surface_all[overall_leader_idx]
+                    if car_surface_all
+                    and overall_leader_idx < len(car_surface_all)
+                    else None)
+                # TrackSurface 2=ApproachingPits, 3=OnTrack.  Missing surface
+                # is not authoritative enough for a Final Lap call.
+                _leader_on_pit = (
+                    _leader_pit_flag or _leader_surface not in (2, 3))
+
+            _driver_avg_lap = (
+                sum(lap_time_hist) / len(lap_time_hist)
+                if lap_time_hist else None)
+            _leader_avg_lap = (
+                sum(leader_lap_time_hist) / len(leader_lap_time_hist)
+                if leader_lap_time_hist else None)
+            _timed_final_eval = final_lap.evaluate_final_lap_for_driver(
+                driver_lap_dist_pct=_driver_dist,
+                leader_lap_dist_pct=_leader_dist,
+                driver_avg_lap_s=_driver_avg_lap,
+                leader_avg_lap_s=_leader_avg_lap,
+                session_time_remain_s=timeRemain,
+                session_laps_remain_for_leader=reader.read_int('SessionLapsRemain'),
+                is_time_race=_is_time_race,
+                lifecycle_state=lifecycle_state,
+                final_lap_already_announced=bool(
+                    final_lap_notice_sent.get(1, False)),
+                is_driver_overall_leader=(
+                    overall_leader_idx is not None
+                    and player_car_idx == overall_leader_idx),
+                driver_pace_sample_count=len(lap_time_hist),
+                leader_pace_sample_count=len(leader_lap_time_hist),
+                driver_in_pit_or_garage=(
+                    bool(onPit) or driver_state == 'garage'),
+                leader_in_pit_or_garage=_leader_on_pit,
+                driver_lap=lap,
+                leader_lap=leader_lap)
+
+            _milestone_laps = final_lap.select_milestone_laps(
+                _is_time_race, _timed_final_eval, _legacy_laps_remaining)
+            _milestone, _crossed = final_lap.select_milestone(
+                _milestone_laps, lifecycle_state, final_lap_notice_sent)
+            if _milestone is not None:
+                _msg = ('Final lap.' if _milestone == 1
+                        else '%d laps to go.' % _milestone)
+                _final_result = broadcast({
+                    'type': 'radio',
+                    'trigger': 'final_lap_notice',
+                    'laps_remaining': _milestone,
+                    'pos': pos,
+                    'message': _msg,
+                })
+                final_lap_notice_sent = (
+                    final_lap.commit_milestone_after_dispatch(
+                        final_lap_notice_sent, _crossed, _final_result))
+            if _is_time_race:
+                log("FINAL LAP DIAG lap=%s leaderIdx=%s driverDist=%s leaderDist=%s "
+                    "driverAvg=%s leaderAvg=%s timeRem=%s crossings=%s reason=%s confidence=%s"
+                    % (
+                        lap, overall_leader_idx, _driver_dist, _leader_dist,
+                        round(_driver_avg_lap, 2)
+                        if _driver_avg_lap is not None else None,
+                        round(_leader_avg_lap, 2)
+                        if _leader_avg_lap is not None else None,
+                        round(timeRemain, 2)
+                        if timeRemain is not None else None,
+                        _timed_final_eval.get(
+                            'estimated_crossings_to_finish'),
+                        _timed_final_eval.get('reason'),
+                        _timed_final_eval.get('confidence')))
+
+            if fuel_per_lap_hist and fuel is not None:
                 avg_fuel_lap = sum(fuel_per_lap_hist) / len(fuel_per_lap_hist)
                 # ── ①消費量は「クリーンラップ1本でも」即Lunaへ送る（短いレース対応・2-4周で読めるように）──
                 # レース長(残り周回)が分からなくても、燃料残量÷消費量で「あと何周走れるか」は出せる。
@@ -2266,118 +2714,73 @@ def poll_iracing():
                     'laps_of_fuel_left': laps_of_fuel_left,   # 現燃料であと何周走れるか（レース長不要）
                     'clean_laps_sampled': len(fuel_per_lap_hist),  # 何周分の実測から出したか（信頼度の目安）
                 }
-                # ── ②レース長が分かる時だけ、to-フィニッシュの余裕/不足も足す ──
-                # 周回制はシンプル（総周回-現在周回）。時間制（タイムサーティン）は1位のペースで
-                # 最終ラップ番号を予測し、自分が同一周回（lead lap）ならそれに準ずる。ラップダウン
-                # している場合は1位のフィニッシュと自分の周回数が一致しないので、自分のペース×
-                # 残り時間で計算する（2026-07-12 Yujiと設計合意・詳細はコメント末尾）。
-                laps_remaining_est = None
-                finish_basis = None   # プロンプト側で「1位基準」「ラップダウン中」等を言い分けるため
-                laps_down = None
-                # ★★2026-07-20 「不明」を「あと1周」に変換しない（Codexレビューの原則）★★
-                #   実走(Interlagos)で全周 rem_est=1 だった真因：SessionTimeRemain を float で誤読して
-                #   0.04 のような極小のゴミ値になり、`0 < timeRemain` を通過 → ceil(0.04/90)=1周 →
-                #   「35分レースがあと1周」として全周計算していた。表示は round して 0.0 に見えていた。
-                #   対策：①型を見て読む(修正済) ②極小値は"不明"として弾く ③どの根拠も無ければ None のまま。
-                #   None のときは下流で to-finish 燃料警告を出さない（＝誤警告より沈黙を選ぶ）。
-                TIME_REMAIN_MIN = 5.0    # これ未満は計測不能かレース終了直前。残り周回の根拠にしない。
-                time_remain_ok = (timeRemain is not None and TIME_REMAIN_MIN < timeRemain < 100000)
-                # lapsTot は「現在周回より確実に先」を指している時だけ周回制と見なす。
-                #   時間制で lapsTot が暫定的に lap+1 を返すと毎周 rem_est=1 になるため lap+1 は信用しない。
-                laps_total_ok = (lapsTot is not None and 0 < lapsTot < 3000 and lapsTot > lap + 1)
-                if laps_total_ok:
-                    laps_remaining_est = max(0, lapsTot - lap)
-                    finish_basis = 'laps_total'
-                elif time_remain_ok:
-                    if leader_lap is not None and len(leader_lap_time_hist) >= 2:
-                        leader_avg_lap = sum(leader_lap_time_hist) / len(leader_lap_time_hist)
-                        leader_laps_left = math.ceil(timeRemain / leader_avg_lap)
-                        predicted_leader_final_lap = leader_lap + leader_laps_left
-                        laps_down = max(0, leader_lap - lap)  # 0=同一周回、正=ラップダウン周回数
-                        if laps_down == 0:
-                            laps_remaining_est = max(0, predicted_leader_final_lap - lap)
-                            finish_basis = 'leader_pace'
-                        elif lap_time_hist:
-                            avg_lap_time = sum(lap_time_hist[-3:]) / len(lap_time_hist[-3:])
-                            laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
-                            finish_basis = 'own_pace_lapped'
-                    elif lap_time_hist:
-                        # 1位のデータがまだ不十分（レース序盤・1位不明等）→ 自分のペースだけで暫定計算
-                        avg_lap_time = sum(lap_time_hist[-3:]) / len(lap_time_hist[-3:])
-                        laps_remaining_est = math.ceil(timeRemain / avg_lap_time)
-                        finish_basis = 'own_pace_no_leader_data'
+                # ── ② to-finish authorityはFinal Lap Unitと完全共有 ──
+                # 時間制でモデルが不成立なら _milestone_laps=None のまま。
+                # own-paceや周回番号差へ戻して「分からない」を数字に変換しない。
+                _fuel_eval = fuel_strategy_mod.evaluate_fuel_to_finish(
+                    fuel_level_l=fuel,
+                    avg_fuel_per_lap_l=avg_fuel_lap,
+                    estimated_crossings_to_finish=_milestone_laps,
+                    clean_laps_sampled=len(fuel_per_lap_hist),
+                    lifecycle_state=lifecycle_state,
+                    previous_band=fuel_warning_band)
+                if _fuel_eval.get('available'):
+                    fuel_strategy.update({
+                        'estimated_crossings_to_finish': _milestone_laps,
+                        'laps_remaining_est': _milestone_laps,
+                        'finish_basis': (
+                            'overall_leader_clock'
+                            if _is_time_race else 'laps_total'),
+                        'required_fuel_l': _fuel_eval['required_fuel_l'],
+                        'fuel_needed': _fuel_eval['required_fuel_l'],
+                        'margin_l': _fuel_eval['margin_l'],
+                        'reserve_l': _fuel_eval['reserve_l'],
+                        'fuel_band': _fuel_eval['band'],
+                        'pit_required': (
+                            _fuel_eval['band']
+                            == fuel_strategy_mod.CRITICAL),
+                    })
 
-                # ★2026-07-21 Codex指示R1：State5(チェッカー)以後、残り周回推定値を増加させない。
-                #   2026-07-21 Monza実走で「残り推定が7周へ跳ね」燃料不足を誤発話した実例の再発防止。
-                #   RACING中に一度でも計算できた最小の推定値でクランプする（増加のみ禁止・減少は許可）。
-                if laps_remaining_est is not None:
-                    if not race_lifecycle.remaining_laps_may_increase(lifecycle_state) \
-                            and last_laps_remaining_est is not None \
-                            and laps_remaining_est > last_laps_remaining_est:
-                        laps_remaining_est = last_laps_remaining_est
-                    last_laps_remaining_est = laps_remaining_est
-
-                # ★P1（2026-07-21 Codex再指示・再々指摘で単一発火に修正）：Last 5/3/1の一度きり通知。
-                #   RACING中のみ。同一フレームで複数の閾値を飛び越えても、発話するのは一番緊急な
-                #   1件だけ（旧final_lapトリガーもここへ統合済み・上のコメント参照）。
-                #   チェッカー後（CHECKER_OUT以降）はrace_lifecycle_fsm.reset()されるまで再発火しない
-                #   （final_lap_notice_sentはSessionNum変更時にresetされる。上のP0修正参照）。
-                _fired_milestone, final_lap_notice_sent = check_final_lap_milestones(
-                    laps_remaining_est, lifecycle_state, final_lap_notice_sent)
-                if _fired_milestone is not None:
-                    _milestone, _msg = _fired_milestone
-                    broadcast({'type': 'radio', 'trigger': 'final_lap_notice',
-                        'laps_remaining': _milestone, 'pos': pos, 'message': _msg})
-
-                # ★Codex指示R1：PLAYER_FINISHED/DEBRIEFではピット計画・残り周回計算そのものを禁止。
-                #   CHECKER_OUTは（新規戦略は出さないが）上のクランプで増加だけ防ぎつつ計算は続ける。
-                if laps_remaining_est is not None and avg_fuel_lap > 0 \
-                        and lifecycle_state not in (race_lifecycle.PLAYER_FINISHED, race_lifecycle.DEBRIEF):
-                    fuel_needed = avg_fuel_lap * (laps_remaining_est + 1)  # +1周分の安全マージン込み
-                    margin_laps = round((fuel - fuel_needed) / avg_fuel_lap, 1)
-                    fuel_strategy['laps_remaining_est'] = laps_remaining_est
-                    fuel_strategy['finish_basis'] = finish_basis
-                    if laps_down is not None:
-                        fuel_strategy['laps_down'] = laps_down
-                    fuel_strategy['fuel_needed'] = round(fuel_needed, 1)
-                    fuel_strategy['margin_laps'] = margin_laps
-                    fuel_strategy['pit_required'] = margin_laps < 0
-                    # ★2026-07-19 燃料計算の計装（Monza実対決テストで誤警告の真因を実値で特定）。
-                    #   「残り1-2周で持たないと誤警告」の疑い＝laps_remaining_est過大 or リーダーペース
-                    #   予測ドリフト。毎ラップ1回、全中間値を吐いて、どこで数字が狂うかを一発で見えるように。
-                    _ld_avg = (round(sum(leader_lap_time_hist)/len(leader_lap_time_hist), 2)
-                               if leader_lap_time_hist else None)
-                    log("FUEL DIAG lap=%s fuel=%.2f avg=%.2f fuelLeftLaps=%s | rem_est=%s basis=%s leaderLap=%s down=%s timeRem=%s leaderAvg=%s | need=%.2f margin=%.2f WARN=%s clean=%s"
-                        % (lap, fuel, avg_fuel_lap, laps_of_fuel_left, laps_remaining_est, finish_basis,
-                           leader_lap, laps_down, (round(timeRemain, 1) if timeRemain else None), _ld_avg,
-                           fuel_needed, margin_laps, (margin_laps < -0.5), len(fuel_per_lap_hist)))
-                    # ★2026-07-12実走で発覚：ラップ完了(=このブロック発火)がピットロード進入直後に
-                    #   重なると、「ピット必須だ」という警告が実際にピットロードを走行中に届いてしまう
-                    #   （既にピットに向かっているのに今更「ピットしろ」と言う矛盾した無線になる）。
-                    #   onPit中は新規の警告を出さない。ピットを出て、まだ margin が負のままなら
-                    #   次のラップ完了時に正しく再警告される。
-                    # ⚠️厳格化(2026-07-15 B-Part3)：margin<0だと僅差ノイズや実測不足でも早すぎ発火し、
-                    #   会話中のエンジニアと矛盾する固定文が独立して飛んでいた(IMSA実走で判明)。明確に不足
-                    #   (margin<-0.5)かつ実測が足りてる(クリーン3周以上)時だけ1回鳴らす。文言もデータ根拠型に。
-                    # ★2026-07-21 Codex指示R1：fuel_strategy_warningはRACINGでのみ許可。
-                    #   CHECKER_OUT/PLAYER_FINISHEDでは「レース終わってる」のに燃料警告が飛ぶ事故
-                    #   （2026-07-21 Monza実走・14:28:19にYujiが訂正した誤発話）を再発させない。
-                    if margin_laps < -0.5 and len(fuel_per_lap_hist) >= 3 and not fuel_strategy_warned \
-                            and not onPit and race_lifecycle.fuel_strategy_allowed(lifecycle_state):
-                        broadcast({'type': 'radio', 'trigger': 'fuel_strategy_warning',
-                            'margin_laps': margin_laps,
-                            'message': 'By the numbers, fuel won\'t reach the finish at this pace. Let\'s lock in the pit plan.'})
-                        fuel_strategy_warned = True
-                    elif margin_laps >= 0:
-                        fuel_strategy_warned = False  # ピット等で給油後、再度不足すれば再警告できるようリセット
-
-                # ★Codex指示R1：CHECKER_OUTでは新規戦略の代わりに一度だけ簡潔な通知を出す。
-                if race_lifecycle.checker_out_notice_allowed(lifecycle_state, checker_out_notice_sent):
-                    _notice_fuel = round(fuel, 1) if fuel is not None else None
-                    broadcast({'type': 'radio', 'trigger': 'checker_out_notice', 'fuel': _notice_fuel,
-                        'message': ('Checkered flag is out. Fuel remaining ' + str(_notice_fuel) + '.')
-                                   if _notice_fuel is not None else 'Checkered flag is out.'})
-                    checker_out_notice_sent = True
+                _fuel_dispatch_result = None
+                if _fuel_eval.get('should_warn') and not onPit:
+                    _fuel_band = _fuel_eval['band']
+                    _fuel_margin = _fuel_eval['margin_l']
+                    _fuel_message = (
+                        'Fuel margin is under half a liter. Save fuel now.'
+                        if _fuel_band == fuel_strategy_mod.TIGHT
+                        else 'Fuel is short by %.1f liters. We need the pit.'
+                        % abs(_fuel_margin))
+                    _fuel_dispatch_result = broadcast({
+                        'type': 'radio',
+                        'trigger': 'fuel_strategy_warning',
+                        'fuel_band': _fuel_band,
+                        'margin_l': _fuel_margin,
+                        'required_fuel_l': _fuel_eval['required_fuel_l'],
+                        'estimated_crossings_to_finish': _milestone_laps,
+                        'message': _fuel_message,
+                    })
+                fuel_warning_band = (
+                    fuel_strategy_mod.commit_band_after_dispatch(
+                        fuel_warning_band, _fuel_eval,
+                        _fuel_dispatch_result))
+                fuel_strategy_warned = (
+                    fuel_warning_band
+                    in (fuel_strategy_mod.TIGHT,
+                        fuel_strategy_mod.CRITICAL))
+                log("FUEL BAND DIAG lap=%s fuel=%.2f avg=%.3f crossings=%s "
+                    "required=%s marginL=%s band=%s prev=%s transition=%s "
+                    "warn=%s dispatch=%s reason=%s clean=%s"
+                    % (
+                        lap, fuel, avg_fuel_lap, _milestone_laps,
+                        _fuel_eval.get('required_fuel_l'),
+                        _fuel_eval.get('margin_l'),
+                        _fuel_eval.get('band'),
+                        _fuel_eval.get('previous_band'),
+                        _fuel_eval.get('transition'),
+                        _fuel_eval.get('should_warn'),
+                        _fuel_dispatch_result,
+                        _fuel_eval.get('reason'),
+                        len(fuel_per_lap_hist)))
 
         if lap_time_changed and onTrack:
             t = fmt_radio(lapTime)
@@ -2468,50 +2871,20 @@ def poll_iracing():
                 }
                 if lap_sector_times:
                     lap_record['sectors'] = [round(s, 2) for s in lap_sector_times]
-                session_laps.append(lap_record)
+                # Team-car telemetry continues while another driver is in the
+                # car. PITWALL supports the configured user only, so teammate
+                # laps must not enter the user's summary/readiness evidence.
+                if _driver_activity_local == driver_activity_mod.ACTIVE:
+                    session_laps.append(lap_record)
 
                 # ── チェッカー後、自分がこのラップ(S/Fライン通過)を終えた＝本当の完走タイミング ──
                 # checkered_pendingは上で「セッション全体がチェッカーになった」時に立てたフラグ。
                 # ここは自分のLapLastLapTimeが更新された瞬間＝自分が実際にS/Fラインを通過した瞬間なので、
                 # リーダー基準でなく自分基準の完走判定になる。
-                if checkered_pending and not summary_sent and session_laps and session_racing_started:
-                    times = [r['time'] for r in session_laps if r['time'] > 0]
-                    best_t = min(times) if times else 0
-                    worst_t = max(times) if times else 0
-                    avg_t = round(sum(times) / len(times), 3) if times else 0
-                    half = max(1, len(times) // 2)
-                    pace_first = round(sum(times[:half]) / half, 3) if times else 0
-                    pace_last  = round(sum(times[half:]) / max(1, len(times) - half), 3) if times else 0
-                    broadcast({
-                        'type': 'session_summary',
-                        'track': session_track,
-                        'event_type': session_event_type,
-                        'is_race': True,
-                        'total_laps': len(session_laps),
-                        'finish_pos': class_pos,
-                        'best_lap': round(best_t, 3),
-                        'worst_lap': round(worst_t, 3),
-                        'avg_lap': avg_t,
-                        'pace_first_half': pace_first,
-                        'pace_last_half': pace_last,
-                        'incidents': prev_incidents or 0,
-                        'laps': session_laps,
-                    })
-                    # デバッグログにリザルトを残す（Yujiが後で見返せるよう・2026-07-15）。
-                    # AIレースはiRacing公式リザルトを吐かないので、このログ行が実質の結果票になる。
-                    log('===== RACE RESULT ===== '
-                        + 'track=' + str(session_track)
-                        + ' finish_pos(overall)=' + str(pos)
-                        + ' finish_pos(class)=' + str(class_pos)
-                        + ' laps=' + str(len(session_laps))
-                        + ' best=' + str(round(best_t, 3))
-                        + ' avg=' + str(avg_t)
-                        + ' pace_first_half=' + str(pace_first)
-                        + ' pace_last_half=' + str(pace_last)
-                        + ' incidents=' + str(prev_incidents or 0)
-                        + ' ======================')
-                    summary_sent = True
-                    checkered_pending = False
+                # ★v3 Codex P0-4：checkered 経路のインライン summary broadcast は削除。
+                #   session_summary の pending 化＋再試行は上の共通ループ (B)(C) に統合。
+                #   ここでは checkered_pending フラグが立ってればループが拾って送る。
+                pass  # summary はループが処理
 
         # ── ローリングスタート中：前走車ギャップが7秒超なら5秒ごとにコール ──
         if in_formation and player_car_idx >= 0:
@@ -2658,11 +3031,8 @@ def poll_iracing():
         # Tyre temps: 自動警告は無効化（読んでる変数がカーカス温度で不正確。較正後に復活予定）
         # データ自体は将来デブリーフで参照可能にする
 
-        # ★P1（2026-07-21 Codexレビュー再々指摘）：旧'final_lap'トリガー（lap==lapsTotの瞬間に発火、
-        #   周回制セッションのみ対応）は、下のcheck_final_lap_milestones()（laps_remaining_est<=1、
-        #   周回制・時間制どちらにも対応）と同じ「残り1周」を別々に検出しており、二重発話の恐れが
-        #   あった。check_final_lap_milestones()の1周閾値(final_lap_notice)へ一本化し、この個別
-        #   トリガーは削除した。
+        # 旧'final_lap'トリガー（lap==lapsTot）は削除済み。
+        # Final Lap / Last 5-3-1 は上の final_lap モジュールだけを真実源とする。
 
         # ── セッションサマリー：チェッカーは「見えた」だけ記録し、送信は自分の完走まで待つ ──
         # SessionState 5=Checkered/6=Cooldownはセッション全体で共有される値——リーダーがチェッカーを
@@ -2739,6 +3109,7 @@ def poll_iracing():
             if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
+                           'car_model': session_car_model,
                            'pos_in': pit_enter_pos, 'pos_out': class_pos})
                 log('PIT timing: lane ' + str(pit_lane_sec) + 's  P' + str(pit_enter_pos) + '->P' + str(class_pos))
 
@@ -3061,14 +3432,18 @@ def poll_iracing():
                                     #   ゲート通過時のみ行う。間引きで送れなかったcandidateを
                                     #   永久消失させない＝予算復活後に最新状態でリトライされる。
                                     if _judge_llm_gate('battle', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
-                                        broadcast({'type': 'judge_call', 'kind': 'battle',
-                                            'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
-                                            'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
-                                            'car_number': num, 'class_pos': _bpos,
-                                            'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '.'})
-                                        behind_armed[idx] = False   # 1回判断に回したら再武装まで黙る
-                                        battle_ever_warned.add(idx)
-                                        last_battle_global = now
+                                        # ★v3 Codex P1：DISPATCHED のみ段階消費。HELD/DROPPED は消費しない。
+                                        #   HELD は将来 flush_radio() が送るが judge_call は
+                                        #   GATEABLE_TRIGGERS に含まれないため実際は HELD にならない。
+                                        _br = broadcast({'type': 'judge_call', 'kind': 'battle',
+                                                'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
+                                                'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
+                                                'car_number': num, 'class_pos': _bpos,
+                                                'message': 'Behind' + car_tag + again_tag + '. ' + _fmt_gap(delta) + '.'})
+                                        if _br == BROADCAST_DISPATCHED:
+                                            behind_armed[idx] = False   # 1回判断に回したら再武装まで黙る
+                                            battle_ever_warned.add(idx)
+                                            last_battle_global = now
 
                     # ── 段階的キャッチアップ/ディフェンスコール（2026-07-14 Yuji設計→同日実走で再調整）──
                     # 単純な車間だけでなく「本当に追いつけそうか」をペース差(pace_diff)で判定してから、
@@ -3132,11 +3507,13 @@ def poll_iracing():
                                     #   次フレームで最新のstageで送り直される（gapが7→3→1.5と進んだ場合、
                                     #   復活時は最新の1.5秒段階が最大1回送られる＝Codex受入条件の実現）。
                                     if _judge_llm_gate('catchup', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
-                                        broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
-                                            'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
-                                            'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
-                                        catchup_stage[idx] = stage
-                                        last_battle_global = now
+                                        # ★v3 Codex P1：DISPATCHED のみ段階消費。
+                                        _br = broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
+                                                'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                                'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
+                                        if _br == BROADCAST_DISPATCHED:
+                                            catchup_stage[idx] = stage
+                                            last_battle_global = now
                         else:  # 相手が後方（順位が1つ下）＝ディフェンス対象
                             if gap > 15.0:
                                 defend_stage[idx] = 0
@@ -3149,11 +3526,13 @@ def poll_iracing():
                                     # ★2026-07-19 LLM判断層へ（上のcatchupと同じ）
                                     # ★2026-07-23 Codex再指摘 P1：段階消費はゲート通過時のみ（catchupと同じ理由）。
                                     if _judge_llm_gate('defend', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
-                                        broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
-                                            'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
-                                            'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
-                                        defend_stage[idx] = stage
-                                        last_battle_global = now
+                                        # ★v3 Codex P1：DISPATCHED のみ段階消費。
+                                        _br = broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
+                                                'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
+                                                'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
+                                        if _br == BROADCAST_DISPATCHED:
+                                            defend_stage[idx] = stage
+                                            last_battle_global = now
 
                 # ══ マルチクラス(速いクラス)接近警告 ══
                 # ⚠️2026-07-14：EstTimeはクラス毎の想定ラップで秒換算する値でクロスクラスでは狂うため、
@@ -3444,6 +3823,9 @@ def poll_joystick():
                     cur = False
                 if cur and not ptt_pressed:
                     ptt_pressed = True
+                    # ★v3 Codex P0-1：PTT を activity 判定から完全削除。
+                    #   非搭乗中も本人が観戦しつつ PTT で会話するのは正常操作のため、
+                    #   PTT 押下を再搭乗信号にすると誤活性する。activity 変更は行わない。
                     broadcast({'type': 'ptt', 'state': 'down'})
                 elif not cur and ptt_pressed:
                     ptt_pressed = False
@@ -3522,7 +3904,14 @@ async def handler(websocket):
                     if lang:
                         ptt_lang = lang
                         log("PTT STT language -> " + str(lang))
+                    # ★v3 Codex P0-1：PTT は activity 変更源にしない（観戦者会話でも押されるため）
                     start_ptt_record()
+                elif cmd == "resume_driving_support":
+                    # ★v3 Codex P0-1：明示的な運転支援再開 CMD。renderer UI から手動発火する。
+                    #   通常 PTT と兼用不可・独立操作。HANDOFF/INACTIVE から ACTIVE 復帰の唯一の
+                    #   確定シグナル。将来 UI ボタン追加まで renderer から直接送信可能。
+                    _mark_manual_resume_signal()
+                    log("MANUAL RESUME: driving support resume requested by user")
                 elif cmd == "ptt_stop":
                     stop_ptt_record()
                 elif cmd == 'ptt_setup':

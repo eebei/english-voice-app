@@ -10,7 +10,7 @@ set -u
 fail=0
 
 echo "── Python: 未定義変数・構文（pyflakes）"
-if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
+if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py irsdk-bridge/driver_activity.py irsdk-bridge/final_lap.py irsdk-bridge/fuel_strategy.py irsdk-bridge/session_authority.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
   echo "   ❌ 致命的な問題あり"; fail=1
 else
   echo "   ✅ 未定義変数なし"
@@ -73,6 +73,30 @@ if python3 irsdk-bridge/tests_judge_llm_gate.py >/dev/null 2>&1; then echo "   �
 
 echo "── SessionInfo cap 診断計装（Unit 0・2026-07-24 Codex指示）"
 if python3 irsdk-bridge/tests_session_info_extent.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_session_info_extent.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Driver Handoff / Inactive Driver 認識（Unit E0・2026-07-26 Codex指示）"
+if python3 irsdk-bridge/tests_driver_handoff.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_driver_handoff.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Final Lap総合首位・壁時計モデル（Unit 1・2026-07-26）"
+if python3 irsdk-bridge/tests_final_lap.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_final_lap.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Final Lap本番配線・dispatch確定契約（Unit 1・2026-07-26）"
+if python3 irsdk-bridge/tests_final_lap_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_final_lap_wiring.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── 耐久燃料L単位band・dispatch確定契約（Unit 2・2026-07-26）"
+if python3 irsdk-bridge/tests_fuel_strategy.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_fuel_strategy.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Final Lap authority→耐久燃料本番配線（Unit 2・2026-07-26）"
+if python3 irsdk-bridge/tests_fuel_strategy_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_fuel_strategy_wiring.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Session Authority純粋契約（Unit 3・2026-07-26）"
+if python3 irsdk-bridge/tests_session_authority.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_session_authority.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── SessionInfo→renderer→prompt権威配線（Unit 3・2026-07-26）"
+if python3 irsdk-bridge/tests_session_authority_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_session_authority_wiring.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── E0×Final Lap×燃料×Session Authority統合契約（2026-07-26）"
+if python3 irsdk-bridge/tests_phase_ab_integration.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_phase_ab_integration.py 2>&1|grep "❌"|head -8; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
