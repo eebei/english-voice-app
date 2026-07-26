@@ -290,9 +290,12 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  // rendererのDOM準備完了直後に更新確認を始める。固定4秒待ちは、旧exeを操作できる窓を作るため廃止。
-  // onceをloadFileより先に登録し、executeJavaScript()がready前に走る競合を防ぐ。
-  win.webContents.once('did-finish-load', () => checkForUpdate());
+  // GitHub API待ちとrenderer読込を並列化する。renderer側は結果確定まで起動シールドを表示し、
+  // 旧buildを操作できる窓を0秒にする。executeJavaScript()だけはdid-finish-load後に行う。
+  let resolveRendererReady;
+  const rendererReady = new Promise((resolve) => { resolveRendererReady = resolve; });
+  win.webContents.once('did-finish-load', resolveRendererReady);
+  checkForUpdate(rendererReady);
   win.loadFile(path.join(__dirname, 'renderer.html'));
 
   // メイン窓を閉じたら、オーバーレイ窓も必ず閉じる。
@@ -312,23 +315,47 @@ function createWindow() {
 // ダウンロード・再起動はユーザーの手動操作（今の配布形式=portableではここが現実的な落とし所）。
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'omoray-pitwall-updatecheck' } }, (res) => {
+    const req = https.get(url, {
+      headers: { 'User-Agent': 'omoray-pitwall-updatecheck' },
+      timeout: 8000,
+    }, (res) => {
       let body = '';
       res.on('data', (d) => { body += d; });
       res.on('end', () => {
         try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
       });
-    }).on('error', reject);
+    });
+    // 起動シールド導入後は無期限hangがアプリ永久ロックになるため、必ず失敗へ確定させる。
+    // destroy(error)で既存error handler→checkForUpdate catchへ流れ、シールドを外して通常起動する。
+    req.on('timeout', () => req.destroy(new Error('update check timeout')));
+    req.on('error', reject);
   });
 }
 
-async function checkForUpdate() {
+async function dismissUpdateCheckShield(rendererReady) {
+  await rendererReady;
+  if (!win || win.isDestroyed()) return;
+  await win.webContents.executeJavaScript(`
+    (function(){
+      var s = document.getElementById('omoray-update-check-shield');
+      if (s) s.remove();
+    })();
+  `);
+}
+
+async function checkForUpdate(rendererReady = Promise.resolve()) {
   try {
     const infoPath = path.join(__dirname, 'build-info.json');
-    if (!fs.existsSync(infoPath)) return;
+    if (!fs.existsSync(infoPath)) {
+      await dismissUpdateCheckShield(rendererReady);
+      return;
+    }
     const info = JSON.parse(fs.readFileSync(infoPath, 'utf8'));
     const buildTag = info.buildTag;
-    if (!buildTag || buildTag === 'dev') return log('update check skipped (dev build)');
+    if (!buildTag || buildTag === 'dev') {
+      await dismissUpdateCheckShield(rendererReady);
+      return log('update check skipped (dev build)');
+    }
 
     const release = await fetchJson(RELEASE_API_URL);
     // 最新ビルドのタグを「バージョン付きexe名 (…-YYYYMMDD-HHmm.exe)」から取得して、自分のタグと比較する。
@@ -340,7 +367,10 @@ async function checkForUpdate() {
       const m = a && a.name && a.name.match(re);
       if (m && (!latestTag || m[1] > latestTag)) latestTag = m[1];
     }
-    if (!latestTag) return log('update check: no versioned asset found');
+    if (!latestTag) {
+      await dismissUpdateCheckShield(rendererReady);
+      return log('update check: no versioned asset found');
+    }
 
     const localN = parseInt(buildTag.replace('-', ''), 10);
     const remoteN = parseInt(latestTag.replace('-', ''), 10);
@@ -355,7 +385,8 @@ async function checkForUpdate() {
       // 閉じるボタンなし＝強制ゲート。理由：PITWALLはテレメトリ解釈がバージョン依存なので、
       // 古いクライアントのまま使うと燃料/ギャップ等を「静かに」誤読するリスクがある（＝捏造と同じ害）。
       // iRacing自体が採用してる「更新しないと入れない」方式に合わせる。
-      if (win) win.webContents.executeJavaScript(`
+      await rendererReady;
+      if (win && !win.isDestroyed()) win.webContents.executeJavaScript(`
         (function(){
           if (document.getElementById('omoray-update-gate')) return;
           var g = document.createElement('div');
@@ -381,12 +412,16 @@ async function checkForUpdate() {
             '<span style="color:#788;display:block;margin-top:8px">DL後：① このアプリを閉じて新しいexeを起動 ②「WindowsによってPCが保護されました」が出たら<b>詳細情報→実行</b>（または右クリック→プロパティ→<b>「許可する」にチェック</b>→OK） ③ 古い日付のexeは削除して誤起動を防止（設定は引き継がれます）</span>' +
             '</div>';
           document.body.appendChild(g);
+          var s = document.getElementById('omoray-update-check-shield');
+          if (s) s.remove();
         })();
       `).catch((e) => log('update gate inject failed: ' + e.message));
     } else {
+      await dismissUpdateCheckShield(rendererReady);
       log('up to date (local=' + buildTag + ')');
     }
   } catch (e) {
+    try { await dismissUpdateCheckShield(rendererReady); } catch (_) {}
     log('checkForUpdate failed: ' + e.message);
   }
 }

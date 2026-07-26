@@ -211,6 +211,15 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 </head>
 <body>
 
+<!-- 更新確認が終わるまで旧buildの操作を許可しない。main側が最新版確認後に除去し、
+     更新必須ならDownloadゲートと入れ替える。HTML直書きなので最初の描画から有効。 -->
+<div id="omoray-update-check-shield" style="position:fixed;inset:0;z-index:200000;background:#07080f;color:#eee;
+  font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:40px">
+  <img src="PITWALL_logo_full.png" alt="OMORAY PITWALL" style="height:58px;margin-bottom:22px">
+  <div style="font-size:13px;letter-spacing:2px;color:#9D4EDD;font-weight:700">CHECKING FOR UPDATES</div>
+</div>
+
 <!-- ═══ UI言語トグル（右上・英日切替。他言語の国旗を表示） ═══ -->
 <button id="lang-toggle-btn" onclick="toggleLang()" title="Language / 言語"
   style="position:fixed;top:12px;right:12px;z-index:100000;width:40px;height:40px;border-radius:10px;border:1px solid #333;background:rgba(20,20,28,.85);color:#fff;font-size:19px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0">🇯🇵</button>
