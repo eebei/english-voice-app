@@ -290,6 +290,9 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // rendererのDOM準備完了直後に更新確認を始める。固定4秒待ちは、旧exeを操作できる窓を作るため廃止。
+  // onceをloadFileより先に登録し、executeJavaScript()がready前に走る競合を防ぐ。
+  win.webContents.once('did-finish-load', () => checkForUpdate());
   win.loadFile(path.join(__dirname, 'renderer.html'));
 
   // メイン窓を閉じたら、オーバーレイ窓も必ず閉じる。
@@ -410,7 +413,6 @@ app.whenReady().then(() => {
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
   createWindow();
   registerOverlayShortcuts();   // Ctrl+Alt+O でオーバーレイのロック解除／再ロック
-  setTimeout(checkForUpdate, 4000);   // 起動直後の輻輳を避けて少し待ってからチェック
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
