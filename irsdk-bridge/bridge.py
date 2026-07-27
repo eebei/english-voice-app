@@ -561,7 +561,9 @@ def _consume_manual_resume_signal():
 ACTIVITY_ALLOWED_META_TYPES = frozenset({
     # 物理ハードウェア・システム
     'mic_error', 'mic_level',
-    'ptt', 'ptt_set', 'ptt_mismatch', 'ptt_config',
+    # ptt_text は本人が明示的に押した手動会話。非搭乗中も会話結果だけは届けるが、
+    # activity を ACTIVE へ戻す根拠にはしない。自動無線の停止契約は維持する。
+    'ptt', 'ptt_text', 'ptt_set', 'ptt_mismatch', 'ptt_config',
     'vol_set',
     # 接続状態
     'iracing_connected', 'iracing_disconnected',

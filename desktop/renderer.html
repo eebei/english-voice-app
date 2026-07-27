@@ -945,7 +945,8 @@ let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionTyp
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
-let memorySavedThisSession = false, sessionBestLapStr = '';
+let memorySavedThisSession = false, lastMemorySignature = '', memorySaveInFlight = null, memorySaveReceipt = '';
+let sessionBestLapStr = '';
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 
 // ── Character config ──
@@ -1385,7 +1386,8 @@ function startSession(){
   document.getElementById('chat-area').innerHTML='';
   showScreen('screen-chat');
   // Profile update
-  memorySavedThisSession=false; sessionBestLapStr=''; briefingKicked=false;
+  memorySavedThisSession=false; lastMemorySignature=''; memorySaveInFlight=null; memorySaveReceipt='';
+  sessionBestLapStr=''; briefingKicked=false;
   const profile = loadProfile()||{};
   saveProfile({ name:userName, sessions:(profile.sessions||0)+1, lastDate:new Date().toISOString().slice(0,10), notes:profile.notes||[], trackMemory:profile.trackMemory||{} });
   // Greeting
@@ -1437,7 +1439,7 @@ function maybeAutoRace(state){
 }
 
 function endSession(){
-  saveMemory();
+  saveMemory({force:true, reason:'session_end'});
   disconnectBridge();
   jamesAutoMicEnabled=false;
   if(recognition){ try{recognition.stop();}catch(e){} }
@@ -1591,10 +1593,31 @@ async function sendMsg(inputSource){
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
-  await callAPI(inputSource==='ptt'?'ptt':'typed');
+  const explicitMemoryRequest = isExplicitMemoryRequest(text);
+  let explicitMemorySave = null;
+  let memoryStatus = memorySaveReceipt;
+  memorySaveReceipt = '';
+  if(explicitMemoryRequest){
+    if(canPersistMemory()){
+      memoryStatus = 'pending';
+      explicitMemorySave = saveMemory({force:true, reason:'explicit_request'});
+      explicitMemorySave.then(saved=>{
+        memorySaveReceipt = saved ? 'saved' : 'failed';
+        const msg=saved
+          ? '✅ 次回用の記憶に保存しました。'
+          : '⚠️ 次回用の記憶には保存できませんでした。';
+        addMsg('sys',msg);
+        console.log('[MEMORY '+(saved?'SAVED':'FAILED')+']');
+      });
+    } else {
+      memoryStatus = 'blocked';
+      addMsg('sys','⚠️ ドライバー交代中のため、次回用記憶には保存しません。');
+    }
+  }
+  await callAPI(inputSource==='ptt'?'ptt':'typed', memoryStatus);
 }
 
-async function callAPI(inputSource){
+async function callAPI(inputSource, memoryStatus=''){
   usageCount(inputSource==='ptt'?'ptt':'typed');
   isBusy=true;
   document.getElementById('busy-ind').classList.add('show');
@@ -1602,7 +1625,8 @@ async function callAPI(inputSource){
   const profile = loadProfile()||{};
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
-  const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildContractNote(_isJP_pre);
+  const profileNote = buildProfileNote(profile) + buildCarTrackMemory()
+    + buildContractNote(_isJP_pre) + buildMemoryStatusNote(_isJP_pre, memoryStatus);
   const raceHistory = buildRaceHistoryContext();
   try{
     const isJP = _isJP_pre;
@@ -1693,7 +1717,11 @@ async function callAPI(inputSource){
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:reply});
-    if(sessionMsgCount>0&&sessionMsgCount%15===0) saveMemory();
+    if(selMode==='debrief' && !memorySavedThisSession && sessionMsgCount>=4){
+      saveMemory({reason:'debrief_checkpoint'});
+    } else if(sessionMsgCount>0&&sessionMsgCount%15===0){
+      saveMemory({reason:'conversation_checkpoint'});
+    }
   } catch(e){
     // 通信エラー時に画面テキストだけで済ませると、走行中で画面を見ていないドライバーには
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
@@ -2272,26 +2300,26 @@ function oishiRadio(d){
     case 'lap_consistent': return `${t}。安定している。`;
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
-    case 'pace_unstable':  return `2周続けて落ちている。一度深呼吸しよう。焦らず、まだ戦える。確実に持ち帰ろう。`;
+    case 'pace_unstable':  return `2周連続ペースダウン。集中しよう。`;
     // ★2026-07-24 Yuji方針：ドライバー名を呼びかけに入れて呼吸を作る（{name}、大丈夫？…）。
     //   キャラ別バリエーション（LunaJP=優しく／HajimeJP=硬く／Default=中立）は個人感が含まれてるので残す。
     //   YujiパターンA（接触→停止→再走行できない）の入口。走行継続なら post_contact_ok が5秒後に続く。
     case 'crash_check': {
       const nm = userName || '';
       const npfx = nm ? nm + '、' : '';
-      if(sel==='LunaJP') return [`${npfx}大丈夫！？手、痛めてない？…深呼吸して。車は動く？無理ならトーイングで戻ってきて、そこから立て直そう。`,`${npfx}今のは大きかった…身体は無事？…ゆっくりでいい。マシン走れる？ダメならトーイングで戻ってきて、一緒に立て直そう。`,`${npfx}大丈夫？ケガしてない？…落ち着いて。走れるならピットまで、無理ならトーイングでいいよ。`][Math.floor(Math.random()*3)];
-      if(sel==='HajimeJP') return [`${npfx}無事か。手は大丈夫か。…車は動くか？無理ならトーイングで戻ってきて。状況はそれから見る。`,`${npfx}でかいのを食らったな。身体は無事か。…マシンは走れるか？無理ならトーイングで戻ってきて、まず戻ろう。`,`${npfx}大丈夫か。ケガはないか。…走れるならピットへ、動かないならトーイングで戻ってきて。`][Math.floor(Math.random()*3)];
-      return [`${npfx}大丈夫？ケガはない？…落ち着いて。車は走れる？動かないならトーイングで戻ってきて、まず無事に戻ろう。`,`${npfx}今のは大きかった。身体は無事？…深呼吸。マシンは動く？無理ならトーイングで戻ってきて。`,`${npfx}手は痛めていない？…焦らず。走れるならピットまで、無理ならトーイングで戻ってきて。そこから立て直そう。`][Math.floor(Math.random()*3)];
+      if(sel==='LunaJP') return [`${npfx}大丈夫？ 車は動く？`,`${npfx}身体は平気？ 走れる？`][Math.floor(Math.random()*2)];
+      if(sel==='HajimeJP') return [`${npfx}無事か。車は動くか？`,`${npfx}身体は平気か。走れるか？`][Math.floor(Math.random()*2)];
+      return [`${npfx}大丈夫？ 車は動く？`,`${npfx}身体は平気？ 走れる？`][Math.floor(Math.random()*2)];
     }
     // ★2026-07-24 towing 削除（Yuji方針）：牽引中はドライバー自発の会話に任せる。反射も判定も廃止。
     case 'incident': {
       const d4=(d.delta||0)>=4, r3=(d.recent||0)>=3;
-      if(r3) return ['インシデントが多い。落ち着いて。順位より完走。','もう十分。頭を冷やそう。確実に持ち帰ろう。','これ以上リスクを取らずに。まず一台、無事に戻そう。'][Math.floor(Math.random()*3)];
-      if(d4) return ['接触。落ち着いて。これ以上リスクを取らずに。','大きいのを受けた。冷静に。今あるものを守ろう。','一度リセット。ここからクリーンにいこう。'][Math.floor(Math.random()*3)];
-      return ['気をつけて。立て直そう。','スピンか。落ち着いて、まだ大丈夫。','焦らず。整えていこう。'][Math.floor(Math.random()*3)];
+      if(r3) return [`インシデントが多い。集中しよう。`,`接触が続いてる。冷静に。`][Math.floor(Math.random()*2)];
+      if(d4) return [`接触。落ち着いて。`,`大きい接触。冷静に。`][Math.floor(Math.random()*2)];
+      return [`インシデント。立て直そう。`,`接触。リセットしよう。`][Math.floor(Math.random()*2)];
     }
     case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパス。`,`順位アップ。P${pos}。`][Math.floor(Math.random()*3)];
-    case 'position_down':  return [`P${pos}。1つ後退。`,`P${pos}。抜かれたけど、まだ取り返せる。`,`P${pos}。落ち着いていこう、ペースはある。`][Math.floor(Math.random()*3)];
+    case 'position_down':  return `P${pos}。1つ後退。`;
     case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
     case 'fuel_strategy_warning':
       return (d.fuel_band === 'tight')
@@ -2301,8 +2329,8 @@ function oishiRadio(d){
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
     case 'pit_entry':      return `Box、制限ライン注意、リミッターオン！`;
-    case 'pit_exit':       return [`コースイン。コース状況確認とタイヤ熱入れしていこう。`,`出た。タイヤ温めていこう。`,`コースイン了解。まずは1周慣らそう。`][Math.floor(Math.random()*3)];
-    case 'limiter_off':    return `リミッターオフ。タイヤ温度注意してペースアップ！`;
+    case 'pit_exit':       return `コースイン。タイヤ注意。`;
+    case 'limiter_off':    return `リミッターオフ。タイヤ冷えてる、慎重に。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     // ★2026-07-21 実走ログで発覚：ここにケースが無いとinjectRadioがbridge.pyの英語
@@ -2314,7 +2342,7 @@ function oishiRadio(d){
     case 'post_contact_ok': {
       const nm = userName || '';
       const npfx = nm ? nm + '、' : '';
-      return `${npfx}走ってるね。アライメントや車の挙動、影響出てない？`;
+      return `${npfx}挙動に異常ある？`;
     }
     // ★2026-07-21 Codex指示R1：新規トリガー。既存の未翻訳箇所とは別に、新設分はここで併せて対応する。
     case 'checker_out_notice':
@@ -2350,8 +2378,8 @@ function oishiRadio(d){
     case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
     case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意。`;
     case 'damage_report':
-      return d.mandatory ? `ダメージ確認。義務修理あり、約${Math.round(d.repair_mand)}秒。次のピットで直そう。`
-                          : `そこまで支障なければ続けよう、ただ状態見ながら、これ以上のインシデントは防ぎたいね。`;
+      return d.mandatory ? `義務修理、約${Math.round(d.repair_mand)}秒。次ピット。`
+                          : `挙動に異常なければ継続。`;
     case 'catchup_ahead': {
       const id = sameClassIdJP(d) + '、';
       let stageTxt = '';
@@ -2839,36 +2867,94 @@ function buildProfileNote(profile){
   if(!lines.length) return '';
   return isJP?'\n\n━━ ドライバープロファイル ━━\n'+lines.join('\n'):'\n\n━━ DRIVER PROFILE ━━\n'+lines.join('\n');
 }
+function isExplicitMemoryRequest(text){
+  const s=String(text||'').trim();
+  return /(覚えて|覚えといて|記憶して|忘れないで|メモして|remember|don['’]?t forget|keep (?:this|that) in mind)/i.test(s);
+}
+function canPersistMemory(){
+  return !(iracingLive && driverActivity==='INACTIVE_DRIVER' && selMode!=='debrief');
+}
+function buildMemoryStatusNote(isJP, status){
+  if(status==='saved'){
+    return isJP
+      ? '\n【記憶保存結果・最優先】直前の明示依頼は次回用記憶へ保存成功。聞かれた場合だけ、保存済みと短く答えてよい。'
+      : '\n[MEMORY SAVE RESULT — HIGHEST PRIORITY] The previous explicit request was persisted. Confirm it briefly only if asked.';
+  }
+  if(status==='failed'){
+    return isJP
+      ? '\n【記憶保存結果・最優先】直前の明示依頼は保存失敗。次回も覚えているとは言うな。'
+      : '\n[MEMORY SAVE RESULT — HIGHEST PRIORITY] The previous explicit request failed to persist. Do not claim it will be remembered next time.';
+  }
+  if(status==='blocked'){
+    return isJP
+      ? '\n【記憶保存結果・最優先】現在はドライバー交代中のため保存対象外。今の会話には答えてよいが、次回用に覚えたとは言うな。'
+      : '\n[MEMORY SAVE RESULT — HIGHEST PRIORITY] Persistence is blocked during driver handoff. Answer the current request, but do not claim it was saved.';
+  }
+  if(status==='pending'){
+    return isJP
+      ? '\n【記憶保存結果・最優先】直前の依頼はバックグラウンドで保存処理中。「覚えた」「次回から反映する」とはまだ言うな。通常の用件へ遅延なく返答しろ。'
+      : '\n[MEMORY SAVE RESULT — HIGHEST PRIORITY] Persistence is running in the background. Do not claim it is saved yet; answer the operational request without delay.';
+  }
+  return '';
+}
 // ★2026-07-19 生ログのコピペ→LLMによる"人物理解の蒸留"に作り替え（Yuji方針）。
 //   旧実装は直近6発言を120文字で切って貼るだけ＝転写であって理解ではなく、
 //   Monzaデブリーフの金塊（「プレッシャー下の判断が冷静」「どこで焦るか」等）を毎回捨てていた。
 //   ラップタイム等の数字は pw_raceHistory / pw_ctmem が別に持つので、ここは"人"だけを積む。
 //   これが記憶2階＝クセ＝Crew Chiefとの決定的差別化（Yuji「これだよ！これ！」）。
-async function saveMemory(){
-  if(memorySavedThisSession||messages.length<4) return;
-  memorySavedThisSession=true;
-  usageCount('insight');
+async function saveMemory(options={}){
+  const force=options.force===true;
+  if(!canPersistMemory()) return false;
+  if(messages.length<(force?2:4)) return false;
   const convo=messages.slice(-16).map(m=>`${m.role==='user'?'D':'E'}: ${String(m.content||'').slice(0,200)}`).join('\n');
-  const profile=loadProfile()||{name:userName,sessions:1};
-  let note='';
+  const signature=sel+'|'+convo;
+  if(!force && signature===lastMemorySignature) return true;
+  if(memorySaveInFlight) await memorySaveInFlight;
+  if(!force && signature===lastMemorySignature) return true;
+
+  memorySaveInFlight=(async()=>{
+    usageCount('insight');
+    const profile=loadProfile()||{name:userName,sessions:1};
+    let note='';
+    try{
+      const authToken=localStorage.getItem('pw_auth_token');
+      const headers={'Content-Type':'application/json'};
+      const body={messages:[{role:'user',content:'[DRIVER_INSIGHT]\n'+convo}],
+        character:sel, mode:selMode, level:'C2', userName, telemetry:'off',
+        sessionAuthority:lastSessionAuthority,
+      driverInsight:true, driverActivity, profileNote:buildProfileNote(profile), max_tokens:220,
+        memoryReason:String(options.reason||'automatic'), usageSessionId};
+      if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+      const ctrl=new AbortController();
+      const timer=setTimeout(()=>ctrl.abort(),15000);
+      let res;
+      try{
+        res=await fetch(API_BASE+'/api/chat',{
+          method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if(!res.ok) return false;
+      const d=await res.json();
+      note=(d.content?.[0]?.text||'').trim();
+    }catch(e){ return false; }
+    if(!note||note.length<4) return false;
+    const current=loadProfile()||profile;
+    const notes=(current.notes||[]);
+    const dated=`[${new Date().toISOString().slice(0,10)}] ${note}`;
+    if(notes[notes.length-1]!==dated) notes.push(dated);
+    while(notes.length>8) notes.shift();
+    saveProfile({...current,notes});
+    memorySavedThisSession=true;
+    lastMemorySignature=signature;
+    return true;
+  })();
   try{
-    const authToken=localStorage.getItem('pw_auth_token');
-    const headers={'Content-Type':'application/json'};
-    const body={messages:[{role:'user',content:'[DRIVER_INSIGHT]\n'+convo}],
-      character:sel, mode:selMode, level:'C2', userName, telemetry:'off',
-      sessionAuthority:lastSessionAuthority,
-      driverInsight:true, driverActivity, profileNote:buildProfileNote(profile), max_tokens:180,
-      usageSessionId};
-    if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
-    const res=await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});
-    const d=await res.json();
-    note=(d.content?.[0]?.text||'').trim();
-  }catch(e){ /* 失敗時は何も残さない */ }
-  if(!note||note.length<4) return;   // 蒸留できなければ書かない（生ログで汚すより無い方がマシ）
-  const notes=(profile.notes||[]);
-  notes.push(`[${new Date().toISOString().slice(0,10)}] ${note}`);
-  while(notes.length>8) notes.shift();
-  saveProfile({...loadProfile()||profile,notes});
+    return await memorySaveInFlight;
+  } finally {
+    memorySaveInFlight=null;
+  }
 }
 function findCarTrackMemory(mem,track,carModel,carClass){
   if(!mem||!track) return null;
