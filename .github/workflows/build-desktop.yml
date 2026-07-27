@@ -60,7 +60,9 @@ jobs:
       - name: Rename for release
         run: |
           $exe = Get-ChildItem desktop/dist/*.exe | Select-Object -First 1
-          Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-${{ steps.date.outputs.DATE }}.exe"
+          Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe"
+          Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Setup-latest.exe"
+          # Build 229以前の更新ゲート・既存Webリンクとの後方互換。中身は同じNSIS installer。
           Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-latest.exe"
         shell: pwsh
 
@@ -71,10 +73,11 @@ jobs:
           name: OMORAY PITWALL Desktop — Build ${{ github.run_number }}
           body: |
             ## OMORAY PITWALL Desktop — Build ${{ github.run_number }}  (${{ steps.date.outputs.DATE }})
-            最新版は常に **Build ${{ github.run_number }}**。ダウンロードしてダブルクリックするだけ。Node/Python不要。bridge内蔵・自動起動。
+            最新版は常に **Build ${{ github.run_number }}**。初回だけinstallerを実行し、以後はデスクトップまたはスタートメニューのショートカットから起動。Node/Python不要。bridge内蔵・自動起動。
 
-            Webサイトのダウンロードリンクは常に `OMORAY-PITWALL-Desktop-latest.exe` を指しています(このビルドで自動上書き)。
+            Webサイトのダウンロードリンクは常に `OMORAY-PITWALL-Setup-latest.exe` を指します。旧build向けの `OMORAY-PITWALL-Desktop-latest.exe` も同じinstallerへ更新します。
           files: |
-            desktop/dist/OMORAY-PITWALL-Desktop-${{ steps.date.outputs.DATE }}.exe
+            desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
+            desktop/dist/OMORAY-PITWALL-Setup-latest.exe
             desktop/dist/OMORAY-PITWALL-Desktop-latest.exe
           prerelease: false

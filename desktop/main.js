@@ -9,7 +9,7 @@ const net = require('net');
 const https = require('https');
 const { spawn } = require('child_process');
 
-const LATEST_EXE_URL = 'https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Desktop-latest.exe';
+const LATEST_EXE_URL = 'https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe';
 const RELEASE_API_URL = 'https://api.github.com/repos/eebei/english-voice-app/releases/tags/desktop-latest';
 
 // ★音声の自動再生を常に許可：TTSはfetch後の非同期コールバックで鳴らすため、
@@ -340,7 +340,7 @@ function createWindow() {
 
 // ── 軽量アップデート通知（自動インストールはしない。CIが焼き込むbuild-info.jsonの日時 vs GitHub最新版）──
 // electron-updaterのような裏側での自動差し替えではなく、「新しいのがあるよ」とバナーで知らせるだけ。
-// ダウンロード・再起動はユーザーの手動操作（今の配布形式=portableではここが現実的な落とし所）。
+// ダウンロードしたNSIS installerを実行して固定インストール先を更新する。
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
@@ -471,7 +471,7 @@ app.whenReady().then(() => {
     fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + now.toISOString() + ' ===\n');
   } catch (e) {}
   Menu.setApplicationMenu(null);   // File/Edit/View/Window/Help の無意味な既定メニューを消す（Windows）
-  loadDesktopSettings(); // portable exeの展開先が変わっても保持される本体設定
+  loadDesktopSettings(); // installer更新後も保持される本体設定
   ipcDesktopSettingsSetup();
   loadOvlCfg();       // オーバーレイの保存済み設定を読む
   ipcOverlaySetup();  // オーバーレイ制御IPCを登録

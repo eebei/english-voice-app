@@ -62,6 +62,9 @@ if node tests-ptt-capture.js >/dev/null 2>&1; then echo "   ✅ 全ケース合�
 echo "── Desktop設定永続化・会話画面復帰（2026-07-27）"
 if node tests-desktop-state.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-desktop-state.js 2>&1|tail -20; fail=1; fi
 
+echo "── Windows NSIS installer・旧更新URL互換（2026-07-27）"
+if node tests-nsis-installer.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-nsis-installer.js 2>&1|tail -20; fail=1; fi
+
 echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
 if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
 
