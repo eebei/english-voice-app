@@ -17,9 +17,13 @@ function check(label, ok) {
 check('設定をuserData配下のJSONへ保存',
   main.includes("path.join(app.getPath('userData'), 'desktop-settings.json')")
   && main.includes('fs.writeFileSync(SETTINGS_FILE'));
-check('preloadの同期IPCで起動前に復元',
+check('起動時読込のみ同期、書込は非同期IPC',
   preload.includes("settingsGetAll: () => ipcRenderer.sendSync('settings:getAll')")
-  && preload.includes("settingsSet: (key, value) => ipcRenderer.sendSync('settings:set'"));
+  && preload.includes("settingsSet: (key, value) => ipcRenderer.send('settings:set'"));
+check('連続入力のdisk書込を150ms集約',
+  main.includes('function scheduleDesktopSettingsSave()')
+  && main.includes('}, 150);')
+  && main.includes('scheduleDesktopSettingsSave();'));
 check('アクセスコード・認証・音量・Voiceを永続対象に含む',
   renderer.includes("'pw_beta_code','pw_auth_token','pw_auth_user','pw_username','pw_device_id'")
   && renderer.includes("'pw_ui_lang','pw_volume','pw_voice_on'"));

@@ -820,6 +820,7 @@ const I18N = {
     sys_conn_error:'⚠ Connection error. Try again.',
     hint_race_on:'Race on — lap readout live',
     status_live:'🟢 iRacing connected · System live',
+    status_detected:'🔵 iRacing detected · Waiting for live telemetry',
     status_bridge:'🟡 System up · Waiting for iRacing to launch',
     status_off:'🔴 Connecting… make sure the app is running',
     hint_go_live:'Tap 🎤 to go LIVE',
@@ -940,6 +941,7 @@ const I18N = {
     sys_conn_error:'⚠ 接続エラー。もう一度お試しください。',
     hint_race_on:'レース中 — ラップ読み上げON',
     status_live:'🟢 iRacing接続 · システム稼働中',
+    status_detected:'🔵 iRacing検出済み · ライブテレメトリ開始待ち',
     status_bridge:'🟡 システム起動 · iRacingの起動を待っています',
     status_off:'🔴 システム接続中… アプリが起動しているか確認してください',
     hint_go_live:'🎤 をタップでLIVE開始',
@@ -974,7 +976,7 @@ let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let sessionActive = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
-let bridgeConnected = false, iracingLive = false;
+let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
@@ -1007,25 +1009,25 @@ const CHARS = {
 
 const GREETINGS = {
   James:  (n,m) => m==='race' ? `${n||'Driver'}, James here. Radio check. Once iRacing connects I'll pull your numbers and set the strategy. Stand by.`
-                 : m==='strategy' ? `${n||'Driver'}, James here. Race or test drive today? I'll read the data — tell me what we're working with.`
+                 : m==='strategy' ? `${n||'Driver'}, James here. Once iRacing connects, I'll read the session and start the briefing.`
                               : `${n||'Driver'}, James Mitchell. Good session? Give me iRating, SOF, Safety Rating and we'll set your targets.`,
   Luna:   (n,m) => m==='race' ? `${n||'Driver'}, Luna here. Radio check. The moment iRacing connects I'll have your numbers. Stay relaxed, breathe, stand by.`
                  : m==='strategy' ? `${n||'Driver'}, Luna here. Race, or a test drive? I'll handle the data — tell me what you're thinking.`
                               : `${n||'Driver'}, Luna. Let's debrief. Tell me how the car felt out there — I'll read the data, you tell me the story behind it.`,
   Hajime: (n,m) => m==='race' ? `${n||'Driver'}, Hajime. Radio check. Waiting for iRacing data. Stand by.`
-                 : m==='strategy' ? `${n||'Driver'}, Hajime. Race or test drive today? I've got the data — tell me the plan.`
+                 : m==='strategy' ? `${n||'Driver'}, Hajime. Once iRacing connects, I'll read the session and set the briefing.`
                               : `${n||'Driver'}, Hajime. Let's go through the session. Walk me through what you felt — I've got the data, you bring the feel.`,
   Kanbe:  (n,m) => m==='race' ? `${n||'ドライバー'}、官兵衛じゃ。ラジオチェック。iRacingに繋がったらデータを読み上げて作戦を立てるけぇ、そのまま待っときい。`
-                 : m==='strategy' ? `${n||'ドライバー'}、官兵衛じゃ。今日はレースか？テストドライブか？データは儂が見るけぇ、お前の考えを聞かせえ。`
+                 : m==='strategy' ? `${n||'ドライバー'}、官兵衛じゃ。iRacingが繋がったらセッションを読んで、こっちからブリーフィングするで。`
                               : `${n||'ドライバー'}、官兵衛じゃ。今日はどのコースを走ったんじゃ？まずコースとコンディションを話してみい。`,
   Oishi:  (n,m) => m==='race' ? `${n||'ドライバー'}、大石だ。無線チェック。iRacingに繋がれば君のデータを読み上げ、作戦を立てる。落ち着いて待っていてくれ。`
-                 : m==='strategy' ? `${n||'ドライバー'}、大石だ。今日はレースか？テストドライブか？データは私が見る。君の考えを聞かせてくれ。`
+                 : m==='strategy' ? `${n||'ドライバー'}、大石だ。iRacing接続後にセッションを確認し、こちらからブリーフィングを始める。`
                               : `${n||'ドライバー'}、大石だ。今日はどのコースを走った？まずコースとコンディションを聞かせてくれ。`,
   HajimeJP: (n,m) => m==='race' ? `${n||'ドライバー'}、大松だ。ラジオチェック。iRacingに繋がったらデータを読み上げる。そのまま待っていてくれ。`
-                 : m==='strategy' ? `${n||'ドライバー'}、大松だ。今日はレースか、テストドライブか。データは私が見る。君の考えを聞かせてくれ。`
+                 : m==='strategy' ? `${n||'ドライバー'}、大松だ。iRacing接続後にセッションを確認し、こちらからブリーフィングを始める。`
                               : `${n||'ドライバー'}、大松だ。今日はどのコースを走った。コースとコンディションから聞かせてくれ。`,
   LunaJP: (n,m) => m==='race' ? `${n||'ドライバー'}、Lunaよ。ラジオチェック。iRacingに繋がったらすぐデータが届くわ。リラックスして、深呼吸して、待ってて。`
-                 : m==='strategy' ? `${n||'ドライバー'}、Luna。今日はレース？それともテストドライブ？データはわたしが見るから、あなたの考えを聞かせて。`
+                 : m==='strategy' ? `${n||'ドライバー'}、Luna。iRacingが繋がったらセッションを確認して、こちらからブリーフィングするね。`
                               : `${n||'ドライバー'}、Luna。デブリーフしましょう。車の感触を教えて——データは私が見るから、あなたは物語を聞かせて。`,
   Matthias: (n,m) => m==='race' ? `${n||'Fahrer'}, hier ist Matthias. Funkcheck. Sobald iRacing verbunden ist, habe ich deine Daten. Warte.`
                  : m==='strategy' ? `${n||'Fahrer'}, Matthias hier. Rennen oder Testfahrt heute? Ich lese die Daten — sag mir, was wir vorhaben.`
@@ -1788,7 +1790,17 @@ async function callAPI(inputSource, memoryStatus=''){
 }
 
 // ── Voice / TTS ──
-function stripMarkdown(t){ return t.replace(/\*\*(.+?)\*\*/g,'$1').replace(/\*(.+?)\*/g,'$1').replace(/`(.+?)`/g,'$1'); }
+// TTSへ渡す直前の最終関門。ストリーミングでは **...** の閉じ側が次chunkへ
+// 分かれるため、対になった記法だけを消す実装では「アスタリスク」と読まれうる。
+// 表示本文は保持し、音声だけMarkdownの構造記号を無条件に除去する。
+function stripMarkdown(t){
+  return String(t||'')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g,'$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g,'$1')
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-+*]\s|\d+[.)]\s)\s*/gm,'')
+    .replace(/[*_`~]/g,'')
+    .replace(/\|/g,'、');
+}
 function stripParens(t){ return t.replace(/\(.*?\)/g,''); }
 function stripEmoji(t){ return t.replace(/[\u{1F000}-\u{1FFFF}]|[☀-➿]/gu,''); }
 function pickVoice(lang,names){
@@ -1839,6 +1851,11 @@ let ttsDisabledUntil = 0;     // TTS失敗時はこの時刻まで一時的にWe
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
 let speakQueue = [];          // 発話待ち行列（{text,prio,kind,ts,dedupeKey}）
 let currentSpeakPrio = 9;     // 再生中の優先度（割り込み判定用・9=何も鳴っていない）
+let speakWindowOk = true;     // bridgeの舵角<約7度 かつ Brake<12%
+let speakGateActive = false;  // オントラック走行中だけtrue
+const IMMEDIATE_PIT_KINDS = new Set([
+  'pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown'
+]);
 // ★2026-07-20 Codex再レビュー P0-1：割り込みは同期部分しか止められていなかった。
 //   drainQueue()が /api/tts の fetch を待っている間は ttsAudio がまだ存在せず、
 //   stopCurrentAudio() に止める対象が無い。よって古いP4のfetchが後から完了して
@@ -1885,7 +1902,9 @@ function speak(text, opts){
         : (opts && typeof opts === 'object') ? opts
         : {prio:SPEAK_PRIO.P4_INFO, kind:'radio'};
   const prio = (typeof o.prio === 'number') ? o.prio : SPEAK_PRIO.P4_INFO;
-  const item = {text, prio, kind:o.kind||'radio', ts:Date.now(), dedupeKey:o.dedupeKey||null};
+  const kind = o.kind||'radio';
+  const item = {text, prio, kind, ts:Date.now(), dedupeKey:o.dedupeKey||null,
+                immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
 
   // 同一ハザードの重複は捨てる（「必ず届ける」は「毎サンプル喋る」ではない＝Codex指摘）
   if(item.dedupeKey && speakQueue.some(q=>q.dedupeKey===item.dedupeKey)) return;
@@ -1910,8 +1929,12 @@ function speak(text, opts){
 function speakReplyChunk(text){
   if(!voiceOn || !text) return;
   // 返答の続きは捨てない。会話と同じP2で、到着順を保つため末尾へ。
-  speakQueue.push({text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null});
+  speakQueue.push({text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null, immediate:false});
   drainQueue();
+}
+
+function speechMayStart(item){
+  return !speakGateActive || speakWindowOk || !!(item&&item.immediate);
 }
 
 // ★2026-07-20 Codexレビュー P0-2：割り込みで再生を止めても draining が解除されず、
@@ -1941,6 +1964,13 @@ function onUtteranceDone(){
 async function drainQueue(){
   if(draining || isSpeaking) return;
   if(!speakQueue.length) return;
+  // コーナー／ブレーキング中は、P0/P1安全無線と期限付きピット手順だけ開始できる。
+  // 通常回答・戦略・順位・ラップ情報はキューに残し、安全窓が開いた通知で再開する。
+  let nextIndex = 0;
+  if(speakGateActive && !speakWindowOk){
+    nextIndex = speakQueue.findIndex(q=>speechMayStart(q));
+    if(nextIndex < 0) return;
+  }
   const c = CHARS[sel]; if(!c){ speakQueue=[]; return; }
   draining = true;
   isSpeaking = true;
@@ -1948,7 +1978,7 @@ async function drainQueue(){
   if(autoMicActive && autoMicRec){ try{autoMicRec.stop();}catch(e){} }
 
   const myGen = speakGeneration;   // ★この発話の世代。以降のawait後・callbackで必ず照合する
-  const _it = speakQueue.shift();
+  const _it = speakQueue.splice(nextIndex,1)[0];
   const raw = (typeof _it === 'string') ? _it : _it.text;
   currentSpeakPrio = (typeof _it === 'object' && typeof _it.prio === 'number') ? _it.prio : 9;
   // ★2026-07-20 Codex再レビュー P1-3：'spoke'は取り出し直後でなく**実際に再生を始めた時**に送る。
@@ -2205,6 +2235,7 @@ function updateBridgeStatus(){
     bar.style.cssText='position:fixed;bottom:0;left:0;right:0;z-index:99999;text-align:center;padding:5px 10px;font-size:13px;font-weight:700;font-family:sans-serif;transition:all 0.3s;';
     document.body.appendChild(bar); }
   if(iracingLive){ bar.textContent=t('status_live'); bar.style.background='#0a7d2e'; bar.style.color='#fff'; }
+  else if(iracingDetected){ bar.textContent=t('status_detected'); bar.style.background='#155e8a'; bar.style.color='#fff'; }
   else if(bridgeConnected){ bar.textContent=t('status_bridge'); bar.style.background='#7a5c00'; bar.style.color='#fff'; }
   else{ bar.textContent=t('status_off'); bar.style.background='#6b0000'; bar.style.color='#fff'; }
 }
@@ -2221,9 +2252,22 @@ function connectBridge(){
     };
     irBridge.onmessage=(e)=>{
       let data; try{data=JSON.parse(e.data);}catch{return;}
+      if(data.type==='iracing_status'){
+        iracingDetected=data.detected===true;
+        iracingLive=data.telemetry_active===true;
+        usageIracingLive=iracingLive;
+        updateBridgeStatus();
+        return;
+      }
+      if(data.type==='iracing_detected'){
+        iracingDetected=true;
+        if(data.telemetry_active!==true) iracingLive=false;
+        updateBridgeStatus();
+        return;
+      }
       if(data.type==='iracing_connected'){
         const _wasLive = iracingLive;
-        iracingLive=true; usageIracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live');
+        iracingDetected=true; iracingLive=true; usageIracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live');
         // ★2026-07-23 Codex再指摘：iracing_connectedが同じ接続中に重複通知されるケースがあるため、
         //   false→trueへ遷移した最初の1回だけ新規発行する（重複では再発行しない）。
         //   暫定仕様：切断→再接続は新session_idとして扱う（同一SessionNum維持は今回スコープ外）。
@@ -2238,11 +2282,18 @@ function connectBridge(){
         return;
       }
       if(data.type==='iracing_disconnected'){
-        usageTick(); iracingLive=false; usageIracingLive=false;
+        usageTick(); iracingDetected=false; iracingLive=false; usageIracingLive=false;
+        speakGateActive=false; speakWindowOk=true; drainQueue();
         flushUsageTelemetry('iracing_disconnected',false,false);
         updateBridgeStatus(); bridgeVoice('iracing_lost'); return;
       }
       if(data.type==='radio') injectRadio(data);
+      if(data.type==='speak_gate'){
+        speakWindowOk = data.window_ok !== false;
+        speakGateActive = data.active === true;
+        if(!speakGateActive || speakWindowOk) drainQueue();
+        return;
+      }
       if(data.type==='session_info'){
         if(data.data){
           const a=data.data.current_session_authority||null;
@@ -2315,7 +2366,7 @@ function connectBridge(){
       }
     };
     irBridge.onclose=()=>{
-      const was=bridgeConnected; bridgeConnected=false; iracingLive=false; updateBridgeStatus();
+      const was=bridgeConnected; bridgeConnected=false; iracingDetected=false; iracingLive=false; updateBridgeStatus();
       if(was) bridgeVoice('bridge_down');
       irBridgeReconnectTimer=setTimeout(connectBridge,3000);
     };
@@ -2327,7 +2378,7 @@ function disconnectBridge(){
   if(irBridge){irBridge.close();irBridge=null;}
   const bar=document.getElementById('bridge-status-bar');
   if(bar) bar.remove();
-  bridgeConnected=false; iracingLive=false;
+  bridgeConnected=false; iracingDetected=false; iracingLive=false;
 }
 
 // ── Radio injection ──
@@ -2386,8 +2437,8 @@ function oishiRadio(d){
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
-    case 'pit_entry':      return `Box、制限ライン注意、リミッターオン！`;
-    case 'pit_exit':       return `コースイン。タイヤ注意。`;
+    case 'pit_entry':      return `制限ライン注意、リミッターオン。`;
+    case 'pit_exit':       return ``;
     case 'limiter_off':    return `リミッターオフ。タイヤ冷えてる、慎重に。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'pit_box_countdown': return `${d.meters}メートル。`;
@@ -2415,14 +2466,13 @@ function oishiRadio(d){
       const cls = d.class_name || '速いクラス';
       const sec = (d.delta != null) ? `${d.delta}秒後方` : '後方';
       const cl  = Array.isArray(d.clusters) ? d.clusters : [];
-      const yield_ = (d.stage >= 2) ? '譲ろう。' : '';
-      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来ている。先頭${sec}。${yield_}`;
-      if(d.shape === 'pack')   return `${cls}${d.count}台、固まって${sec}。${yield_}`;
-      if(d.shape === 'split')  return `${cls}${cl[0]}台が${sec}、その後に${cl.slice(1).join('＋')}台。${yield_}`;
-      return `${cls}、${sec}。${yield_}`;
+      if(d.shape === 'train')  return `${cls}が等間隔で${d.count}台来ている。先頭${sec}。`;
+      if(d.shape === 'pack')   return `${cls}${d.count}台、固まって${sec}。`;
+      if(d.shape === 'split')  return `${cls}${cl[0]}台が${sec}、その後に${cl.slice(1).join('＋')}台。`;
+      return `${cls}、${sec}。`;
     }
     case 'multiclass_approaching': return `後方に速いクラス、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。準備しておこう。`;
-    case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン譲ろう。`;
+    case 'multiclass_imminent':    return `速いクラスが真後ろ、${classIdTxtJP(d.class_name, d.class_pos)}。${d.delta}秒。ライン維持。`;
     case 'battle_behind': {
       const num = d.car_number ? `${d.car_number}号車、` : '';
       return d.repeat ? `また${num}詰めてきている。${d.delta}秒。` : `後ろ、${num}${d.delta}秒。詰めてきている。`;
@@ -2545,6 +2595,7 @@ function matthiasRadio(d){
 // 英語キャラ（James/Luna/Hajime）はbridgeの英語messageをそのまま使う（既に自然な英語）
 function injectRadio(data){
   if(selMode!=='race') return;
+  if(data.trigger==='pit_exit') return;  // limiter_off直後の重複コールは全キャラクターで廃止
   let text;
   if(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP') text=oishiRadio(data)||data.message||'';
   else if(sel==='Matthias') text=matthiasRadio(data)||data.message||'';
@@ -2754,8 +2805,13 @@ async function scheduleAutoBriefing(){
     const authToken = localStorage.getItem('pw_auth_token');
     const headers = {'Content-Type':'application/json'};
     const profile = loadProfile()||{};
+    const previousRaceBriefing = buildPreviousRaceBriefingNote();
     const body = {
-      messages:[{role:'user', content:'[BRIEFING_KICKOFF] iRacingに接続した。今わかっているコース・車種・セッション種別を踏まえ、ドライバーに戦略ブリーフィングを自分から短く切り出せ。まずレースかテストか、目標を一問だけ聞け。'}],
+      messages:[{role:'user', content:`[BRIEFING_KICKOFF] iRacingに接続した。現在の権威データを踏まえ、短い戦略ブリーフィングを始めよ。
+「レースかテストか」は状況に関係なく質問するな。現在のSession種別をこちらから宣言し、未知なら接続待ちとして数字や種別を作るな。
+SOF・iRating・SRと、下記の直近同条件レースを自然に使え。良い根拠がある時は、レーサーが誇れる具体的成果を一言だけ先に褒めろ。根拠がない美辞麗句は禁止。
+${previousRaceBriefing}
+最後の質問は、今日の目標などテレメトリで分からない主観を一つだけ聞け。マークダウン禁止。`}],
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
       liveData:lastTelemetry, sessionType:lastSessionType,
@@ -3106,6 +3162,44 @@ function buildRaceHistoryContext(){
     return rows.join('\n');
   }catch{return '';}
 }
+// 今日と同じコース（可能なら同じ車）の直近結果をブリーフィング用に1件だけ選ぶ。
+// 「良いレース」の判定はLLMへ委ねず、表彰台・無事故・自己ベスト更新だけを
+// 褒めてよい根拠として構造化する。保存していない事実は作らない。
+function buildPreviousRaceBriefingNote(){
+  try{
+    const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
+    const track=String(lastTrack||'').toLowerCase();
+    const car=String(lastCarModel||lastCarClass||'').toLowerCase();
+    if(!track) return '現在コース未確定。前回記録を選ばず、過去結果を作るな。';
+    const matches=history.filter(s=>{
+      if(track && String(s.track||'').toLowerCase()!==track) return false;
+      if(!car) return true;
+      const sCar=String(s.car||s.carClass||'').toLowerCase();
+      return !sCar || sCar===car;
+    });
+    if(!matches.length) return '前回同条件の記録なし。過去結果を作るな。';
+    const prev=matches[matches.length-1];
+    const older=matches.slice(0,-1).filter(s=>parseFloat(s.bestLap)>0);
+    const positives=[];
+    const pos=parseInt(prev.finishPos,10);
+    const inc=parseInt(prev.incidents,10);
+    const best=parseFloat(prev.bestLap);
+    if(pos>0 && pos<=3) positives.push(`P${pos}`);
+    if(Number.isFinite(inc) && inc===0) positives.push('インシデント0');
+    if(best>0 && older.some(s=>best<parseFloat(s.bestLap))) positives.push(`過去ベスト更新 ${fmtLap(best)}`);
+    const facts=[
+      prev.date||'', prev.track||lastTrack||'',
+      pos>0?`決勝P${pos}`:'',
+      best>0?`ベスト${fmtLap(best)}`:'',
+      prev.totalLaps?`${prev.totalLaps}周`:'',
+      Number.isFinite(inc)?`インシデント${inc}`:''
+    ].filter(Boolean).join(' / ');
+    return `直近同条件: ${facts}\n褒めてよい根拠: ${positives.length?positives.join(' / '):'なし'}\n`
+      +(positives.length
+        ? '冒頭でこの成果を一言だけ具体的に褒め、その後に今日の話へ進め。'
+        : '良い結果だったと捏造して褒めるな。必要なら前回の事実を一つだけ今日の課題へつなげろ。');
+  }catch{return '前回記録の読取失敗。過去結果を作るな。';}
+}
 
 // Init voices
 if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
@@ -3283,14 +3377,36 @@ async function transcribePttAudio(data){
       audioDurationSeconds:Number(data.audioDurationSeconds)||undefined,
       usageSessionId:data.usageSessionId||usageSessionId
     };
-    const r=await fetch(API_BASE+'/api/stt',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload),
-      signal:ctrl.signal
-    });
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const result=await r.json();
+    let result=null, lastError=null;
+    const retryDelays=[0,300,900];
+    for(let attempt=0;attempt<retryDelays.length;attempt++){
+      if(retryDelays[attempt]) await new Promise(resolve=>setTimeout(resolve,retryDelays[attempt]));
+      try{
+        const r=await fetch(API_BASE+'/api/stt',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload),
+          signal:ctrl.signal
+        });
+        if(!r.ok){
+          const err=new Error('HTTP '+r.status);
+          err.retryable=(r.status===429||r.status>=500);
+          throw err;
+        }
+        result=await r.json();
+        break;
+      }catch(e){
+        lastError=e;
+        const retryable=e.name==='AbortError'||e.retryable!==false;
+        if(!retryable||attempt===retryDelays.length-1||ctrl.signal.aborted) throw e;
+        try{
+          if(irBridge&&irBridge.readyState===1){
+            irBridge.send(JSON.stringify({cmd:'log_line',text:'[PTT_STT_RETRY] attempt='+(attempt+1)+' error='+String(e&&e.message||e)}));
+          }
+        }catch(_){}
+      }
+    }
+    if(!result) throw lastError||new Error('empty STT result');
     const text=String(result.text||'').trim();
     setHint('');
     if(text){

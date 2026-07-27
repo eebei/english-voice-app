@@ -45,6 +45,7 @@ let overlayWin = null;
 let bridgeProc = null;
 let SETTINGS_FILE = '';
 let desktopSettings = {};
+let settingsSaveTimer = null;
 
 function loadDesktopSettings() {
   try {
@@ -61,14 +62,20 @@ function saveDesktopSettings() {
     if (SETTINGS_FILE) fs.writeFileSync(SETTINGS_FILE, JSON.stringify(desktopSettings, null, 2));
   } catch (e) { log('saveDesktopSettings failed: ' + e.message); }
 }
+function scheduleDesktopSettingsSave() {
+  if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+  settingsSaveTimer = setTimeout(() => {
+    settingsSaveTimer = null;
+    saveDesktopSettings();
+  }, 150);
+}
 function ipcDesktopSettingsSetup() {
   ipcMain.on('settings:getAll', (event) => { event.returnValue = desktopSettings; });
-  ipcMain.on('settings:set', (event, key, value) => {
-    if (typeof key !== 'string' || !key.startsWith('pw_')) { event.returnValue = false; return; }
+  ipcMain.on('settings:set', (_event, key, value) => {
+    if (typeof key !== 'string' || !key.startsWith('pw_')) return;
     if (value === null || value === undefined) delete desktopSettings[key];
     else desktopSettings[key] = value;
-    saveDesktopSettings();
-    event.returnValue = true;
+    scheduleDesktopSettingsSave();
   });
 }
 
@@ -488,5 +495,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', stopBridge);
+app.on('before-quit', () => {
+  if (settingsSaveTimer) { clearTimeout(settingsSaveTimer); settingsSaveTimer = null; saveDesktopSettings(); }
+  stopBridge();
+});
 app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch (e) {} });

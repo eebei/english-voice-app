@@ -570,7 +570,7 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'iracing_connected', 'iracing_disconnected',
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
-    'driver_state', 'driver_activity', 'lap_sectors', 'pit_timing',
+    'driver_state', 'driver_activity', 'speak_gate', 'lap_sectors', 'pit_timing',
     # session_summary は呼び出し側で should_fire_race_summary() ガード。
     # broadcast() は素通しし、broadcast() の戻り値で送信成功を確認する契約。
     'session_summary',
@@ -654,6 +654,7 @@ def _session_scoped_reset_values():
         'race_start_time': None,
         'pit_enter_time': None,
         'pit_enter_pos': None,
+        'pit_entry_announced_stop': False,
         # ★2026-07-21 五度目の指摘で追加
         'summary_sent': False,
         'checkered_pending': False,
@@ -880,7 +881,7 @@ def _describe_traffic(gaps):
 
 def _mc_message_en(cls, nearest, gaps, shape, clusters, stage):
     """英語キャラ用の文言。日本語はrenderer側で組む。"""
-    tail = ' Give them room.' if stage >= 2 else ''
+    tail = ''
     if shape == 'train':
         return '%s, %d cars evenly spaced, first one %s behind.%s' % (cls, len(gaps), _fmt_gap(nearest), tail)
     if shape == 'pack':
@@ -973,8 +974,15 @@ _gate_active = False        # ゲートを効かせる状況か（＝オント�
 
 def _set_speak_gate(window_ok, active):
     global _gate_window_ok, _gate_active
+    changed = (window_ok != _gate_window_ok or active != _gate_active)
     _gate_window_ok = window_ok
     _gate_active = active
+    # renderer直結の会話回答・LLM戦略発話も同じ安全窓へ入れる。
+    # 状態が変わった時だけ送り、毎tickのWebSocket floodingを避ける。
+    if changed:
+        broadcast({'type': 'speak_gate',
+                   'window_ok': bool(window_ok),
+                   'active': bool(active)})
 
 def flush_radio():
     """毎サイクル呼ぶ。窓が開いてて保留があれば送る。古すぎたら破棄（陳腐化防止）。
@@ -1658,10 +1666,14 @@ def fmt_radio(seconds):
 _str_type_logged = False   # SDK型診断を1回だけ出すためのフラグ（2026-07-20）
 reader = IRacingReader()
 session_info_sent = False
+_iracing_mem_detected = False
+_iracing_telemetry_active = False
 
 def poll_iracing():
     global session_info_sent, _lifecycle_state
+    global _iracing_mem_detected, _iracing_telemetry_active
     ir_was_connected = False
+    inactive_diag_at = 0.0
     last_lap_time = None
     session_best = None
     personal_best = None
@@ -1738,6 +1750,7 @@ def poll_iracing():
     session_num_in_class = 0
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
     pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
+    pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
@@ -1794,7 +1807,13 @@ def poll_iracing():
         if not reader.is_open():
             if reader.open():
                 log("iRacing memory map opened (attached to iRacing)")
+                _iracing_mem_detected = True
+                _iracing_telemetry_active = False
+                inactive_diag_at = 0.0
+                broadcast({'type': 'iracing_detected', 'telemetry_active': False})
             else:
+                _iracing_mem_detected = False
+                _iracing_telemetry_active = False
                 time.sleep(2)
                 continue
 
@@ -1808,6 +1827,7 @@ def poll_iracing():
             # rendererの初期値ACTIVEを引きずらせず、このloopで評価した現状態を必ず続けて通知する。
             _force_driver_activity_broadcast = True
             ir_was_connected = True
+            _iracing_telemetry_active = True
             inactive_since = None
             prev_current_lap = None   # セッション移行後の誤検知防止
             last_lap_time   = None   # 次の本当のラップを必ず報告
@@ -1825,15 +1845,22 @@ def poll_iracing():
             fuel_warning_band = None
             leader_lap_time_hist.clear()
             lap_delta_hist.clear()
+        if active:
+            # 15秒未満のSDK瞬断から復帰した場合も内部スナップショットをActiveへ戻す。
+            _iracing_telemetry_active = True
+            inactive_since = None
 
         # 切断は15秒間ずっと非アクティブな時だけ（セッション移行・ロード中を含むブリップで初期化しない）
         if not active and ir_was_connected:
+            _iracing_telemetry_active = False
             if inactive_since is None:
                 inactive_since = time.time()
             elif time.time() - inactive_since >= 15.0:
-                log("<<< iRacing DISCONNECTED (sustained 5s)")
+                log("<<< iRacing DISCONNECTED (sustained 15s)")
                 broadcast({'type': 'iracing_disconnected'})
                 ir_was_connected = False
+                _iracing_mem_detected = False
+                _iracing_telemetry_active = False
                 session_info_sent = False
                 last_session_sig = None
                 inactive_since = None
@@ -1841,7 +1868,24 @@ def poll_iracing():
                 reader.close()
                 time.sleep(2)
                 continue
-            # 5秒未満の中断：何もせず維持（記憶も接続も保つ）
+            # 15秒未満の中断：何もせず維持（記憶も接続も保つ）
+            time.sleep(0.3)
+            continue
+        elif not active:
+            # 共有メモリは見えているがStatus=0の状態を、10秒ごとに原因判定可能な形で残す。
+            # 2026-07-27 八木氏Build 230ではopen後36秒間ここに留まり、従来ログでは
+            # 「Waiting for iRacing」しか出ず、ロード中／SDK非Activeを区別できなかった。
+            now_diag = time.time()
+            if now_diag - inactive_diag_at >= 10.0:
+                inactive_diag_at = now_diag
+                try:
+                    status_raw = reader._read_int(reader.H_STATUS)
+                    _buf_off, tick = irsdk_mem.get_buf_offset(reader._ptr)
+                    log("IRSDK WAIT: memory_open=1 status=%s tick=%s telemetry_active=0" %
+                        (status_raw, tick))
+                except Exception as diag_error:
+                    log("IRSDK WAIT: memory_open=1 status=read_error telemetry_active=0 error=" +
+                        str(diag_error))
             time.sleep(0.3)
             continue
         else:
@@ -1937,6 +1981,7 @@ def poll_iracing():
                         race_start_time = _sig_reset['race_start_time']
                         pit_enter_time = _sig_reset['pit_enter_time']
                         pit_enter_pos = _sig_reset['pit_enter_pos']
+                        pit_entry_announced_stop = _sig_reset['pit_entry_announced_stop']
                         summary_sent = _sig_reset['summary_sent']
                         checkered_pending = _sig_reset['checkered_pending']
                         session_racing_started = _sig_reset['session_racing_started']
@@ -2071,6 +2116,7 @@ def poll_iracing():
             race_start_time = _reset['race_start_time']
             pit_enter_time = _reset['pit_enter_time']
             pit_enter_pos = _reset['pit_enter_pos']
+            pit_entry_announced_stop = _reset['pit_entry_announced_stop']
             summary_sent = _reset['summary_sent']
             checkered_pending = _reset['checkered_pending']
             session_racing_started = _reset['session_racing_started']
@@ -3077,6 +3123,22 @@ def poll_iracing():
         prev_limiter_on = limiter_on
 
         # Pit in/out
+        # ★2026-07-27 Yuji実走：OnPitRoad=True は制限ライン通過後になるコースがある。
+        # PlayerTrackSurface 3(track)→2(approaching pits) を先行通知に使う。
+        # これはピット進入車だけに出るSDK境界なので、座標だけの30m判定のように毎周誤発火しない。
+        # 2を通知しないコース/車両では、下のOnPitRoad遷移をフォールバックにする。
+        _pit_surface_now = reader.read_int('PlayerTrackSurface')
+        _pit_surface_prev = prev.get('_psurf')
+        _spd_pit = reader.read_float('Speed')
+        _pit_entry_speed_ok = (_spd_pit is not None and _spd_pit > 5.0)
+        if (_pit_surface_prev == 3 and _pit_surface_now == 2
+                and not onPit and not pit_entry_announced_stop and _pit_entry_speed_ok):
+            broadcast({'type': 'radio', 'trigger': 'pit_entry',
+                'message': 'Watch the limit line, limiter on.'})
+            pit_entry_announced_stop = True
+        elif (_pit_surface_prev == 2 and _pit_surface_now == 3 and not onPit):
+            pit_entry_announced_stop = False  # 進入を中止した場合は次回に備えて再武装
+
         # ★2026-07-24 pit_entry 誤発火対策（Yuji方針）:
         #   (1) 従来 `not prev['onPit']` は None→True（起動時spawn）でも発火して "ピットインだな" 誤爆。
         #       `prev['onPit'] is False` に変更＝genuine False→True 遷移だけを許可。
@@ -3087,21 +3149,17 @@ def poll_iracing():
         #       低速の正規ピット進入（ダメージで這うように入るケース等）でも必ず走らせる。
         #       これを忘れると limiter_off_announced_stopがTrueのまま次ストップに持ち越し＝リミッターオフ消失＋
         #       pit_lane_secが計測不能＝ピットタイミング学習も消える連鎖崩壊が起きる。
-        #   (3) セリフを Yuji 新設計に統一：「Box、制限ライン注意、リミッターオン！」
-        #       （※SDKに"ピット意図"信号が無いため『制限ライン100m手前』の予告は将来アップデート扱い。
-        #         現在はピットレーン進入=onPit=True のジャストのタイミングで発話＝物理的には制限ラインの
-        #         30〜100m手前に相当（トラック依存）。学習ベースの100m予告は [[project_pitwall_indirect_damage_detection]] と
-        #         同じく将来課題としてメモ化）。
+        #   (3) 発話は上のSDK接近境界で先行。ここは境界が取れない環境のフォールバックだけ。
         if onPit and prev['onPit'] is False:
             # 状態更新は無条件（低速の正規進入でも必ず走らせる）
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
             limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
-            # radio 発話のみ Speed>5m/s ガード（誤発火抑制）
-            _spd_pit = reader.read_float('Speed')
-            if _spd_pit is not None and _spd_pit > 5.0:
+            # 先行通知済みなら重複させない。未通知環境のみここでフォールバック。
+            if not pit_entry_announced_stop and _pit_entry_speed_ok:
                 broadcast({'type': 'radio', 'trigger': 'pit_entry',
-                    'message': 'Box, watch the limit line, limiter on!'})
+                    'message': 'Watch the limit line, limiter on.'})
+                pit_entry_announced_stop = True
 
         if prev['onPit'] and not onPit and onTrack:
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
@@ -3118,9 +3176,8 @@ def poll_iracing():
                 broadcast({'type': 'radio', 'trigger': 'limiter_off',
                     'message': 'Limiter off. Watch tyre temps and pick up the pace.'})
                 limiter_off_announced_stop = True
-            _pex_msg = random.choice(['Out. P' + str(pos) + '. Tyres one lap.', 'Back on track, P' + str(pos) + '. Warm the tyres up.',
-                'Copy, you\'re out. P' + str(pos) + '.'])
-            broadcast({'type': 'radio', 'trigger': 'pit_exit', 'pos': pos, 'message': _pex_msg})
+            # 出口直後の二重コールは廃止。ここでは limiter_off だけを発話する。
+            pit_entry_announced_stop = False
             if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
@@ -3879,9 +3936,19 @@ async def handler(websocket):
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
         await websocket.send(json.dumps({'type': 'connected'}))
+        # Browser late join時の副作用なし状態同期。Activeならrendererを即座に緑へ、
+        # memory open/status 0なら「Telemetry待ち」へする。iracing_connectedを再送すると
+        # usage session再発行・briefing再実行を起こすため、専用snapshotを使う。
+        await websocket.send(json.dumps({'type': 'iracing_status',
+                                         'detected': bool(_iracing_mem_detected),
+                                         'telemetry_active': bool(_iracing_telemetry_active)}))
         # 現在のPTT設定・音量ボタン設定を通知
         await websocket.send(json.dumps({'type': 'ptt_config', 'binding': ptt_binding}))
         await websocket.send(json.dumps({'type': 'vol_config', 'binding': vol_binding}))
+        # renderer再接続時も、その瞬間の走行安全窓を必ず同期する。
+        await websocket.send(json.dumps({'type': 'speak_gate',
+                                         'window_ok': bool(_gate_window_ok),
+                                         'active': bool(_gate_active)}))
         # マイク一覧＋現在の選択を通知（UIのマイク選択UI初期化用）
         await websocket.send(json.dumps({'type': 'mic_list', 'devices': list_input_devices(), 'selected': selected_mic_index}))
         # クライアントからのコマンド受信（PTT設定など）

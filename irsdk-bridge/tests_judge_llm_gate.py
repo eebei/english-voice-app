@@ -524,77 +524,31 @@ def test_removing_post_contact_reset_would_break_test():
 # ── pit_entry 再設計テスト（2026-07-24 Yuji設計・Codex差戻し対応） ────────
 
 def test_pit_entry_state_update_not_gated_by_speed():
-    print('\n══ 本番配線：低速pit進入でも状態更新は行うが radio broadcast のみ speed guard(Codex P1) ══')
+    print('\n══ 本番配線：pit接近境界で先行通知し、OnPitRoadをフォールバックにする ══')
     src = _bridge_source()
-    # 検証：`if onPit and prev['onPit'] is False:` の直下に
-    #   pit_enter_time / pit_enter_pos / limiter_off_announced_stop = False が全部あること。
-    #   これらは"speed guard の中"に入っていないこと。
-    #   broadcast('pit_entry') の直前(同じifスコープ内)で Speed>5m/s ガードが評価されること。
-    #
-    # 具体的には、pit_entry の broadcast をアンカーに、そこから遡って
-    #   (1) `_spd_pit = reader.read_float('Speed')` の後に `if _spd_pit is not None and _spd_pit > 5.0:` があり、
-    #       その中に broadcast('pit_entry') が入っている（＝broadcastはspeed guard内）
-    #   (2) その _spd_pit の読み取りより **前** に pit_enter_time / pit_enter_pos / limiter_off_announced_stop
-    #       への代入がある（＝状態更新はspeed guard外・=無条件）
-
-    # pit_entry の broadcast 位置
-    m = re.search(
-        r"broadcast\(\{['\"]type['\"]:\s*['\"]radio['\"],\s*['\"]trigger['\"]:\s*['\"]pit_entry['\"]",
-        src)
-    check("pit_entry radio broadcast が bridge.py に存在する", m is not None)
-    if not m:
-        return
-
-    # broadcast より前600文字を切り出し、その中で speed guard と state 更新の相対位置を確認
-    pre = src[max(0, m.start() - 800):m.start()]
-    # (1) speed guard: `if _spd_pit is not None and _spd_pit > 5.0:` が broadcast の直前(pre末尾200文字)にあること
-    guard_pat = re.compile(r"if _spd_pit is not None and _spd_pit > 5\.0\s*:")
-    guard_m = guard_pat.search(pre)
-    check('pit_entry broadcast の直前で Speed>5m/s guard が評価されている', guard_m is not None)
-
-    # (2) 状態更新は guard より "前" にあること
-    if guard_m:
-        pre_guard = pre[:guard_m.start()]
-        for var in ['pit_enter_time', 'pit_enter_pos', 'limiter_off_announced_stop']:
-            # `pit_enter_time = ...` のような代入行
-            assign_pat = re.compile(r'^\s*' + var + r'\s*=', re.MULTILINE)
-            check(f'{var} への代入が Speed guard より "前"(=無条件)で行われている',
-                  assign_pat.search(pre_guard) is not None,
-                  '(Codex P1) 状態更新は低速正規進入でも必ず走らせる')
+    check('PlayerTrackSurface 3→2 の接近境界を先行通知に使用',
+          '_pit_surface_prev == 3 and _pit_surface_now == 2' in src)
+    check('先行通知は OnPitRoad 前だけに限定',
+          'and not onPit and not pit_entry_announced_stop' in src)
+    check('低速誤発火を Speed>5m/s で抑止',
+          '_pit_entry_speed_ok = (_spd_pit is not None and _spd_pit > 5.0)' in src)
+    check('OnPitRoad False→True フォールバックを維持',
+          "if onPit and prev['onPit'] is False:" in src
+          and 'if not pit_entry_announced_stop and _pit_entry_speed_ok:' in src)
+    check('1ストップ1回の通知フラグをセッション状態として保持',
+          "'pit_entry_announced_stop': False" in src
+          and "pit_entry_announced_stop = _reset['pit_entry_announced_stop']" in src)
 
 
 def test_low_speed_pit_entry_no_broadcast_but_state_updates():
-    print('\n══ 変異試験：状態更新を speed guard の中に移動するとテストが失敗する ══')
-    # 上のテストが偽陽性でないことを、代入行を guard 内に「移動した」変異ソースで確認
+    print('\n══ 変異試験：先行通知の3→2境界を削除すると検出する ══')
     src = _bridge_source()
-    # 状態更新3行(pit_enter_time/pit_enter_pos/limiter_off_announced_stop = False)を削除
-    old = ("            pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録\n"
-           "            pit_enter_pos = class_pos\n"
-           "            limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装\n")
-    check('変異対象の状態更新3行がソースに存在する', old in src)
-    if old not in src:
-        return
-    mut = src.replace(old, '            # === state updates removed (mutation) ===\n', 1)
+    old = '_pit_surface_prev == 3 and _pit_surface_now == 2'
+    check('変異対象の先行通知境界が存在する', old in src)
+    mut = src.replace(old, 'False  # mutation: early trigger removed', 1)
     check('変異が実際にソースを変更した', mut != src)
-
-    # 変異後、上のテストと同じロジックで pit_entry broadcast 前の代入を探す→無いはず
-    m = re.search(
-        r"broadcast\(\{['\"]type['\"]:\s*['\"]radio['\"],\s*['\"]trigger['\"]:\s*['\"]pit_entry['\"]",
-        mut)
-    if not m:
-        check('変異後もpit_entry broadcast自体は存在する(削除しすぎでない)', False)
-        return
-    pre = mut[max(0, m.start() - 800):m.start()]
-    guard_m = re.search(r"if _spd_pit is not None and _spd_pit > 5\.0\s*:", pre)
-    if not guard_m:
-        check('変異後もspeed guard自体は残っている', False)
-        return
-    pre_guard = pre[:guard_m.start()]
-    # 3変数のうちどれか1つでも消えたら検出できる
-    missing = [v for v in ['pit_enter_time', 'pit_enter_pos', 'limiter_off_announced_stop']
-               if re.search(r'^\s*' + v + r'\s*=', pre_guard, re.MULTILINE) is None]
-    check('変異後は guard 前に状態更新代入が無い(=バグを検出できる証明)',
-          len(missing) == 3, f'missing after mutation: {missing}')
+    check('変異後は3→2先行通知契約を満たさない',
+          old not in mut)
 
 
 def test_pit_entry_prev_onpit_guard_prevents_startup_spawn_misfire():

@@ -53,6 +53,12 @@ if node tests-update-gate-latency.js >/dev/null 2>&1; then echo "   ✅ 全ケ�
 echo "── F1型レース無線・反射短文化（2026-07-26）"
 if node tests-radio-brevity.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-radio-brevity.js 2>&1|tail -20; fail=1; fi
 
+echo "── Luna発話安全窓・舵角/ブレーキゲート（2026-07-27）"
+if node tests-speech-window.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speech-window.js 2>&1|tail -20; fail=1; fi
+
+echo "── iRacing検出済み・ライブテレメトリ待ち診断（2026-07-28）"
+if node tests-iracing-detection.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-iracing-detection.js 2>&1|tail -20; fail=1; fi
+
 echo "── デブリーフ自動記憶・明示保存結果契約（2026-07-27）"
 if node tests-memory-wiring.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-wiring.js 2>&1|tail -20; fail=1; fi
 

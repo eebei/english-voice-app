@@ -29,7 +29,7 @@ function extract(name, kind) {
   return rest.slice(0, end > 0 ? end : rest.length);
 }
 
-const parts = ['speak', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
+const parts = ['speak', 'speechMayStart', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
   .map(n => extract(n, n === 'drainQueue' ? 'async' : 'fn')).join('\n');
 
 // テストごとに新しいサンドボックスを作って独立実行する
@@ -53,6 +53,8 @@ function makeSandbox({ fetchImpl, AudioImpl, webSpeechImpl, voiceLang = 'ja-JP',
     autoMicActive: false, autoMicRec: null, isBusy: false,
     jamesAutoMicEnabled: false, jamesMuted: false, startAutoMic: () => {},
     MAX_RADIO_QUEUE: 2,
+    speakWindowOk: true, speakGateActive: false,
+    IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown']),
     SPEAK_PRIO: { P0_SAFETY: 0, P1_HAZARD: 1, P2_PROCEDURE: 2, P3_STRATEGY: 3, P4_INFO: 4, P5_CHAT: 5 },
     CHARS: { LunaJP: { gVoice, gLang: 'ja-JP', gRate: 1, gPitch: 0, voiceLang, pitch: 1, rate: 1, voiceNames: ['test-voice'] } },
     API_BASE: 'http://x',

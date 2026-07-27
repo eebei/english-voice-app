@@ -39,6 +39,10 @@ check('STTを正常なElectron HTTPS経路へ統一',
   bridge.includes("broadcast({'type': 'ptt_audio'")
   && renderer.includes("if(data.type==='ptt_audio')")
   && renderer.includes("fetch(API_BASE+'/api/stt'"));
+check('Electron STT経路も一時障害を3回まで再試行',
+  renderer.includes('const retryDelays=[0,300,900]')
+  && renderer.includes("err.retryable=(r.status===429||r.status>=500)")
+  && renderer.includes('[PTT_STT_RETRY]'));
 check('INACTIVE中もSTT結果・診断配送を許可',
   bridge.includes("'ptt', 'ptt_text', 'ptt_audio', 'ptt_error', 'ptt_diagnostic'"));
 
