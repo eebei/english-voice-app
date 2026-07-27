@@ -776,6 +776,7 @@ const I18N = {
     hint_ptt_set_a:'✅ PTT bound: button ',
     hint_ptt_set_b:' (push to talk)',
     hint_not_caught:"(didn't catch that)",
+    hint_ptt_network:'⚠ Speech service connection failed. Check your internet connection and try PTT again.',
     hint_ptt_press:'🎮 Press the wheel button you want to use now…',
     hint_ptt_waiting:'⏺ Waiting for button…',
     hint_recording:'🔴 Recording… (release to send)',
@@ -894,6 +895,7 @@ const I18N = {
     hint_ptt_set_a:'✅ PTT登録：ボタン',
     hint_ptt_set_b:'（押して話す）',
     hint_not_caught:'（聞き取れず）',
+    hint_ptt_network:'⚠ 音声認識サーバーに接続できません。ネット接続を確認し、もう一度PTTを押してください。',
     hint_ptt_press:'🎮 ハンドルの使いたいボタンを今すぐ押してください…',
     hint_ptt_waiting:'⏺ ボタン待機…',
     hint_recording:'🔴 録音中…（ボタンを離すと送信）',
@@ -2260,6 +2262,10 @@ function connectBridge(){
         setHint(reason==='too_short'
           ? 'PTTを押して一呼吸してから話してください。'
           : 'マイク入力が無音です。設定画面のTestで確認してください。');
+        return;
+      }
+      if(data.type==='ptt_error'){
+        setHint(data.reason==='network' ? t('hint_ptt_network') : t('sys_conn_error'));
         return;
       }
     };

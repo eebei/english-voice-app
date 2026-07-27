@@ -32,6 +32,14 @@ check('busy中の即時録音を破棄',
 check('rendererは短音声と無音を区別表示',
   renderer.includes("if(data.type==='ptt_diagnostic')")
   && renderer.includes("reason==='too_short'"));
+check('STT通信を3回まで再試行',
+  bridge.includes('retry_delays = (0.0, 0.4, 1.2)')
+  && bridge.includes('for attempt, delay in enumerate(retry_delays, start=1):')
+  && bridge.includes('STT network failure after retries:'));
+check('通信失敗を聞き取り失敗と区別',
+  bridge.includes('broadcast({"type": "ptt_error", "reason": "network"})')
+  && renderer.includes("if(data.type==='ptt_error')")
+  && renderer.includes("t('hint_ptt_network')"));
 
 console.log(`\nPTT Immediate Capture: ${pass}/${pass + fail}`);
 if (fail) process.exit(1);

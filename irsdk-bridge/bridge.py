@@ -454,41 +454,53 @@ def record_ptt_audio():
 
 async def send_stt_request(audio_b64, duration_seconds=None):
     """RailwayのSTTプロキシにマイク音声を送信 (LINEAR16/16kHz WAV)"""
-    try:
-        import urllib.request
-        stt_payload = {
-            "audio": audio_b64,
-            "encoding": "LINEAR16",
-            "sampleRateHertz": 16000,
-            "languageCode": ptt_lang,
-            "usageSessionId": usage_session_id,
-        }
-        if duration_seconds is not None:
-            stt_payload["audioDurationSeconds"] = duration_seconds
-        stt_body = json.dumps(stt_payload).encode("utf-8")
-        req = urllib.request.Request(
-            RAILWAY_URL + "/api/stt",
-            data=stt_body,
-            # ⚠️2026-07-14判明：Cloudflare移行後、urllibのデフォルトUser-Agent("Python-urllib/3.x")が
-            #   ボット判定されて403で弾かれるようになった（旧Railway URLはCloudflare経由じゃなかったので
-            #   起きてなかった）。ブラウザ相当のUser-Agentを名乗ることで回避する。
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        text = (data.get("text") or "").strip()
-        log("STT response: " + str(data))
-        if text:
-            broadcast({"type": "ptt_text", "text": text})
-            log("PTT: recognized -> " + text)
-        else:
-            broadcast({"type": "ptt_text", "text": ""})
-            log("PTT: STT returned empty")
-    except Exception as e:
-        log("STT error: " + str(e))
-        broadcast({"type": "ptt_text", "text": ""})
+    import urllib.request
+    stt_payload = {
+        "audio": audio_b64,
+        "encoding": "LINEAR16",
+        "sampleRateHertz": 16000,
+        "languageCode": ptt_lang,
+        "usageSessionId": usage_session_id,
+    }
+    if duration_seconds is not None:
+        stt_payload["audioDurationSeconds"] = duration_seconds
+    stt_body = json.dumps(stt_payload).encode("utf-8")
+
+    # DNSの一時失敗・Wi-Fi瞬断を「聞き取れず」と誤判定しない。短い間隔で3回まで再試行し、
+    # 全失敗時だけrendererへ通信障害を通知する。次のPTTは通常どおり新規試行できる。
+    retry_delays = (0.0, 0.4, 1.2)
+    last_error = None
+    for attempt, delay in enumerate(retry_delays, start=1):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            req = urllib.request.Request(
+                RAILWAY_URL + "/api/stt",
+                data=stt_body,
+                # ⚠️2026-07-14判明：Cloudflare移行後、urllibのデフォルトUser-Agentが403になるため
+                # ブラウザ相当のUser-Agentを使用する。
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            text = (data.get("text") or "").strip()
+            log("STT response (attempt %d): %s" % (attempt, str(data)))
+            if text:
+                broadcast({"type": "ptt_text", "text": text})
+                log("PTT: recognized -> " + text)
+            else:
+                broadcast({"type": "ptt_text", "text": ""})
+                log("PTT: STT returned empty")
+            return
+        except Exception as e:
+            last_error = e
+            log("STT attempt %d/%d failed: %s" % (
+                attempt, len(retry_delays), str(e)))
+
+    log("STT network failure after retries: " + str(last_error))
+    broadcast({"type": "ptt_error", "reason": "network"})
 
 # ══════════════════════════════════════════════════════════════════════════
 # ★★2026-07-20 無線ディレクター（発話アーキテクチャの全面再設計）★★
