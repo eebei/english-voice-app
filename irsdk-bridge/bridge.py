@@ -74,6 +74,7 @@ ptt_capturing = False     # 設定モード（次に押されたボタンを登�
 ptt_pressed = False       # 現在押下中か
 ptt_lang = "ja-JP"        # STT言語（選択キャラに追従。English勢=en-GB/en-US、日本語勢=ja-JP）
 ptt_mismatch_warned = False  # 登録デバイスが見つからない事を通知済みか（毎スキャンで連呼しない）
+ptt_discard_recording = False  # rendererがbusy等で拒否した即時録音をSTTへ送らない
 
 # ── コスト計測用session_id（rendererから受け取りメモリ保持。認証には使わない）──
 usage_session_id = None
@@ -318,18 +319,32 @@ def _rms_level(data):
         return 0
 
 def start_ptt_record():
-    global ptt_recording
+    global ptt_recording, ptt_discard_recording
     if not ptt_audio:
-        return
+        return False
+    if ptt_recording:
+        log("PTT: duplicate start ignored")
+        return False
+    ptt_discard_recording = False
     ptt_recording = True
     log("PTT: recording started (native pyaudio)")
+    return True
 
 def stop_ptt_record():
     global ptt_recording
     if not ptt_recording:
-        return
+        log("PTT: duplicate stop ignored")
+        return False
     ptt_recording = False
     log("PTT: recording stopped, sending to STT...")
+    return True
+
+def abort_ptt_record():
+    """即時録音開始後、rendererがbusyなら現在テイクを破棄する。"""
+    global ptt_recording, ptt_discard_recording
+    ptt_discard_recording = True
+    ptt_recording = False
+    log("PTT: recording aborted by renderer")
 
 def record_ptt_audio():
     """バックグラウンドスレッド：キャプチャ要求(録音 or マイクテスト)ごとにストリームを開き、
@@ -337,7 +352,7 @@ def record_ptt_audio():
     ⚠️ストリームをキャプチャの都度開き直すことで、UIでマイクを切り替えたら次のキャプチャから
       即反映される（旧実装は起動時に"システム既定"デバイスで1回だけ開いて固定していた——SIM PCで
       別デバイスが既定になっていると無音を拾い「didn't catch that」になる根本原因だった）。"""
-    global ptt_recording, ptt_test_active
+    global ptt_recording, ptt_test_active, ptt_discard_recording
     if not ptt_audio:
         log("PTT record: pyaudio not initialized, skipping")
         return
@@ -385,6 +400,10 @@ def record_ptt_audio():
             except Exception:
                 pass
         broadcast({'type': 'mic_level', 'level': 0})   # メーターを戻す
+        if ptt_discard_recording:
+            ptt_discard_recording = False
+            log("PTT: discarded aborted recording")
+            continue
         if was_recording and frames:
             # WAVファイルはWindows対応パスに（/tmpはWindows未対応）
             wav_file = os.path.join(_base, "ptt_audio.wav")
@@ -393,6 +412,7 @@ def record_ptt_audio():
             # 静かなマイクでもSTTが通るよう、ピーク音量を目標まで自動で底上げする。3人中2人が
             # マイク音量問題を踏んだため、Windowsをいじらせずアプリ側で吸収する。無音は増幅しない
             # （ノイズを大きくしないため）。クリップは飽和処理。audioop不可の環境では黙ってスキップ。
+            peak = 0
             try:
                 import audioop
                 peak = audioop.max(raw, 2)          # 2バイト=16bit
@@ -408,6 +428,18 @@ def record_ptt_audio():
                 # rawはLINEAR16のraw PCM(gain調整後)なので、byte数から正確な秒数を逆算できる
                 # （WEBM_OPUS等の圧縮音声と違い、ここは推測不要の実測値）。
                 duration_seconds = len(raw) / float(RATE * CHANNELS * sample_width)
+                if duration_seconds < 0.35:
+                    log("PTT DIAG: too_short duration=%.2fs peak=%s device=%s" % (
+                        duration_seconds, str(peak), str(dev_idx)))
+                    broadcast({'type': 'ptt_diagnostic', 'reason': 'too_short',
+                               'duration': round(duration_seconds, 2)})
+                    continue
+                if peak < 200:
+                    log("PTT DIAG: no_signal duration=%.2fs peak=%s device=%s" % (
+                        duration_seconds, str(peak), str(dev_idx)))
+                    broadcast({'type': 'ptt_diagnostic', 'reason': 'no_signal',
+                               'duration': round(duration_seconds, 2)})
+                    continue
                 with wave.open(wav_file, 'wb') as wf:
                     wf.setnchannels(CHANNELS)
                     wf.setsampwidth(sample_width)
@@ -3840,9 +3872,14 @@ def poll_joystick():
                     # ★v3 Codex P0-1：PTT を activity 判定から完全削除。
                     #   非搭乗中も本人が観戦しつつ PTT で会話するのは正常操作のため、
                     #   PTT 押下を再搭乗信号にすると誤活性する。activity 変更は行わない。
+                    # ★2026-07-27：renderer往復を待たず、この入力エッジで録音開始。
+                    #   短い第一声がストリームopen前に欠けて STT empty になる窓を最小化する。
+                    start_ptt_record()
                     broadcast({'type': 'ptt', 'state': 'down'})
                 elif not cur and ptt_pressed:
                     ptt_pressed = False
+                    # 離したエッジでも即停止。rendererから戻る重複CMDは関数側で無害化する。
+                    stop_ptt_record()
                     broadcast({'type': 'ptt', 'state': 'up'})
 
             # 音量ボタン監視：押した瞬間（立ち上がりエッジ）に1段変更を送る。
@@ -3920,6 +3957,8 @@ async def handler(websocket):
                         log("PTT STT language -> " + str(lang))
                     # ★v3 Codex P0-1：PTT は activity 変更源にしない（観戦者会話でも押されるため）
                     start_ptt_record()
+                elif cmd == "ptt_abort":
+                    abort_ptt_record()
                 elif cmd == "resume_driving_support":
                     # ★v3 Codex P0-1：明示的な運転支援再開 CMD。renderer UI から手動発火する。
                     #   通常 PTT と兼用不可・独立操作。HANDOFF/INACTIVE から ACTIVE 復帰の唯一の

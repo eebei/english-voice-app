@@ -56,6 +56,9 @@ if node tests-radio-brevity.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── デブリーフ自動記憶・明示保存結果契約（2026-07-27）"
 if node tests-memory-wiring.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-wiring.js 2>&1|tail -20; fail=1; fi
 
+echo "── PTT即時録音・短音声診断（2026-07-27）"
+if node tests-ptt-capture.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-ptt-capture.js 2>&1|tail -20; fail=1; fi
+
 echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
 if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
 

@@ -144,11 +144,13 @@ def test_p0_1_bridge_ptt_hook_does_not_mark_resume():
     src = _bridge_source()
     # PTT 押下の joystick hook から _mark_manual_resume_signal が呼ばれない
     m = re.search(
-        r'if cur and not ptt_pressed:[\s\S]{0,400}?broadcast\(\{\'type\': \'ptt\'',
+        r'if cur and not ptt_pressed:([\s\S]*?)elif not cur and ptt_pressed:',
         src)
     check('joystick PTT down block が見つかる', m is not None)
     if m:
-        block = m.group(0)
+        block = m.group(1)
+        check('block 内で PTT down を broadcast',
+              "broadcast({'type': 'ptt', 'state': 'down'})" in block)
         check('block 内で _mark_manual_resume_signal() を呼ばない',
               '_mark_manual_resume_signal()' not in block)
     # renderer cmd 'ptt_start' でも呼ばれない
@@ -469,6 +471,45 @@ def test_allow_list_denies_voice_during_inactive():
         bridge._set_driver_activity(_prev)
 
 
+# ── PTT即時録音・冪等契約 ─────────────────────────────
+
+def test_ptt_record_edges_are_idempotent():
+    print('\n══ PTT start/stop 二重CMDは冪等 ══')
+    old_audio = bridge.ptt_audio
+    old_recording = bridge.ptt_recording
+    old_discard = bridge.ptt_discard_recording
+    try:
+        bridge.ptt_audio = object()
+        bridge.ptt_recording = False
+        bridge.ptt_discard_recording = False
+        check('最初のstartだけ開始', bridge.start_ptt_record() is True)
+        check('二重startは無視', bridge.start_ptt_record() is False)
+        check('最初のstopだけ停止', bridge.stop_ptt_record() is True)
+        check('二重stopは無視', bridge.stop_ptt_record() is False)
+        bridge.start_ptt_record()
+        bridge.abort_ptt_record()
+        check('abortで録音停止', bridge.ptt_recording is False)
+        check('abortで破棄フラグ', bridge.ptt_discard_recording is True)
+    finally:
+        bridge.ptt_audio = old_audio
+        bridge.ptt_recording = old_recording
+        bridge.ptt_discard_recording = old_discard
+
+
+def test_ptt_hardware_edge_starts_before_renderer_roundtrip():
+    print('\n══ PTT hardware edgeでrenderer往復前に録音開始 ══')
+    src = _bridge_source()
+    down = src.find("if cur and not ptt_pressed:")
+    start = src.find("start_ptt_record()", down)
+    down_broadcast = src.find("broadcast({'type': 'ptt', 'state': 'down'})", down)
+    up = src.find("elif not cur and ptt_pressed:", down)
+    stop = src.find("stop_ptt_record()", up)
+    up_broadcast = src.find("broadcast({'type': 'ptt', 'state': 'up'})", up)
+    check('down edge: start → broadcast', down < start < down_broadcast < up)
+    check('up edge: stop → broadcast', up < stop < up_broadcast)
+    check('busy renderer用abort CMDあり', 'cmd == "ptt_abort"' in src)
+
+
 # ── 本番配線 ─────────────────────────────────────
 
 def test_bridge_imports_driver_activity_module():
@@ -721,6 +762,8 @@ def run_all():
     # allow-list
     test_allow_list_meta_pass_during_inactive()
     test_allow_list_denies_voice_during_inactive()
+    test_ptt_record_edges_are_idempotent()
+    test_ptt_hardware_edge_starts_before_renderer_roundtrip()
     # 本番配線
     test_bridge_imports_driver_activity_module()
     test_bridge_activity_gate_before_director()

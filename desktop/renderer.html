@@ -2255,6 +2255,13 @@ function connectBridge(){
           setHint(t('hint_not_caught'));
         }
       }
+      if(data.type==='ptt_diagnostic'){
+        const reason=String(data.reason||'');
+        setHint(reason==='too_short'
+          ? 'PTTを押して一呼吸してから話してください。'
+          : 'マイク入力が無音です。設定画面のTestで確認してください。');
+        return;
+      }
     };
     irBridge.onclose=()=>{
       const was=bridgeConnected; bridgeConnected=false; iracingLive=false; updateBridgeStatus();
@@ -3165,7 +3172,15 @@ function setupPTT(){
 // ── PTT v2：bridge側ネイティブマイク（pyaudio）──
 // ブラウザのマイク制限を回避。ネイティブPythonプロセスでキャプチャ
 async function pttStart(){
-  if(pttHeld || isBusy) return;
+  if(pttHeld) return;
+  if(isBusy){
+    try{
+      if(irBridge && irBridge.readyState===1){
+        irBridge.send(JSON.stringify({cmd:'ptt_abort'}));
+      }
+    }catch(e){}
+    return;
+  }
   if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off')); return; }
   pttHeld = true;
   // 録音中はAI発話を止める（自分の声に被せない）
