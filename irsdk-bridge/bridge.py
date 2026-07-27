@@ -448,59 +448,15 @@ def record_ptt_audio():
                 with open(wav_file, 'rb') as f:
                     b64 = base64.b64encode(f.read()).decode()
                 log("PTT: wav saved (%d bytes, %.2fs), sending to STT" % (len(b64), duration_seconds))
-                asyncio.run_coroutine_threadsafe(send_stt_request(b64, duration_seconds), loop)
+                # Python/urllibだけWindows DNS(getaddrinfo)に失敗し、同じPCのElectron側HTTPSは
+                # 正常という実機事例が発生。STTもchat/TTSと同じElectron通信経路へ統一する。
+                broadcast({'type': 'ptt_audio', 'audio': b64,
+                           'encoding': 'LINEAR16', 'sampleRateHertz': RATE,
+                           'languageCode': ptt_lang,
+                           'audioDurationSeconds': duration_seconds,
+                           'usageSessionId': usage_session_id})
             except Exception as e:
                 log("PTT wav/stt error: " + str(e))
-
-async def send_stt_request(audio_b64, duration_seconds=None):
-    """RailwayのSTTプロキシにマイク音声を送信 (LINEAR16/16kHz WAV)"""
-    import urllib.request
-    stt_payload = {
-        "audio": audio_b64,
-        "encoding": "LINEAR16",
-        "sampleRateHertz": 16000,
-        "languageCode": ptt_lang,
-        "usageSessionId": usage_session_id,
-    }
-    if duration_seconds is not None:
-        stt_payload["audioDurationSeconds"] = duration_seconds
-    stt_body = json.dumps(stt_payload).encode("utf-8")
-
-    # DNSの一時失敗・Wi-Fi瞬断を「聞き取れず」と誤判定しない。短い間隔で3回まで再試行し、
-    # 全失敗時だけrendererへ通信障害を通知する。次のPTTは通常どおり新規試行できる。
-    retry_delays = (0.0, 0.4, 1.2)
-    last_error = None
-    for attempt, delay in enumerate(retry_delays, start=1):
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            req = urllib.request.Request(
-                RAILWAY_URL + "/api/stt",
-                data=stt_body,
-                # ⚠️2026-07-14判明：Cloudflare移行後、urllibのデフォルトUser-Agentが403になるため
-                # ブラウザ相当のUser-Agentを使用する。
-                headers={"Content-Type": "application/json",
-                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            text = (data.get("text") or "").strip()
-            log("STT response (attempt %d): %s" % (attempt, str(data)))
-            if text:
-                broadcast({"type": "ptt_text", "text": text})
-                log("PTT: recognized -> " + text)
-            else:
-                broadcast({"type": "ptt_text", "text": ""})
-                log("PTT: STT returned empty")
-            return
-        except Exception as e:
-            last_error = e
-            log("STT attempt %d/%d failed: %s" % (
-                attempt, len(retry_delays), str(e)))
-
-    log("STT network failure after retries: " + str(last_error))
-    broadcast({"type": "ptt_error", "reason": "network"})
 
 # ══════════════════════════════════════════════════════════════════════════
 # ★★2026-07-20 無線ディレクター（発話アーキテクチャの全面再設計）★★
@@ -607,7 +563,8 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'mic_error', 'mic_level',
     # ptt_text は本人が明示的に押した手動会話。非搭乗中も会話結果だけは届けるが、
     # activity を ACTIVE へ戻す根拠にはしない。自動無線の停止契約は維持する。
-    'ptt', 'ptt_text', 'ptt_set', 'ptt_mismatch', 'ptt_config',
+    'ptt', 'ptt_text', 'ptt_audio', 'ptt_error', 'ptt_diagnostic',
+    'ptt_set', 'ptt_mismatch', 'ptt_config',
     'vol_set',
     # 接続状態
     'iracing_connected', 'iracing_disconnected',

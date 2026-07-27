@@ -448,7 +448,8 @@ def test_allow_list_meta_pass_during_inactive():
     _prev = bridge._driver_activity
     try:
         bridge._set_driver_activity(da.INACTIVE_DRIVER)
-        for etype in ('ptt', 'ptt_text', 'iracing_connected', 'session_summary',
+        for etype in ('ptt', 'ptt_text', 'ptt_audio', 'ptt_error', 'ptt_diagnostic',
+                      'iracing_connected', 'session_summary',
                       'driver_state', 'session_info', 'pit_timing'):
             check(f'INACTIVE × {etype} → allowed',
                   bridge._activity_allows_broadcast({'type': etype}) is True)

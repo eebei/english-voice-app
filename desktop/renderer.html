@@ -2257,6 +2257,10 @@ function connectBridge(){
           setHint(t('hint_not_caught'));
         }
       }
+      if(data.type==='ptt_audio'){
+        transcribePttAudio(data);
+        return;
+      }
       if(data.type==='ptt_diagnostic'){
         const reason=String(data.reason||'');
         setHint(reason==='too_short'
@@ -3217,8 +3221,50 @@ function pttStop(){
   }
 }
 
+async function transcribePttAudio(data){
+  setHint(t('hint_transcribing'));
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),12000);
+  try{
+    const payload={
+      audio:data.audio,
+      encoding:data.encoding||'LINEAR16',
+      sampleRateHertz:Number(data.sampleRateHertz)||16000,
+      languageCode:data.languageCode||'ja-JP',
+      audioDurationSeconds:Number(data.audioDurationSeconds)||undefined,
+      usageSessionId:data.usageSessionId||usageSessionId
+    };
+    const r=await fetch(API_BASE+'/api/stt',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload),
+      signal:ctrl.signal
+    });
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const result=await r.json();
+    const text=String(result.text||'').trim();
+    setHint('');
+    if(text){
+      document.getElementById('chat-input').value=text;
+      sendMsg('ptt');
+      addMsg('driver','[PTT] '+text);
+    }else{
+      setHint(t('hint_not_caught'));
+    }
+  }catch(e){
+    setHint(t('hint_ptt_network'));
+    try{
+      if(irBridge&&irBridge.readyState===1){
+        irBridge.send(JSON.stringify({cmd:'log_line',text:'[PTT_STT_RENDERER_ERROR] '+String(e&&e.message||e)}));
+      }
+    }catch(_){}
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
 // ※ボタン検出・マイク入力・STT処理は全てbridge側（pyaudio+Google STT）
-//   ブラウザのマイク制限を回避するため。
+//   ブラウザのマイク制限を回避する。HTTPS送信だけはElectron側へ統一。
 updatePTTLabel();
 </script>
 </body>
