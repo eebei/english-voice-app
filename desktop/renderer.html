@@ -509,6 +509,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       </div>
 
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
+      <button class="start-btn" id="btn-return-session" onclick="returnToSession()" style="display:none;margin-top:12px">会話へ戻る →</button>
     </div>
 
     <!-- SCREEN ④: Select Engineer（楽しみは最後） -->
@@ -622,7 +623,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="chat-name" id="chat-name"></div>
           <div class="chat-desc" id="chat-desc"></div>
           <div class="chat-header-top">
-            <button class="back-btn" data-i18n="end_session_btn" onclick="endSession()">End Session</button>
+            <div style="display:flex;gap:6px">
+              <button class="back-btn" data-i18n="settings_btn" onclick="openSessionSettings()">⚙ Settings</button>
+              <button class="back-btn" data-i18n="end_session_btn" onclick="endSession()">End Session</button>
+            </div>
             <div style="display:flex;gap:8px;align-items:center">
               <button class="voice-tog on" id="voice-tog" data-i18n="voice_on" onclick="toggleVoice()">🔊 Voice</button>
               <div style="display:flex;align-items:center;gap:6px" data-i18n-title="tip_engine_vol" title="エンジニアの音量">
@@ -662,6 +666,31 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 const API_BASE = 'https://www.omoraypitwall.com';
+const PERSISTENT_SETTING_KEYS = [
+  'pw_beta_code','pw_auth_token','pw_auth_user','pw_username','pw_device_id',
+  'pw_ui_lang','pw_volume','pw_voice_on'
+];
+function persistentSet(key,value){
+  try{
+    if(value===null||value===undefined) localStorage.removeItem(key);
+    else localStorage.setItem(key,String(value));
+    if(window.pitwall&&window.pitwall.settingsSet) window.pitwall.settingsSet(key,value);
+  }catch(_){}
+}
+function hydratePersistentSettings(){
+  try{
+    if(!window.pitwall||!window.pitwall.settingsGetAll) return;
+    const native=window.pitwall.settingsGetAll()||{};
+    PERSISTENT_SETTING_KEYS.forEach(key=>{
+      if(native[key]!==undefined&&native[key]!==null){
+        localStorage.setItem(key,String(native[key]));
+      }else{
+        const legacy=localStorage.getItem(key);
+        if(legacy!==null) window.pitwall.settingsSet(key,legacy);
+      }
+    });
+  }catch(_){}
+}
 
 // ══════════════════════════════════════════════════════════════
 // UI i18n（UIクロームの英日切替。デフォルト=英語。エンジニアの発話は別軸で不変）
@@ -724,6 +753,7 @@ const I18N = {
     pill_jp:'🇯🇵 Japanese',
     session_start_btn:'Start Session →',
     back_btn:'← Back',
+    settings_btn:'⚙ Settings',
     end_session_btn:'End Session',
     // ── Mode select ──
     mode_select_label:'Select Mode',
@@ -849,6 +879,7 @@ const I18N = {
     pill_jp:'🇯🇵 日本語',
     session_start_btn:'セッション開始 →',
     back_btn:'← 戻る',
+    settings_btn:'⚙ 設定',
     end_session_btn:'セッション終了',
     mode_select_label:'モードを選択',
     mode_strategy_title:'戦略',
@@ -920,7 +951,7 @@ const I18N = {
 function t(key){ const L=window.uiLang||'en'; return (I18N[L]&&I18N[L][key]) || I18N.en[key] || key; }
 function applyLang(lang){
   window.uiLang = (lang==='ja') ? 'ja' : 'en';
-  try{ localStorage.setItem('pw_ui_lang', window.uiLang); }catch(e){}
+  persistentSet('pw_ui_lang', window.uiLang);
   document.querySelectorAll('[data-i18n]').forEach(el=>{ const v=t(el.getAttribute('data-i18n')); if(v!=null) el.textContent=v; });
   document.querySelectorAll('[data-i18n-ph]').forEach(el=>{ const v=t(el.getAttribute('data-i18n-ph')); if(v!=null) el.setAttribute('placeholder',v); });
   document.querySelectorAll('[data-i18n-title]').forEach(el=>{ const v=t(el.getAttribute('data-i18n-title')); if(v!=null) el.setAttribute('title',v); });
@@ -940,6 +971,7 @@ function pushMsg(m){
   if(messages.length > MAX_CLIENT_MESSAGES) messages.splice(0, messages.length - MAX_CLIENT_MESSAGES);
 }
 let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
+let sessionActive = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingLive = false;
@@ -1033,7 +1065,7 @@ function getDeviceId(){
     if(!id){
       id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
         : ('dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
-      localStorage.setItem('pw_device_id', id);
+      persistentSet('pw_device_id', id);
     }
     return id;
   }catch(e){ return ''; }
@@ -1172,7 +1204,7 @@ async function submitBetaCode(){
   const res=await verifyBeta(code);
   btn.disabled=false; btn.textContent=t('gate_verify_btn');
   if(res.ok){
-    localStorage.setItem('pw_beta_code', code);
+    persistentSet('pw_beta_code', code);
     msg.style.color='#6f6'; msg.textContent=t('welcome_prefix')+(res.name||'')+t('welcome_suffix');
     setTimeout(()=>{ hideBetaGate(); },700);
   }else{
@@ -1232,8 +1264,8 @@ async function verifyAndEnterWithToken(token){
     const data=await r.json();
     if(!data.user) return {ok:false, reason:t('err_code_invalid')};
     if(!data.user.isMember) return {ok:false, reason:t('err_not_member')};
-    localStorage.setItem('pw_auth_token', token);
-    localStorage.setItem('pw_auth_user', JSON.stringify(data.user));
+    persistentSet('pw_auth_token', token);
+    persistentSet('pw_auth_user', JSON.stringify(data.user));
     hideBetaGate();
     if(!data.user.displayName){ showNicknameGate(); }
     return {ok:true};
@@ -1258,7 +1290,7 @@ async function saveNickname(){
       body:JSON.stringify({displayName:name, leaderboardOptIn:optIn})});
     const data=await r.json();
     if(data.user){
-      localStorage.setItem('pw_auth_user', JSON.stringify(data.user));
+      persistentSet('pw_auth_user', JSON.stringify(data.user));
       hideNicknameGate();
     }else{
       msg.style.color='#f66'; msg.textContent=t('err_save_failed');
@@ -1277,14 +1309,14 @@ async function bootGate(){
   if(savedToken){
     const result=await verifyAndEnterWithToken(savedToken);
     if(result.ok) return true;
-    localStorage.removeItem('pw_auth_token'); localStorage.removeItem('pw_auth_user');
+    persistentSet('pw_auth_token',null); persistentSet('pw_auth_user',null);
   }
   const saved=localStorage.getItem('pw_beta_code');
   if(saved){
     const res=await verifyBeta(saved);
     if(res.ok){ hideBetaGate(); return true; }
     // 無効化された/消された → 保存を消してゲートへ
-    if(res.reason==='revoked'||res.reason==='not_found'){ localStorage.removeItem('pw_beta_code'); }
+    if(res.reason==='revoked'||res.reason==='not_found'){ persistentSet('pw_beta_code',null); }
   }
   showBetaGate();
   return false;
@@ -1294,8 +1326,14 @@ async function bootGate(){
 function showScreen(id){
   document.querySelectorAll('.app-screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  if(id==='screen-setup'){ try{ updatePTTLabel(); updateVolLabel(); }catch(e){} }
+  if(id==='screen-setup'){
+    try{ updatePTTLabel(); updateVolLabel(); }catch(e){}
+    const back=document.getElementById('btn-return-session');
+    if(back) back.style.display=sessionActive?'block':'none';
+  }
 }
+function openSessionSettings(){ showScreen('screen-setup'); }
+function returnToSession(){ if(sessionActive) showScreen('screen-chat'); }
 
 // ── Engineer selection ──
 function selectEng(name){
@@ -1324,7 +1362,7 @@ function selectEng(name){
 function onNameInput(){
   userName = document.getElementById('user-name-input').value.trim();
   document.getElementById('btn-setup-next').disabled = !userName;   // 設定画面：名前が入れば次へ
-  try{ if(userName) localStorage.setItem('pw_username', userName); }catch(e){}
+  if(userName) persistentSet('pw_username', userName);
 }
 // ①設定 → ③モードへ
 function goToModeStep(){
@@ -1386,6 +1424,7 @@ function startSession(){
   document.getElementById('chat-desc').textContent = c.desc;
   messages=[]; turns=0; sessionMsgCount=0;
   document.getElementById('chat-area').innerHTML='';
+  sessionActive=true;
   showScreen('screen-chat');
   // Profile update
   memorySavedThisSession=false; lastMemorySignature=''; memorySaveInFlight=null; memorySaveReceipt='';
@@ -1446,6 +1485,7 @@ function endSession(){
   jamesAutoMicEnabled=false;
   if(recognition){ try{recognition.stop();}catch(e){} }
   speakQueue=[]; stopCurrentAudio();
+  sessionActive=false;
   showScreen('screen-select');
 }
 
@@ -1768,7 +1808,7 @@ function phonetify(text, lang){
 let pwVolume = (()=>{ const v=parseFloat(localStorage.getItem('pw_volume')); return isNaN(v)?1.0:Math.min(Math.max(v,0),1); })();
 function onVolume(val){
   pwVolume = Math.min(Math.max(parseInt(val,10)/100, 0), 1);
-  localStorage.setItem('pw_volume', String(pwVolume));
+  persistentSet('pw_volume', String(pwVolume));
   if(ttsAudio){ try{ ttsAudio.volume = pwVolume; }catch(e){} }  // 再生中でも即反映
   const icon=document.getElementById('vol-icon'); if(icon) icon.textContent = pwVolume===0?'🔇':(pwVolume<0.5?'🔉':'🔊');
 }
@@ -2060,6 +2100,7 @@ function toggleVoice(){
   const btn=document.getElementById('voice-tog');
   btn.textContent=voiceOn?t('voice_on'):t('voice_off');
   btn.classList.toggle('on',voiceOn);
+  persistentSet('pw_voice_on', voiceOn?'1':'0');
   if(!voiceOn){ speakQueue=[]; stopCurrentAudio(); }
 }
 
@@ -3072,9 +3113,17 @@ if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
 // ── Electron native app: LPを飛ばして直接アプリ画面を開く ──
 // （Webブラウザ版ではLPを見せるが、デスクトップアプリ＝本体なので即起動）
 window.addEventListener('DOMContentLoaded', ()=>{
+  hydratePersistentSettings();
+  const savedVolume=parseFloat(localStorage.getItem('pw_volume'));
+  pwVolume=Number.isFinite(savedVolume)?Math.min(Math.max(savedVolume,0),1):1.0;
+  voiceOn=localStorage.getItem('pw_voice_on')!=='0';
   try{ applyLang(localStorage.getItem('pw_ui_lang')||'en'); }catch(e){ window.uiLang='en'; }
   try{ openApp(); }catch(e){} try{ bootGate(); }catch(e){}
   try{ const s=document.getElementById('vol-slider'); if(s){ s.value=Math.round(pwVolume*100); onVolume(s.value); } }catch(e){}
+  try{
+    const btn=document.getElementById('voice-tog');
+    if(btn){ btn.textContent=voiceOn?t('voice_on'):t('voice_off'); btn.classList.toggle('on',voiceOn); }
+  }catch(e){}
 });
 
 // ══════════════════════════════════════════════════════════════

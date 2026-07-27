@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('pitwall', {
   overlayNudge:  (dx,dy)   => ipcRenderer.send('overlay:nudge', {dx,dy}),  // オーバーレイ内の矢印キーで微移動
   overlaySetLang:(lang)    => ipcRenderer.send('overlay:setLang', lang),   // 字幕の表示言語（en/ja）
   overlayGetState: ()      => ipcRenderer.invoke('overlay:getState'),
+  // portable exeのランダム展開先に依存しない永続設定（app.getPath('userData')）。
+  settingsGetAll: () => ipcRenderer.sendSync('settings:getAll'),
+  settingsSet: (key, value) => ipcRenderer.sendSync('settings:set', key, value),
   // ── main → 窓（設定値の受信。overlay.html / renderer.html 両方が使う）──
   onOverlayConfig: (cb) => ipcRenderer.on('overlay:config', (_e, cfg) => cb(cfg)),
   onOverlayData:   (cb) => ipcRenderer.on('overlay:data',   (_e, line) => cb(line)),

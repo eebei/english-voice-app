@@ -43,6 +43,34 @@ function killStaleBridges() {
 let win;
 let overlayWin = null;
 let bridgeProc = null;
+let SETTINGS_FILE = '';
+let desktopSettings = {};
+
+function loadDesktopSettings() {
+  try {
+    SETTINGS_FILE = path.join(app.getPath('userData'), 'desktop-settings.json');
+    desktopSettings = fs.existsSync(SETTINGS_FILE)
+      ? JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) : {};
+  } catch (e) {
+    desktopSettings = {};
+    log('loadDesktopSettings failed: ' + e.message);
+  }
+}
+function saveDesktopSettings() {
+  try {
+    if (SETTINGS_FILE) fs.writeFileSync(SETTINGS_FILE, JSON.stringify(desktopSettings, null, 2));
+  } catch (e) { log('saveDesktopSettings failed: ' + e.message); }
+}
+function ipcDesktopSettingsSetup() {
+  ipcMain.on('settings:getAll', (event) => { event.returnValue = desktopSettings; });
+  ipcMain.on('settings:set', (event, key, value) => {
+    if (typeof key !== 'string' || !key.startsWith('pw_')) { event.returnValue = false; return; }
+    if (value === null || value === undefined) delete desktopSettings[key];
+    else desktopSettings[key] = value;
+    saveDesktopSettings();
+    event.returnValue = true;
+  });
+}
 
 // ── レースオーバーレイの設定（位置/透明度/スケール/ロック）を永続化 ──
 let OVL_CFG_FILE = '';
@@ -443,6 +471,8 @@ app.whenReady().then(() => {
     fs.writeFileSync(LOG_FILE, '=== OMORAY PITWALL debug log ' + now.toISOString() + ' ===\n');
   } catch (e) {}
   Menu.setApplicationMenu(null);   // File/Edit/View/Window/Help の無意味な既定メニューを消す（Windows）
+  loadDesktopSettings(); // portable exeの展開先が変わっても保持される本体設定
+  ipcDesktopSettingsSetup();
   loadOvlCfg();       // オーバーレイの保存済み設定を読む
   ipcOverlaySetup();  // オーバーレイ制御IPCを登録
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動
