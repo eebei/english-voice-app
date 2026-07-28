@@ -665,7 +665,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
-const API_BASE = 'https://www.omoraypitwall.com';
+// 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
+const API_BASE = 'https://english-voice-app-production.up.railway.app';
 const PERSISTENT_SETTING_KEYS = [
   'pw_beta_code','pw_auth_token','pw_auth_user','pw_username','pw_device_id',
   'pw_ui_lang','pw_volume','pw_voice_on'

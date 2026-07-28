@@ -17,6 +17,9 @@ function check(label, ok) {
 
 check('更新判定は旧Desktop名とNSIS Setup名の両方を認識',
   main.includes('(?:Desktop|Setup)-(\\d{8}-\\d{4})'));
+check('DesktopとBridgeのAPIはDNS障害に強いRailway実体へ直結',
+  renderer.includes("const API_BASE = 'https://english-voice-app-production.up.railway.app'")
+  && bridge.includes('RAILWAY_URL = "https://english-voice-app-production.up.railway.app"'));
 check('ピット秒読みは100/50/20のみ',
   bridge.includes('for _mark in (100, 50, 20):')
   && !bridge.includes('for _mark in (150, 100, 50, 20):'));

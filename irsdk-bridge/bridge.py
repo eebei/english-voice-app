@@ -118,7 +118,8 @@ def save_vol_config():
 
 TTS_API_KEY = ""  # bridgeはRailway STT proxyを使うので空でもOK（直接Google API呼ばない場合）
 
-RAILWAY_URL = "https://www.omoraypitwall.com"
+# 独自ドメインのDNS障害からBridgeのSTT経路を分離する。
+RAILWAY_URL = "https://english-voice-app-production.up.railway.app"
 
 # コーナー単位サイドバイサイド検知の舵角しきい値（ラジアン）。
 # ⚠️車種でステアリング比が違う(GT3は切れ角大、フォーミュラは小さい)ため固定値の限界あり。
