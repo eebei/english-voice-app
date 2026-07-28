@@ -15,7 +15,9 @@ function check(label, ok) {
 check('安全窓は舵角0.12rad未満かつブレーキ12%未満',
   bridge.includes('SPEAK_STEER_RAD = 0.12')
   && bridge.includes('SPEAK_BRAKE_TH  = 0.12')
-  && bridge.includes('(_steer_abs < SPEAK_STEER_RAD) and (_brake_now < SPEAK_BRAKE_TH)'));
+  && bridge.includes('(_steer_abs < SPEAK_STEER_RAD)')
+  && bridge.includes('(_brake_now < SPEAK_BRAKE_TH)')
+  && bridge.includes('_speech_controls_known'));
 check('bridgeは安全窓の変化をrendererへ通知',
   bridge.includes("'type': 'speak_gate'")
   && bridge.includes("'window_ok': bool(window_ok)")

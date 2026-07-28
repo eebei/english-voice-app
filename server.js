@@ -759,6 +759,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
             outputClosed = true;
             return;
           }
+          // 既に完全な一文を返しているなら、残り枠へ次の文を途中まで詰めない。
+          // 「最終ラッ。」「次回は見越。」のような尻切れより、完成文1つを優先する。
+          if (emittedText && unicodeLength(sentence) > remaining) {
+            outputClosed = true;
+            return;
+          }
           const limited = limitReplyText(sentence, remaining);
           if (limited) {
             res.write(limited);

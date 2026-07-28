@@ -2420,8 +2420,20 @@ def poll_iracing():
         # 保留があれば窓が開いた瞬間に送る（flush）。安全直結はemit_radioでゲート無視。
         _steer_abs = abs(steering_angle) if steering_angle is not None else 0.0
         _brake_now = brake_val if brake_val is not None else 0.0
-        speak_window_ok = (_steer_abs < SPEAK_STEER_RAD) and (_brake_now < SPEAK_BRAKE_TH)
-        _set_speak_gate(speak_window_ok, driver_state == 'track')   # 走行中だけゲート有効
+        _speech_controls_known = steering_angle is not None and brake_val is not None
+        speak_window_ok = (
+            _speech_controls_known
+            and (_steer_abs < SPEAK_STEER_RAD)
+            and (_brake_now < SPEAK_BRAKE_TH))
+        _speech_speed = reader.read_float('Speed')
+        # グリッド停止・停止中の会話をコーナー用安全窓で長時間保留しない。
+        # 約18km/h未満は運転負荷が低く、通常会話を即時に返してよい。
+        # Speed欠損を「停止」と解釈してfail-openしない。走行状態ならゲートを維持し、
+        # 操舵/ブレーキも欠損していればwindow_ok=falseとして安全無線以外を保留する。
+        _speech_gate_active = (
+            driver_state == 'track'
+            and (_speech_speed is None or _speech_speed >= 5.0))
+        _set_speak_gate(speak_window_ok, _speech_gate_active)
         flush_radio()
         if steering_angle is not None and is_race_session and not in_start_rush:
             _sa = abs(steering_angle)

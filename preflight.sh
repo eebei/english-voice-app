@@ -128,6 +128,9 @@ if python3 irsdk-bridge/tests_phase_ab_integration.py >/dev/null 2>&1; then echo
 echo "── Build 232 実走ハードニング（TTS・話法・ピット・燃料・更新）"
 if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build232-hardening.js; fail=1; fi
 
+echo "── セッション証拠デブリーフ・本人確認Memory（2026-07-28）"
+if node tests-evidence-debrief.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
