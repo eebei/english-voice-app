@@ -396,7 +396,9 @@ async function checkForUpdate(rendererReady = Promise.resolve()) {
     // 最新ビルドのタグを「バージョン付きexe名 (…-YYYYMMDD-HHmm.exe)」から取得して、自分のタグと比較する。
     // ⚠️latest.exe の updated_at(アップロード時刻)はビルド時刻より必ず後になるため、時刻比較だと
     //    最新版exeでも毎回「古い」と誤判定して無限ループになる。だから“タグ同士”で厳密比較する。
-    const re = /OMORAY-PITWALL-Desktop-(\d{8}-\d{4})\.exe$/;
+    // NSIS移行後はversioned assetがSetup-*、旧portable時代はDesktop-*。
+    // 両方を認識しないとBuild 230以前がBuild 231を検出できない。
+    const re = /OMORAY-PITWALL-(?:Desktop|Setup)-(\d{8}-\d{4})\.exe$/;
     let latestTag = null;
     for (const a of (release.assets || [])) {
       const m = a && a.name && a.name.match(re);

@@ -47,12 +47,13 @@ const sandbox = {
   jamesAutoMicEnabled: false, jamesMuted: false, startAutoMic: ()=>{},
   MAX_RADIO_QUEUE: 2,
   speakWindowOk: true, speakGateActive: false,
-  IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown']),
+  IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_countdown']),
   SPEAK_PRIO: { P0_SAFETY: 0, P1_HAZARD: 1, P2_PROCEDURE: 2, P3_STRATEGY: 3, P4_INFO: 4, P5_CHAT: 5 },
   CHARS: { LunaJP: { gVoice: 'ja-JP-x', gLang: 'ja-JP', gRate: 1, gPitch: 0, voiceLang: 'ja-JP', pitch: 1, rate: 1, voiceNames: [] } },
   API_BASE: 'http://x',
   // 依存関数のスタブ
-  phonetify: t => t, stripMarkdown: t => t, stripParens: t => t, stripEmoji: t => t,
+  phonetify: t => t, normalizeLunaSpeech: t => t,
+  stripMarkdown: t => t, stripParens: t => t, stripEmoji: t => t,
   pickVoice: () => null,
   irBridge: { readyState: 1, send: (j) => spokeReports.push(JSON.parse(j)) },
   // ★2026-07-23 speak()がusageSessionId計測のためlocalStorage.getItem('pw_auth_token')を
@@ -62,6 +63,7 @@ const sandbox = {
   // ★2026-07-23 診断計装：ttsFailLogは本番でrenderer.htmlにdefineされているが、
   //   このテストではspeak/drainQueue/playWebSpeechしか抽出しないためスタブが必要。
   ttsFailLog: () => {},
+  ttsEventLog: () => {},
   AbortController: class { constructor(){ this.signal={aborted:false}; } abort(){ this.signal.aborted=true; } },
   // TTS取得：テストが好きなタイミングで完了させられる
   fetch: () => new Promise((res, rej) => { ttsResolve = { res, rej }; }),
@@ -143,16 +145,16 @@ const reset = () => {
   check('再生開始後に1回だけ計上される', spokeReports.filter(r => r.cmd === 'spoke').length === 1);
 
 
-  // ⑤【Codex #6】Web Speech：cancel後に遅れて届く旧onendがP0を壊さない
+  // ⑤ Web Speech：非常用ピット音声のcancel後に遅れて届く旧onendがP0を壊さない
   //    ※前回の依頼書で「テスト済み」と書いたが、実際にはこの経路を一度も通していなかった。
   reset();
   sandbox.ttsDisabledUntil = Date.now() + 60000;      // Cloud TTSを無効化＝Web Speechへ強制フォールバック
-  sandbox.speak('情報', { prio: 4 });
+  sandbox.speak('ピット進入', { prio: 2, kind: 'pit_entry' });
   await sleep(10);
-  const p4Utt = utterances[utterances.length - 1];
-  check('[WS] P4がWeb Speechで再生された', played.some(x => x.startsWith('webspeech:')) && !!p4Utt);
-  check('[WS] 本番がonendを付けている', typeof p4Utt.onend === 'function');
-  const staleOnEnd = p4Utt.onend;                     // 割り込み前に本番のcallbackを捕まえる
+  const pitUtt = utterances[utterances.length - 1];
+  check('[WS] 非常用ピット音声がWeb Speechで再生された', played.some(x => x.startsWith('webspeech:')) && !!pitUtt);
+  check('[WS] 本番がonendを付けている', typeof pitUtt.onend === 'function');
+  const staleOnEnd = pitUtt.onend;                    // 割り込み前に本番のcallbackを捕まえる
   sandbox.speak('停止車両', { prio: 0 });              // 割り込み
   await sleep(10);
   check('[WS] 割り込みでcancelが呼ばれた', wsCancels.length >= 1);

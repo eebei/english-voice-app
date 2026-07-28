@@ -125,6 +125,9 @@ if python3 irsdk-bridge/tests_session_authority_wiring.py >/dev/null 2>&1; then 
 echo "── E0×Final Lap×燃料×Session Authority統合契約（2026-07-26）"
 if python3 irsdk-bridge/tests_phase_ab_integration.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_phase_ab_integration.py 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── Build 232 実走ハードニング（TTS・話法・ピット・燃料・更新）"
+if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build232-hardening.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

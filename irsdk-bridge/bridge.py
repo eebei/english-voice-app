@@ -498,7 +498,7 @@ PRIORITY = {
     # Final Lapは時刻判断。P2でduck/budgetによる消費を防ぐ。
     'final_lap': 2, 'final_lap_notice': 2,
     # 燃料不足は数値根拠のP0。band dedupで連呼を防ぐ。
-    'fuel_warning': 0, 'fuel_strategy_warning': 0,
+    'fuel_warning': 0, 'fuel_strategy_warning': 0, 'fuel_strategy_safe': 3,
     # P3 戦略
     'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
@@ -2820,6 +2820,19 @@ def poll_iracing():
                         'estimated_crossings_to_finish': _milestone_laps,
                         'message': _fuel_message,
                     })
+                elif (_fuel_eval.get('transition') == 'critical_to_safe'
+                      and not onPit):
+                    # 給油後に「不足」が解消した事実を一度だけ返す。
+                    # 計算成功を黙ったままにせず、通常の戦略情報(P3)として安全窓で発話する。
+                    _fuel_dispatch_result = broadcast({
+                        'type': 'radio',
+                        'trigger': 'fuel_strategy_safe',
+                        'margin_l': _fuel_eval['margin_l'],
+                        'required_fuel_l': _fuel_eval['required_fuel_l'],
+                        'estimated_crossings_to_finish': _milestone_laps,
+                        'message': 'Fuel is good. %.1f liters margin to finish.'
+                                   % _fuel_eval['margin_l'],
+                    })
                 fuel_warning_band = (
                     fuel_strategy_mod.commit_band_after_dispatch(
                         fuel_warning_band, _fuel_eval,
@@ -3217,12 +3230,12 @@ def poll_iracing():
                 #   最初の有効サンプルで既に通過済みのmarkは消化済みとして黙って捨てる。
                 if 0 < _dist_m < 400:
                     if pit_prev_dist_m is None:
-                        for _mark in (150, 100, 50, 20):
+                        for _mark in (100, 50, 20):
                             if _dist_m <= _mark:
                                 pit_marks_called.add(_mark)   # 既に通過＝読まない
                     elif _dist_m < pit_prev_dist_m and (pit_prev_dist_m - _dist_m) < 120:
                         # 近づいている時のみ（距離の逆行やラップ跨ぎの飛びでは鳴らさない）
-                        for _mark in (150, 100, 50, 20):
+                        for _mark in (100, 50, 20):
                             if pit_prev_dist_m > _mark >= _dist_m and _mark not in pit_marks_called:
                                 pit_marks_called.add(_mark)
                                 broadcast({'type': 'radio', 'trigger': 'pit_box_countdown',
@@ -3239,10 +3252,9 @@ def poll_iracing():
                     pit_box_pct = _ldp        # ★自分のボックス位置を学習（次回から秒読みできる）
                     log("PIT BOX learned at LapDistPct=%.4f (track=%.0fm)" % (_ldp, track_length_m or 0))
                 pit_marks_called.clear()
-                broadcast({'type': 'radio', 'trigger': 'pit_box_here', 'message': 'Box here. Slow.'})
+                broadcast({'type': 'radio', 'trigger': 'pit_box_here', 'message': 'Box here.'})
             # ② ★決定シグナル＝サービス開始(完全停止)。PlayerCarPitSvStatus 0→非0
-            if _prev_pss == 0 and _pss is not None and _pss != 0:
-                broadcast({'type': 'radio', 'trigger': 'pit_box_stop', 'message': 'Stop. Box position.'})
+            # 完全停止後の追加コールは遅い。最後の案内は「Box here.」で終える。
             # 値が変わった時だけ診断ログ（1541行の垂れ流し反省）
             _key = "%s|%s|%s|%s" % (_psurf, _pss, _po, onPit)
             if _key != prev.get('_pit_key'):

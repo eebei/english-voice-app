@@ -25,7 +25,8 @@ check('INACTIVE_DRIVER中も安全窓メタデータは遮断しない',
 check('renderer再接続時にも現在の安全窓を同期',
   bridge.includes("await websocket.send(json.dumps({'type': 'speak_gate'"));
 check('即時ピット手順のホワイトリスト',
-  renderer.includes("'pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown'"));
+  renderer.includes("'pit_entry','limiter_off','pit_box_here','pit_box_countdown'")
+  && !renderer.includes("'pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown'"));
 check('P0/P1または期限付きピット手順だけimmediate',
   renderer.includes('immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))'));
 check('通常の会話継続チャンクはimmediateではない',

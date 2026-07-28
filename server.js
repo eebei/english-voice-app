@@ -554,11 +554,44 @@ const ttsLimiter = rateLimit({
 //   stream経路では拒否文の代わりに生JSON文字列が喋られてしまう。
 //   非stream経路は既存のAnthropic互換JSON形（{content:[{type:'text',text}]}）を維持する。
 function sendGuardReply(req, res, text) {
+  const limitedText = limitReplyText(text, resolveReplyCharLimit(req.body || {}, req.body && req.body.mode));
   if (req.body.stream) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.end(text);
+    return res.end(limitedText);
   }
-  return res.json({ content: [{ type: 'text', text }] });
+  return res.json({ content: [{ type: 'text', text: limitedText }] });
+}
+
+function unicodeLength(text) {
+  return Array.from(String(text || '')).length;
+}
+
+function unicodeSlice(text, limit) {
+  return Array.from(String(text || '')).slice(0, limit).join('');
+}
+
+// LLMの指示追従だけに依存せず、表示・TTS・会話履歴へ返す本文そのものを制限する。
+// 上限超過時は最後の文末までを優先し、文末が無ければ句点を付けて尻切れを避ける。
+function limitReplyText(text, maxChars) {
+  const clean = String(text || '').trim();
+  if (!clean || unicodeLength(clean) <= maxChars) return clean;
+  const head = unicodeSlice(clean, maxChars);
+  const points = Array.from(head);
+  let lastBoundary = -1;
+  for (let i = 0; i < points.length; i++) {
+    if (/[。．！？!?]/.test(points[i])) lastBoundary = i;
+  }
+  if (lastBoundary >= Math.min(8, Math.floor(maxChars / 3))) {
+    return points.slice(0, lastBoundary + 1).join('').trim();
+  }
+  return points.slice(0, Math.max(1, maxChars - 1)).join('').trimEnd() + '。';
+}
+
+function resolveReplyCharLimit(body, mode) {
+  const defaults = mode === 'race' ? 35 : mode === 'debrief' ? 70 : 180;
+  const hardCap = mode === 'race' ? 60 : mode === 'debrief' ? 70 : 300;
+  const requested = Number.parseInt(body.max_chars, 10);
+  return Math.min(Math.max(Number.isFinite(requested) ? requested : defaults, 12), hardCap);
 }
 
 // ── Chat proxy ──────────────────────────────────────────────────────────────
@@ -675,6 +708,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     let safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
     // レース無線は物理的にも短く（長文の暴走を防ぐバックストップ）
     if (mode === 'race') safeMaxTokens = Math.min(safeMaxTokens, 100);
+    const safeMaxChars = resolveReplyCharLimit(req.body, mode);
 
     // ユーザーログ（Railway のログで確認可能）
     if (userName) {
@@ -708,20 +742,52 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('X-Accel-Buffering', 'no');  // プロキシのバッファリング無効化（即時flush）
       let streamUsage = null;
+      let pendingText = '';
+      let emittedText = '';
+      let outputClosed = false;
+      const emitCompleteSentences = (final = false) => {
+        if (outputClosed) return;
+        while (pendingText) {
+          const boundary = pendingText.search(/[。．！？!?\n]/);
+          if (boundary < 0 && !final) return;
+          const take = boundary >= 0 ? boundary + 1 : pendingText.length;
+          const sentence = pendingText.slice(0, take).trim();
+          pendingText = pendingText.slice(take);
+          if (!sentence) continue;
+          const remaining = safeMaxChars - unicodeLength(emittedText);
+          if (remaining <= 0) {
+            outputClosed = true;
+            return;
+          }
+          const limited = limitReplyText(sentence, remaining);
+          if (limited) {
+            res.write(limited);
+            emittedText += limited;
+            if (typeof res.flush === 'function') res.flush();
+          }
+          if (unicodeLength(sentence) > remaining || unicodeLength(emittedText) >= safeMaxChars) {
+            outputClosed = true;
+            return;
+          }
+        }
+      };
       try {
         const stream = await client.messages.create({
           model, max_tokens: safeMaxTokens, system, messages, stream: true,
         });
         for await (const event of stream) {
           if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta') {
-            res.write(event.delta.text);
-            if (typeof res.flush === 'function') res.flush();
+            if (!outputClosed) {
+              pendingText += event.delta.text;
+              emitCompleteSentences(false);
+            }
           } else if (event.type === 'message_start') {
             streamUsage = { ...event.message.usage };
           } else if (event.type === 'message_delta' && event.usage) {
             streamUsage = { ...streamUsage, output_tokens: event.usage.output_tokens };
           }
         }
+        emitCompleteSentences(true);
         logUsage(streamUsage);
         res.end();
       } catch (streamErr) {
@@ -740,6 +806,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     });
 
     logUsage(response.usage);
+    if (Array.isArray(response.content)) {
+      response.content = response.content.map(block => (
+        block && block.type === 'text'
+          ? { ...block, text: limitReplyText(block.text, safeMaxChars) }
+          : block
+      ));
+    }
     res.json(response);
   } catch (err) {
     // ★2026-07-21（Codexレビュー・変異テストで実証）：character/modeはtryブロック内で

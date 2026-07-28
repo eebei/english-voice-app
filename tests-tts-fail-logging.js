@@ -54,11 +54,12 @@ function makeSandbox({ fetchImpl, AudioImpl, webSpeechImpl, voiceLang = 'ja-JP',
     jamesAutoMicEnabled: false, jamesMuted: false, startAutoMic: () => {},
     MAX_RADIO_QUEUE: 2,
     speakWindowOk: true, speakGateActive: false,
-    IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown']),
+    IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_countdown']),
     SPEAK_PRIO: { P0_SAFETY: 0, P1_HAZARD: 1, P2_PROCEDURE: 2, P3_STRATEGY: 3, P4_INFO: 4, P5_CHAT: 5 },
     CHARS: { LunaJP: { gVoice, gLang: 'ja-JP', gRate: 1, gPitch: 0, voiceLang, pitch: 1, rate: 1, voiceNames: ['test-voice'] } },
     API_BASE: 'http://x',
-    phonetify: t => t, stripMarkdown: t => t, stripParens: t => t, stripEmoji: t => t,
+    phonetify: t => t, normalizeLunaSpeech: t => t,
+    stripMarkdown: t => t, stripParens: t => t, stripEmoji: t => t,
     pickVoice: () => webSpeechImpl && webSpeechImpl.pickVoiceReturn !== undefined ? webSpeechImpl.pickVoiceReturn : { name: 'test' },
     localStorage: { getItem: () => null, setItem: () => {} },
     usageSessionId: 'test-usage-session-id',
@@ -79,6 +80,7 @@ function makeSandbox({ fetchImpl, AudioImpl, webSpeechImpl, voiceLang = 'ja-JP',
     ttsFailLog: (where, detail) => {
       state.ttsFails.push('[TTS_FAIL] ' + where + ' | ' + (detail || ''));
     },
+    ttsEventLog: () => {},
     AbortController: class {
       constructor() { this.signal = { aborted: false }; }
       abort() { this.signal.aborted = true; if (this._onabort) this._onabort(); }
@@ -154,11 +156,11 @@ function makeAudio({ playRejects, fireOnError, fireOnended, fireOnendedThenOnErr
   };
 }
 
-async function runCase(label, opts, verify) {
+async function runCase(label, opts, verify, speakOpts = { prio: 0, kind: 'stopped_ahead' }) {
   console.log('\n══ ' + label + ' ══');
   const { sandbox, state } = makeSandbox(opts);
-  sandbox.speak('テスト発話', { prio: 4, kind: 'info' });
-  await sleep(30);   // fetch/Audio/onerrorが全部落ち着くまで待つ
+  sandbox.speak('テスト発話', speakOpts);
+  await sleep(650);   // 250ms retry×1 + fetch/Audio/onerrorが全部落ち着くまで待つ
   verify(state);
 }
 
@@ -211,17 +213,17 @@ async function runCase(label, opts, verify) {
   }, (s) => {
     const kinds = s.ttsFails.map(l => l.split(' | ')[0].replace('[TTS_FAIL] ', ''));
     check('cloud_tts_fetch_error が1回だけログされる', kinds.filter(k => k === 'cloud_tts_fetch_error').length === 1, kinds);
-    check('cloud_tts_timeout_8s は出ない', !kinds.includes('cloud_tts_timeout_8s'), kinds);
+    check('cloud_tts_timeout_5s は出ない', !kinds.includes('cloud_tts_timeout_5s'), kinds);
     check('WebSpeech呼び出しは1回だけ', s.webSpeechCalls.length === 1, s.webSpeechCalls.length);
   });
 
-  // ケース5: fetchタイムアウト (AbortError) → cloud_tts_timeout_8s
-  await runCase('fetchタイムアウト → cloud_tts_timeout_8s', {
+  // ケース5: fetchタイムアウト (AbortError) → cloud_tts_timeout_5s
+  await runCase('fetchタイムアウト → cloud_tts_timeout_5s', {
     fetchImpl: async () => { const e = new Error('The user aborted a request.'); e.name = 'AbortError'; throw e; },
     AudioImpl: makeAudio({}),
   }, (s) => {
     const kinds = s.ttsFails.map(l => l.split(' | ')[0].replace('[TTS_FAIL] ', ''));
-    check('cloud_tts_timeout_8s が1回だけログされる', kinds.filter(k => k === 'cloud_tts_timeout_8s').length === 1, kinds);
+    check('cloud_tts_timeout_5s が1回だけログされる', kinds.filter(k => k === 'cloud_tts_timeout_5s').length === 1, kinds);
     check('cloud_tts_fetch_error は出ない (AbortErrorの分離)', !kinds.includes('cloud_tts_fetch_error'), kinds);
     check('WebSpeech呼び出しは1回だけ', s.webSpeechCalls.length === 1, s.webSpeechCalls.length);
   });
@@ -311,7 +313,34 @@ async function runCase(label, opts, verify) {
     check('webspeech_throw が1回だけ', kinds.filter(k => k === 'webspeech_throw').length === 1, kinds);
   });
 
-  // ケース11: 正常系 (何もログされない・spoke1回)
+  // ケース11: 通常会話はCloud失敗時に別人の機械音へ落とさない
+  await runCase('通常会話のCloud失敗 → 機械音を抑止', {
+    fetchImpl: async () => { throw new Error('network down'); },
+    AudioImpl: makeAudio({}),
+  }, (s) => {
+    const kinds = s.ttsFails.map(l => l.split(' | ')[0].replace('[TTS_FAIL] ', ''));
+    check('Cloud失敗は記録される', kinds.filter(k => k === 'cloud_tts_fetch_error').length === 1, kinds);
+    check('通常会話ではWebSpeechを使わない', s.webSpeechCalls.length === 0, s.webSpeechCalls.length);
+    check('再生していない発話をspoke計上しない', s.spokeReports.length === 0, s.spokeReports.length);
+  }, { prio: 4, kind: 'info' });
+
+  // ケース12: 1回目の一時失敗は短い再試行でCloud音声へ復帰
+  let retryCalls = 0;
+  await runCase('Cloud一時失敗 → 2回目で復帰', {
+    fetchImpl: async () => {
+      retryCalls++;
+      if(retryCalls === 1) throw new Error('temporary network failure');
+      return { status: 200, ok: true, json: async () => ({ audioContent: 'RECOVERED' }) };
+    },
+    AudioImpl: makeAudio({ fireOnended: true }),
+  }, (s) => {
+    check('Cloud fetchを2回試行', retryCalls === 2, retryCalls);
+    check('復帰時は失敗ログを残さない', s.ttsFails.length === 0, s.ttsFails);
+    check('WebSpeechへ落ちない', s.webSpeechCalls.length === 0, s.webSpeechCalls.length);
+    check('Cloud再生を1回だけ計上', s.spokeReports.length === 1, s.spokeReports.length);
+  });
+
+  // ケース13: 正常系 (何もログされない・spoke1回)
   await runCase('正常系 → ttsFailログ0件・spoke1回', {
     fetchImpl: async () => ({ status: 200, ok: true, json: async () => ({ audioContent: 'OK' }) }),
     AudioImpl: makeAudio({}),

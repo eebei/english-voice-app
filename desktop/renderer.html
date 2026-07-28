@@ -1678,10 +1678,18 @@ async function callAPI(inputSource, memoryStatus=''){
     //   言われた時モデルが尻切れ文の残りから補完＝単語の途中から始まる壊れた返答になる
     //   (Yuji 2026-07-15 Monza実走で発覚)。1返答で1論点を完結できる余裕に引き上げる。
     // レースは物理的にも短く（プロンプトの無線鉄則のバックストップ。冗長な4文返答を頭打ちに）
-    const maxTok = (selMode==='race' && isJP) ? 80
-                 : (selMode==='race' && !isJP) ? 55
-                 : (selMode==='debrief' && isJP) ? 550
+    const maxTok = (selMode==='race' && isJP) ? 55
+                 : (selMode==='race' && !isJP) ? 45
+                 : (selMode==='debrief' && isJP) ? 120
+                 : (selMode==='debrief' && !isJP) ? 100
                  : 550;
+    // max_tokens は日本語の文字数を保証しない。表示・TTS・履歴を同じ長さにするため、
+    // サーバー側の文字数ゲートへ希望上限を渡す。戦略質問だけは数字と根拠を言い切れる余裕を持たせる。
+    const latestUserText = [...messages].reverse().find(m=>m && m.role==='user')?.content || '';
+    const isStrategyQuestion = /燃料|給油|ピット|戦略|作戦|残り.{0,4}(?:周|時間)|何周|アンダーカット|オーバーカット|fuel|pit|strategy|laps? left|undercut|overcut/i.test(latestUserText);
+    const maxChars = selMode==='race' ? (isStrategyQuestion ? 60 : 35)
+                   : selMode==='debrief' ? 70
+                   : 180;
     // ⚠️アクセスコードのみのセッション(八木さん/Tobi等)ではproductを送らない＝従来通りゲート無し。
     // アカウントログイン済み(pw_auth_token有り)の時だけproduct:'pitwall'を送り、サーバー側の
     // 会員チェック(is_member)を実際に働かせる。
@@ -1704,6 +1712,7 @@ async function callAPI(inputSource, memoryStatus=''){
         profileNote,
         raceHistory,
         max_tokens:maxTok,
+        max_chars:maxChars,
         usageSessionId
     };
     if(inputSource==='ptt'||inputSource==='typed') chatBody.inputSource = inputSource;
@@ -1816,6 +1825,23 @@ function phonetify(text, lang){
     return text.replace(/iRacing/g,'I Racing');
   }
 }
+// Lunaはプロンプトだけに頼らず、TTS直前にも乱暴・男性的な語を遮断する。
+// 数値や技術用語は変えず、呼称・方言・強い断定語尾だけを最小限に整える。
+function normalizeLunaSpeech(text){
+  if(sel!=='LunaJP') return text;
+  const name = (userName||'あなた').trim() || 'あなた';
+  return String(text||'')
+    .replace(/お前/g, name)
+    .replace(/あんた/g, 'あなた')
+    .replace(/申し訳ね[ぇえ]/g, 'ごめんね')
+    .replace(/しようや/g, 'しよう')
+    .replace(/やろうや/g, 'やろう')
+    .replace(/かもしれん/g, 'かもしれない')
+    .replace(/だった奴/g, 'だった車')
+    .replace(/こいつ|そいつ|あいつ/g, 'その車')
+    .replace(/だ。/g, '。')
+    .replace(/だ$/g, 'ね');
+}
 // ── エンジニア音量（0.0〜1.0・localStorage永続）──
 let pwVolume = (()=>{ const v=parseFloat(localStorage.getItem('pw_volume')); return isNaN(v)?1.0:Math.min(Math.max(v,0),1); })();
 function onVolume(val){
@@ -1854,7 +1880,7 @@ let currentSpeakPrio = 9;     // 再生中の優先度（割り込み判定用�
 let speakWindowOk = true;     // bridgeの舵角<約7度 かつ Brake<12%
 let speakGateActive = false;  // オントラック走行中だけtrue
 const IMMEDIATE_PIT_KINDS = new Set([
-  'pit_entry','limiter_off','pit_box_here','pit_box_stop','pit_box_countdown'
+  'pit_entry','limiter_off','pit_box_here','pit_box_countdown'
 ]);
 // ★2026-07-20 Codex再レビュー P0-1：割り込みは同期部分しか止められていなかった。
 //   drainQueue()が /api/tts の fetch を待っている間は ttsAudio がまだ存在せず、
@@ -1889,6 +1915,15 @@ function ttsFailLog(where, detail){
   try{
     const msg = '[TTS_FAIL] ' + where + ' | ' + (detail || '');
     console.error(msg);
+    if(irBridge && irBridge.readyState===1){
+      irBridge.send(JSON.stringify({cmd:'log_line', text: msg}));
+    }
+  }catch(_){}
+}
+function ttsEventLog(where, detail){
+  try{
+    const msg = '[TTS_EVENT] ' + where + ' | ' + (detail || '');
+    console.log(msg);
     if(irBridge && irBridge.readyState===1){
       irBridge.send(JSON.stringify({cmd:'log_line', text: msg}));
     }
@@ -2001,15 +2036,29 @@ async function drainQueue(){
     ttsAudio = null;
     onUtteranceDone();
   };
-  const clean = phonetify(stripMarkdown(stripParens(stripEmoji(raw))), c.voiceLang);
+  const clean = phonetify(normalizeLunaSpeech(
+    stripMarkdown(stripParens(stripEmoji(raw)))), c.voiceLang);
 
   // 見張り番：完了イベントが来なくても必ず一定時間で次へ進める（キュー永久固まり防止）
   if(speakWatchdog) clearTimeout(speakWatchdog);
   const watchMs = Math.min(40000, 5000 + clean.length * 130);
   speakWatchdog = setTimeout(()=>{ if(myGen!==speakGeneration) return; try{stopCurrentAudio();}catch(e){} onUtteranceDone(); }, watchMs);
 
-  // Cloud TTSが使えない/設定なしなら即Web Speech
-  if(Date.now() < ttsDisabledUntil || !c.gVoice){ reportSpoke(); playWebSpeech(clean, c, myGen, _completeOnce); return; }
+  // Cloud TTS停止中も、別人の機械音を通常会話へ混ぜない。
+  // 安全・期限付きピット手順だけ非常用Web Speechを許可する。
+  if(Date.now() < ttsDisabledUntil || !c.gVoice){
+    const emergencyFallback = currentSpeakPrio<=SPEAK_PRIO.P1_HAZARD ||
+      !!(_it && IMMEDIATE_PIT_KINDS.has(_it.kind));
+    if(emergencyFallback){
+      reportSpoke();
+      playWebSpeech(clean, c, myGen, _completeOnce);
+    } else {
+      ttsFailLog('cloud_tts_temporarily_disabled',
+        'chars='+clean.length+' lang='+c.gLang+' → text-only; alien voice suppressed');
+      _completeOnce();
+    }
+    return;
+  }
 
   // ★2026-07-23 Codex再指摘 P0：onerrorとplay rejectが同じAudioで両方発火するケースがある。
   //   両方でplayWebSpeech()を呼ぶと二重フォールバック＝重複再生・reportSpoke二重計上に
@@ -2020,25 +2069,50 @@ async function drainQueue(){
   const _fallbackOnce = (where, detail)=>{
     if(_fellBack || _completed || myGen !== speakGeneration) return;   // 既に完了通知済みならフォールバック不要
     _fellBack = true;
-    ttsFailLog(where, detail+' chars='+clean.length+' lang='+c.gLang+' → WebSpeechへフォールバック');
+    const emergencyFallback = currentSpeakPrio<=SPEAK_PRIO.P1_HAZARD ||
+      !!(_it && IMMEDIATE_PIT_KINDS.has(_it.kind));
+    ttsFailLog(where, detail+' chars='+clean.length+' lang='+c.gLang+
+      (emergencyFallback ? ' → emergency WebSpeech' : ' → text-only; alien voice suppressed'));
     ttsAudio = null;
-    reportSpoke();    // reportSpokeは_reportSpokeCalled guardで1回きり
-    playWebSpeech(clean, c, myGen, _completeOnce);   // done を _completeOnce に集約(utteranceDone 1回)
+    if(emergencyFallback){
+      reportSpoke();    // reportSpokeは_reportSpokeCalled guardで1回きり
+      playWebSpeech(clean, c, myGen, _completeOnce);
+    } else {
+      _completeOnce();
+    }
   };
   try{
-    const ctrl = new AbortController();
-    speakFetchCtrl = ctrl;                                  // 割り込み時にabortできるよう保持
-    const fetchTimer = setTimeout(()=>ctrl.abort(), 8000);  // TTS取得が固まらないようタイムアウト
     const ttsAuthToken = localStorage.getItem('pw_auth_token');
     const ttsHeaders = {'Content-Type':'application/json'};
     const ttsBody = { text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch, usageSessionId };
     if(ttsAuthToken){ ttsHeaders['Authorization']='Bearer '+ttsAuthToken; ttsBody.product='pitwall'; }
-    const r = await fetch(API_BASE+'/api/tts',{
-      method:'POST', headers:ttsHeaders,
-      body:JSON.stringify(ttsBody),
-      signal: ctrl.signal
-    });
-    clearTimeout(fetchTimer);
+    let r = null;
+    let lastFetchError = null;
+    // 一時的なネットワーク落ちで即Windows音声へ変わらないよう短い再試行を入れる。
+    for(let attempt=1; attempt<=2; attempt++){
+      const ctrl = new AbortController();
+      speakFetchCtrl = ctrl;
+      const fetchTimer = setTimeout(()=>ctrl.abort(), 5000);
+      try{
+        r = await fetch(API_BASE+'/api/tts',{
+          method:'POST', headers:ttsHeaders,
+          body:JSON.stringify(ttsBody),
+          signal: ctrl.signal
+        });
+        clearTimeout(fetchTimer);
+        lastFetchError = null;
+        break;
+      }catch(fetchErr){
+        clearTimeout(fetchTimer);
+        lastFetchError = fetchErr;
+        if(myGen !== speakGeneration) return;
+        if(attempt<2){
+          ttsEventLog('cloud_retry', 'attempt='+attempt+' chars='+clean.length);
+          await new Promise(resolve=>setTimeout(resolve,250));
+        }
+      }
+    }
+    if(lastFetchError) throw lastFetchError;
     if(myGen !== speakGeneration) return;                   // ★割り込まれた＝この発話は破棄
     // ★2026-07-23 Codex再指摘 P1：HTTP/空audioでthrowするとcatchでcloud_tts_fetch_errorとして
     //   二重ログされていた。throwせず早期returnで正確に1kindだけログする設計へ変更。
@@ -2060,10 +2134,15 @@ async function drainQueue(){
     const audio = new Audio('data:audio/mp3;base64,'+data.audioContent);
     audio.volume = pwVolume;   // ユーザー設定の音量を適用
     ttsAudio = audio;
+    ttsEventLog('cloud_ready', 'voice='+c.gVoice+' chars='+clean.length+
+      ' volume='+pwVolume.toFixed(2)+' voiceOn='+voiceOn);
     // callbackも世代を照合してから状態を触る（遅れて届いた旧世代がP0を解除しないように）
     // ★_completeOnceに集約：完了(onended)・遅延onerror・フォールバック経由のutt.onendのどれか
     //   1回だけonUtteranceDoneを呼ぶ（キュー二重進行防止）。
-    audio.onended = _completeOnce;
+    audio.onended = ()=>{
+      ttsEventLog('cloud_ended', 'voice='+c.gVoice+' chars='+clean.length);
+      _completeOnce();
+    };
     // ★2026-07-23 診断計装：audio.onerrorは従来ログ無し・フォールバック無しで沈黙終了していた。
     //   Yuji報告「字幕は出たが音が来ない」の最有力容疑者。証拠を残す＋WebSpeechへフォールバック。
     //   _fallbackOnceで両方経路の重複発火を抑止。
@@ -2073,6 +2152,8 @@ async function drainQueue(){
     };
     try{
       await audio.play();
+      ttsEventLog('cloud_playing', 'voice='+c.gVoice+' chars='+clean.length+
+        ' volume='+pwVolume.toFixed(2));
     }catch(playErr){
       if(myGen !== speakGeneration) return;                 // 割り込みでabortしたのは正常
       _fallbackOnce('audio_play_reject', (playErr && (playErr.name+': '+playErr.message)));
@@ -2086,7 +2167,7 @@ async function drainQueue(){
     if(myGen !== speakGeneration) return;                   // 割り込みによるabortは既にここで抜ける（診断対象外）
     // ここへ来るのはfetchが例外を投げた場合のみ（HTTP/空audioは早期returnで到達しない）。
     //   AbortError → タイムアウト（明示割り込みはgen照合で上で除外済み）／それ以外 → ネットワーク等。
-    const kind = (e && e.name === 'AbortError') ? 'cloud_tts_timeout_8s' : 'cloud_tts_fetch_error';
+    const kind = (e && e.name === 'AbortError') ? 'cloud_tts_timeout_5s' : 'cloud_tts_fetch_error';
     _fallbackOnce(kind, (e && (e.name+': '+e.message)));
   }
 }
@@ -2444,8 +2525,10 @@ function oishiRadio(d){
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     // ★2026-07-21 実走ログで発覚：ここにケースが無いとinjectRadioがbridge.pyの英語
     //   フォールバック("Box here. Slow." 等)をそのまま喋ってしまう(LunaJP実走で確認)。
-    case 'pit_box_here':   return `ボックスここ。減速。`;
-    case 'pit_box_stop':   return `停止。ボックス位置。`;
+    case 'pit_box_here':   return `ボックスここ。`;
+    case 'pit_box_stop':   return ``;
+    case 'fuel_strategy_safe':
+      return `燃料OK。約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。`;
     // ★2026-07-24 post_contact_ok（Yuji設計）：crash_check の5秒後に走行継続確認できたら発火。
     //   Pattern B（走行継続）の第二声。Pattern A（停止）は bridge 側で自動抑止＝ここには来ない。
     case 'post_contact_ok': {
