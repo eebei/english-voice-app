@@ -656,11 +656,11 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         <div id="debrief-guide-title" style="font-weight:700;color:#f0abfc;margin-bottom:7px">Session review</div>
         <div id="debrief-guide-evidence" style="font-size:12px;color:#d1d5db;line-height:1.55;margin-bottom:9px"></div>
         <div id="debrief-guide-question" style="font-size:14px;line-height:1.55"></div>
-        <button id="debrief-guide-cancel" class="back-btn" style="margin-top:10px" onclick="dismissEvidenceDebrief()">振り返りを終了</button>
+        <button id="debrief-guide-cancel" class="back-btn" style="margin-top:10px" onclick="dismissEvidenceDebrief()">End review</button>
         <div id="debrief-guide-actions" style="display:none;gap:8px;margin-top:10px">
-          <button class="back-btn" onclick="confirmEvidenceMemory()">この内容を保存</button>
-          <button class="back-btn" onclick="restartEvidenceDebrief()">回答を修正</button>
-          <button class="back-btn" onclick="dismissEvidenceDebrief()">保存しない</button>
+          <button id="debrief-guide-save" class="back-btn" onclick="confirmEvidenceMemory()">Save</button>
+          <button id="debrief-guide-restart" class="back-btn" onclick="restartEvidenceDebrief()">Revise answers</button>
+          <button id="debrief-guide-discard" class="back-btn" onclick="dismissEvidenceDebrief()">Don’t save</button>
         </div>
       </div>
       <div class="busy-indicator" id="busy-ind" data-i18n="busy">Engineer thinking…</div>
@@ -998,6 +998,8 @@ let sessionBestLapStr = '';
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = false, autoDebriefData = null;
 let evidenceDebrief = null;
+let fuelCapacityConfirmedThisSession = null;
+let lastFuelCapacityContext = null;
 
 // ── Character config ──
 const CHARS = {
@@ -1446,6 +1448,7 @@ function startSession(){
   memorySavedThisSession=false; lastMemorySignature=''; memorySaveInFlight=null; memorySaveReceipt='';
   sessionBestLapStr=''; briefingKicked=false;
   lastSessionSummary=null; autoDebriefStarted=false; autoDebriefData=null;
+  fuelCapacityConfirmedThisSession=null;
   if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
   evidenceDebrief=null;
   const debriefGuide=document.getElementById('debrief-guide');
@@ -1660,6 +1663,7 @@ async function sendMsg(inputSource){
   if(!text||isBusy) return;
   inp.value=''; inp.style.height='auto';
   addMsg('user',text);
+  captureConfirmedFuelCapacity(text);
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
@@ -1700,7 +1704,8 @@ async function callAPI(inputSource, memoryStatus=''){
   const profile = loadProfile()||{};
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
-  const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildSessionEvidenceNote()
+  const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildFuelAuthorityNote(_isJP_pre)
+    + buildSessionEvidenceNote()
     + buildContractNote(_isJP_pre) + buildMemoryStatusNote(_isJP_pre, memoryStatus);
   const raceHistory = buildRaceHistoryContext();
   try{
@@ -2416,6 +2421,7 @@ function connectBridge(){
           if(a&&a.track&&a.track!=='unknown') lastTrack=a.track;
           if(data.data.player_irating) lastIrating=data.data.player_irating;
           if(data.data.safety_rating) lastSr=data.data.safety_rating;
+          applySessionFuelAuthority(data.data);
         }
         injectBriefing(data.data);
       }
@@ -2429,6 +2435,7 @@ function connectBridge(){
         return;
       }
       if(data.type==='session_summary'){
+        data=sanitizeSessionEvidence(data);
         lastSessionSummary=data;
         saveSessionSummary(data);
         reconcileEvidenceSummary(data);
@@ -2976,11 +2983,23 @@ function fmtLap(v){
   const s = n - m*60;
   return m>0 ? (m + ':' + s.toFixed(3).padStart(6,'0')) : s.toFixed(3);
 }
+function validFinishPosition(value){
+  const n=Number(value);
+  return Number.isInteger(n)&&n>0?n:null;
+}
+function sanitizeSessionEvidence(data){
+  const clean={...(data||{})};
+  clean.finish_pos=validFinishPosition(clean.finish_pos);
+  return clean;
+}
 
 // ── Debrief auto-trigger ──
 function scheduleAutoDebrief(data){
   // FINISHED が summary より先に届いた場合、後着した完全な summary へ差し替える。
-  if(data) autoDebriefData=data;
+  if(data){
+    data=sanitizeSessionEvidence(data);
+    autoDebriefData=data;
+  }
   if(autoDebriefStarted) return;
   if(selMode==='debrief'){
     autoDebriefStarted=true;
@@ -2996,7 +3015,7 @@ function scheduleAutoDebrief(data){
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const laps=reviewData.total_laps||'?';
     const best=fmtLap(reviewData.best_lap||sessionBestLapStr||'?');
-    const pos=reviewData.finish_pos;
+    const pos=validFinishPosition(reviewData.finish_pos);
     // 実セッション種別が分かればそれで呼ぶ（予選/練習をレースと決め打ちしない）
     const st=(lastSessionType||'').toLowerCase();
     const sessJP = st.includes('race')?'レース':st.includes('qualif')?'予選':st.includes('practice')?'練習':'セッション';
@@ -3008,14 +3027,14 @@ function scheduleAutoDebrief(data){
     // 岡山弁(官兵衛)専用の語尾「じゃ」を全日本語キャラに使い回してた誤り。
     // 大石/HajimeJP=標準語、LunaJP=タメ口標準語、官兵衛だけ岡山弁、で語尾を分ける。
     const jpEnding = (sel==='Kanbe')
-        ? (pos<=3 ? `${sessJP}終了じゃ！${posJP}見事な走りじゃったで！${laps}周、ベスト${best}。デブリーフを始めようか？`
+        ? (pos&&pos<=3 ? `${sessJP}終了じゃ！${posJP}見事な走りじゃったで！${laps}周、ベスト${best}。デブリーフを始めようか？`
                   : `${sessJP}終了じゃ。${posJP}${laps}周、ベスト${best}。デブリーフを始めようか？`)
       : (sel==='LunaJP')
-        ? (pos<=3 ? `${userName||'ドライバー'}、${sessJP}終わったよ！${posJP}やったね！${laps}周、ベスト${best}。デブリーフ始めよっか？`
+        ? (pos&&pos<=3 ? `${userName||'ドライバー'}、${sessJP}終わったよ！${posJP}やったね！${laps}周、ベスト${best}。デブリーフ始めよっか？`
                   : `${userName||'ドライバー'}、${sessJP}終わったよ。${posJP}${laps}周、ベスト${best}。デブリーフ始めよっか？`)
-        : (pos<=3 ? `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}見事な結果だ。${laps}周、ベスト${best}。デブリーフを始めようか。`
+        : (pos&&pos<=3 ? `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}見事な結果だ。${laps}周、ベスト${best}。デブリーフを始めようか。`
                   : `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}${laps}周、ベスト${best}。デブリーフを始めようか。`);
-    const enEnding = pos<=3
+    const enEnding = pos&&pos<=3
         ? `${userName||'Driver'}, that's the ${sessEN}! ${posEN} Great drive out there. ${laps} laps, best ${best}. Ready for the debrief?`
         : `${userName||'Driver'}, that's the ${sessEN}. ${posEN} ${laps} laps, best ${best}. Ready for the debrief?`;
     switchMode('debrief');   // チェッカー→自動でデブリーフモードへ（ラップ読み上げOFF・じっくり会話）
@@ -3028,60 +3047,118 @@ function scheduleAutoDebrief(data){
 }
 
 function buildFallbackSessionSummary(){
-  return {
+  return sanitizeSessionEvidence({
     type:'session_summary', track:lastTrack||'', car_class:lastCarClass||'',
     car_model:lastCarModel||'', event_type:lastSessionType||'Race', is_race:true,
     total_laps:lastTelemetry?.lap||lastTelemetry?.lap_completed||0,
     finish_pos:lastTelemetry?.class_pos||lastTelemetry?.position||null,
     best_lap:parseFloat(sessionBestLapStr)||null,
     incidents:lastTelemetry?.incidents||0,
-  };
+  });
 }
+function evidenceLanguage(){
+  if(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP') return 'ja';
+  if(sel==='Matthias') return 'de';
+  if(sel==='Camila') return 'pt';
+  return 'en';
+}
+const EVIDENCE_COPY={
+  en:{
+    title:'📋 Session Evidence', optionalTitle:'📋 Practice / Qualifying evidence ready',
+    classPos:'Class P',laps:'laps',best:'Best',average:'Average',fuel:'Fuel',incidents:'Incidents',
+    practice:['What felt best and most repeatable today?','What was the biggest issue: car, tyres, traffic, or your inputs?','If you change only one thing next run, what will it be?'],
+    qualify:['What worked best on the attack lap?','Where did you lose the most time?','If you change only one thing next qualifying, what will it be?'],
+    race:['What was your best decision or strongest part of the drive?','What caused the biggest time loss?','If you ran the same conditions again, what one thing would you change?'],
+    fuelQ:'Did fuel use and the pit decision match the plan? Tell me what differed.',
+    save:'Save this',restart:'Revise answers',discard:'Don’t save',cancel:'End review',start:'Review this session',
+    preview:'Ready to save',ready:'I linked your answers to the measured session data. Review them and choose whether to save.',
+    saved:'✅ Saved to your session memory for next time.',failed:'⚠️ Session memory could not be saved.',
+    missing:'⚠️ Not saved because driver, track, or car could not be confirmed.',
+    wait:'⏳ Answer after the question has finished playing.'
+  },
+  ja:{
+    title:'📋 セッション証拠', optionalTitle:'📋 練習・予選の振り返り準備完了',
+    classPos:'クラス P',laps:'周',best:'ベスト',average:'平均',fuel:'燃費',incidents:'インシデント',
+    practice:['今日いちばん再現できた、良い感触はどこ？','最大の問題は車、タイヤ、交通、それとも自分の操作のどれ？','次の走行で一つだけ変えるなら何にする？'],
+    qualify:['アタックで一番うまく決まった部分はどこ？','一番タイムを失った原因は何だった？','次の予選で一つだけ変えるなら何にする？'],
+    race:['今日いちばん良かった判断や走りはどこ？','最大のタイムロスは何が原因だった？','同じ条件でもう一度走るなら、一つだけ何を変える？'],
+    fuelQ:'燃料とピット判断は想定どおりだった？違った点があれば教えて。',
+    save:'この内容を保存',restart:'回答を修正',discard:'保存しない',cancel:'振り返りを終了',start:'このセッションを振り返る',
+    preview:'保存予定',ready:'回答を実測データと結びつけたよ。内容を確認して、保存するか選んでね。',
+    saved:'✅ 次回用のセッション記憶に保存しました。',failed:'⚠️ セッション記憶を保存できませんでした。',
+    missing:'⚠️ ドライバー・コース・車両を確認できないため保存しませんでした。',
+    wait:'⏳ 質問の読み上げが終わってから答えてください。'
+  },
+  de:{
+    title:'📋 Session-Nachweis', optionalTitle:'📋 Trainings-/Qualifying-Auswertung bereit',
+    classPos:'Klasse P',laps:'Runden',best:'Bestzeit',average:'Durchschnitt',fuel:'Verbrauch',incidents:'Incidents',
+    practice:['Was fühlte sich heute am besten und reproduzierbar an?','Was war das größte Problem: Auto, Reifen, Verkehr oder deine Eingaben?','Wenn du im nächsten Run nur eine Sache änderst, welche?'],
+    qualify:['Was hat auf der schnellen Runde am besten funktioniert?','Wo hast du am meisten Zeit verloren?','Wenn du im nächsten Qualifying nur eine Sache änderst, welche?'],
+    race:['Was war deine beste Entscheidung oder stärkste Phase?','Was hat den größten Zeitverlust verursacht?','Was würdest du unter denselben Bedingungen einmal ändern?'],
+    fuelQ:'Entsprachen Verbrauch und Boxenentscheidung dem Plan? Was war anders?',
+    save:'Speichern',restart:'Antworten ändern',discard:'Nicht speichern',cancel:'Auswertung beenden',start:'Session auswerten',
+    preview:'Zum Speichern bereit',ready:'Ich habe deine Antworten mit den Messdaten verknüpft. Prüfe sie und entscheide, ob sie gespeichert werden.',
+    saved:'✅ Für die nächste Session gespeichert.',failed:'⚠️ Session-Erinnerung konnte nicht gespeichert werden.',
+    missing:'⚠️ Nicht gespeichert: Fahrer, Strecke oder Auto konnten nicht bestätigt werden.',
+    wait:'⏳ Antworte erst, wenn die Frage vollständig abgespielt wurde.'
+  },
+  pt:{
+    title:'📋 Evidências da sessão', optionalTitle:'📋 Revisão de treino/classificação pronta',
+    classPos:'Classe P',laps:'voltas',best:'Melhor',average:'Média',fuel:'Consumo',incidents:'Incidentes',
+    practice:['O que funcionou melhor e foi mais repetível hoje?','Qual foi o maior problema: carro, pneus, tráfego ou seus comandos?','Se mudar apenas uma coisa na próxima saída, qual será?'],
+    qualify:['O que funcionou melhor na volta rápida?','Onde você perdeu mais tempo?','Se mudar apenas uma coisa na próxima classificação, qual será?'],
+    race:['Qual foi sua melhor decisão ou parte mais forte da pilotagem?','O que causou a maior perda de tempo?','Nas mesmas condições, o que você mudaria uma única vez?'],
+    fuelQ:'O consumo e a decisão de pit corresponderam ao plano? O que foi diferente?',
+    save:'Salvar',restart:'Revisar respostas',discard:'Não salvar',cancel:'Encerrar revisão',start:'Revisar esta sessão',
+    preview:'Pronto para salvar',ready:'Vinculei suas respostas aos dados medidos. Revise e escolha se deseja salvar.',
+    saved:'✅ Salvo na memória da sessão para a próxima vez.',failed:'⚠️ Não foi possível salvar a memória da sessão.',
+    missing:'⚠️ Não foi salvo porque piloto, pista ou carro não puderam ser confirmados.',
+    wait:'⏳ Responda depois que a pergunta terminar de tocar.'
+  }
+};
+function evidenceCopy(){ return EVIDENCE_COPY[evidenceLanguage()]||EVIDENCE_COPY.en; }
 function evidenceLines(data){
+  data=sanitizeSessionEvidence(data);
+  const c=evidenceCopy();
   const lines=[];
   const kind=String(data.event_type||lastSessionType||'Session');
   lines.push(`${kind} · ${data.track||lastTrack||'Track'} · ${data.car_model||lastCarModel||data.car_class||lastCarClass||'Car'}`);
-  if(data.finish_pos) lines.push(`Class P${data.finish_pos}`);
-  if(data.total_laps) lines.push(`${data.total_laps} laps`);
-  if(data.best_lap) lines.push(`Best ${fmtLap(data.best_lap)}`);
-  if(data.avg_lap) lines.push(`Average ${fmtLap(data.avg_lap)}`);
-  if(data.avg_fuel_per_lap!=null) lines.push(`Fuel ${data.avg_fuel_per_lap} L/lap`);
-  if(data.incidents!=null) lines.push(`Incidents ${data.incidents}`);
+  if(data.finish_pos) lines.push(`${c.classPos}${data.finish_pos}`);
+  if(data.total_laps) lines.push(`${data.total_laps} ${c.laps}`);
+  if(data.best_lap) lines.push(`${c.best} ${fmtLap(data.best_lap)}`);
+  if(data.avg_lap) lines.push(`${c.average} ${fmtLap(data.avg_lap)}`);
+  if(data.avg_fuel_per_lap!=null) lines.push(`${c.fuel} ${data.avg_fuel_per_lap} L/lap`);
+  if(data.incidents!=null) lines.push(`${c.incidents} ${data.incidents}`);
   return lines;
 }
 function buildEvidenceQuestions(data){
+  const c=evidenceCopy();
   const st=String(data.event_type||lastSessionType||'').toLowerCase();
   const practice=st.includes('practice');
   const qualify=st.includes('qualif');
-  const qs = practice ? [
-    '今日いちばん再現できた、良い感触はどこ？',
-    '最大の問題は車、タイヤ、交通、それとも自分の操作のどれ？',
-    '次の走行で一つだけ変えるなら何にする？'
-  ] : qualify ? [
-    'アタックで一番うまく決まった部分はどこ？',
-    '一番タイムを失った原因は何だった？',
-    '次の予選で一つだけ変えるなら何にする？'
-  ] : [
-    '今日いちばん良かった判断や走りはどこ？',
-    '最大のタイムロスは何が原因だった？',
-    '同じ条件でもう一度走るなら、一つだけ何を変える？'
-  ];
-  if(data.avg_fuel_per_lap!=null) qs.push('燃料とピット判断は想定どおりだった？違った点があれば教えて。');
+  const qs=(practice?c.practice:qualify?c.qualify:c.race).slice();
+  if(data.avg_fuel_per_lap!=null) qs.push(c.fuelQ);
   return qs;
 }
 function beginEvidenceDebrief(data){
   const panel=document.getElementById('debrief-guide');
   if(!panel) return;
-  const safeData=data||buildFallbackSessionSummary();
+  const c=evidenceCopy();
+  const safeData=sanitizeSessionEvidence(data||buildFallbackSessionSummary());
   evidenceDebrief={active:true,index:0,data:safeData,questions:buildEvidenceQuestions(safeData),answers:[],acceptAfter:0};
   panel.style.display='block';
-  document.getElementById('debrief-guide-title').textContent='📋 Session Evidence';
+  document.getElementById('debrief-guide-title').textContent=c.title;
   document.getElementById('debrief-guide-evidence').textContent=evidenceLines(safeData).join(' · ');
+  document.getElementById('debrief-guide-save').textContent=c.save;
+  document.getElementById('debrief-guide-restart').textContent=c.restart;
+  document.getElementById('debrief-guide-discard').textContent=c.discard;
+  document.getElementById('debrief-guide-cancel').textContent=c.cancel;
   document.getElementById('debrief-guide-actions').style.display='none';
   askEvidenceQuestion();
 }
 function reconcileEvidenceSummary(data){
   // 8秒を越えて届いた完全summaryも、表示・保存対象の factual evidence へ反映する。
+  data=sanitizeSessionEvidence(data);
   autoDebriefData=data;
   if(!evidenceDebrief || !data) return;
   evidenceDebrief.data=data;
@@ -3099,9 +3176,10 @@ function askEvidenceQuestion(){
     dedupeKey:`debrief_question_${evidenceDebrief.index}`});
 }
 function recordEvidenceAnswer(text){
+  const c=evidenceCopy();
   const questionPending=speakQueue.some(q=>q && q.kind==='debrief_question');
   if(isSpeaking || questionPending || Date.now() < (evidenceDebrief.acceptAfter||0)){
-    addMsg('sys','⏳ 質問の読み上げが終わってから答えてください。');
+    addMsg('sys',c.wait);
     return;
   }
   evidenceDebrief.answers[evidenceDebrief.index]=text;
@@ -3109,9 +3187,9 @@ function recordEvidenceAnswer(text){
   if(evidenceDebrief.index<evidenceDebrief.questions.length){ askEvidenceQuestion(); return; }
   evidenceDebrief.active=false;
   const preview=evidenceDebrief.questions.map((q,i)=>`・${q}\n  ${evidenceDebrief.answers[i]||'—'}`).join('\n');
-  document.getElementById('debrief-guide-question').textContent='保存予定\n'+preview;
+  document.getElementById('debrief-guide-question').textContent=c.preview+'\n'+preview;
   document.getElementById('debrief-guide-actions').style.display='flex';
-  const msg='回答を実測データと結びつけたよ。内容を確認して、保存するか選んでね。';
+  const msg=c.ready;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg);
 }
 function restartEvidenceDebrief(){ if(evidenceDebrief) beginEvidenceDebrief(evidenceDebrief.data); }
@@ -3133,11 +3211,12 @@ function loadEvidenceRecords(){
 }
 function confirmEvidenceMemory(){
   if(!evidenceDebrief) return;
+  const c=evidenceCopy();
   const memoryTrack=evidenceDebrief.data.track||lastTrack||'';
   const memoryCar=evidenceDebrief.data.car_model||lastCarModel
     ||evidenceDebrief.data.car_class||lastCarClass||'';
   if(!userName || !memoryTrack || !memoryCar){
-    addMsg('sys','⚠️ ドライバー・コース・車両を確認できないため保存しませんでした。');
+    addMsg('sys',c.missing);
     return;
   }
   try{
@@ -3147,7 +3226,7 @@ function confirmEvidenceMemory(){
       scope:{session_type:evidenceDebrief.data.event_type||lastSessionType||'',
         track:memoryTrack,car:memoryCar,
         car_class:evidenceDebrief.data.car_class||lastCarClass||''},
-      evidence:{finish_pos:evidenceDebrief.data.finish_pos||null,total_laps:evidenceDebrief.data.total_laps||0,
+      evidence:{finish_pos:validFinishPosition(evidenceDebrief.data.finish_pos),total_laps:evidenceDebrief.data.total_laps||0,
         best_lap:evidenceDebrief.data.best_lap||null,avg_lap:evidenceDebrief.data.avg_lap||null,
         avg_fuel_per_lap:evidenceDebrief.data.avg_fuel_per_lap??null,incidents:evidenceDebrief.data.incidents??null},
       qa:evidenceDebrief.questions.map((question,i)=>({question,answer:evidenceDebrief.answers[i]||''})),
@@ -3155,21 +3234,25 @@ function confirmEvidenceMemory(){
     });
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
-    addMsg('sys','✅ 次回用のセッション記憶に保存しました。');
-  }catch(e){ addMsg('sys','⚠️ セッション記憶を保存できませんでした。'); }
+    addMsg('sys',c.saved);
+  }catch(e){ addMsg('sys',c.failed); }
   dismissEvidenceDebrief();
 }
 function offerSessionReview(data){
+  data=sanitizeSessionEvidence(data);
   // Practice/Qualifyは次セッション開始を邪魔しない。画面に任意開始の証拠カードだけ出す。
+  if(autoDebriefStarted || (evidenceDebrief && evidenceDebrief.active)) return;
   const panel=document.getElementById('debrief-guide'); if(!panel) return;
   panel.style.display='block';
-  document.getElementById('debrief-guide-title').textContent='📋 Practice / Qualifying evidence ready';
+  const c=evidenceCopy();
+  document.getElementById('debrief-guide-title').textContent=c.optionalTitle;
   document.getElementById('debrief-guide-evidence').textContent=evidenceLines(data).join(' · ');
   const question=document.getElementById('debrief-guide-question');
   question.textContent='';
   const startButton=document.createElement('button');
   startButton.className='back-btn';
-  startButton.textContent='このセッションを振り返る';
+  startButton.textContent=c.start;
+  document.getElementById('debrief-guide-cancel').textContent=c.cancel;
   startButton.onclick=()=>{ switchMode('debrief'); beginEvidenceDebrief(lastSessionSummary); };
   question.appendChild(startButton);
   document.getElementById('debrief-guide-actions').style.display='none';
@@ -3363,9 +3446,10 @@ function findCarTrackMemory(mem,track,carModel,carClass){
   return null;
 }
 function saveSessionSummary(data){
+  data=sanitizeSessionEvidence(data);
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    history.push({date:new Date().toISOString().slice(0,10),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:data.finish_pos||null,irating:lastIrating||null,sr:lastSr||null});
+    history.push({date:new Date().toISOString().slice(0,10),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:validFinishPosition(data.finish_pos),irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -3431,6 +3515,105 @@ function buildCarTrackMemory(){
       :`\n\n━━ MEMORY FOR THIS CAR+TRACK (${car||'car'} @ ${track}) ━━\n`+parts.join(' / ')+'\nUse this proactively (e.g. "you ran 3.8L/lap here last time, let\'s plan the same"). But once live data arrives today, prefer the live numbers.';
   }catch{return '';}
 }
+function fuelCapacityKey(){
+  const c=lastFuelCapacityContext||{};
+  return [
+    String(lastCarClass||'unknown').trim().toLowerCase(),
+    String(lastCarModel||'unknown').trim().toLowerCase(),
+    c.series_id??'series-unknown',c.season_id??'season-unknown',
+    c.race_week??'week-unknown',c.is_fixed_setup===true?'fixed':'open'
+  ].join('|');
+}
+function applySessionFuelAuthority(info){
+  if(!info||typeof info!=='object') return;
+  lastFuelCapacityContext={
+    series_id:info.series_id??null,season_id:info.season_id??null,
+    race_week:info.race_week??null,is_fixed_setup:info.is_fixed_setup===true,
+    physical_tank_capacity_l:Number(info.physical_tank_capacity_l),
+    session_fuel_limit_ratio:Number(info.session_fuel_limit_ratio),
+    effective_fuel_capacity_l:Number(info.effective_fuel_capacity_l)
+  };
+  const effective=Number(info.effective_fuel_capacity_l);
+  if(!(effective>=10&&effective<=300)) return;
+  fuelCapacityConfirmedThisSession=Math.round(effective*1000)/1000;
+  try{
+    const all=JSON.parse(localStorage.getItem('pw_fuel_capacity_bop')||'{}');
+    all[fuelCapacityKey()]={
+      capacity_l:fuelCapacityConfirmedThisSession,
+      physical_tank_capacity_l:Number.isFinite(lastFuelCapacityContext.physical_tank_capacity_l)
+        ?lastFuelCapacityContext.physical_tank_capacity_l:null,
+      session_fuel_limit_ratio:Number.isFinite(lastFuelCapacityContext.session_fuel_limit_ratio)
+        ?lastFuelCapacityContext.session_fuel_limit_ratio:null,
+      car_class:lastCarClass||'',car_model:lastCarModel||'',
+      series_id:lastFuelCapacityContext.series_id,season_id:lastFuelCapacityContext.season_id,
+      race_week:lastFuelCapacityContext.race_week,is_fixed_setup:lastFuelCapacityContext.is_fixed_setup,
+      confirmed_at:new Date().toISOString(),source:'iracing_session_info'
+    };
+    localStorage.setItem('pw_fuel_capacity_bop',JSON.stringify(all));
+  }catch{}
+}
+function loadConfirmedFuelCapacity(){
+  if(Number.isFinite(fuelCapacityConfirmedThisSession)) return fuelCapacityConfirmedThisSession;
+  try{
+    const all=JSON.parse(localStorage.getItem('pw_fuel_capacity_bop')||'{}');
+    const value=Number(all[fuelCapacityKey()]?.capacity_l);
+    return Number.isFinite(value)&&value>0?value:null;
+  }catch{return null;}
+}
+function captureConfirmedFuelCapacity(text){
+  // SessionInfoの実効上限が取れている場合、会話/STT値で権威データを上書きしない。
+  if(Number.isFinite(lastFuelCapacityContext?.effective_fuel_capacity_l)) return;
+  const raw=String(text||'');
+  if(!/(満タン|タンク(?:容量|上限)?|fuel\s*(?:tank|capacity)|full\s*tank)/i.test(raw)) return;
+  const m=raw.match(/(\d{2,4}(?:[.,]\d+)?)\s*(?:l|ℓ|リットル)/i);
+  if(!m) return;
+  const value=Number(m[1].replace(',','.'));
+  // 桁落ち・小数点脱落を推測補正しない。例:「53 L」が「503 L」になった場合、
+  // 50.3 Lへ変換すると誤ったBoP容量を永続化するため、範囲外としてfail-closeする。
+  if(!(value>=10&&value<=200)) return;
+  fuelCapacityConfirmedThisSession=Math.round(value*10)/10;
+  try{
+    const all=JSON.parse(localStorage.getItem('pw_fuel_capacity_bop')||'{}');
+    all[fuelCapacityKey()]={
+      capacity_l:fuelCapacityConfirmedThisSession,
+      car_class:lastCarClass||'',car_model:lastCarModel||'',
+      confirmed_at:new Date().toISOString(),source:'driver_explicit'
+    };
+    localStorage.setItem('pw_fuel_capacity_bop',JSON.stringify(all));
+  }catch{}
+}
+function buildFuelAuthorityNote(isJ){
+  const live=lastTelemetry||{};
+  const fs=(live.fuel_strategy&&typeof live.fuel_strategy==='object')?live.fuel_strategy:{};
+  const pairs=[
+    ['current_fuel_l',Number(live.fuel),v=>v>=0],
+    ['measured_avg_l_per_lap',Number(fs.avg_fuel_per_lap),v=>v>0],
+    ['laps_of_fuel_left',Number(fs.laps_of_fuel_left),v=>v>=0],
+    ['authoritative_laps_to_finish',Number(fs.estimated_crossings_to_finish),v=>v>=0],
+    ['required_fuel_to_finish_l',Number(fs.required_fuel_l),v=>v>=0],
+    ['fuel_margin_l',Number(fs.margin_l),()=>true],
+    ['physical_tank_capacity_l',Number(lastFuelCapacityContext?.physical_tank_capacity_l),v=>v>0],
+    ['session_fuel_limit_ratio',Number(lastFuelCapacityContext?.session_fuel_limit_ratio),v=>v>0&&v<=1],
+    ['confirmed_bop_tank_capacity_l',Number(loadConfirmedFuelCapacity()),v=>v>0]
+  ];
+  const facts=pairs.filter(([,v,ok])=>Number.isFinite(v)&&ok(v)).map(([k,v])=>`${k}=${v}`);
+  const body=facts.length?facts.join(' / '):'no_authoritative_fuel_solution';
+  const sharedSafetyJP='\n全キャラクター共通安全契約：安全問題や車両異常ではタイム回復やプッシュを促さず、まず状態確認と安全な継続可否を尋ねる。見えていない事故やスピンを「把握していた」と言わない。';
+  const sharedSafetyEN='\nShared safety contract for every engineer: for safety or vehicle trouble, verify condition and whether continuing is safe before discussing pace recovery. Never claim to have observed an incident or spin that telemetry did not establish.';
+  return isJ
+    ? `\n\n━━ 燃料戦略・最優先権威契約 ━━\n${body}\n`
+      +'燃料残量・平均燃費・残り周回・必要給油量は上記の確定値だけを使え。タンク容量はconfirmed_bop_tank_capacity_lがある時だけ使え。'
+      +'現在燃料とタンク容量を混同するな。authoritative_laps_to_finishが無い時は残り周回、完走可否、ピット周回を推測せず、「残り周回の権威データ待ち」と短く答えろ。'
+      +'一般的なGT3容量、過去会話、質問に含まれる周回数で確定値を上書きするな。計算器との矛盾は禁止。'
+      +sharedSafetyJP
+      +(sel==='LunaJP'
+        ? '\nLunaは女性の自然な標準語を徹底する。「正解だ」「無理はするな」「狙おうぜ」「出すぞ」「申し訳ない」「必須だ」を使わない。'
+        : '')
+    : `\n\n━━ AUTHORITATIVE FUEL CONTRACT ━━\n${body}\n`
+      +'Use only the confirmed values above for fuel, consumption, laps to finish and pit calculations. Never infer tank capacity or race distance. '
+      +'If authoritative_laps_to_finish is absent, say the authoritative finish distance is not available. Never replace calculator facts with generic GT3 assumptions or conversational guesses.'
+      +sharedSafetyEN;
+}
 function buildRaceHistoryContext(){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
@@ -3467,18 +3650,27 @@ function buildSessionEvidenceNote(){
       return rt===track && rc===car;
     }).slice(-3);
     if(!relevant.length) return '';
+    const lang=evidenceLanguage();
+    const promptCopy={
+      en:{heading:'Confirmed evidence from matching sessions',confirmed:'Driver-confirmed',
+        rule:'This is reference evidence from the past 90 days, not proof that it is still true. Keep measured facts separate from driver answers. Do not force an optimistic or pessimistic conclusion. Confirm current conditions, then use at most one relevant point for a question, strategy, or handover.'},
+      ja:{heading:'同条件の本人確認済みセッション証拠',confirmed:'本人確認済み',
+        rule:'これは過去90日以内の参考証拠であり、現在も正しいという結論ではない。実測値と本人回答を区別し、楽観・悲観の結論を強要せず、現在条件を確認してから次の質問・作戦・申し送りへ一つだけ活かせ。'},
+      de:{heading:'Bestätigte Nachweise aus vergleichbaren Sessions',confirmed:'Vom Fahrer bestätigt',
+        rule:'Dies sind Referenzdaten aus den letzten 90 Tagen, kein Beweis für die aktuelle Situation. Messwerte und Fahreraussagen getrennt halten. Keine optimistische oder pessimistische Schlussfolgerung erzwingen. Aktuelle Bedingungen prüfen und höchstens einen relevanten Punkt für Frage, Strategie oder Übergabe nutzen.'},
+      pt:{heading:'Evidências confirmadas de sessões equivalentes',confirmed:'Confirmado pelo piloto',
+        rule:'Estas são evidências de referência dos últimos 90 dias, não prova de que ainda sejam verdadeiras. Separe fatos medidos das respostas do piloto. Não force uma conclusão otimista ou pessimista. Confirme as condições atuais e use no máximo um ponto relevante para pergunta, estratégia ou passagem.'}
+    }[lang]||null;
     const rows=relevant.map(r=>{
       const facts=[
         r.scope?.session_type||'Session',r.scope?.track||'',
-        r.evidence?.finish_pos?`P${r.evidence.finish_pos}`:'',
+        validFinishPosition(r.evidence?.finish_pos)?`P${validFinishPosition(r.evidence.finish_pos)}`:'',
         r.evidence?.avg_fuel_per_lap!=null?`${r.evidence.avg_fuel_per_lap}L/周`:''
       ].filter(Boolean).join(' / ');
       const qa=(r.qa||[]).map(x=>`${x.question} → ${x.answer}`).join(' | ');
-      return `${facts}\n本人確認済み: ${qa}`;
+      return `${facts}\n${promptCopy.confirmed}: ${qa}`;
     });
-    return '\n\n━━ 同条件の本人確認済みセッション証拠 ━━\n'+rows.join('\n')
-      +'\nこれは過去90日以内の参考証拠であり、現在も正しいという結論ではない。'
-      +'実測値と本人回答を区別し、楽観・悲観の結論を強要せず、現在条件を確認してから次の質問・作戦・申し送りへ一つだけ活かせ。';
+    return `\n\n━━ ${promptCopy.heading} ━━\n`+rows.join('\n')+'\n'+promptCopy.rule;
   }catch{return '';}
 }
 // 今日と同じコース（可能なら同じ車）の直近結果をブリーフィング用に1件だけ選ぶ。

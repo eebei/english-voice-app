@@ -131,6 +131,12 @@ if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケー
 echo "── セッション証拠デブリーフ・本人確認Memory（2026-07-28）"
 if node tests-evidence-debrief.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js; fail=1; fi
 
+echo "── 全7キャラクター 判断・記憶・安全契約共通化（2026-07-29）"
+if node tests-character-capability-parity.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-character-capability-parity.js; fail=1; fi
+
+echo "── Fuel authority・BoP容量・結果/debrief fail-close（2026-07-29）"
+if node tests-fuel-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-fuel-authority.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

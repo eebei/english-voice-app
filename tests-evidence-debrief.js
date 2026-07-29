@@ -16,7 +16,8 @@ function check(label, ok){
 check('FINISHEDからsummary欠落時も自動デブリーフへ到達',
   renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(lastSessionSummary||buildFallbackSessionSummary())"));
 check('FINISHED後着summaryを完全データへ差し替える',
-  renderer.includes('if(data) autoDebriefData=data;')
+  renderer.includes('autoDebriefData=data;')
+  && renderer.includes('data=sanitizeSessionEvidence(data);')
   && renderer.includes('const reviewData=autoDebriefData||data||buildFallbackSessionSummary();')
   && renderer.includes('function reconcileEvidenceSummary(data)'));
 check('自動デブリーフは8秒後にdebriefへ切替',
@@ -47,7 +48,7 @@ if(recordFn){
     evidenceDebrief:{active:true,index:0,acceptAfter:0,answers:[],questions:['Q1','Q2','Q3']},
     speakQueue:[{kind:'debrief_question'}],isSpeaking:false,Date,
     addMsg:()=>{},askEvidenceQuestion:()=>{},document:{getElementById:()=>({})},
-    pushMsg:()=>{},speak:()=>{}
+    pushMsg:()=>{},speak:()=>{},evidenceCopy:()=>({wait:'wait'})
   };
   vm.runInNewContext(recordFn[0],rapidContext);
   rapidContext.recordEvidenceAnswer('連打回答');
@@ -66,6 +67,7 @@ check('破損localStorageは対象keyだけ自動復旧',
   && renderer.includes('localStorage.removeItem(key)'));
 check('保存済み証拠を次回同条件のプロンプトへ配線',
   renderer.includes('buildSessionEvidenceNote()')
+  && renderer.includes('Confirmed evidence from matching sessions')
   && renderer.includes('同条件の本人確認済みセッション証拠'));
 check('ドライバー・コース・車両が未確定ならmemory参照をfail-closed',
   renderer.includes("if(!userName || !track || !car) return '';")
@@ -73,7 +75,8 @@ check('ドライバー・コース・車両が未確定ならmemory参照をfail
   && renderer.includes('return rt===track && rc===car;'));
 check('記憶は90日で失効し現在の結論として扱わない',
   renderer.includes('const maxAgeMs=90*24*60*60*1000;')
-  && renderer.includes('現在も正しいという結論ではない'));
+  && renderer.includes('現在も正しいという結論ではない')
+  && renderer.includes('not proof that it is still true'));
 check('停止・グリッドでは発話安全窓を無効化',
   bridge.includes('_speech_speed >= 5.0')
   && bridge.includes('_set_speak_gate(speak_window_ok, _speech_gate_active)'));

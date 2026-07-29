@@ -1480,6 +1480,47 @@ def parse_session_info(yaml_str):
                 result['track_display'] = line.split(':', 1)[1].strip()
             elif line.startswith('EventType:'):
                 result['event_type'] = line.split(':', 1)[1].strip()
+            elif line.startswith('SeriesID:'):
+                try:
+                    result['series_id'] = int(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith('SeasonID:'):
+                try:
+                    result['season_id'] = int(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith('RaceWeek:'):
+                try:
+                    result['race_week'] = int(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith('Official:'):
+                result['official'] = line.split(':', 1)[1].strip().lower() in ('1', 'true')
+            elif line.startswith('IsFixedSetup:'):
+                result['is_fixed_setup'] = line.split(':', 1)[1].strip().lower() in ('1', 'true')
+            elif line.startswith('DriverCarFuelMaxLtr:'):
+                try:
+                    result['driver_car_fuel_max_ltr'] = float(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith('DriverCarMaxFuelPct:'):
+                try:
+                    result['driver_car_max_fuel_pct'] = float(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+
+        # iRacingの車両物理タンク容量と、シリーズ/Fixed setupで許可された割合を分離する。
+        # DriverCarMaxFuelPct は通常0..1だが、将来/SDK差で0..100表記でも安全に扱う。
+        _physical_l = result.get('driver_car_fuel_max_ltr')
+        _allowed_pct = result.get('driver_car_max_fuel_pct')
+        if isinstance(_physical_l, (int, float)) and _physical_l > 0:
+            result['physical_tank_capacity_l'] = round(float(_physical_l), 3)
+            if isinstance(_allowed_pct, (int, float)) and _allowed_pct > 0:
+                _ratio = float(_allowed_pct) / 100.0 if _allowed_pct > 1.0 else float(_allowed_pct)
+                if 0 < _ratio <= 1.0:
+                    result['session_fuel_limit_ratio'] = round(_ratio, 6)
+                    result['effective_fuel_capacity_l'] = round(float(_physical_l) * _ratio, 3)
 
         # Parse Sessions list → {SessionNum: SessionType}
         #   EventTypeは"週末イベント全体の種別"(Race週末なら予選中でも Race)なので当てにならない。
@@ -1949,7 +1990,14 @@ def poll_iracing():
                             + " car:" + str(info.get('player_car_model'))
                             + " currentSession:" + str(info.get('current_session_type'))
                             + " track:" + str(info.get('track')) + " iR:" + str(info.get('player_irating'))
-                            + " SR:" + str(info.get('safety_rating')))
+                            + " SR:" + str(info.get('safety_rating'))
+                            + " fuelPhysicalL:" + str(info.get('physical_tank_capacity_l'))
+                            + " fuelLimitRatio:" + str(info.get('session_fuel_limit_ratio'))
+                            + " fuelEffectiveL:" + str(info.get('effective_fuel_capacity_l'))
+                            + " series:" + str(info.get('series_id'))
+                            + " season:" + str(info.get('season_id'))
+                            + " week:" + str(info.get('race_week'))
+                            + " fixed:" + str(info.get('is_fixed_setup')))
                         # ── 診断ログ：ゼッケンとSRの不一致調査（2026-07-14 Yuji IMSA実走）──────────
                         # #28のログSR2.23 vs 結果画面SR1.51の食い違いを次回切り分けるため、iRacingの
                         # DriverInfoが「セッション開始時点で」各車に何を報告しているかをそのまま吐く。
