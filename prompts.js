@@ -738,7 +738,7 @@ function buildSystem(p) {
     // LunaJPの各モードに残る古い「最大限フランク」「敬語禁止」例より後で適用する
     // 口調契約。共通ルール中の「お前」等にも引っ張られないよう最優先で上書きする。
     if (character === 'LunaJP') {
-      modeNote += '\n\n━━ Luna話法契約（最優先）━━\n落ち着いた女性エンジニアの標準語で話す。柔らかな口語と自然な「です・ます」は使用可。「あんた」「お前」「奴」「〜しようや」「〜やろうや」「〜かもしれん」「申し訳ねぇ」、強い男性的な断定「〜だ。」の連発は絶対禁止。短文でも「位置OK。」「さっきのP4ね。」のように、中立または柔らかな女性標準語にする。呼びかけは名前か「あなた」、不要なら省略する。親しさより信頼感を優先する。';
+      modeNote += '\n\n━━ Luna話法契約（最優先）━━\n落ち着いた女性エンジニアの標準語で話す。柔らかな口語と自然な「です・ます」は使用可。「あんた」「お前」「奴」「〜しようや」「〜やろうや」「〜かもしれん」「申し訳ねぇ」「申し訳ない」、「その通りだ」「P12スタートだ」「必要だ」「あ、待てよ」のような強い男性的断定は絶対禁止。「その通りね」「P12スタートね」「必要ね」「ちょっと待って」のように直す。短文でも「位置OK。」「さっきのP4ね。」のように、中立または柔らかな女性標準語にする。呼びかけは名前か「あなた」、不要なら省略する。親しさより信頼感を優先する。';
     }
     if (mode === 'strategy') {
       modeNote += isJ
@@ -896,9 +896,16 @@ function buildSystem(p) {
       }
     }
     if (live.damage_s != null && live.damage_s > 0) {
+      const totalRepairSeconds = Math.round(Number(live.damage_s));
+      const repairJP = totalRepairSeconds >= 60
+        ? Math.floor(totalRepairSeconds / 60) + '分' + (totalRepairSeconds % 60) + '秒'
+        : totalRepairSeconds + '秒';
+      const repairEN = totalRepairSeconds >= 60
+        ? Math.floor(totalRepairSeconds / 60) + 'm ' + (totalRepairSeconds % 60) + 's'
+        : totalRepairSeconds + 's';
       liveNote += isJ
-        ? '\n\n【損傷状況】現在マシンに損傷あり＝ピットでの修理に約' + live.damage_s + '秒必要な状態。ドライバーに損傷やボディの状態を聞かれたら、この修理所要時間を損傷の目安として正直に伝えろ（例「損傷あり、修理に' + live.damage_s + '秒。走行に影響が出てるはずだ、感触どう？」）。iRacingは個別パーツ名までは出さないので、パーツ名を捏造するな。'
-        : '\n\n[DAMAGE] The car currently has damage — about ' + live.damage_s + 's of pit repair needed. If the driver asks about damage or bodywork, report this repair time honestly as the damage gauge (e.g. "you have damage, ~' + live.damage_s + 's of repairs — it should be affecting the car, how does it feel?"). iRacing does not expose individual part names, so never invent a part name.';
+        ? '\n\n【損傷状況】現在マシンに損傷あり＝ピットでの修理に約' + repairJP + '必要な状態。60秒以上は必ず分・秒で答え、生の秒数を読まない。ドライバーに聞かれたら正直に伝え、まず走りの感触を尋ねろ。iRacingは個別パーツ名までは出さないので、パーツ名を捏造するな。'
+        : '\n\n[DAMAGE] The car currently has damage — about ' + repairEN + ' of pit repair needed. Always convert 60 seconds or more to minutes and seconds. Report it honestly and never invent a damaged part.';
     }
     // 気象データ（八木さん実走で「路面温度データ来てない」判明→追加。聞かれた時のみ答える・数値記憶は薄い）
     if (live.weather && (live.weather.track_temp_c != null || live.weather.air_temp_c != null)) {

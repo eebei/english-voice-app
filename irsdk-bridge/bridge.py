@@ -1522,21 +1522,34 @@ def parse_session_info(yaml_str):
                     result['session_fuel_limit_ratio'] = round(_ratio, 6)
                     result['effective_fuel_capacity_l'] = round(float(_physical_l) * _ratio, 3)
 
-        # Parse Sessions list → {SessionNum: SessionType}
+        # Parse Sessions list. EventType is the weekend type, not the active session.
         #   EventTypeは"週末イベント全体の種別"(Race週末なら予選中でも Race)なので当てにならない。
         #   現在走ってるセッションの種別は SessionNum で Sessions リストを引く必要がある。
         sessions = {}
+        session_details = {}
         cur_snum = None
         for line in yaml_str.split('\n'):
             s = line.strip()
             if s.startswith('- SessionNum:'):
                 try:
                     cur_snum = int(s.split(':', 1)[1].strip())
+                    session_details.setdefault(cur_snum, {})
                 except:
                     cur_snum = None
             elif s.startswith('SessionType:') and cur_snum is not None:
                 sessions[cur_snum] = s.split(':', 1)[1].strip()
+                session_details[cur_snum]['session_type'] = sessions[cur_snum]
+            elif s.startswith('SessionLaps:') and cur_snum is not None:
+                raw = s.split(':', 1)[1].strip().strip('"').strip("'")
+                try:
+                    session_details[cur_snum]['session_laps'] = int(raw)
+                except Exception:
+                    if raw:
+                        session_details[cur_snum]['session_laps_text'] = raw
+            elif s.startswith('SessionTime:') and cur_snum is not None:
+                session_details[cur_snum]['session_time'] = s.split(':', 1)[1].strip().strip('"').strip("'")
         result['sessions'] = sessions
+        result['session_details'] = session_details
 
         # Parse drivers for iRating and SOF
         drivers = []
@@ -1589,6 +1602,8 @@ def parse_session_info(yaml_str):
                         current_driver['spectator'] = int(stripped.split(':')[1].strip())
                     except:
                         pass
+                elif stripped.startswith('CarIsPaceCar:'):
+                    current_driver['pace_car'] = stripped.split(':', 1)[1].strip().lower() in ('1', 'true')
                 elif stripped.startswith('CarClassID:'):
                     try:
                         current_driver['class_id'] = int(stripped.split(':')[1].strip())
@@ -1627,12 +1642,27 @@ def parse_session_info(yaml_str):
                         pass
                     break
 
-        # Calculate SOF (exclude spectators)
-        real_drivers = [d for d in drivers if d.get('spectator', 0) == 0 and d.get('irating', 0) > 0]
-        if real_drivers:
-            sof = int(sum(d['irating'] for d in real_drivers) / len(real_drivers))
+        # Entry list authority and SOF have different membership rules:
+        # AI cars can have no iRating but still occupy a real grid slot. Count every
+        # non-spectator, non-pace-car entry; use rated humans only for SOF.
+        entry_drivers = [
+            d for d in drivers
+            if d.get('spectator', 0) == 0
+            and not d.get('pace_car', False)
+            and str(d.get('name', '')).strip().lower() not in ('pace car', 'safety car')
+        ]
+        rated_drivers = [d for d in entry_drivers if d.get('irating', 0) > 0]
+        if entry_drivers:
+            result['num_drivers'] = len(entry_drivers)
+            class_counts = {}
+            for d in entry_drivers:
+                class_name = str(d.get('class_name') or '').strip()
+                if class_name:
+                    class_counts[class_name] = class_counts.get(class_name, 0) + 1
+            result['class_entry_counts'] = class_counts
+        if rated_drivers:
+            sof = int(sum(d['irating'] for d in rated_drivers) / len(rated_drivers))
             result['sof'] = sof
-            result['num_drivers'] = len(real_drivers)
 
         # Store drivers and player_car_idx for class map
         result['drivers'] = drivers
@@ -1652,6 +1682,88 @@ def parse_session_info(yaml_str):
             sr_value = round(lic_sublevel / 100, 2)
             result['safety_rating'] = lic_name + ' ' + str(sr_value)
             result['safety_rating_raw'] = sr_value
+            result['player_class_entry_count'] = result.get('class_entry_counts', {}).get(
+                player.get('class_name', ''), 0)
+
+        # QualifyResultsInfo is authoritative only when the player's row contains a
+        # positive lap time. Never reinterpret live Position or iRating as a grid result.
+        qualify_results = []
+        in_qualify_results = False
+        current_result = {}
+        for line in yaml_str.split('\n'):
+            s = line.strip()
+            if s.startswith('QualifyResultsInfo:'):
+                in_qualify_results = True
+                continue
+            if in_qualify_results:
+                if line and s and not line[0].isspace() and ':' in s:
+                    if current_result:
+                        qualify_results.append(current_result)
+                        current_result = {}
+                    break
+                if s.startswith('- Position:'):
+                    if current_result:
+                        qualify_results.append(current_result)
+                    current_result = {}
+                    try:
+                        current_result['position_zero'] = int(s.split(':', 1)[1].strip())
+                    except Exception:
+                        pass
+                elif s.startswith('ClassPosition:'):
+                    try:
+                        current_result['class_position_zero'] = int(s.split(':', 1)[1].strip())
+                    except Exception:
+                        pass
+                elif s.startswith('CarIdx:'):
+                    try:
+                        current_result['car_idx'] = int(s.split(':', 1)[1].strip())
+                    except Exception:
+                        pass
+                elif s.startswith('FastestTime:'):
+                    try:
+                        current_result['fastest_time'] = float(s.split(':', 1)[1].strip())
+                    except Exception:
+                        pass
+        if in_qualify_results and current_result:
+            qualify_results.append(current_result)
+        player_qual = next((q for q in qualify_results if q.get('car_idx') == player_car_idx), None)
+        if player_qual and player_qual.get('fastest_time', -1) > 0:
+            # Do not assume whether SDK Position fields are zero- or one-based.
+            # A zero row proves zero-based. Without one, position stays unavailable
+            # until a real dump establishes a stronger contract.
+            overall_zero_based = any(q.get('position_zero') == 0 for q in qualify_results)
+            player_class = player.get('class_name', '') if player else ''
+            class_zero_based = any(
+                q.get('class_position_zero') == 0
+                and next((d for d in drivers if d.get('car_idx') == q.get('car_idx')), {}).get('class_name', '') == player_class
+                for q in qualify_results)
+            result['qualifying_result'] = {
+                'status': 'valid',
+                'overall_position': player_qual.get('position_zero', -1) + 1
+                    if overall_zero_based and player_qual.get('position_zero', -1) >= 0 else None,
+                'class_position': player_qual.get('class_position_zero', -1) + 1
+                    if class_zero_based and player_qual.get('class_position_zero', -1) >= 0 else None,
+                'fastest_time': player_qual['fastest_time'],
+                'source': 'QualifyResultsInfo',
+                'position_base_verified': overall_zero_based,
+                'class_position_base_verified': class_zero_based
+            }
+        elif in_qualify_results:
+            result['qualifying_result'] = {
+                'status': 'no_valid_time',
+                'overall_position': None,
+                'class_position': None,
+                'fastest_time': None,
+                'source': 'QualifyResultsInfo'
+            }
+        else:
+            result['qualifying_result'] = {
+                'status': 'unavailable',
+                'overall_position': None,
+                'class_position': None,
+                'fastest_time': None,
+                'source': None
+            }
 
         # セクター構成（SplitTimeInfo > Sectors > SectorStartPct）
         sectors = []

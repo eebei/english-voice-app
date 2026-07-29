@@ -992,6 +992,7 @@ let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
+let lastWeekendAuthority = null;  // entry list / qualifying format and result authority
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, lastMemorySignature = '', memorySaveInFlight = null, memorySaveReceipt = '';
 let sessionBestLapStr = '';
@@ -1668,6 +1669,12 @@ async function sendMsg(inputSource){
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
   if(evidenceDebrief && evidenceDebrief.active){
+    // Guided review stays active, but a question to the engineer must not be consumed
+    // as the next evidence answer. Let the normal debrief LLM answer it.
+    if(isDebriefAnalysisQuestion(text)){
+      await callAPI(inputSource==='ptt'?'ptt':'typed');
+      return;
+    }
     usageCount(inputSource==='ptt'?'ptt':'typed');
     recordEvidenceAnswer(text);
     return;
@@ -1705,7 +1712,7 @@ async function callAPI(inputSource, memoryStatus=''){
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
   const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildFuelAuthorityNote(_isJP_pre)
-    + buildSessionEvidenceNote()
+    + buildWeekendAuthorityNote(_isJP_pre) + buildSessionEvidenceNote()
     + buildContractNote(_isJP_pre) + buildMemoryStatusNote(_isJP_pre, memoryStatus);
   const raceHistory = buildRaceHistoryContext();
   try{
@@ -1802,10 +1809,10 @@ async function callAPI(inputSource, memoryStatus=''){
     flushSentences(true);
     const reply = full.trim();
     if(!reply) throw new Error('empty');
-    const display = reply.replace(/\[JA:[\s\S]*\]$/,'').trim();
+    const display = normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
-    pushMsg({role:'assistant',content:reply});
+    pushMsg({role:'assistant',content:display});
     if(selMode==='debrief' && !memorySavedThisSession && sessionMsgCount>=4){
       saveMemory({reason:'debrief_checkpoint'});
     } else if(sessionMsgCount>0&&sessionMsgCount%15===0){
@@ -1870,11 +1877,16 @@ function normalizeLunaSpeech(text){
     .replace(/お前/g, name)
     .replace(/あんた/g, 'あなた')
     .replace(/申し訳ね[ぇえ]/g, 'ごめんね')
+    .replace(/申し訳ない/g, 'ごめんね')
+    .replace(/その通りだ[。！]?/g, 'その通りね。')
+    .replace(/あ、?待てよ[。！]?/g, 'ちょっと待って。')
     .replace(/しようや/g, 'しよう')
     .replace(/やろうや/g, 'やろう')
     .replace(/かもしれん/g, 'かもしれない')
     .replace(/だった奴/g, 'だった車')
     .replace(/こいつ|そいつ|あいつ/g, 'その車')
+    .replace(/(P\d+スタート)だ[。！]?/gi, '$1ね。')
+    .replace(/(\d+(?:分\d+秒|秒)必要)だ[。！]?/g, '$1ね。')
     .replace(/だ。/g, '。')
     .replace(/だ$/g, 'ね');
 }
@@ -2421,6 +2433,14 @@ function connectBridge(){
           if(a&&a.track&&a.track!=='unknown') lastTrack=a.track;
           if(data.data.player_irating) lastIrating=data.data.player_irating;
           if(data.data.safety_rating) lastSr=data.data.safety_rating;
+          lastWeekendAuthority={
+            num_drivers:Number(data.data.num_drivers)||0,
+            class_entry_counts:data.data.class_entry_counts||{},
+            player_class:data.data.player_car_class||'',
+            player_class_entry_count:Number(data.data.player_class_entry_count)||0,
+            session_details:data.data.session_details||{},
+            qualifying_result:data.data.qualifying_result||null
+          };
           applySessionFuelAuthority(data.data);
         }
         injectBriefing(data.data);
@@ -2618,7 +2638,7 @@ function oishiRadio(d){
     case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
     case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意。`;
     case 'damage_report':
-      return d.mandatory ? `義務修理、約${Math.round(d.repair_mand)}秒。次ピット。`
+      return d.mandatory ? `義務修理、約${fmtDuration(d.repair_mand,true)}。次ピット。`
                           : `挙動に異常なければ継続。`;
     case 'catchup_ahead': {
       const id = sameClassIdJP(d) + '、';
@@ -2921,6 +2941,10 @@ function injectBriefing(data){
   if(data.sof)   parts.push(isJP?`SOF ${data.sof}`:`SOF ${data.sof}`);
   if(data.player_irating) parts.push(`iRating ${data.player_irating}`);
   if(data.safety_rating)  parts.push(`SR ${data.safety_rating}`);
+  if(data.num_drivers) parts.push(isJP?`全${data.num_drivers}台`:`${data.num_drivers} entries`);
+  if(data.player_class_entry_count) parts.push(isJP
+    ? `${data.player_car_class||'同クラス'} ${data.player_class_entry_count}台`
+    : `${data.player_car_class||'class'} ${data.player_class_entry_count} entries`);
   const summary = parts.join(' · ');
   if(!summary) return;
   const msg = isJP?`セッション情報受信：${summary}`:`Session briefing: ${summary}`;
@@ -2949,7 +2973,10 @@ ${previousRaceBriefing}
       liveData:lastTelemetry, sessionType:lastSessionType,
       sessionAuthority:lastSessionAuthority, driverState, driverActivity,
       carClass:lastCarClass, carModel:lastCarModel,
-      profileNote: buildProfileNote(profile)+buildCarTrackMemory()+buildContractNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'),
+      profileNote: buildProfileNote(profile)+buildCarTrackMemory()
+        +buildFuelAuthorityNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')
+        +buildWeekendAuthorityNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')
+        +buildContractNote(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'),
       raceHistory: buildRaceHistoryContext(),   // カルテ（過去セッション・全キャラ共有）を能動ブリーフィングにも渡す
       max_tokens: 150,
       usageSessionId, briefingKickoff: true
@@ -2982,6 +3009,13 @@ function fmtLap(v){
   const m = Math.floor(n/60);
   const s = n - m*60;
   return m>0 ? (m + ':' + s.toFixed(3).padStart(6,'0')) : s.toFixed(3);
+}
+function fmtDuration(v, isJP=true){
+  const n=Number(v);
+  if(!Number.isFinite(n)||n<=0) return '';
+  const total=Math.round(n), minutes=Math.floor(total/60), seconds=total%60;
+  if(minutes>0) return isJP?`${minutes}分${seconds}秒`:`${minutes}m ${seconds}s`;
+  return isJP?`${seconds}秒`:`${seconds}s`;
 }
 function validFinishPosition(value){
   const n=Number(value);
@@ -3117,6 +3151,10 @@ const EVIDENCE_COPY={
   }
 };
 function evidenceCopy(){ return EVIDENCE_COPY[evidenceLanguage()]||EVIDENCE_COPY.en; }
+function isDebriefAnalysisQuestion(text){
+  const s=String(text||'').trim();
+  return /どう(?:だった|思う|見えた)|分析して|評価して|振り返って|感想(?:は|を)|what do you think|how (?:was|did)|analyse|analyze|evaluate/i.test(s);
+}
 function evidenceLines(data){
   data=sanitizeSessionEvidence(data);
   const c=evidenceCopy();
@@ -3613,6 +3651,25 @@ function buildFuelAuthorityNote(isJ){
       +'Use only the confirmed values above for fuel, consumption, laps to finish and pit calculations. Never infer tank capacity or race distance. '
       +'If authoritative_laps_to_finish is absent, say the authoritative finish distance is not available. Never replace calculator facts with generic GT3 assumptions or conversational guesses.'
       +sharedSafetyEN;
+}
+function buildWeekendAuthorityNote(isJ){
+  const w=lastWeekendAuthority;
+  if(!w) return isJ
+    ? '\n\n━━ レース週末権威 ━━\nSessionInfo未受信。台数・クラス構成・予選順位・グリッドを推測するな。'
+    : '\n\n━━ WEEKEND AUTHORITY ━━\nSessionInfo not received. Never infer entry counts, class composition, qualifying position, or grid.';
+  const classRows=Object.entries(w.class_entry_counts||{}).map(([k,v])=>`${k}=${v}`).join(' / ');
+  const q=w.qualifying_result||{};
+  const qFact=q.status==='valid'
+    ? `qualifying=valid overall_P${q.overall_position||'?'} class_P${q.class_position||'?'} fastest=${fmtLap(q.fastest_time)}`
+    : q.status==='no_valid_time' ? 'qualifying=no_valid_time' : 'qualifying=unavailable';
+  const sessions=Object.entries(w.session_details||{}).map(([n,d])=>{
+    const length=d.session_laps!=null?`${d.session_laps}laps`:(d.session_time||d.session_laps_text||'length_unknown');
+    return `${n}:${d.session_type||'unknown'}:${length}`;
+  }).join(' / ');
+  const facts=`entries=${w.num_drivers||'unknown'} / classes=${classRows||'unknown'} / player_class=${w.player_class||'unknown'} / player_class_entries=${w.player_class_entry_count||'unknown'} / ${qFact} / sessions=${sessions||'unknown'}`;
+  return isJ
+    ? `\n\n━━ レース週末権威 ━━\n${facts}\n上記だけを事実として使え。entriesは総台数、player_class_entriesは同クラス台数。予選がno_valid_timeなら「有効タイムなし」と言え。ライブ順位・iRating・エントリー順から予選順位やグリッドを作るな。グリッドの正式権威値が無ければ「グリッド未確定」と答えろ。`
+    : `\n\n━━ WEEKEND AUTHORITY ━━\n${facts}\nUse only these facts. If qualifying=no_valid_time, report no valid qualifying time. Never derive qualifying or grid position from live position, iRating, or entry order. Without an explicit authoritative grid value, say the grid is not confirmed.`;
 }
 function buildRaceHistoryContext(){
   try{

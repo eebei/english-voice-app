@@ -137,6 +137,9 @@ if node tests-character-capability-parity.js >/dev/null 2>&1; then echo "   ✅ 
 echo "── Fuel authority・BoP容量・結果/debrief fail-close（2026-07-29）"
 if node tests-fuel-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-fuel-authority.js; fail=1; fi
 
+echo "── Weekend authority・予選fail-close・Luna話法・修理時間（2026-07-29）"
+if python3 irsdk-bridge/tests_weekend_authority.py >/dev/null 2>&1 && node tests-weekend-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_weekend_authority.py; node tests-weekend-authority.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
