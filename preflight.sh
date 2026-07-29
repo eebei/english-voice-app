@@ -128,6 +128,9 @@ if python3 irsdk-bridge/tests_phase_ab_integration.py >/dev/null 2>&1; then echo
 echo "── Build 232 実走ハードニング（TTS・話法・ピット・燃料・更新）"
 if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build232-hardening.js; fail=1; fi
 
+echo "── Build 236 Race権威・燃料回答・Luna安全話法（2026-07-29）"
+if node tests-build236-race-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build236-race-authority.js; fail=1; fi
+
 echo "── セッション証拠デブリーフ・本人確認Memory（2026-07-28）"
 if node tests-evidence-debrief.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js; fail=1; fi
 

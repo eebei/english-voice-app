@@ -14,7 +14,7 @@ function check(label, ok){
 }
 
 check('FINISHEDからsummary欠落時も自動デブリーフへ到達',
-  renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(lastSessionSummary||buildFallbackSessionSummary())"));
+  renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(buildFallbackSessionSummary())"));
 check('FINISHED後着summaryを完全データへ差し替える',
   renderer.includes('autoDebriefData=data;')
   && renderer.includes('data=sanitizeSessionEvidence(data);')

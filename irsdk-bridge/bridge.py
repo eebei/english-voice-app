@@ -3272,8 +3272,16 @@ def poll_iracing():
         if driver_state == 'track' and fuel is not None and 0.5 < fuel < 5 \
                 and not _fuel_ok_to_finish \
                 and (prev['fuel'] is None or prev['fuel'] >= 5):
+            _fuel_margin_l = _fs.get('margin_l')
+            _fuel_pit_required = bool(_fs.get('pit_required')) or (
+                isinstance(_fuel_margin_l, (int, float)) and _fuel_margin_l < 0)
             broadcast({'type': 'radio', 'trigger': 'fuel_warning', 'fuel': round(fuel, 1),
-                'message': 'Fuel ' + str(round(fuel, 1)) + '. Save mode now.'})
+                'pit_required': _fuel_pit_required,
+                'margin_l': _fuel_margin_l,
+                'message': (
+                    'Fuel ' + str(round(fuel, 1)) + '. Box this lap.'
+                    if _fuel_pit_required
+                    else 'Fuel ' + str(round(fuel, 1)) + '. Save mode now.')})
 
         # Tyre temps: 自動警告は無効化（読んでる変数がカーカス温度で不正確。較正後に復活予定）
         # データ自体は将来デブリーフで参照可能にする

@@ -1874,6 +1874,10 @@ function normalizeLunaSpeech(text){
   if(sel!=='LunaJP') return text;
   const name = (userName||'あなた').trim() || 'あなた';
   return String(text||'')
+    .replace(/データ受け取った(?=[。！？!?\s]|$)[。！？!?\s]*/g, 'データ来たよ。')
+    .replace(/(?:ピット)?済ん(?=[。！？!?\s]|$)[。！？!?\s]*/g, 'ピットはこれからね。')
+    .replace(/リミッターオフ[。！]?\s*全開でいい[。！]?/g, 'ピット出口。タイヤ冷えてる、慎重に。')
+    .replace(/全開でいい[。！]?/g, 'タイヤ冷えてる、慎重に。')
     .replace(/お前/g, name)
     .replace(/あんた/g, 'あなた')
     .replace(/申し訳ね[ぇえ]/g, 'ごめんね')
@@ -2451,7 +2455,9 @@ function connectBridge(){
       if(data.type==='driver_activity'){
         driverActivity=String(data.state||'UNKNOWN');
         // summary配送が遅延／欠落しても、本人完走という権威状態からデブリーフへ必ず到達する。
-        if(driverActivity==='FINISHED') scheduleAutoDebrief(lastSessionSummary||buildFallbackSessionSummary());
+        // 直前のPractice/Qualify summaryを使うと、Raceを「2周」等と誤報する。
+        // FINISHED時点は現在のRace live値を暫定権威とし、後着する完全summaryで差し替える。
+        if(driverActivity==='FINISHED') scheduleAutoDebrief(buildFallbackSessionSummary());
         return;
       }
       if(data.type==='session_summary'){
@@ -2579,7 +2585,10 @@ function oishiRadio(d){
     }
     case 'position_up':    return [`P${pos}。`,`P${pos}。ナイスパス。`,`順位アップ。P${pos}。`][Math.floor(Math.random()*3)];
     case 'position_down':  return `P${pos}。1つ後退。`;
-    case 'fuel_warning':   return `燃料残り${d.fuel}。セーブ開始。`;
+    case 'fuel_warning':
+      return d.pit_required
+        ? `燃料残り${d.fuel}リットル。今周ピット。`
+        : `燃料残り${d.fuel}リットル。セーブ開始。`;
     case 'fuel_strategy_warning':
       return (d.fuel_band === 'tight')
         ? `燃料マージン0.5リットル未満。セーブ開始。`
@@ -3081,11 +3090,16 @@ function scheduleAutoDebrief(data){
 }
 
 function buildFallbackSessionSummary(){
+  const liveLap=Math.max(
+    Number(lastTelemetry?.lap)||0,
+    Number(lastTelemetry?.lap_completed)||0
+  );
+  const livePosition=Number(lastTelemetry?.class_pos)||Number(lastTelemetry?.position)||null;
   return sanitizeSessionEvidence({
     type:'session_summary', track:lastTrack||'', car_class:lastCarClass||'',
     car_model:lastCarModel||'', event_type:lastSessionType||'Race', is_race:true,
-    total_laps:lastTelemetry?.lap||lastTelemetry?.lap_completed||0,
-    finish_pos:lastTelemetry?.class_pos||lastTelemetry?.position||null,
+    total_laps:liveLap,
+    finish_pos:livePosition,
     best_lap:parseFloat(sessionBestLapStr)||null,
     incidents:lastTelemetry?.incidents||0,
   });
@@ -3642,10 +3656,12 @@ function buildFuelAuthorityNote(isJ){
     ? `\n\n━━ 燃料戦略・最優先権威契約 ━━\n${body}\n`
       +'燃料残量・平均燃費・残り周回・必要給油量は上記の確定値だけを使え。タンク容量はconfirmed_bop_tank_capacity_lがある時だけ使え。'
       +'現在燃料とタンク容量を混同するな。authoritative_laps_to_finishが無い時は残り周回、完走可否、ピット周回を推測せず、「残り周回の権威データ待ち」と短く答えろ。'
+      +'measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無いレース開始前は、ピット周回を絶対に提示するな。confirmed_bop_tank_capacity_lがある場合は「53Lスタート。実測燃費が3周そろったらピット周回を確定するね」の形式で答えろ。'
+      +'ピット実行前に「ピット済み」「今のピットで給油」と完了形で言うな。現在燃料が必要量を下回る時は、セーブだけで済むように言わず「今周ピット」を優先しろ。'
       +'一般的なGT3容量、過去会話、質問に含まれる周回数で確定値を上書きするな。計算器との矛盾は禁止。'
       +sharedSafetyJP
       +(sel==='LunaJP'
-        ? '\nLunaは女性の自然な標準語を徹底する。「正解だ」「無理はするな」「狙おうぜ」「出すぞ」「申し訳ない」「必須だ」を使わない。'
+        ? '\nLunaは女性の自然な標準語を徹底する。「正解だ」「無理はするな」「狙おうぜ」「出すぞ」「申し訳ない」「必須だ」「データ受け取った」「ピット済ん」を使わない。ピットロードから退出するまで「全開でいい」と言わず、冷えたタイヤへの注意を優先する。'
         : '')
     : `\n\n━━ AUTHORITATIVE FUEL CONTRACT ━━\n${body}\n`
       +'Use only the confirmed values above for fuel, consumption, laps to finish and pit calculations. Never infer tank capacity or race distance. '

@@ -750,6 +750,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         while (pendingText) {
           const boundary = pendingText.search(/[。．！？!?\n]/);
           if (boundary < 0 && !final) return;
+          // 完成文の後にモデルがtoken上限等で単語途中のまま終了した場合、
+          // 未完tailは捨てる。「。ス」のような断片を表示/TTSへ流さない。
+          if (boundary < 0 && final && emittedText) {
+            pendingText = '';
+            outputClosed = true;
+            return;
+          }
           const take = boundary >= 0 ? boundary + 1 : pendingText.length;
           const sentence = pendingText.slice(0, take).trim();
           pendingText = pendingText.slice(take);
