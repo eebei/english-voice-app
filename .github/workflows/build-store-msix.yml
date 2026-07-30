@@ -1,0 +1,64 @@
+name: Build OMORAY PITWALL Microsoft Store package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build bridge EXE
+        run: |
+          python -m pip install --upgrade pip
+          pip install websockets pyinstaller pygame pyaudio
+          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console --hidden-import pygame irsdk-bridge/bridge.py
+
+      - name: Bundle bridge into desktop app
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/bridge
+          Copy-Item dist/OMORAY-PITWALL-Bridge.exe desktop/bridge/OMORAY-PITWALL-Bridge.exe
+        shell: pwsh
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Write Store build info
+        run: |
+          $iso = Get-Date -Format 'o'
+          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"store-${{ github.run_number }}`", `"buildNum`": ${{ github.run_number }}, `"channel`": `"store`"}"
+        shell: pwsh
+
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build Store package
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:store
+
+      - name: Upload private Store submission artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: omoray-pitwall-store-msix-${{ github.run_number }}
+          path: |
+            desktop/dist/*.appx
+            desktop/dist/*.appxupload
+            desktop/dist/*.msix
+            desktop/dist/*.msixupload
+          if-no-files-found: error
+          retention-days: 14

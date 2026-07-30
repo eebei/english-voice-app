@@ -11,6 +11,9 @@ const { spawn } = require('child_process');
 
 const LATEST_EXE_URL = 'https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe';
 const RELEASE_API_URL = 'https://api.github.com/repos/eebei/english-voice-app/releases/tags/desktop-latest';
+// Store/MSIX版の更新はMicrosoft Storeが管理する。GitHubの未署名NSISへ誘導すると
+// Smart App Control対策を壊すため、Store実行時は独自更新ゲートを使わない。
+const IS_WINDOWS_STORE = process.windowsStore === true;
 
 // ★音声の自動再生を常に許可：TTSはfetch後の非同期コールバックで鳴らすため、
 //   デフォルト（ユーザー操作直後のみ許可）だとブロックされ無音になる。
@@ -380,6 +383,10 @@ async function dismissUpdateCheckShield(rendererReady) {
 
 async function checkForUpdate(rendererReady = Promise.resolve()) {
   try {
+    if (IS_WINDOWS_STORE) {
+      await dismissUpdateCheckShield(rendererReady);
+      return log('update check skipped (Microsoft Store manages updates)');
+    }
     const infoPath = path.join(__dirname, 'build-info.json');
     if (!fs.existsSync(infoPath)) {
       await dismissUpdateCheckShield(rendererReady);

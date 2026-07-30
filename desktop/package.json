@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "dist:store": "electron-builder --win appx"
   },
   "author": "OMORAY",
   "license": "UNLICENSED",
@@ -36,6 +37,14 @@
     "win": {
       "target": "nsis",
       "icon": "app-icon.png"
+    },
+    "appx": {
+      "identityName": "OMORAY.OMORAYPITWALL",
+      "publisher": "CN=29CFAD71-6272-4675-AE22-C0F8D243BBD8",
+      "applicationId": "OMORAYPITWALL",
+      "displayName": "OMORAY PITWALL",
+      "publisherDisplayName": "OMORAY",
+      "backgroundColor": "#090B12"
     },
     "nsis": {
       "oneClick": true,
