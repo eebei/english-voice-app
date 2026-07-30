@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "2026-07-30-TEST (Phase B calibration + Phase C shadow forecast)"
+BUILD_VERSION = "Build 238 (Phase B calibration + Phase C shadow forecast)"
 PORT = 8765
 connected_clients = set()
 loop = None
