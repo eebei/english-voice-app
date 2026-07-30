@@ -2,10 +2,19 @@ name: Build OMORAY PITWALL Bridge (Windows EXE + Installer)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish the built installer/EXE to bridge-latest'
+        required: true
+        default: false
+        type: boolean
   push:
     paths:
       - 'irsdk-bridge/bridge.py'
+      - 'irsdk-bridge/pit_loss_calibrator.py'
+      - 'irsdk-bridge/pit_exit_forecaster.py'
       - 'irsdk-bridge/installer.iss'
+      - '.github/workflows/build-bridge.yml'
 
 permissions:
   contents: write
@@ -49,7 +58,17 @@ jobs:
           Copy-Item installer_output\OMORAY-PITWALL-Setup.exe "installer_output\OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe"
         shell: pwsh
 
+      - name: Upload private test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OMORAY-PITWALL-Phase-BC-shadow-${{ steps.date.outputs.DATE }}
+          path: |
+            installer_output/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
+            dist/OMORAY-PITWALL-Bridge-${{ steps.date.outputs.DATE }}.exe
+          if-no-files-found: error
+
       - name: Publish to Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: bridge-latest

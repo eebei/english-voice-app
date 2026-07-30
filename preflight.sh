@@ -10,7 +10,7 @@ set -u
 fail=0
 
 echo "── Python: 未定義変数・構文（pyflakes）"
-if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py irsdk-bridge/driver_activity.py irsdk-bridge/final_lap.py irsdk-bridge/fuel_strategy.py irsdk-bridge/session_authority.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
+if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py irsdk-bridge/driver_activity.py irsdk-bridge/final_lap.py irsdk-bridge/fuel_strategy.py irsdk-bridge/session_authority.py irsdk-bridge/pit_loss_calibrator.py irsdk-bridge/pit_exit_forecaster.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
   echo "   ❌ 致命的な問題あり"; fail=1
 else
   echo "   ✅ 未定義変数なし"
@@ -124,6 +124,12 @@ if python3 irsdk-bridge/tests_session_authority_wiring.py >/dev/null 2>&1; then 
 
 echo "── E0×Final Lap×燃料×Session Authority統合契約（2026-07-26）"
 if python3 irsdk-bridge/tests_phase_ab_integration.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_phase_ab_integration.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Phase B ピットロス通常区間差引・中央値/IQR（2026-07-29）"
+if python3 irsdk-bridge/tests_pit_loss_calibrator.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_pit_loss_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_pit_loss_calibrator.py; python3 irsdk-bridge/tests_pit_loss_wiring.py; fail=1; fi
+
+echo "── Phase C ピット復帰順位・blend shadow forecast（2026-07-30）"
+if python3 irsdk-bridge/tests_pit_exit_forecaster.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_pit_exit_forecaster.py; python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py; fail=1; fi
 
 echo "── Build 232 実走ハードニング（TTS・話法・ピット・燃料・更新）"
 if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build232-hardening.js; fail=1; fi

@@ -41,9 +41,11 @@ import driver_activity as driver_activity_mod
 import final_lap
 import fuel_strategy as fuel_strategy_mod
 import session_authority as session_authority_mod
+import pit_loss_calibrator as pit_loss_calibrator_mod
+import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "2026-07-07-B (gap/fuel/autoflow/stream)"
+BUILD_VERSION = "2026-07-30-TEST (Phase B calibration + Phase C shadow forecast)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -67,6 +69,7 @@ except Exception:
 PTT_CONFIG_PATH = os.path.join(_config_dir, "ptt_config.json")
 VOL_CONFIG_PATH = os.path.join(_config_dir, "vol_config.json")
 MIC_CONFIG_PATH = os.path.join(_config_dir, "mic_config.json")
+PIT_LOSS_PATH = os.path.join(_config_dir, "pit_loss_calibration.json")
 
 # ── PTT（プッシュ・トゥ・トーク）状態 ──
 ptt_binding = None        # {"joy": int, "button": int, "name": str}
@@ -572,6 +575,7 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
     'driver_state', 'driver_activity', 'speak_gate', 'lap_sectors', 'pit_timing',
+    'pit_loss_calibration',
     # session_summary は呼び出し側で should_fire_race_summary() ガード。
     # broadcast() は素通しし、broadcast() の戻り値で送信成功を確認する契約。
     'session_summary',
@@ -1904,6 +1908,13 @@ def poll_iracing():
     session_num_in_class = 0
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
     pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
+    pit_enter_pct = None
+    pit_enter_fuel = None
+    pit_repair_start_s = 0.0
+    pit_stall_start_time = None
+    pit_stall_total_s = 0.0
+    pit_loss_calibrator = pit_loss_calibrator_mod.PitLossCalibrator(PIT_LOSS_PATH)
+    pit_exit_forecast_shadow = None
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -3348,6 +3359,68 @@ def poll_iracing():
             # 状態更新は無条件（低速の正規進入でも必ず走らせる）
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
+            pit_enter_pct = reader.read_float('LapDistPct')
+            pit_enter_fuel = fuel
+            pit_repair_start_s = damage_s
+            pit_stall_start_time = None
+            pit_stall_total_s = 0.0
+            # Phase C shadow mode: forecast only at a genuine pit-entry edge.
+            # Log and score it, but never speak or use it as strategy authority
+            # until field accuracy has been established.
+            _pit_flags_entry = reader.read_int('SessionFlags') or 0
+            _pit_caution_entry = 'caution' if (_pit_flags_entry & 0xC000) else 'green'
+            _pit_calibration_entry = pit_loss_calibrator.get_summary(
+                session_track, session_car_model, _pit_caution_entry)
+            _pit_cls_positions = reader.read_int_array('CarIdxClassPosition', 64)
+            _pit_last_laps = reader.read_float_array('CarIdxLastLapTime', 64)
+            _pit_snapshot_cars = []
+            if player_class_id is not None and player_class_id >= 0:
+                for _pci in range(64):
+                    if _pci == player_car_idx or car_class_map.get(_pci) != player_class_id:
+                        continue
+                    _pit_snapshot_cars.append({
+                        'car_idx': _pci,
+                        'class_id': car_class_map.get(_pci),
+                        'car_number': car_number_map.get(_pci),
+                        'class_position': (
+                            _pit_cls_positions[_pci]
+                            if _pit_cls_positions and _pci < len(_pit_cls_positions)
+                            else None),
+                        'lap': (
+                            car_laps_all[_pci]
+                            if car_laps_all and _pci < len(car_laps_all) else None),
+                        'lap_dist_pct': (
+                            car_dist_all[_pci]
+                            if car_dist_all and _pci < len(car_dist_all) else None),
+                        'last_lap_time': (
+                            _pit_last_laps[_pci]
+                            if _pit_last_laps and _pci < len(_pit_last_laps) else None),
+                        'on_pit_road': bool(
+                            car_on_pitroad_all[_pci]
+                            if car_on_pitroad_all and _pci < len(car_on_pitroad_all)
+                            else False),
+                        'track_surface': (
+                            car_surface_all[_pci]
+                            if car_surface_all and _pci < len(car_surface_all) else None),
+                    })
+            _pit_snapshot_id = "%s:%s:%s" % (
+                cur_snum,
+                round(pit_enter_time, 3) if pit_enter_time is not None else 'na',
+                player_car_idx)
+            pit_exit_forecast_shadow = pit_exit_forecaster_mod.forecast_at_pit_entry(
+                snapshot={
+                    'snapshot_id': _pit_snapshot_id,
+                    'session_num': cur_snum,
+                    'session_time': pit_enter_time,
+                    'player_car_idx': player_car_idx,
+                    'player_class_id': player_class_id,
+                    'player_class_position': class_pos,
+                    'player_lap': lap,
+                    'cars': _pit_snapshot_cars,
+                },
+                calibration=_pit_calibration_entry)
+            log("PIT EXIT SHADOW forecast: " + json.dumps(
+                pit_exit_forecast_shadow, ensure_ascii=False, separators=(',', ':')))
             limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
             # 先行通知済みなら重複させない。未通知環境のみここでフォールバック。
             if not pit_entry_announced_stop and _pit_entry_speed_ok:
@@ -3359,8 +3432,12 @@ def poll_iracing():
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
             # 耐久のピットウィンドウ予測(復帰順位・トラフィック回避)の土台。1階記憶に残す。
             pit_lane_sec = None
+            _pit_exit_session_time = reader.read_double('SessionTime')
+            if pit_stall_start_time is not None and _pit_exit_session_time is not None:
+                pit_stall_total_s += max(0.0, _pit_exit_session_time - pit_stall_start_time)
+                pit_stall_start_time = None
             if pit_enter_time is not None:
-                _now = reader.read_double('SessionTime')
+                _now = _pit_exit_session_time
                 if _now is not None:
                     pit_lane_sec = round(_now - pit_enter_time, 1)
                 pit_enter_time = None
@@ -3373,11 +3450,53 @@ def poll_iracing():
             # 出口直後の二重コールは廃止。ここでは limiter_off だけを発話する。
             pit_entry_announced_stop = False
             if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
+                _exit_pct = reader.read_float('LapDistPct')
+                _fuel_added = (
+                    round(max(0.0, fuel - pit_enter_fuel), 2)
+                    if fuel is not None and pit_enter_fuel is not None else None)
+                _repair_done = round(max(0.0, pit_repair_start_s - damage_s), 1)
+                _classification = 'calibration'
+                if _repair_done > 0.5:
+                    _classification = 'repair'
+                elif pit_stall_total_s > 45.0:
+                    _classification = 'long_stop'
+                elif pit_stall_total_s < 1.0 and (_fuel_added is None or _fuel_added < 0.2):
+                    _classification = 'drive_through'
+                _flags = reader.read_int('SessionFlags') or 0
+                _caution = 'caution' if (_flags & 0xC000) else 'green'
+                _pit_sample = {
+                    'track': session_track, 'car_class': session_car_class,
+                    'car_model': session_car_model,
+                    'pit_entry_pct': pit_enter_pct, 'pit_exit_pct': _exit_pct,
+                    'lane_total_s': pit_lane_sec,
+                    'stall_s': round(pit_stall_total_s, 2),
+                    'fuel_added_l': _fuel_added,
+                    # iRacing tyre-change completion signal is not yet verified.
+                    # Unknown is safer than inferring it from stop duration.
+                    'tire_service': 'unknown',
+                    'repair_s': _repair_done, 'caution_state': _caution,
+                    'classification': _classification,
+                    'session_num': cur_snum,
+                }
+                _pit_loss_summary = pit_loss_calibrator.add_pit_sample(_pit_sample)
+                _pit_exit_score = pit_exit_forecaster_mod.score_actual(
+                    pit_exit_forecast_shadow, class_pos)
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
                            'car_model': session_car_model,
-                           'pos_in': pit_enter_pos, 'pos_out': class_pos})
+                           'pos_in': pit_enter_pos, 'pos_out': class_pos,
+                           'sample': _pit_sample, 'calibration': _pit_loss_summary,
+                           'pit_exit_forecast_shadow': pit_exit_forecast_shadow,
+                           'pit_exit_forecast_score': _pit_exit_score})
+                log("PIT EXIT SHADOW actual: " + json.dumps({
+                    'snapshot_id': (
+                        pit_exit_forecast_shadow.get('snapshot_id')
+                        if isinstance(pit_exit_forecast_shadow, dict) else None),
+                    'actual_class_position': class_pos,
+                    'score': _pit_exit_score,
+                }, ensure_ascii=False, separators=(',', ':')))
                 log('PIT timing: lane ' + str(pit_lane_sec) + 's  P' + str(pit_enter_pos) + '->P' + str(class_pos))
+                pit_exit_forecast_shadow = None
 
         # ── ピット秒読み診断 v2（2026-07-17）──
         # iRacing公式スポッター相当の「Your box」信号を出してるSDK変数を推測ゼロで特定するため、
@@ -3395,6 +3514,13 @@ def poll_iracing():
             _spd_now = reader.read_float('Speed')
             _prev_psurf = prev.get('_psurf')
             _prev_pss   = prev.get('_pss')
+            _session_time_now = reader.read_double('SessionTime')
+            if onPit and _pss not in (None, 0) and _prev_pss in (None, 0):
+                pit_stall_start_time = _session_time_now
+            elif (pit_stall_start_time is not None and _pss in (None, 0)
+                    and _prev_pss not in (None, 0) and _session_time_now is not None):
+                pit_stall_total_s += max(0.0, _session_time_now - pit_stall_start_time)
+                pit_stall_start_time = None
             # ★★2026-07-20 ピットボックスまでの距離カウントダウン（Yuji要望）★★
             #   iRacingはボックス位置を直接くれないので、**自分のボックスを学習**する：
             #   最初の入庫で「到達した瞬間のLapDistPct」を記録し、次からそこまでの距離を数える。
@@ -3448,6 +3574,27 @@ def poll_iracing():
             prev['_pss']   = _pss
         except Exception as _pe:
             log("PIT DIAG error: " + str(_pe))
+
+        # Phase B: learned entry/exit coordinates also define the clean on-track
+        # comparison segment.  This runs every normal lap without driver input.
+        _pit_loss_ldp = reader.read_float('LapDistPct')
+        _pit_loss_flags = reader.read_int('SessionFlags') or 0
+        _pit_loss_caution = 'caution' if (_pit_loss_flags & 0xC000) else 'green'
+        _pit_loss_summary = pit_loss_calibrator.observe_normal_tick(
+            track=session_track, car_model=session_car_model,
+            caution_state=_pit_loss_caution,
+            session_time=reader.read_double('SessionTime'),
+            lap_dist_pct=_pit_loss_ldp,
+            previous_lap_dist_pct=prev.get('_pit_loss_ldp'),
+            on_pit_road=bool(onPit), on_track=bool(onTrack),
+            player_track_surface=reader.read_int('PlayerTrackSurface'),
+            session_num=cur_snum)
+        prev['_pit_loss_ldp'] = _pit_loss_ldp
+        if _pit_loss_summary is not None:
+            broadcast({'type': 'pit_loss_calibration',
+                       'track': session_track, 'car_model': session_car_model,
+                       'calibration': _pit_loss_summary})
+            log("PIT LOSS calibration: " + str(_pit_loss_summary))
 
         # ── マルチクラス・バトル検知 ────────────────────────────────────
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
