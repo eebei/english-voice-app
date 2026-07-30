@@ -2,6 +2,12 @@ name: Build OMORAY PITWALL Desktop (Windows EXE)
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish the installer to the public desktop-latest release'
+        required: false
+        type: boolean
+        default: false
   push:
     paths:
       - 'desktop/**'
@@ -66,7 +72,17 @@ jobs:
           Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-latest.exe"
         shell: pwsh
 
+      - name: Upload private build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OMORAY-PITWALL-Desktop-Build-${{ github.run_number }}-${{ steps.date.outputs.DATE }}
+          path: |
+            desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
+            desktop/dist/OMORAY-PITWALL-Setup-latest.exe
+            desktop/dist/OMORAY-PITWALL-Desktop-latest.exe
+
       - name: Publish to Release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: desktop-latest

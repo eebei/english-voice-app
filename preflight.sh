@@ -56,6 +56,9 @@ if node tests-radio-brevity.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── Luna発話安全窓・舵角/ブレーキゲート（2026-07-27）"
 if node tests-speech-window.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speech-window.js 2>&1|tail -20; fail=1; fi
 
+echo "── Telemetry Truth Gate・完全ラップタイム（2026-07-30）"
+if node tests-telemetry-truth-gate.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-telemetry-truth-gate.js 2>&1|tail -20; fail=1; fi
+
 echo "── iRacing検出済み・ライブテレメトリ待ち診断（2026-07-28）"
 if node tests-iracing-detection.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-iracing-detection.js 2>&1|tail -20; fail=1; fi
 

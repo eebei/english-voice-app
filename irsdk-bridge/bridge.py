@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 238 (Phase B calibration + Phase C shadow forecast)"
+BUILD_VERSION = "Build 239 (Telemetry Truth Gate + locale-safe lap times)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1804,21 +1804,11 @@ def fmt_time(seconds):
     return "%d:%06.3f" % (m, s)
 
 def fmt_radio(seconds):
-    # 本物のF1無線方式：分は言わず「秒」だけ言う。ドライバーは自分が何分台かは分かっている。
-    # 秒は必ず2桁ゼロ埋め：101.589(1:41.589) -> 「41.589」 / 121.567(2:01.567) -> 「01.567」 / 45.3 -> 「45.300」。
-    # 【例外】00秒台（分ちょうど付近）だけは分を付ける：120.567(2:00.567) -> 「2:00.567」。
-    #   ← 分を落とすと「0.567」になり“0秒5”と誤解させ危険なため、この時だけ分を残す。
-    # タイムは1/1000秒（サウザンス）まで＝iRacing表示と一致。
+    # 表示用の完全なラップタイム。分を落とすと 1:48.121 が 48.121 に見え、
+    # 予選/決勝の証拠としても曖昧になる。TTS向けの「1分48秒121」変換はrendererで分離する。
     if seconds is None or seconds <= 0:
         return None
-    m = int(seconds // 60)
-    s = seconds - m * 60
-    if m >= 1 and int(s) == 0:
-        return "%d:%06.3f" % (m, s)   # 2:00.567（00秒台は分をつける・コロンありで時刻扱い＝日付誤読しない）
-    # ★2026-07-19 日付誤読バグ根絶：秒部分が1桁だと従来の2桁ゼロ埋めが「06.630」を作り、
-    #   Google TTSがこれを"日付"(6月…)として読む(まーぼー/YujiがRoadAmerica/Interlagosで発覚)。
-    #   先頭ゼロを外して「6.630」にすれば数値として正しく読まれる。3桁小数は維持。
-    return "%.3f" % s                 # 24.567 / 6.630 / 45.300（先頭ゼロ無し＝日付に誤読されない）
+    return fmt_time(seconds) if seconds >= 60 else "%.3f" % seconds
 
 
 _str_type_logged = False   # SDK型診断を1回だけ出すためのフラグ（2026-07-20）
@@ -1906,6 +1896,7 @@ def poll_iracing():
     session_car_model = ''
     session_event_type = ''
     session_num_in_class = 0
+    session_effective_fuel_capacity_l = None
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
     pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
     pit_enter_pct = None
@@ -2096,6 +2087,9 @@ def poll_iracing():
                     session_car_model = info.get('player_car_model', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
+                    session_effective_fuel_capacity_l = info.get(
+                        'effective_fuel_capacity_l') or info.get(
+                            'physical_tank_capacity_l')
                     session_info_sent = True
                     # ── 本当に新しいセッションの時だけ：briefing送信＋状態リセット ──
                     if (sig != last_session_sig
@@ -2220,6 +2214,8 @@ def poll_iracing():
             _str_type_logged = True
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
+        player_track_surface = reader.read_int('PlayerTrackSurface')
+        pit_service_status = reader.read_int('PlayerCarPitSvStatus')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
         if onPit:
             pit_this_lap = True   # この周でピットを通った→燃料学習から除外（アウト/インラップ）
@@ -3056,16 +3052,19 @@ def poll_iracing():
                         #   機械音を避けるため言い回しは複数から回す。
                         _bl = ['Personal best. ', 'That\'s your best. ', 'New best. ', 'Best of the day. ']
                         broadcast({'type': 'radio', 'trigger': 'personal_best',
-                            'time': t, 'diff': round(diff, 2),
+                            'time': t, 'time_seconds': round(lapTime, 3),
+                            'diff': round(diff, 2),
                             'message': _bl[int(time.time()) % len(_bl)] + t + '.'})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
+                            'time_seconds': round(lapTime, 3),
                             'message': t + '. Baseline lap.'})
                     personal_best = lapTime
                     session_best = lapTime
 
                 elif is_session_best:
                     broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t,
+                        'time_seconds': round(lapTime, 3),
                         'message': 'Session best. ' + t + '.'})
                     session_best = lapTime
 
@@ -3456,12 +3455,34 @@ def poll_iracing():
                     if fuel is not None and pit_enter_fuel is not None else None)
                 _repair_done = round(max(0.0, pit_repair_start_s - damage_s), 1)
                 _classification = 'calibration'
+                _fuel_capacity_known = bool(
+                    isinstance(session_effective_fuel_capacity_l, (int, float))
+                    and session_effective_fuel_capacity_l > 0)
+                _full_refuel_reference = bool(
+                    _fuel_added is not None
+                    and _fuel_added >= 0.2
+                    and _fuel_capacity_known
+                    and fuel is not None
+                    and fuel >= (
+                        session_effective_fuel_capacity_l
+                        - max(0.5, session_effective_fuel_capacity_l * 0.01)))
                 if _repair_done > 0.5:
                     _classification = 'repair'
                 elif pit_stall_total_s > 45.0:
                     _classification = 'long_stop'
                 elif pit_stall_total_s < 1.0 and (_fuel_added is None or _fuel_added < 0.2):
                     _classification = 'drive_through'
+                elif _fuel_added is None:
+                    _classification = 'fuel_delta_unknown_reference'
+                elif (_fuel_added is not None and _fuel_added >= 0.2
+                      and not _fuel_capacity_known):
+                    # 容量がまだ届いていない給油は、満タンか通常量か分類できない。
+                    # 推測でcalibrationへ混ぜず、観測記録だけ残す。
+                    _classification = 'fuel_capacity_unknown_reference'
+                elif _full_refuel_reference:
+                    # 満タン給油は観測記録として残すが、最適な通常サービス量の
+                    # pit-loss baseline には混ぜない。
+                    _classification = 'full_refuel_reference'
                 _flags = reader.read_int('SessionFlags') or 0
                 _caution = 'caution' if (_flags & 0xC000) else 'green'
                 _pit_sample = {
@@ -3471,6 +3492,12 @@ def poll_iracing():
                     'lane_total_s': pit_lane_sec,
                     'stall_s': round(pit_stall_total_s, 2),
                     'fuel_added_l': _fuel_added,
+                    'exit_fuel_l': round(fuel, 2) if fuel is not None else None,
+                    'effective_fuel_capacity_l': session_effective_fuel_capacity_l,
+                    'reference_only': _classification in (
+                        'full_refuel_reference',
+                        'fuel_capacity_unknown_reference',
+                        'fuel_delta_unknown_reference'),
                     # iRacing tyre-change completion signal is not yet verified.
                     # Unknown is safer than inferring it from stop duration.
                     'tire_service': 'unknown',
@@ -4065,6 +4092,9 @@ def poll_iracing():
                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,
+                'on_pit_road': bool(onPit),
+                'player_track_surface': player_track_surface,
+                'pit_service_status': pit_service_status,
                 'fuel_strategy': fuel_strategy,
                 'tires': tires,
                 'damage_s': damage_s,

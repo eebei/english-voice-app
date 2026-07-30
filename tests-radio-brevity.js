@@ -66,6 +66,9 @@ check('Lunaは自然な女性標準語・乱暴な呼称を明示禁止',
   prompts.includes('【重要・話し方＝自然な女性の標準語】')
   && prompts.includes('「あんた」「お前」「〜しようや」「〜やろうや」「申し訳ねぇ」等')
   && prompts.includes('━━ Luna話法契約（最優先）━━'));
+check('Lunaは短い自然な相槌だけ許可し第二助言を禁止',
+  prompts.includes('「うん、」「そうね、」「その通りね、」')
+  && prompts.includes('一般論・励まし・第二の助言を足すな'));
 
 const lunaStrategySystem = buildSystem({
   character:'LunaJP', mode:'strategy', telemetry:'live',

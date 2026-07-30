@@ -25,10 +25,13 @@ if (normalize) {
   const ctx = { sel:'LunaJP', userName:'Yuji' };
   vm.runInNewContext(normalize[0], ctx);
   const got = ctx.normalizeLunaSpeech('データ受け取った。リミッターオフ。全開でいい。');
-  check('機械的データ文言と冷間タイヤ全開指示を除去',
-    !/データ受け取った|全開でいい/.test(got)
+  const claim = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text\)\{[\s\S]*?\n\}/);
+  if(claim) vm.runInNewContext(claim[0], ctx);
+  check('機械的データ文言を整え、車両状態はtruth gateへ委譲',
+    !/データ受け取った/.test(got)
     && /データ来たよ/.test(got)
-    && /タイヤ冷えてる/.test(got));
+    && !!claim
+    && ctx.hasTelemetryOwnedVehicleClaim(got));
   const ordinary = ctx.normalizeLunaSpeech('データ受け取ったら確認するね。ピット済んだら教えて。');
   check('通常文の一部へregexを過剰適用しない',
     ordinary.includes('データ受け取ったら')

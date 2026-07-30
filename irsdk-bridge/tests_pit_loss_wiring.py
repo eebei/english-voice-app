@@ -14,6 +14,11 @@ checks = {
     "repair separated": "_classification = 'repair'" in source,
     "long stop separated": "_classification = 'long_stop'" in source,
     "drive through separated": "_classification = 'drive_through'" in source,
+    "full refuel reference separated": "_classification = 'full_refuel_reference'" in source,
+    "full refuel capacity evidence": "'effective_fuel_capacity_l': session_effective_fuel_capacity_l" in source,
+    "full refuel reference flag": "'reference_only': _classification in (" in source,
+    "unknown capacity fail closed": "_classification = 'fuel_capacity_unknown_reference'" in source,
+    "unknown fuel delta fail closed": "_classification = 'fuel_delta_unknown_reference'" in source,
     "result broadcast allowed": "'pit_loss_calibration'," in source,
 }
 failed = [name for name, ok in checks.items() if not ok]

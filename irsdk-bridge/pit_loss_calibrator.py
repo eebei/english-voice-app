@@ -5,6 +5,7 @@ import statistics
 from datetime import datetime, timezone
 
 CALCULATOR_VERSION = 1
+SERVICE_PROFILE_VERSION = 1
 MAX_SAMPLES = 40
 
 
@@ -53,7 +54,9 @@ def condition_key(track, car_model, caution_state="green"):
 def summarize_record(record):
     record = record or {}
     pits = [s for s in record.get("pit_samples", [])
-            if s.get("classification") == "calibration"]
+            if s.get("classification") == "calibration"
+            and not s.get("reference_only", False)
+            and s.get("service_profile_version") == SERVICE_PROFILE_VERSION]
     normals = record.get("normal_samples", [])
     lane = [s.get("lane_total_s") for s in pits]
     normal = [s.get("normal_segment_s") for s in normals]
@@ -63,6 +66,8 @@ def summarize_record(record):
     usable = min(len(pits), len(normals))
     return {
         "pit_sample_count": len(pits),
+        "excluded_pit_sample_count": max(
+            0, len(record.get("pit_samples", [])) - len(pits)),
         "normal_sample_count": len(normals),
         "usable_sample_count": usable,
         "confidence": "medium" if usable >= 3 else "low",
@@ -81,7 +86,11 @@ def _reconcile_observed_losses(record):
     normal_median = _median(
         s.get("normal_segment_s") for s in record.get("normal_samples", []))
     for sample in record.get("pit_samples", []):
-        if sample.get("classification") != "calibration" or normal_median is None:
+        if (sample.get("classification") != "calibration"
+                or sample.get("reference_only", False)
+                or sample.get("service_profile_version")
+                    != SERVICE_PROFILE_VERSION
+                or normal_median is None):
             sample["normal_segment_s"] = None
             sample["observed_loss_s"] = None
             continue
@@ -155,6 +164,7 @@ class PitLossCalibrator:
             "lane_total_s": round(lane, 3),
             "timestamp": sample.get("timestamp") or datetime.now(timezone.utc).isoformat(),
             "calculator_version": CALCULATOR_VERSION,
+            "service_profile_version": SERVICE_PROFILE_VERSION,
         })
         record["pit_samples"] = (record["pit_samples"] + [normalized])[-MAX_SAMPLES:]
         _reconcile_observed_losses(record)

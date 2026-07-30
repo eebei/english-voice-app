@@ -996,6 +996,7 @@ let lastWeekendAuthority = null;  // entry list / qualifying format and result a
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, lastMemorySignature = '', memorySaveInFlight = null, memorySaveReceipt = '';
 let sessionBestLapStr = '';
+let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = false, autoDebriefData = null;
 let evidenceDebrief = null;
@@ -1447,7 +1448,7 @@ function startSession(){
   showScreen('screen-chat');
   // Profile update
   memorySavedThisSession=false; lastMemorySignature=''; memorySaveInFlight=null; memorySaveReceipt='';
-  sessionBestLapStr=''; briefingKicked=false;
+  sessionBestLapStr=''; sessionBestLapSeconds=null; briefingKicked=false;
   lastSessionSummary=null; autoDebriefStarted=false; autoDebriefData=null;
   fuelCapacityConfirmedThisSession=null;
   if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
@@ -1703,6 +1704,47 @@ async function sendMsg(inputSource){
   await callAPI(inputSource==='ptt'?'ptt':'typed', memoryStatus);
 }
 
+// ── Telemetry Truth Gate ──
+// LLMの会話は自由にするが、ピット境界・リミッター・サービス状態はSDKで成立した時だけ
+// deterministic radioが発話する。プロンプトで抑えるだけではstream途中の誤発話を止められないため、
+// TTSより前にクライアントでも遮断する。
+function hasTelemetryOwnedVehicleClaim(text){
+  // 「まだリミッターオフにしないで」のような否定・禁止は状態成立の断定ではない。
+  // その部分だけ除いてから、残る肯定的な状態claimを検査する。
+  const s=String(text||'')
+    .replace(/リミッター(?:オン|オフ)(?:には?しないで|はまだ|じゃない|ではない|するな)/gi,'')
+    .replace(/(?:ピット|ボックス)(?:アウト|出口)(?:はまだ|していない|してない|じゃない|ではない)/gi,'')
+    .replace(/\b(?:do not|don't|never)\s+(?:turn|switch\s+)?(?:the\s+)?limiter\s+(?:on|off)\b/gi,'')
+    .replace(/\b(?:pit|box)\s+(?:exit|out)\s+(?:is\s+)?(?:not|isn't)\s+(?:yet|active)?\b/gi,'');
+  const stateClaim=[
+    /(?:ボックス|ピット)(?:は)?ここ/i,
+    /(?:ピット|ボックス)(?:アウト|出口)/i,
+    /リミッター(?:オン|オフ|解除|作動)/i,
+    /(?:給油|作業|タイヤ交換)(?:中|開始|完了)/i,
+    /(?:まだ)?ピット(?:レーン)?(?:の)?中/i,
+    /(?:制限|リミット)ライン/i,
+    /\bbox\s+here\b/i,
+    /\b(?:pit|box)\s+(?:exit|out)\b/i,
+    /\blimiter\s+(?:on|off|engaged|disengaged)\b/i,
+    /\b(?:refuelling|refueling|fueling|service)\s+(?:now|underway|complete|started)\b/i,
+    /\b(?:limit|limiter)\s+line\b/i,
+  ].some(re=>re.test(s));
+  const pitContext=/(?:ボックス|ピット|\bbox\b|\bpit\b)/i.test(s);
+  const pitCountdown=/(?:100|50|20)\s*(?:メートル|m\b|metres?\b|meters?\b)/i.test(s);
+  return stateClaim || (pitContext && pitCountdown);
+}
+function telemetryTruthFallback(live, userText, isJP){
+  const pitIntent=/ボックス|ピット|\bbox\b|\bpit\b/i.test(String(userText||''));
+  if(isJP){
+    if(live && live.on_pit_road===true) return 'ピットレーン内。';
+    if(pitIntent) return sel==='LunaJP' ? 'うん、ボックス準備。' : 'ボックス準備。';
+    return sel==='LunaJP' ? 'その車両状態はまだ成立してないよ。' : 'その車両状態はまだ成立していない。';
+  }
+  if(live && live.on_pit_road===true) return 'In the pit lane.';
+  if(pitIntent) return 'Box prepared.';
+  return 'That vehicle state is not active.';
+}
+
 async function callAPI(inputSource, memoryStatus=''){
   usageCount(inputSource==='ptt'?'ptt':'typed');
   isBusy=true;
@@ -1776,9 +1818,13 @@ async function callAPI(inputSource, memoryStatus=''){
     let full = '';          // これまでに受信した全文
     let spokenLen = 0;      // 既に喋った文字位置
     let firstSpoken = false;
+    let truthBlocked = false;
+    let truthFallback = '';
+    let truthFallbackSpoken = false;
     const bubble = addMsg('ai','');   // 空の吹き出しを作り、届いた分で更新していく
     const SENT_RE = /[。．！？!?\n]/;  // 文の区切り
     const flushSentences = (isFinal)=>{
+      if(truthBlocked) return;
       let pending = full.slice(spokenLen);
       // [JA:...]（初級者向け翻訳）は喋らない。C2では通常出ないが保険。
       const jaIdx = pending.indexOf('[JA:');
@@ -1802,14 +1848,28 @@ async function callAPI(inputSource, memoryStatus=''){
       const {done, value} = await reader.read();
       if(done) break;
       full += decoder.decode(value, {stream:true});
-      if(bubble) bubble.textContent = full.replace(/\[JA:[\s\S]*\]$/,'').trim();
+      if(!truthBlocked && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full)){
+        truthBlocked=true;
+        truthFallback=telemetryTruthFallback(lastTelemetry, latestUserText, isJP);
+        if(bubble) bubble.textContent=truthFallback;
+        if(!truthFallbackSpoken){
+          speak(truthFallback, true);
+          truthFallbackSpoken=true;
+        }
+        convoLog('driver', '[TELEMETRY_TRUTH_GATE] blocked LLM vehicle-state claim: '
+          + full.replace(/\s+/g,' ').trim());
+      } else if(!truthBlocked && bubble) {
+        bubble.textContent = full.replace(/\[JA:[\s\S]*\]$/,'').trim();
+      }
       flushSentences(false);
     }
     clearTimeout(fetchTimer);
     flushSentences(true);
     const reply = full.trim();
     if(!reply) throw new Error('empty');
-    const display = normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
+    const display = truthBlocked
+      ? truthFallback
+      : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:display});
@@ -1860,12 +1920,59 @@ function pickVoice(lang,names){
   for(const n of names){ const v=voices.find(x=>x.name.toLowerCase().includes(n.toLowerCase())); if(v)return v; }
   return voices.find(v=>v.lang.startsWith(lang))||null;
 }
+function numberWordsEN(n){
+  const ones=['zero','one','two','three','four','five','six','seven','eight','nine'];
+  const teens=['ten','eleven','twelve','thirteen','fourteen','fifteen','sixteen','seventeen','eighteen','nineteen'];
+  const tens=['','','twenty','thirty','forty','fifty','sixty','seventy','eighty','ninety'];
+  n=Number(n);
+  if(n<10) return ones[n];
+  if(n<20) return teens[n-10];
+  return tens[Math.floor(n/10)]+(n%10?'-'+ones[n%10]:'');
+}
+function numberWordsDE(n){
+  const ones=['null','eins','zwei','drei','vier','fünf','sechs','sieben','acht','neun'];
+  const teens=['zehn','elf','zwölf','dreizehn','vierzehn','fünfzehn','sechzehn','siebzehn','achtzehn','neunzehn'];
+  const tens=['','','zwanzig','dreißig','vierzig','fünfzig','sechzig','siebzig','achtzig','neunzig'];
+  n=Number(n);
+  if(n<10) return ones[n];
+  if(n<20) return teens[n-10];
+  const unit=n%10===1?'ein':ones[n%10];
+  return n%10?unit+'und'+tens[Math.floor(n/10)]:tens[Math.floor(n/10)];
+}
+function numberWordsPT(n){
+  const ones=['zero','um','dois','três','quatro','cinco','seis','sete','oito','nove'];
+  const teens=['dez','onze','doze','treze','catorze','quinze','dezesseis','dezessete','dezoito','dezenove'];
+  const tens=['','','vinte','trinta','quarenta','cinquenta','sessenta','setenta','oitenta','noventa'];
+  n=Number(n);
+  if(n<10) return ones[n];
+  if(n<20) return teens[n-10];
+  return tens[Math.floor(n/10)]+(n%10?' e '+ones[n%10]:'');
+}
+function lapTimeForSpeech(value, lang){
+  const m=String(value||'').match(/^(\d+):(\d{2})\.(\d{3})$/);
+  if(!m) return String(value||'');
+  const minutes=Number(m[1]), seconds=Number(m[2]), millis=m[3].split('');
+  if(lang && lang.startsWith('ja')){
+    return minutes>0
+      ? `${minutes}分${seconds}秒${m[3]}`
+      : `${seconds}秒${m[3]}`;
+  }
+  if(lang && lang.startsWith('de')){
+    return `${numberWordsDE(minutes)} ${seconds<10?'null ':''}${numberWordsDE(seconds)} Komma ${millis.map(numberWordsDE).join(' ')}`;
+  }
+  if(lang && lang.startsWith('pt')){
+    return `${numberWordsPT(minutes)} ${seconds<10?'zero ':''}${numberWordsPT(seconds)} vírgula ${millis.map(numberWordsPT).join(' ')}`;
+  }
+  return `${numberWordsEN(minutes)} ${seconds<10?'oh ':''}${numberWordsEN(seconds)} point ${millis.map(numberWordsEN).join(' ')}`;
+}
 function phonetify(text, lang){
   if(!text) return text;
+  const spoken=String(text).replace(/\b\d+:\d{2}\.\d{3}\b/g,
+    value=>lapTimeForSpeech(value,lang));
   if(lang && lang.startsWith('ja')){
-    return text.replace(/iRacing/g,'アイレーシング');
+    return spoken.replace(/iRacing/g,'アイレーシング');
   } else {
-    return text.replace(/iRacing/g,'I Racing');
+    return spoken.replace(/iRacing/g,'I Racing');
   }
 }
 // Lunaはプロンプトだけに頼らず、TTS直前にも乱暴・男性的な語を遮断する。
@@ -1875,9 +1982,6 @@ function normalizeLunaSpeech(text){
   const name = (userName||'あなた').trim() || 'あなた';
   return String(text||'')
     .replace(/データ受け取った(?=[。！？!?\s]|$)[。！？!?\s]*/g, 'データ来たよ。')
-    .replace(/(?:ピット)?済ん(?=[。！？!?\s]|$)[。！？!?\s]*/g, 'ピットはこれからね。')
-    .replace(/リミッターオフ[。！]?\s*全開でいい[。！]?/g, 'ピット出口。タイヤ冷えてる、慎重に。')
-    .replace(/全開でいい[。！]?/g, 'タイヤ冷えてる、慎重に。')
     .replace(/お前/g, name)
     .replace(/あんた/g, 'あなた')
     .replace(/申し訳ね[ぇえ]/g, 'ごめんね')
@@ -2553,9 +2657,19 @@ function classIdTxtDE(className, classPos){
 // 同クラス(GT3同士)は号車=車番号で識別（Yuji方針2026-07-14夜）。番号が無ければクラス+順位にフォールバック。
 function sameClassIdJP(d){ return d.car_number ? `${d.car_number}号車` : classIdTxtJP(d.class_name, d.class_pos); }
 function sameClassIdDE(d){ return d.car_number ? `Wagen ${d.car_number}` : classIdTxtDE(d.class_name, d.class_pos); }
+function lapTimeSpeechJP(value){
+  const s=String(value||'').trim();
+  const m=s.match(/^(\d+):(\d{2})\.(\d{3})$/);
+  if(m) return Number(m[1])>0
+    ? `${Number(m[1])}分${Number(m[2])}秒${m[3]}`
+    : `${Number(m[2])}秒${m[3]}`;
+  const short=s.match(/^(\d{1,2})\.(\d{3})$/);
+  if(short) return `${Number(short[1])}秒${short[2]}`;
+  return s;
+}
 // bridgeが実際に送る全トリガーに対応（trigger名・フィールド名はbridge.pyと一致させること）
-function oishiRadio(d){
-  const t=d.time||'';
+function oishiRadio(d, forSpeech=false){
+  const t=forSpeech?lapTimeSpeechJP(d.time):(d.time||'');
   const diff=(d.diff!==undefined)?d.diff:'';
   const pos=(d.pos!==undefined)?d.pos:'';
   switch(d.trigger){
@@ -2757,18 +2871,27 @@ function matthiasRadio(d){
 function injectRadio(data){
   if(selMode!=='race') return;
   if(data.trigger==='pit_exit') return;  // limiter_off直後の重複コールは全キャラクターで廃止
-  let text;
-  if(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP') text=oishiRadio(data)||data.message||'';
+  let text, spokenText;
+  if(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'){
+    text=oishiRadio(data,false)||data.message||'';
+    spokenText=oishiRadio(data,true)||text;
+  }
   else if(sel==='Matthias') text=matthiasRadio(data)||data.message||'';
   else                   text=data.message||'';   // James/Luna/Hajime
   if(!text) return;
-  if(data.trigger==='personal_best'&&data.time) sessionBestLapStr=data.time;
+  if(['personal_best','first_lap','session_best'].includes(data.trigger) && data.time){
+    const candidate=Number(data.time_seconds);
+    if(!sessionBestLapSeconds || (candidate>0 && candidate<sessionBestLapSeconds)){
+      sessionBestLapStr=data.time;
+      sessionBestLapSeconds=candidate||null;
+    }
+  }
   addMsg('ai',text);
   pushMsg({role:'assistant',content:text});
   // ★2026-07-20 Codexレビュー P0-1：bridgeが決めた優先度をそのまま使う。
   //   旧実装は crash_check だけ boolean で昇格させ、他は既定のP4に落ちていたため、
   //   停止車両・速いクラス接近・ピット手順まで「情報」と同列に扱われていた。
-  speak(text, {prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
+  speak(spokenText||text, {prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
                kind:data.trigger||'radio',
                dedupeKey:(data.trigger||'') + (data.class_name||'') + (data.car_number||'')});
 }
@@ -3013,6 +3136,7 @@ ${previousRaceBriefing}
 // 60秒以上は必ず分に直す（1:24.567）。60未満はそのまま（24.567）。
 // 数字でない値（'?'、fmt_radio済みの文字列等）はそのまま返す。
 function fmtLap(v){
+  if(typeof v==='string' && /^\d+:\d{2}\.\d{3}$/.test(v.trim())) return v.trim();
   const n = (typeof v === 'number') ? v : parseFloat(v);
   if(!isFinite(n) || n <= 0) return (v==null ? '' : v);
   const m = Math.floor(n/60);
@@ -3100,7 +3224,7 @@ function buildFallbackSessionSummary(){
     car_model:lastCarModel||'', event_type:lastSessionType||'Race', is_race:true,
     total_laps:liveLap,
     finish_pos:livePosition,
-    best_lap:parseFloat(sessionBestLapStr)||null,
+    best_lap:sessionBestLapSeconds||null,
     incidents:lastTelemetry?.incidents||0,
   });
 }

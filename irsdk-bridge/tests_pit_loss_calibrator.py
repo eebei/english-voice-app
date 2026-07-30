@@ -14,17 +14,23 @@ check("crossing", crossed_forward(.97, .99, .98))
 check("wrap crossing", crossed_forward(.99, .02, .01))
 check("teleport rejected", not crossed_forward(.5, .2, .9))
 summary = summarize_record({
-    "pit_samples": [{"lane_total_s": x, "classification": "calibration"}
+    "pit_samples": [{"lane_total_s": x, "classification": "calibration",
+                     "service_profile_version": 1}
                     for x in (31.3, 27.0, 33.3)]
-                   + [{"lane_total_s": 90, "classification": "repair"}],
+                   + [{"lane_total_s": 90, "classification": "repair"},
+                      {"lane_total_s": 35.9,
+                       "classification": "full_refuel_reference",
+                       "reference_only": True}],
     "normal_samples": [{"normal_segment_s": x} for x in (7.1, 7.3, 7.2)],
 })
 check("repair excluded", summary["pit_sample_count"] == 3)
+check("full refuel reference excluded", summary["pit_sample_count"] == 3)
 check("ready at three", summary["prediction_ready"])
 check("median loss", summary["observed_loss_median_s"] == 24.1)
 
 two_sample_summary = summarize_record({
-    "pit_samples": [{"lane_total_s": x, "classification": "calibration"}
+    "pit_samples": [{"lane_total_s": x, "classification": "calibration",
+                     "service_profile_version": 1}
                     for x in (31.3, 27.0)],
     "normal_samples": [{"normal_segment_s": x} for x in (7.1, 7.3)],
 })
@@ -64,6 +70,18 @@ with tempfile.TemporaryDirectory() as directory:
         check("sample receives observed loss", sample["observed_loss_s"] == 24.1)
     c.path = directory  # os.replace(file, existing directory) must fail open
     check("disk failure does not escape", c._save() is False)
+
+legacy_summary = summarize_record({
+    "pit_samples": [{
+        "lane_total_s": 35.9, "classification": "calibration",
+        "stall_s": 21, "fuel_added_l": 30.1,
+    }],
+    "normal_samples": [{"normal_segment_s": 7.2}],
+})
+check("legacy sample excluded without service evidence",
+      legacy_summary["pit_sample_count"] == 0)
+check("legacy sample remains visible as excluded evidence",
+      legacy_summary["excluded_pit_sample_count"] == 1)
 
 with tempfile.TemporaryDirectory() as directory:
     c = PitLossCalibrator(os.path.join(directory, "pit-loss.json"))

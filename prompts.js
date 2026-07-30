@@ -751,8 +751,11 @@ function buildSystem(p) {
     // ★最優先ルール＝1コール1文1情報・相槌禁止・改行で複数言うな・沈黙も無線。
     if (mode === 'race') {
       modeNote += isJ
-        ? '\n\n━━ 無線の鉄則（全コール共通・最優先・厳守）━━\n・1回の無線は【1文・1情報】だけ。改行して複数のことを続けて言うな。言うことが無ければ黙れ（沈黙も無線のうち）。\n・「了解」「了承」「はい」「わかった」「承知」等の相槌・返事を先頭にも末尾にも付けるな。いきなり用件（数字・指示）から入れ。\n・自分が何をするか／どういう構えかの自己説明・所信表明・実況を絶対に語るな。ドライバーに必要な事実か指示だけを言え。\n・ドライバーが相槌・OK・短い指示を返しただけなら、返事は不要（必要でも一言だけ）。それ以上足すな。\n・悪い例（禁止）：「了解。ピットアウト準備。／リミッターセット。速度制限内で出ろ。／テレメトリ確認中。／コースインだ。まずウォームアップ。」← 4つも言うな。\n・良い例：「リミッターオフ。全開でいい。」← これで終わり。次の用件は次の無線で。'
-        : '\n\n━━ RADIO IRON RULE (all calls · highest priority) ━━\n- ONE sentence, ONE piece of info per call. Never stack multiple statements or use line breaks. If there is nothing to say, stay silent (silence is part of radio).\n- No acknowledgement fillers ("Copy", "OK", "Understood", "Right") at the start or end — lead straight with the info.\n- Never narrate what you are doing or your stance. Only the fact or instruction the driver needs.\n- If the driver merely acknowledged, no reply is needed (one word at most). Do not add more.\n- Bad: "Copy. Limiter set, stay under the limit. Checking telemetry. Out you go, warm-up lap." (four things) — Good: "Limiter off, send it." One point per call.';
+        ? '\n\n━━ 無線の鉄則（全コール共通・最優先・厳守）━━\n・1回の無線は【1文・1情報】だけ。改行して複数のことを続けて言うな。言うことが無ければ黙れ（沈黙も無線のうち）。\n・「了解」「了承」「はい」「わかった」「承知」等の機械的な相槌を先頭にも末尾にも付けるな。いきなり用件（数字・指示）から入れ。\n・自分が何をするか／どういう構えかの自己説明・所信表明・実況を絶対に語るな。ドライバーに必要な事実か指示だけを言え。\n・ドライバーが相槌・OK・短い指示を返しただけなら、返事は不要（必要でも一言だけ）。それ以上足すな。\n・悪い例（禁止）：「了解。ピットアウト準備。／リミッターセット。速度制限内で出ろ。／テレメトリ確認中。／コースインだ。まずウォームアップ。」← 4つも言うな。\n・良い例：「前0.8。」← これで終わり。次の用件は次の無線で。'
+        : '\n\n━━ RADIO IRON RULE (all calls · highest priority) ━━\n- ONE sentence, ONE piece of info per call. Never stack multiple statements or use line breaks. If there is nothing to say, stay silent (silence is part of radio).\n- No mechanical acknowledgement fillers ("Copy", "OK", "Understood", "Right") at the start or end — lead straight with the info.\n- Never narrate what you are doing or your stance. Only the fact or instruction the driver needs.\n- If the driver merely acknowledged, no reply is needed (one word at most). Do not add more.\n- Bad: "Copy. Limiter set, stay under the limit. Checking telemetry. Out you go, warm-up lap." (four things) — Good: "Gap ahead, zero point eight." One point per call.';
+      if(character === 'LunaJP'){
+        modeNote += '\n\n━━ Lunaの短い相槌（無線鉄則への限定例外）━━\n「うん、」「そうね、」「その通りね、」は、人間らしい呼吸として必要な時だけ使ってよい。ただし相槌と用件を合わせて【1文・1論点】で終える。例：「うん、ターン1は無理しないで。」その後に「一貫性で前を狙おう」のような一般論・励まし・第二の助言を足すな。同じ相槌を連続使用しない。';
+      }
     }
     // IMSA実走でHajimeが燃料コールを矛盾させ(「18周目に給油」→1分後「20周以降」)、レース前に合意した
     // アンダーカット計画を忘れてドライバーに催促された。データは届いていた＝プロンプトが「ライブ数値固定・
@@ -842,7 +845,11 @@ function buildSystem(p) {
         en.push('Gap to each class position: ' + rows.join(' / '));
       }
     }
-    if (live.on_track === false) { jp.push('現在ピット/ガレージ内（走行データはさっきまでの値）'); en.push('Currently in pit/garage (data is from moments ago)'); }
+    if (live.on_pit_road === true) { jp.push('OnPitRoad=true（現在ピットレーン内）'); en.push('OnPitRoad=true (currently in pit lane)'); }
+    else if (live.on_pit_road === false) { jp.push('OnPitRoad=false（現在ピットレーン外）'); en.push('OnPitRoad=false (currently outside pit lane)'); }
+    if (live.on_track === false && live.on_pit_road !== true) { jp.push('IsOnTrack=false（コース上とは断定できない）'); en.push('IsOnTrack=false (do not claim the car is on track)'); }
+    if (live.player_track_surface != null) { jp.push('PlayerTrackSurface=' + live.player_track_surface); en.push('PlayerTrackSurface=' + live.player_track_surface); }
+    if (live.pit_service_status != null) { jp.push('PlayerCarPitSvStatus=' + live.pit_service_status); en.push('PlayerCarPitSvStatus=' + live.pit_service_status); }
     if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
     // 燃料戦略（bridgeが直近クリーンラップの実消費量から計算済み・Claudeは計算せず転記するだけ）
     // ①消費量＋あと何周走れるかは、クリーンラップ1本からでも届く（短いレース/序盤でも把握できる）。
@@ -873,8 +880,8 @@ function buildSystem(p) {
     }
     if (jp.length) {
       liveNote = isJ
-        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目は「その数字は届いてない」と言い切れ（「確認する」は禁止）。絶対に推測で数字を作るな。\n【ラップタイムの言い方・厳守】タイムは既に「分:秒.ミリ秒」形式で届く（例：ベスト1:40.493）。モータースポーツ流に秒だけ言え＝1:40.493なら「40.5」（下段だけ）。59秒台以下（分表記なし）ならそのまま「49.6」。ベスト/直近を聞かれたら、届いてる最新の値で答えろ（古い周のタイムを言うな）。'
-        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. For items NOT listed here, say plainly that the value is not coming through — never "let me check". Never invent a number.\n[How to say lap times] Times already arrive formatted as M:SS.mmm (e.g. best 1:40.493). Say motorsport-style — just the seconds within the minute (1:40.493 → "forty point five"); if under a minute (no colon), say it directly ("49.6"). Answer with the latest value you have, not an older lap.';
+        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目は「その数字は届いてない」と言い切れ（「確認する」は禁止）。絶対に推測で数字を作るな。\n【車両状態の権限境界・最優先】ピット境界、ボックス位置、距離カウント、リミッターON/OFF、給油・作業中/完了はSDK駆動の固定無線だけが発話する。会話AIは「ボックス準備」まで。たとえドライバーがboxと言っても「ボックスここ」「ピットアウト」「リミッターオフ」「給油中」等の状態遷移を先回りして断定するな。\n【ラップタイムの言い方・厳守】完全なタイムを維持する。1:40.493なら表示は「1:40.493」、日本語発話は「1分40秒493」。分を落として「40.5」とだけ言うな。ベスト/直近を聞かれたら、届いている最新値で答えろ。'
+        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. For items NOT listed here, say plainly that the value is not coming through — never "let me check". Never invent a number.\n[VEHICLE-STATE AUTHORITY — HIGHEST PRIORITY] Pit boundaries, box position/countdown, limiter transitions and service/fuelling state are spoken only by the SDK-driven deterministic radio. Conversational AI may say "box prepared" but must never jump ahead with "box here", "pit exit", "limiter off" or "refuelling now".\n[How to say lap times] Preserve the complete M:SS.mmm time; never drop the minute. Answer with the latest value you have, not an older lap.';
     }
     // ── タイヤ詳細＆損傷（項目7）：聞かれた時だけ答える。走行中は自分から言うな ──
     const tr = live.tires;
@@ -1178,6 +1185,15 @@ function buildSystem(p) {
     ? '\n\n【記憶の誠実さ・最重要】「覚えた」「次回も覚えている」「記憶しておく」は、入力内に【記憶保存結果】の成功が明記された時だけ言え。会話中に理解しただけで永続保存を約束するな。'
     : '\n\n[MEMORY HONESTY — CRITICAL] Say "I saved that", "I will remember next time", or equivalent ONLY when the input explicitly reports a successful MEMORY SAVE RESULT. Understanding something in the current conversation is not persistent memory.';
   // prefix = キャラ固定部分（キャッシュ対象）、suffix = 毎回変わる動的部分（非キャッシュ）
+  // 古いキャラ固有文より後で、全言語の完全ラップタイム契約と相槌契約を一意にする。
+  // 表示はM:SS.mmmの証拠を保持し、コロンを含まない音声化はrendererのTTS直前で行う。
+  modeNote = modeNote
+    .replace('・タイムは秒だけ言え（例「41.5」）。分は言うな。',
+      '・タイムは完全な分:秒.ミリ秒で保持しろ（例「1:41.500」）。分を落とすな。')
+    .replace(/1:42\.3/g, '1:42.300')
+    .replace('・良い例：「55.2。ベスト。」', '・良い例：「1:55.200。ベスト。」')
+    .replace('等の機械的な相槌を', '等の相槌・返事を')
+    .replace('No mechanical acknowledgement fillers', 'No acknowledgement fillers');
   const prefix = authorityBlock + base + (skipLevel ? '' : levelInstruction(level)) + engRules + nameNote + modeNote + voiceNote + memoryTruthRule;
   // ── ★2026-07-19 ドライバー観察メモの蒸留（記憶2階＝クセ・Yuji「これこそプロンプトがあっていい」）──
   //   セッション終わりに呼ばれる特殊コール。ドライバーへの発話ではなく"未来の自分へのメモ"を書かせる。
@@ -1262,8 +1278,8 @@ function buildSystem(p) {
   let speechFixNote = '';
   if (isJ) {
     speechFixNote = '\n\n━━ 発話の約束（実走で判明した不具合の是正）━━\n'
-      + '【タイムをコロンで書くな】「1:48.838」と書くと音声エンジンが時刻として読み上げ、「一時48分838」になる。'
-      + '必ず「1分48秒838」または秒だけの「48.838」と書け。デブリーフでも同じ。\n'
+      + '【完全なラップタイムを保持】表示証拠は「1:48.838」のM:SS.mmm形式で書け。'
+      + '分を落とした「48.838」だけの表記は禁止。音声ではクライアントがTTS直前に「1分48秒838」へ変換する。\n'
       + '【自分の作業を実況するな】「データ確認中」「ちょっと待って」「見直してる」は無線に要らない。'
       + '分かるなら答え、分からないなら「そのデータは無い」と言い切れ。作業の説明は無音でやれ。\n'
       + '【給油量は"入る前"に言う】「ピットを出た時点で20Lあれば足りる」は順序が逆で意味を成さない。'
@@ -1280,8 +1296,8 @@ function buildSystem(p) {
       + '「セーフティカーが来たのか、自分で判断したのか」のような推測の列挙は要らない。';
   } else {
     speechFixNote = '\n\n━━ SPEECH RULES (corrections found in real running) ━━\n'
-      + '[Never write a lap time with a colon] "1:48.838" is read aloud by the voice engine as a clock time. '
-      + 'Write "one minute 48.838" or just the seconds "48.838". Same in the debrief.\n'
+      + '[Preserve the complete lap time] Write the display evidence as M:SS.mmm, for example "1:48.838". '
+      + 'Never drop the minute or shorten it to "48.838"; the client converts display text to locale-safe speech at TTS time.\n'
       + '[Never narrate your own work] "checking the data", "hold on", "let me look again" do not belong on the radio. '
       + 'Answer if you know; say plainly that you do not have that data if you don\'t. Do the looking silently.\n'
       + '[Fuel figures belong BEFORE the stop] "you needed 20 litres once you were out" is backwards and useless. '
