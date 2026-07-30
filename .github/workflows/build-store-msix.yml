@@ -38,7 +38,13 @@ jobs:
       - name: Write Store build info
         run: |
           $iso = Get-Date -Format 'o'
-          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"store-${{ github.run_number }}`", `"buildNum`": ${{ github.run_number }}, `"channel`": `"store`"}"
+          $bridgeSource = Get-Content -Path irsdk-bridge/bridge.py -Raw
+          $buildMatch = [regex]::Match($bridgeSource, 'BUILD_VERSION\s*=\s*"Build\s+(\d+)')
+          if (-not $buildMatch.Success) {
+            throw "Could not read the product Build number from irsdk-bridge/bridge.py"
+          }
+          $productBuild = [int]$buildMatch.Groups[1].Value
+          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"store-${{ github.run_number }}`", `"buildNum`": $productBuild, `"channel`": `"store`"}"
         shell: pwsh
 
       - name: Install dependencies
