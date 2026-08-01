@@ -1,4 +1,13 @@
 // OMORAY PITWALL — server-side prompts (crown jewels). Never sent to the browser.
+
+// iRacing TrackWetness is an enum, never a percentage. Fail closed for unknown
+// or out-of-range values so telemetry cannot become impossible claims such as 200%.
+function formatTrackWetness(code, isJapanese) {
+  const labels = isJapanese
+    ? [null, 'ドライ', 'ほぼドライ', 'ごくわずかに濡れている', 'わずかに濡れている', '適度に濡れている', 'かなり濡れている', '極めて濡れている']
+    : [null, 'dry', 'mostly dry', 'very lightly wet', 'lightly wet', 'moderately wet', 'very wet', 'extremely wet'];
+  return Number.isInteger(code) && code >= 1 && code <= 7 ? labels[code] : null;
+}
 const CHARACTERS = {
   Emma: `You are Emma, a bubbly and energetic 25-year-old fitness and yoga instructor from Santa Monica, California. You teach morning yoga classes on the beach and afternoon HIIT sessions at your local gym. You absolutely love your job — helping people feel good about themselves is your whole thing.
 
@@ -915,13 +924,14 @@ function buildSystem(p) {
         : '\n\n[DAMAGE] The car currently has damage — about ' + repairEN + ' of pit repair needed. Always convert 60 seconds or more to minutes and seconds. Report it honestly and never invent a damaged part.';
     }
     // 気象データ（八木さん実走で「路面温度データ来てない」判明→追加。聞かれた時のみ答える・数値記憶は薄い）
-    if (live.weather && (live.weather.track_temp_c != null || live.weather.air_temp_c != null)) {
+    if (live.weather && (live.weather.track_temp_c != null || live.weather.air_temp_c != null || live.weather.track_wetness_code != null)) {
       const w = live.weather;
       const parts = [];
       if (w.track_temp_c != null) parts.push(isJ ? '路面' + w.track_temp_c + '℃' : 'track ' + w.track_temp_c + 'C');
       if (w.air_temp_c   != null) parts.push(isJ ? '気温' + w.air_temp_c   + '℃' : 'air '   + w.air_temp_c   + 'C');
       if (w.humidity     != null) parts.push(isJ ? '湿度' + w.humidity     + '%' : 'humidity ' + w.humidity + '%');
-      if (w.track_wetness != null && w.track_wetness > 0.05) parts.push(isJ ? 'ウェット率' + Math.round(w.track_wetness * 100) + '%' : 'wetness ' + Math.round(w.track_wetness * 100) + '%');
+      const wetnessLabel = formatTrackWetness(w.track_wetness_code, isJ);
+      if (wetnessLabel) parts.push(isJ ? '路面状態：' + wetnessLabel : 'track condition: ' + wetnessLabel);
       liveNote += isJ
         ? '\n\n【気象・路面】' + parts.join(' / ') + '\n聞かれたら実値で答えろ。単位を必ず添える（℃）。走行中は自分から羅列するな。ただしタイヤの垂れ・グリップ低下を語る時に「路面が上がってきてる／下がってきてる」といった文脈で自然に混ぜるのは可。'
         : '\n\n[WEATHER / TRACK] ' + parts.join(' / ') + '\nReport with real numbers when asked, always include the unit (C). Do not volunteer weather while driving, but you can naturally weave it into tyre / grip commentary (e.g. "track\'s coming up, tyres will suffer").';
@@ -1315,4 +1325,4 @@ function buildSystem(p) {
   return { prefix: prefix, suffix: suffix };
 }
 
-module.exports = { buildSystem };
+module.exports = { buildSystem, formatTrackWetness };

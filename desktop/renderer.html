@@ -796,6 +796,7 @@ const I18N = {
     err_enter_code:'Please enter a code.',
     err_not_found:'This code was not found.',
     err_revoked:'This code is no longer active. Please contact Yuji.',
+    err_expired:'Your five-day test access has ended. Please contact Yuji to continue.',
     err_network:"Can't reach the server. Check your connection.",
     err_unavailable:'The auth server is warming up. Please wait and retry.',
     err_auth_failed:'Authentication failed.',
@@ -918,6 +919,7 @@ const I18N = {
     err_enter_code:'コードを入力してください。',
     err_not_found:'このコードは見つかりません。',
     err_revoked:'このコードは現在無効です。Yujiに連絡してください。',
+    err_expired:'5日間のテストアクセスが終了しました。継続についてYujiに連絡してください。',
     err_network:'サーバーに接続できません。ネット接続を確認してください。',
     err_unavailable:'認証サーバー準備中です。少し待って再試行してください。',
     err_auth_failed:'認証に失敗しました。',
@@ -1091,6 +1093,23 @@ function getDeviceId(){
   }catch(e){ return ''; }
 }
 
+// Attach the same server-verifiable entitlement to every cost-bearing API.
+// A saved access code is not trusted locally: the server rechecks active/expiry
+// on every request using its own clock.
+function applyPitwallAccess(headers, body){
+  headers['X-Pitwall-Product']='pitwall';
+  if(body) body.product='pitwall';
+  const token=localStorage.getItem('pw_auth_token');
+  const code=localStorage.getItem('pw_beta_code');
+  if(token){
+    headers.Authorization='Bearer '+token;
+  }else if(code){
+    headers['X-Pitwall-Access-Code']=code;
+    headers['X-Pitwall-Device-Id']=getDeviceId();
+  }
+  return headers;
+}
+
 // ── コスト計測用session_id ──
 // 同じ走行中(=同じiRacing接続)は同じID。新しいiRacing接続('iracing_connected')で新しいIDを発行する。
 // 認証には使わない・64文字以内(サーバー側でも検証)。アプリ起動直後はまだ接続前でも会話できるため、
@@ -1228,7 +1247,7 @@ async function submitBetaCode(){
     msg.style.color='#6f6'; msg.textContent=t('welcome_prefix')+(res.name||'')+t('welcome_suffix');
     setTimeout(()=>{ hideBetaGate(); },700);
   }else{
-    const reasons={not_found:t('err_not_found'),revoked:t('err_revoked'),
+    const reasons={not_found:t('err_not_found'),revoked:t('err_revoked'),expired:t('err_expired'),
       network:t('err_network'),unavailable:t('err_unavailable')};
     msg.style.color='#f66'; msg.textContent=reasons[res.reason]||t('err_auth_failed');
   }
@@ -1336,7 +1355,7 @@ async function bootGate(){
     const res=await verifyBeta(saved);
     if(res.ok){ hideBetaGate(); return true; }
     // 無効化された/消された → 保存を消してゲートへ
-    if(res.reason==='revoked'||res.reason==='not_found'){ persistentSet('pw_beta_code',null); }
+    if(res.reason==='revoked'||res.reason==='not_found'||res.reason==='expired'){ persistentSet('pw_beta_code',null); }
   }
   showBetaGate();
   return false;
@@ -1559,7 +1578,7 @@ async function translateLine(text, target){
     const authToken = localStorage.getItem('pw_auth_token');
     const headers = {'Content-Type':'application/json'};
     const body = { text, target, usageSessionId };
-    if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+    applyPitwallAccess(headers, body);
     const ctrl = new AbortController();
     const timer = setTimeout(()=>ctrl.abort(), 8000);
     const r = await fetch(API_BASE+'/api/translate',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
@@ -1801,7 +1820,7 @@ async function callAPI(inputSource, memoryStatus=''){
         usageSessionId
     };
     if(inputSource==='ptt'||inputSource==='typed') chatBody.inputSource = inputSource;
-    if(authToken){ chatHeaders['Authorization']='Bearer '+authToken; chatBody.product='pitwall'; }
+    applyPitwallAccess(chatHeaders, chatBody);
     chatBody.stream = true;   // ストリーミング要求（文が出来た端から喋る＝流れるような会話）
     const ctrl = new AbortController();
     const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);  // Chat API 30秒でタイムアウト
@@ -2241,7 +2260,16 @@ async function drainQueue(){
     const ttsAuthToken = localStorage.getItem('pw_auth_token');
     const ttsHeaders = {'Content-Type':'application/json'};
     const ttsBody = { text:clean, voice:c.gVoice, languageCode:c.gLang, rate:c.gRate, pitch:c.gPitch, usageSessionId };
-    if(ttsAuthToken){ ttsHeaders['Authorization']='Bearer '+ttsAuthToken; ttsBody.product='pitwall'; }
+    ttsHeaders['X-Pitwall-Product']='pitwall'; ttsBody.product='pitwall';
+    if(ttsAuthToken){
+      ttsHeaders.Authorization='Bearer '+ttsAuthToken;
+    }else{
+      const ttsAccessCode=localStorage.getItem('pw_beta_code');
+      if(ttsAccessCode){
+        ttsHeaders['X-Pitwall-Access-Code']=ttsAccessCode;
+        ttsHeaders['X-Pitwall-Device-Id']=getDeviceId();
+      }
+    }
     let r = null;
     let lastFetchError = null;
     // 一時的なネットワーク落ちで即Windows音声へ変わらないよう短い再試行を入れる。
@@ -2916,7 +2944,7 @@ async function checkPaceJudgment(data){
     max_tokens:80,
     usageSessionId
   };
-  if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+  applyPitwallAccess(headers, body);
   try{
     const ctrl = new AbortController();
     const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);  // Chat API 30秒でタイムアウト
@@ -3033,7 +3061,7 @@ async function runJudgeCall(data){
     max_tokens:80,
     usageSessionId
   };
-  if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+  applyPitwallAccess(headers, body);
   const ctrl = new AbortController();
   const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);
   let reply='';
@@ -3113,7 +3141,7 @@ ${previousRaceBriefing}
       max_tokens: 150,
       usageSessionId, briefingKickoff: true
     };
-    if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+    applyPitwallAccess(headers, body);
     try{
       const ctrl = new AbortController();
       const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);
@@ -3583,7 +3611,7 @@ async function saveMemory(options={}){
         sessionAuthority:lastSessionAuthority,
       driverInsight:true, driverActivity, profileNote:buildProfileNote(profile), max_tokens:220,
         memoryReason:String(options.reason||'automatic'), usageSessionId};
-      if(authToken){ headers['Authorization']='Bearer '+authToken; body.product='pitwall'; }
+      applyPitwallAccess(headers, body);
       const ctrl=new AbortController();
       const timer=setTimeout(()=>ctrl.abort(),15000);
       let res;
@@ -4090,9 +4118,11 @@ async function transcribePttAudio(data){
     for(let attempt=0;attempt<retryDelays.length;attempt++){
       if(retryDelays[attempt]) await new Promise(resolve=>setTimeout(resolve,retryDelays[attempt]));
       try{
+        const sttHeaders={'Content-Type':'application/json'};
+        applyPitwallAccess(sttHeaders, payload);
         const r=await fetch(API_BASE+'/api/stt',{
           method:'POST',
-          headers:{'Content-Type':'application/json'},
+          headers:sttHeaders,
           body:JSON.stringify(payload),
           signal:ctrl.signal
         });

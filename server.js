@@ -213,7 +213,8 @@ app.post('/api/beta/verify', betaLimiter, express.json(), async (req, res) => {
   try {
     const { code, deviceId } = req.body || {};
     const r = await auth.verifyBetaToken(code, deviceId);
-    if (r.ok) return res.json({ ok: true, name: r.name, tier: r.tier });
+    if (r.ok) return res.json({ ok: true, name: r.name, tier: r.tier,
+      activatedAt: r.activatedAt || null, expiresAt: r.expiresAt || null });
     return res.status(403).json({ ok: false, reason: r.reason || 'denied' });
   } catch (err) {
     res.status(500).json({ ok: false, reason: 'error' });
@@ -267,6 +268,12 @@ app.post('/api/beta/admin/revoke', requireAdmin, express.json(), async (req, res
     const { code, active } = req.body || {};
     const r = await auth.setBetaActive(code, active === true);
     res.json(r);
+  } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+app.post('/api/beta/admin/expire', requireAdmin, express.json(), async (req, res) => {
+  try {
+    const { code } = req.body || {};
+    res.json(await auth.expireBetaToken(code));
   } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
 
@@ -402,6 +409,36 @@ app.post('/api/admin/member/revoke', requireAdmin, express.json(), async (req, r
 // ── 会員基盤（マジックリンク認証） ───────────────────────────────────────────
 // 現在ユーザーをreqに付与（未ログイン/未設定ならreq.user=null。既存機能は不変）。
 app.use(auth.attachUser);
+
+// One server-side entitlement gate protects every paid-cost API. The desktop
+// sends the same identity on chat, translation, TTS and STT; no route may rely
+// on a hidden screen or a one-time startup check.
+async function requirePitwallEntitlement(req, res, next) {
+  try {
+    // Deliberately do not trust body.product or any other client-controlled flag:
+    // omitting such a flag must never turn a paid endpoint into a public one.
+    if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
+    if (req.user && req.user.is_member) return next();
+
+    const code = req.headers['x-pitwall-access-code'];
+    const deviceId = req.headers['x-pitwall-device-id'];
+    if (typeof code !== 'string' || !code.trim()) {
+      return res.status(401).json({ error: 'access_required' });
+    }
+    const access = await auth.verifyBetaToken(code, deviceId);
+    if (!access.ok) {
+      const status = access.reason === 'expired' ? 403 : 401;
+      return res.status(status).json({ error: 'access_' + (access.reason || 'denied') });
+    }
+    req.betaAccess = access;
+    next();
+  } catch (err) {
+    console.error('[entitlement] verification failed:', err.message);
+    return res.status(503).json({ error: 'auth_unavailable' });
+  }
+}
+
+app.use(['/api/chat', '/api/translate', '/api/tts', '/api/stt'], requirePitwallEntitlement);
 
 const usageCheckpointLimiter = rateLimit({ windowMs: 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false });
 app.post('/api/usage/session-checkpoint', usageCheckpointLimiter, async (req, res) => {
@@ -603,14 +640,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const usageSessionId = (typeof req.body.usageSessionId === 'string' && req.body.usageSessionId.length <= 64)
       ? req.body.usageSessionId : null;
 
-    // ── PITWALL課金ゲート ──
-    // exe(PITWALL)は product:'pitwall' を送る。課金者(is_member)のみ許可。
-    // RaceVoice(無料)や旧クライアントは product を送らない → 従来通り通す。
-    if (req.body.product === 'pitwall') {
-      if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
-      if (!req.user) return res.status(401).json({ error: 'login_required' });
-      if (!req.user.is_member) return res.status(403).json({ error: 'membership_required' });
-    }
+    // PITWALL entitlement was already enforced by the shared route middleware.
 
     // ── Build the system prompt SERVER-SIDE (crown jewels never leave the server) ──
     // prefix(キャラ固定部分)に prompt cache を効かせてAPIコストを大幅削減。suffix(動的)は非キャッシュ。
@@ -844,11 +874,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 // 1行ずつの短い無線を翻訳する。haiku（激安・高速）。会話品質には影響させない独立系統。
 app.post('/api/translate', ttsLimiter, async (req, res) => {
   try {
-    if (req.body.product === 'pitwall') {
-      if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
-      if (!req.user) return res.status(401).json({ error: 'login_required' });
-      if (!req.user.is_member) return res.status(403).json({ error: 'membership_required' });
-    }
+    // PITWALL entitlement was already enforced by the shared route middleware.
     const text = (req.body.text || '').toString().slice(0, 500);
     const target = req.body.target === 'ja' ? 'Japanese' : 'English';
     if (!text.trim()) return res.json({ text: '' });

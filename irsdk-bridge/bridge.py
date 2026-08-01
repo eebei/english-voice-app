@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 239 (Telemetry Truth Gate + locale-safe lap times)"
+BUILD_VERSION = "Build 240 (TrackWetness + 5-day access gate)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -2565,12 +2565,17 @@ def poll_iracing():
             track_temp_c = reader.read_float('TrackTemp')   # フォールバック（TrackTempCrewが無い/Noneのセッション用）
         air_temp_c   = reader.read_float('AirTemp')         # 気温
         rel_humidity = reader.read_float('RelativeHumidity') # 湿度 0..1
-        track_wet    = reader.read_float('TrackWetness')     # 路面ウェット度 0..1(乾) - iRacing 2024+
+        # TrackWetness is irsdk_TrackWetness (0..7), NOT a 0..1 ratio.
+        # 0=unknown, 1=dry, 2=mostly dry, 3=very lightly wet, 4=lightly wet,
+        # 5=moderately wet, 6=very wet, 7=extremely wet.
+        track_wet_code = reader.read_int('TrackWetness')
+        if track_wet_code not in range(1, 8):
+            track_wet_code = None
         weather = {
             'track_temp_c': round(track_temp_c, 1) if track_temp_c is not None else None,
             'air_temp_c':   round(air_temp_c, 1)   if air_temp_c is not None   else None,
             'humidity':     round(rel_humidity * 100, 0) if rel_humidity is not None else None,
-            'track_wetness': round(track_wet, 2) if track_wet is not None else None,
+            'track_wetness_code': track_wet_code,
         }
 
         # ── コーナー単位サイドバイサイド検知（新規・2026-07-14 Yuji設計）──

@@ -113,6 +113,10 @@ async function init() {
       last_seen     TIMESTAMPTZ
     );
   `);
+  // Time-limited tester access is anchored in the database. Client clocks,
+  // reinstalls and device changes cannot reset these values.
+  await pool.query(`ALTER TABLE beta_tokens ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE beta_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
   // exe起動コードのデバイス紐付け（2026-07-11深夜追加）。
   //   従来はactiveフラグのみでゲートしていたため、1コードを友達に配ると無制限に無課金で使い放題になる
   //   穴があった。ここで「1コードにつき使える端末はMAX_DEVICES_PER_CODE台まで」に制限する。
@@ -845,6 +849,34 @@ async function verifyBetaToken(rawCode, rawDeviceId) {
   if (!row) return { ok: false, reason: 'not_found' };
   if (!row.active) return { ok: false, reason: 'revoked' };
 
+  const isFiveDayTester = row.tier === 'trial_5day';
+  let activatedAt = row.activated_at;
+  let expiresAt = row.expires_at;
+  if (isFiveDayTester && !activatedAt) {
+    // First successful verification wins. The conditional UPDATE is atomic,
+    // so concurrent first requests cannot move the five-day window.
+    const activated = await pool.query(
+      `UPDATE beta_tokens
+          SET activated_at = now(), expires_at = now() + interval '5 days'
+        WHERE code = $1 AND active = true AND activated_at IS NULL
+        RETURNING activated_at, expires_at`, [code]
+    );
+    if (activated.rows[0]) {
+      activatedAt = activated.rows[0].activated_at;
+      expiresAt = activated.rows[0].expires_at;
+    } else {
+      const current = await pool.query(
+        'SELECT active, activated_at, expires_at FROM beta_tokens WHERE code = $1', [code]);
+      const currentRow = current.rows[0];
+      if (!currentRow || !currentRow.active) return { ok: false, reason: 'revoked' };
+      activatedAt = currentRow.activated_at;
+      expiresAt = currentRow.expires_at;
+    }
+  }
+  if (isFiveDayTester && (!expiresAt || new Date(expiresAt).getTime() <= Date.now())) {
+    return { ok: false, reason: 'expired', activatedAt, expiresAt };
+  }
+
   // デバイス「椅子取りゲーム」（deviceIdを送ってくる新exeのみ対象・旧exeは後方互換で従来通り無制限）。
   //   上限に達している状態で未知の端末が来たら、一番last_seenが古い端末を追い出して席を空ける。
   //   締め出す＝ブロックするのではなく「奪い合う」ことで、再インストールは通し、貸し借りには
@@ -872,7 +904,7 @@ async function verifyBetaToken(rawCode, rawDeviceId) {
 
   // 最終接続時刻を更新（Yujiが「最後にいつ使ったか」を見られる）
   pool.query('UPDATE beta_tokens SET last_seen = now() WHERE code = $1', [code]).catch(() => {});
-  return { ok: true, name: row.name, tier: row.tier };
+  return { ok: true, name: row.name, tier: row.tier, activatedAt, expiresAt };
 }
 
 // ── ベータコード管理（Yuji専用・ADMIN_SECRETで保護） ──
@@ -882,7 +914,7 @@ function genBetaCode(name) {
   return `PITWALL-${tag}-${rand}`;
 }
 
-async function createBetaToken({ name, tier = 'lifetime', billingStart = null, note = null }) {
+async function createBetaToken({ name, tier = 'trial_5day', billingStart = null, note = null }) {
   if (!ready) throw new Error('unavailable');
   const code = genBetaCode(name);
   await pool.query(
@@ -895,7 +927,10 @@ async function createBetaToken({ name, tier = 'lifetime', billingStart = null, n
 async function listBetaTokens() {
   if (!ready) return [];
   const { rows } = await pool.query(
-    `SELECT code, name, tier, active, billing_start, note, created_at, last_seen
+    `SELECT code, name, tier, active, billing_start, note, created_at, last_seen,
+            activated_at, expires_at,
+            CASE WHEN expires_at IS NULL THEN NULL
+                 ELSE GREATEST(0, EXTRACT(EPOCH FROM (expires_at - now()))) END AS seconds_remaining
        FROM beta_tokens ORDER BY created_at DESC`
   );
   return rows;
@@ -906,6 +941,18 @@ async function setBetaActive(rawCode, active) {
   const code = normalizeCode(rawCode);
   const { rowCount } = await pool.query(
     `UPDATE beta_tokens SET active = $2 WHERE code = $1`, [code, !!active]
+  );
+  return { ok: rowCount > 0 };
+}
+
+// Test/support control: expire a five-day code immediately without changing
+// the global five-day policy or waiting for wall-clock time to pass.
+async function expireBetaToken(rawCode) {
+  if (!ready) throw new Error('unavailable');
+  const code = normalizeCode(rawCode);
+  const { rowCount } = await pool.query(
+    `UPDATE beta_tokens SET expires_at = now() - interval '1 second'
+      WHERE code = $1 AND tier = 'trial_5day'`, [code]
   );
   return { ok: rowCount > 0 };
 }
@@ -1155,7 +1202,7 @@ module.exports = {
   recordReferralAttribution, countReferralConversion,
   createFoundingCheckout,
   createBillingPortalSession,
-  verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive,
+  verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive, expireBetaToken,
   createFoundingApplication, listFoundingApplications,
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
   recordApiUsage, getApiUsageStats, recordGoogleUsage, recordUsageSessionCheckpoint, getUsageSessionStats,
