@@ -13,11 +13,13 @@ function check(label,ok){
 }
 
 const languageStart=renderer.indexOf('function evidenceLanguage(){');
-const languageEnd=renderer.indexOf('function evidenceLines(data){',languageStart);
-const questionsStart=renderer.indexOf('function buildEvidenceQuestions(data){');
-const questionsEnd=renderer.indexOf('function beginEvidenceDebrief(data){',questionsStart);
-const source=renderer.slice(languageStart,languageEnd)+renderer.slice(questionsStart,questionsEnd);
-const context={sel:'James',lastSessionType:'Race'};
+const questionsEnd=renderer.indexOf('function beginEvidenceDebrief(data){',languageStart);
+const source=renderer.slice(languageStart,questionsEnd);
+const storage=new Map();
+const context={sel:'James',lastSessionType:'Race',usageBuild:'240',Date,Math,
+  localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},
+  usageCount:()=>{},loadEvidenceRecords:()=>[],
+  validFinishPosition:v=>Number.isInteger(Number(v))&&Number(v)>0?Number(v):null};
 vm.createContext(context);
 vm.runInContext(source,context);
 
@@ -32,8 +34,8 @@ for(const [character,language] of Object.entries(characters)){
   const copy=context.evidenceCopy();
   check(`${character}: complete localized Q&A controls`,
     Array.isArray(copy.race)&&copy.race.length===3&&copy.save&&copy.discard&&copy.cancel&&copy.ready&&copy.saved);
-  const questions=context.buildEvidenceQuestions({event_type:'Race',avg_fuel_per_lap:3.8});
-  check(`${character}: same 3+fuel evidence structure`,questions.length===4);
+  const questions=context.buildEvidenceQuestions({event_type:'Race',finish_pos:5,avg_fuel_per_lap:3.8});
+  check(`${character}: localized contextual evidence structure`,questions.length>=3&&questions.length<=4);
 }
 
 const evidenceNote=renderer.slice(

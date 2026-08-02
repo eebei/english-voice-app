@@ -104,6 +104,9 @@ if python3 irsdk-bridge/tests_judge_llm_gate.py >/dev/null 2>&1; then echo "   �
 echo "── SessionInfo cap 診断計装（Unit 0・2026-07-24 Codex指示）"
 if python3 irsdk-bridge/tests_session_info_extent.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_session_info_extent.py 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── Session ResultsPositions正式順位（2026-08-02）"
+if python3 irsdk-bridge/tests_session_results.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_session_results.py; fail=1; fi
+
 echo "── Driver Handoff / Inactive Driver 認識（Unit E0・2026-07-26 Codex指示）"
 if python3 irsdk-bridge/tests_driver_handoff.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_driver_handoff.py 2>&1|grep "❌"|head -8; fail=1; fi
 
@@ -142,6 +145,9 @@ if node tests-build236-race-authority.js >/dev/null 2>&1; then echo "   ✅ 全�
 
 echo "── セッション証拠デブリーフ・本人確認Memory（2026-07-28）"
 if node tests-evidence-debrief.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js; fail=1; fi
+
+echo "── 指名ライバルCarIdx固定・GAP非代用（2026-08-02）"
+if node tests-named-rival.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-named-rival.js; fail=1; fi
 
 echo "── 全7キャラクター 判断・記憶・安全契約共通化（2026-07-29）"
 if node tests-character-capability-parity.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-character-capability-parity.js; fail=1; fi

@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 240 (TrackWetness + 5-day access gate)"
+BUILD_VERSION = "Build 241 (Monza 15 truth + debrief + rival hardening)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -501,6 +501,8 @@ PRIORITY = {
     'personal_best': 2, 'session_best': 2,
     # Final Lapは時刻判断。P2でduck/budgetによる消費を防ぐ。
     'final_lap': 2, 'final_lap_notice': 2,
+    # Checker fallback is a race-ending procedure, never default P5 chatter.
+    'checker_out_notice': 2,
     # 燃料不足は数値根拠のP0。band dedupで連呼を防ぐ。
     'fuel_warning': 0, 'fuel_strategy_warning': 0, 'fuel_strategy_safe': 3,
     # P3 戦略
@@ -1216,7 +1218,10 @@ class IRacingReader:
             si_offset = self._read_int(self.H_SESSION_INFO_OFFSET)
             if si_len <= 0 or si_offset <= 0:
                 return None
-            _cap = 200000
+            # 40-car weekends can exceed the historical 200 KB operational
+            # cap.  Read up to the already-audited diagnostic ceiling so late
+            # result/roster sections are not silently truncated.
+            _cap = self._DIAG_PROBE_MAX
             raw = self._bytes(si_offset, min(si_len, _cap))
             # ★2026-07-21 Codex指示R2「原因修正」：read-only診断（PowerShell不要・本体組み込み）。
             #   2026-07-21のMonza AIレース(約40台)でbridgeログが"drivers:1 / class空"を報告した。
@@ -1555,6 +1560,68 @@ def parse_session_info(yaml_str):
         result['sessions'] = sessions
         result['session_details'] = session_details
 
+        # Parse each Sessions[n].ResultsPositions table.  iRacing does not
+        # expose a required top-level `SessionResults:` block; race results
+        # normally live inside the active session item.
+        session_results = {}
+        result_session_num = None
+        in_results = False
+        results_indent = None
+        current_position = None
+        for line in yaml_str.split('\n'):
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            if stripped.startswith('- SessionNum:'):
+                if current_position is not None and result_session_num is not None:
+                    session_results.setdefault(result_session_num, []).append(current_position)
+                current_position = None
+                in_results = False
+                try:
+                    result_session_num = int(stripped.split(':', 1)[1].strip())
+                except Exception:
+                    result_session_num = None
+                continue
+            if stripped.startswith('ResultsPositions:') and result_session_num is not None:
+                in_results = True
+                results_indent = indent
+                current_position = None
+                continue
+            if not in_results:
+                continue
+            if (stripped and indent <= results_indent
+                    and not stripped.startswith('- Position:')):
+                if current_position is not None:
+                    session_results.setdefault(result_session_num, []).append(current_position)
+                current_position = None
+                in_results = False
+                continue
+            if stripped.startswith('- Position:'):
+                if current_position is not None:
+                    session_results.setdefault(result_session_num, []).append(current_position)
+                current_position = {}
+                try:
+                    current_position['position_zero'] = int(stripped.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif current_position is not None and stripped.startswith('ClassPosition:'):
+                try:
+                    current_position['class_position_zero'] = int(stripped.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif current_position is not None and stripped.startswith('CarIdx:'):
+                try:
+                    current_position['car_idx'] = int(stripped.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif current_position is not None and stripped.startswith('LapsComplete:'):
+                try:
+                    current_position['laps_complete'] = int(stripped.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+        if current_position is not None and result_session_num is not None:
+            session_results.setdefault(result_session_num, []).append(current_position)
+        result['session_results'] = session_results
+
         # Parse drivers for iRating and SOF
         drivers = []
         in_drivers = False
@@ -1834,6 +1901,7 @@ def poll_iracing():
     car_irating_map = {}        # car_idx -> iRating（危険ドライバー警告用）
     car_sr_map = {}             # car_idx -> Safety Rating値（例 2.34）
     car_number_map = {}         # car_idx -> ゼッケン（危険ドライバー警告での認識度向上用）
+    car_name_map = {}           # car_idx -> roster driver name（指名ライバル照合用）
     car_class_name_map = {}     # car_idx -> クラス名（例"GTP"。マルチクラス接近警告での読み上げ用）
     ahead_armed = {}            # car_idx -> bool（前方の危険ドライバー警告・再武装フラグ）
     danger_warned = {}          # car_idx -> last warned time（前後共通クールダウン）
@@ -1909,6 +1977,10 @@ def poll_iracing():
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
+    qualifying_checker_crossed = False  # 予選チェッカー後、自車がS/Fを通過した
+    qualifying_result_announced_for = None  # SessionNum単位で暫定順位を1回だけ通知
+    latest_qualifying_result = None
+    latest_session_results = {}
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
     fuel_warning_band = None
@@ -2066,6 +2138,8 @@ def poll_iracing():
                 info['current_session_authority'] = _session_authority
                 info['current_session_num'] = _session_authority['session_num']
                 info['current_session_type'] = _session_authority['session_type']
+                latest_qualifying_result = info.get('qualifying_result')
+                latest_session_results = info.get('session_results') or {}
                 # ★2026-07-21 Codex指示R2「原因修正」：read-only診断。DriverInfoから解析できた人数と、
                 #   実テレメトリ上に car_idx が見えている数を突き合わせる。大きく食い違えば
                 #   YAML解析側（parse_session_info）の問題、一致していれば「iRatingフィルタで
@@ -2173,6 +2247,8 @@ def poll_iracing():
                         last_session_num = _authority_session_num
                 if 'drivers' in info:
                     for d in info.get('drivers', []):
+                        if 'car_idx' in d and d.get('name'):
+                            car_name_map[d['car_idx']] = d['name']
                         if 'car_idx' in d and 'class_id' in d:
                             car_class_map[d['car_idx']] = d['class_id']
                         if 'car_idx' in d and 'class_name' in d:
@@ -2228,6 +2304,7 @@ def poll_iracing():
         cur_sess_type   = sessions_map.get(cur_snum, '') if cur_snum is not None else ''
         _previous_is_race_session = is_race_session
         is_race_session = ('race' in cur_sess_type.lower())
+        is_qualifying_session = ('qual' in cur_sess_type.lower())
 
         # ★P0（2026-07-21 Codexレビュー再指摘・再々指摘で拡張）：SessionNum変更を直接検知して
         #   race_lifecycle_fsmと燃料/ラップ計測のセッション限定状態を一括resetする。
@@ -2239,6 +2316,7 @@ def poll_iracing():
         _changed, _reset = maybe_reset_on_session_num_change(
             cur_snum, last_session_num, race_lifecycle_fsm)
         if _changed:
+            qualifying_checker_crossed = False
             # Practice/Qualify summaryはgarageで確定しない。SessionNum変更だけを権威ある終了
             # シグナルとして、reset前の旧セッション記録を一度送る。別ドライバーへのhandoff中でも
             # セッションそのものが切り替わった事実は確定しているため、安全にsummary化できる。
@@ -2256,6 +2334,7 @@ def poll_iracing():
                         'is_race': False,
                         'total_laps': len(session_laps),
                         'finish_pos': class_pos,
+                        'finish_pos_confirmed': False,
                         'best_lap': round(min(_old_times), 3),
                         'worst_lap': round(max(_old_times), 3),
                         'avg_lap': round(sum(_old_times) / len(_old_times), 3),
@@ -2497,7 +2576,11 @@ def poll_iracing():
                         'event_type': session_event_type,
                         'is_race': is_race_session,
                         'total_laps': len(session_laps),
-                        'finish_pos': class_pos,
+                        'finish_pos': None,
+                        # CarIdxClassPosition is still a live telemetry value here.
+                        # Do not present it as an official final result until an
+                        # authoritative SessionInfo result row is matched.
+                        'finish_pos_confirmed': False,
                         'best_lap': round(_best_t, 3),
                         'worst_lap': round(_worst_t, 3),
                         'avg_lap': round(sum(_times) / len(_times), 3),
@@ -2507,6 +2590,20 @@ def poll_iracing():
                         'incidents': prev_incidents or 0,
                         'laps': session_laps,
                     }
+                    _official_rows = latest_session_results.get(cur_snum, [])
+                    _official_player = next((r for r in _official_rows
+                                             if r.get('car_idx') == player_car_idx), None)
+                    _overall_zero = any(r.get('position_zero') == 0 for r in _official_rows)
+                    _class_zero = any(r.get('class_position_zero') == 0 for r in _official_rows)
+                    if (_official_player and _overall_zero and _class_zero
+                            and _official_player.get('class_position_zero', -1) >= 0):
+                        _pending_summary['finish_pos'] = (
+                            _official_player['class_position_zero'] + 1)
+                        _pending_summary['overall_finish_pos'] = (
+                            _official_player.get('position_zero', -1) + 1
+                            if _official_player.get('position_zero', -1) >= 0 else None)
+                        _pending_summary['finish_pos_confirmed'] = True
+                        _pending_summary['finish_pos_source'] = 'ResultsPositions'
                     log('Session summary pending: %d laps, best %s (route=%s)' % (
                         len(session_laps), str(round(_best_t, 3)),
                         'race' if is_race_session else 'non_race'))
@@ -2779,6 +2876,30 @@ def poll_iracing():
         )
         prev_current_lap = currentLap  # 互換性のため残す（使用しない）
 
+        # 予選の他車情報は、単独走行方式でもSDK上に他車が存在して見えるため警告根拠にしない。
+        # チェッカー後に自車がS/Fを通過し、QualifyResultsInfoの検証済み順位が届いてから
+        # 一度だけ暫定結果を読む。順位が取れなければ推測も代替値も使わず沈黙する。
+        if (is_qualifying_session and cur_ss in (5, 6) and lap_time_changed
+                and last_lap_time is not None):
+            qualifying_checker_crossed = True
+        if (is_qualifying_session and qualifying_checker_crossed
+                and qualifying_result_announced_for != cur_snum
+                and isinstance(latest_qualifying_result, dict)
+                and latest_qualifying_result.get('status') == 'valid'):
+            _q_class = latest_qualifying_result.get('class_position')
+            _q_overall = latest_qualifying_result.get('overall_position')
+            if _q_class is not None or _q_overall is not None:
+                if _q_class is not None and _q_overall is not None and _q_class != _q_overall:
+                    _q_msg = 'Provisional qualifying result, class P%d, overall P%d.' % (_q_class, _q_overall)
+                else:
+                    _q_pos = _q_class if _q_class is not None else _q_overall
+                    _q_msg = 'Provisional qualifying result, P%d.' % _q_pos
+                broadcast({'type': 'radio', 'trigger': 'qualifying_provisional_result',
+                           'class_pos': _q_class, 'overall_pos': _q_overall,
+                           'message': _q_msg})
+                qualifying_result_announced_for = cur_snum
+                log('QUALIFY RESULT announced: ' + _q_msg)
+
         # ── セクター計測（走行中は黙る・ラップ完了時にデータのみ送信）──
         if sector_bounds and onTrack:
             try:
@@ -2883,10 +3004,19 @@ def poll_iracing():
                     if car_surface_all
                     and overall_leader_idx < len(car_surface_all)
                     else None)
-                # TrackSurface 2=ApproachingPits, 3=OnTrack.  Missing surface
-                # is not authoritative enough for a Final Lap call.
-                _leader_on_pit = (
-                    _leader_pit_flag or _leader_surface not in (2, 3))
+                # AI leaders can expose an unavailable TrackSurface while
+                # position/lap progress remains valid.  Do not suppress every
+                # Final Lap call on that single weak signal.
+                _leader_on_pit = final_lap.leader_is_inactive(
+                    on_pit_road=_leader_pit_flag,
+                    track_surface=_leader_surface,
+                    lap=(car_laps_all[overall_leader_idx]
+                         if car_laps_all and overall_leader_idx < len(car_laps_all)
+                         else None),
+                    lap_dist_pct=_leader_dist,
+                    overall_position=(car_positions[overall_leader_idx]
+                                      if car_positions and overall_leader_idx < len(car_positions)
+                                      else None))
 
             _driver_avg_lap = (
                 sum(lap_time_hist) / len(lap_time_hist)
@@ -3632,7 +3762,8 @@ def poll_iracing():
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
         nearest_ahead_gap = None    # 毎ループ更新（前後の最近接ギャップ）
         nearest_behind_gap = None
-        if player_car_idx >= 0 and onTrack and not onPit and not in_formation:
+        if (player_car_idx >= 0 and onTrack and not onPit and not in_formation
+                and not is_qualifying_session):
             car_f2_times   = reader.read_float_array('CarIdxF2Time', 64)
             car_last_laps  = reader.read_float_array('CarIdxLastLapTime', 64)
             car_on_track   = reader.read_int_array('CarIdxTrackSurface', 64)
@@ -4051,6 +4182,7 @@ def poll_iracing():
         # 周回数が違う車同士でも(EstTimeと違って)そのまま引き算して正しいギャップになる。
         # なのでレース中のみ、クラス内の全順位について{順位: 自分とのギャップ秒}を作って毎回同送する。
         standings_gaps = None
+        competitor_status = []
         if is_race_session and player_car_idx >= 0:
             _cls_pos_arr = reader.read_int_array('CarIdxClassPosition', 64)
             _f2_arr = reader.read_float_array('CarIdxF2Time', 64)
@@ -4065,6 +4197,15 @@ def poll_iracing():
                         if _si >= len(_f2_arr) or _f2_arr[_si] is None or _f2_arr[_si] < 0:
                             continue
                         standings_gaps[str(_spos)] = round(_f2_arr[_si] - _player_f2, 1)
+                        if _si != player_car_idx:
+                            competitor_status.append({
+                                'car_idx': _si,
+                                'name': car_name_map.get(_si),
+                                'car_number': car_number_map.get(_si),
+                                'class_pos': _spos,
+                                # Positive=behind the player; negative=ahead.
+                                'gap_s': round(_f2_arr[_si] - _player_f2, 1),
+                            })
 
                     # ── レース中の前後ギャップは F2Time（iRacingダッシュボードと同じリーダー相対）で
                     #    「隣の順位」から取り直す。EstTimeの同一周回フィルターだと接近戦でS/Fライン跨ぎに
@@ -4105,6 +4246,7 @@ def poll_iracing():
                 'damage_s': damage_s,
                 'weather': weather,
                 'standings_gaps': standings_gaps,
+                'competitors': competitor_status,
             })
             last_telem_ts = _tnow
 

@@ -480,6 +480,12 @@ app.post('/api/usage/session-checkpoint', usageCheckpointLimiter, async (req, re
       autoPaceCalls: int(b.autoPaceCalls),
       briefingCalls: int(b.briefingCalls),
       insightCalls: int(b.insightCalls),
+      debriefOffered: int(b.debriefOffered),
+      debriefStarted: int(b.debriefStarted),
+      debriefCompleted: int(b.debriefCompleted),
+      debriefDismissed: int(b.debriefDismissed),
+      feedbackPrompted: int(b.feedbackPrompted),
+      feedbackAnswered: int(b.feedbackAnswered),
       normalExit: b.normalExit === true,
       lastReason: typeof b.reason === 'string' ? b.reason.slice(0, 40) : null,
     });

@@ -52,7 +52,10 @@ def _scenario(cars, player_exit_progress, lane_s, player_class_id):
         if lap is None or pct is None or not 0.0 <= pct < 1.0 or lap_time is None:
             excluded.append(idx)
             continue
-        if car.get("on_pit_road") or car.get("track_surface") not in (2, 3):
+        # AI cars may leave TrackSurface unavailable while lap progress and
+        # class position keep updating.  The explicit pit flag is decisive;
+        # otherwise valid progress is stronger than this weak surface field.
+        if car.get("on_pit_road"):
             excluded.append(idx)
             continue
         progress = lap + pct + lane_s / lap_time

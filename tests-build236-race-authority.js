@@ -11,8 +11,9 @@ function check(name, ok) {
   else { fail++; console.error('❌ ' + name); }
 }
 
-check('FINISHEDは直前Qualify summaryでなくRace live fallbackを使う',
-  renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(buildFallbackSessionSummary());")
+check('Race FINISHEDは直前Qualify summaryでなくRace fallbackを使う',
+  renderer.includes("driverActivity==='FINISHED' && String(lastSessionType||'').toLowerCase().includes('race')")
+  && renderer.includes('scheduleAutoDebrief(buildFallbackSessionSummary());')
   && !renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(lastSessionSummary||buildFallbackSessionSummary());"));
 
 const fallback = renderer.match(/function buildFallbackSessionSummary\(\)\{[\s\S]*?\n\}/);
@@ -45,9 +46,10 @@ check('残量5L警告も計算器が不足判定なら今周ピット',
   bridge.includes("'pit_required': _fuel_pit_required")
   && renderer.includes('d.pit_required')
   && renderer.includes('今周ピット。'));
-check('fallback順位は数値へ正規化してからsanitize',
-  !!fallback && fallback[0].includes('const livePosition=Number(')
-  && fallback[0].includes('finish_pos:livePosition'));
+check('fallback順位は未確定としてfail-closed',
+  !!fallback && !fallback[0].includes('const livePosition=Number(')
+  && fallback[0].includes('finish_pos:null')
+  && fallback[0].includes('finish_pos_confirmed:false'));
 check('未完stream tailを完成文の後へ送らない',
   server.includes("if (boundary < 0 && final && emittedText)"));
 

@@ -336,11 +336,11 @@ def test_diag_uses_bounded_probe_max():
           '_DIAG_PROBE_MAX = 400000' in src)
 
 
-def test_diag_does_not_modify_operational_cap():
-    print('\n══ 診断は operational cap を変更しない ══')
+def test_operational_read_uses_audited_ceiling():
+    print('\n══ operational read も監査済み上限まで読む ══')
     src = _bridge_source()
-    check("operational read は _cap = 200000 を使用",
-          "_cap = 200000" in src)
+    check("operational read は _DIAG_PROBE_MAX を使用",
+          "_cap = self._DIAG_PROBE_MAX" in src)
     check("operational raw の読み取り上限が min(si_len, _cap) のまま",
           "raw = self._bytes(si_offset, min(si_len, _cap))" in src)
 
@@ -686,7 +686,7 @@ def run_all():
     # 配線
     test_read_session_info_wires_diagnostic()
     test_diag_uses_bounded_probe_max()
-    test_diag_does_not_modify_operational_cap()
+    test_operational_read_uses_audited_ceiling()
     # 本物の変異試験（実装を壊してテスト検出する）
     test_mutation_removing_nul_slicing_breaks_p1_test()
     test_mutation_removing_cap_boundary_check_breaks_p2_test()

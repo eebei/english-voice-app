@@ -991,7 +991,7 @@ let sessionActive = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingDetected = false, iracingLive = false;
-let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null;
+let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null, lastSessionNum = null;
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
 let lastWeekendAuthority = null;  // entry list / qualifying format and result authority
@@ -1004,6 +1004,59 @@ let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = fal
 let evidenceDebrief = null;
 let fuelCapacityConfirmedThisSession = null;
 let lastFuelCapacityContext = null;
+let namedRival = null; // {carIdx,name,carNumber}; reset at SessionNum boundary
+
+function resetSessionScopedReviewState(){
+  if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
+  autoDebriefStarted=false;
+  autoDebriefData=null;
+  lastSessionSummary=null;
+  namedRival=null;
+  if(evidenceDebrief && evidenceDebrief.active) dismissEvidenceDebrief();
+}
+
+const RIVAL_FIRST_NAME_ALIASES={
+  kevin:['ケビン','けびん'], james:['ジェームズ','じぇーむず'], john:['ジョン','じょん'],
+  michael:['マイケル','まいける'], david:['デビッド','デイビッド','でびっど'],
+  mark:['マーク','まーく'], marc:['マーク','まーく'], scott:['スコット','すこっと']
+};
+function normalizeRivalToken(value){
+  return String(value||'').toLowerCase().replace(/[^a-z0-9\u3040-\u30ff]/g,'');
+}
+function resolveMentionedCompetitor(text){
+  const competitors=Array.isArray(lastTelemetry?.competitors)?lastTelemetry.competitors:[];
+  const source=normalizeRivalToken(text);
+  if(!source) return null;
+  const matches=competitors.filter(c=>{
+    const full=normalizeRivalToken(c.name);
+    const first=normalizeRivalToken(String(c.name||'').split(/\s+/)[0]);
+    const number=normalizeRivalToken(c.car_number);
+    const aliases=RIVAL_FIRST_NAME_ALIASES[first]||[];
+    return (full&&source.includes(full))
+      || (first&&first.length>=3&&source.includes(first))
+      || aliases.some(a=>source.includes(normalizeRivalToken(a)))
+      || (number&&new RegExp(`(?:#|car|車|号車)${number}(?!\\d)`,'i').test(String(text||'').replace(/\s+/g,'')));
+  });
+  return matches.length===1?matches[0]:null;
+}
+function updateNamedRivalFromUser(text){
+  if(!/ライバル|rival|gap|差|何秒|どれくらい|どのくらい|号車|car\s*#?/i.test(String(text||''))) return;
+  const hit=resolveMentionedCompetitor(text);
+  if(hit) namedRival={carIdx:hit.car_idx,name:hit.name||'',carNumber:hit.car_number||''};
+}
+function buildNamedRivalNote(isJP){
+  if(!namedRival) return '';
+  const rivals=Array.isArray(lastTelemetry?.competitors)?lastTelemetry.competitors:[];
+  const live=rivals.find(c=>Number(c.car_idx)===Number(namedRival.carIdx));
+  if(!live || !Number.isFinite(Number(live.gap_s))) return isJP
+    ? `\n\n━━ 指名ライバル権威 ━━\n${namedRival.name||('car #'+namedRival.carNumber)}の現在GAPは取得不能。別の前後車GAPで代用するな。`
+    : `\n\n━━ NAMED RIVAL AUTHORITY ━━\nThe current gap to ${namedRival.name||('car #'+namedRival.carNumber)} is unavailable. Never substitute the nearest-car gap.`;
+  const gap=Number(live.gap_s);
+  const direction=gap>0?'behind':gap<0?'ahead':'level';
+  return isJP
+    ? `\n\n━━ 指名ライバル権威 ━━\nname=${namedRival.name||'unknown'} / car_number=${namedRival.carNumber||'unknown'} / class_P${live.class_pos||'?'} / gap_s=${Math.abs(gap).toFixed(1)} / relative=${direction}\nrelative=behindは相手が自車の後方、aheadは前方。この値だけで回答し、gap_ahead、gap_behind、P1差へ置換するな。`
+    : `\n\n━━ NAMED RIVAL AUTHORITY ━━\nname=${namedRival.name||'unknown'} / car_number=${namedRival.carNumber||'unknown'} / class_P${live.class_pos||'?'} / gap_s=${Math.abs(gap).toFixed(1)} / relative=${direction}\nUse only this signed relationship. Never substitute gap_ahead, gap_behind, or the gap to P1.`;
+}
 
 // ── Character config ──
 const CHARS = {
@@ -1128,6 +1181,8 @@ function usageNowIso(){ return new Date().toISOString(); }
 function usageNewRecord(id){
   return {sessionId:id,sequence:0,startedAt:usageNowIso(),endedAt:null,totalSeconds:0,iracingSeconds:0,
     pttCalls:0,typedCalls:0,autoJudgeCalls:0,autoPaceCalls:0,briefingCalls:0,insightCalls:0,
+    debriefOffered:0,debriefStarted:0,debriefCompleted:0,debriefDismissed:0,
+    feedbackPrompted:0,feedbackAnswered:0,
     normalExit:false,reason:'start',_lastTickMs:Date.now()};
 }
 function usageTick(){
@@ -1140,7 +1195,10 @@ function usageTick(){
 function usageCount(kind){
   if(!usageTelemetry) return;
   const key={ptt:'pttCalls',typed:'typedCalls',auto_judge:'autoJudgeCalls',auto_pace:'autoPaceCalls',
-    briefing:'briefingCalls',insight:'insightCalls'}[kind];
+    briefing:'briefingCalls',insight:'insightCalls',debrief_offered:'debriefOffered',
+    debrief_started:'debriefStarted',debrief_completed:'debriefCompleted',
+    debrief_dismissed:'debriefDismissed',feedback_prompted:'feedbackPrompted',
+    feedback_answered:'feedbackAnswered'}[kind];
   if(key) usageTelemetry[key]++;
 }
 function usagePublicRecord(reason, normalExit){
@@ -1790,6 +1848,7 @@ async function callAPI(inputSource, memoryStatus=''){
     // max_tokens は日本語の文字数を保証しない。表示・TTS・履歴を同じ長さにするため、
     // サーバー側の文字数ゲートへ希望上限を渡す。戦略質問だけは数字と根拠を言い切れる余裕を持たせる。
     const latestUserText = [...messages].reverse().find(m=>m && m.role==='user')?.content || '';
+    updateNamedRivalFromUser(latestUserText);
     const isStrategyQuestion = /燃料|給油|ピット|戦略|作戦|残り.{0,4}(?:周|時間)|何周|アンダーカット|オーバーカット|fuel|pit|strategy|laps? left|undercut|overcut/i.test(latestUserText);
     const maxChars = selMode==='race' ? (isStrategyQuestion ? 60 : 35)
                    : selMode==='debrief' ? 70
@@ -1813,7 +1872,7 @@ async function callAPI(inputSource, memoryStatus=''){
         driverState, driverActivity,
         carClass:lastCarClass,   // シリーズ検出用（例IMSA23→IMSAルール注入）
         carModel:lastCarModel,
-        profileNote,
+        profileNote:profileNote+buildNamedRivalNote(isJP),
         raceHistory,
         max_tokens:maxTok,
         max_chars:maxChars,
@@ -2562,6 +2621,11 @@ function connectBridge(){
       if(data.type==='session_info'){
         if(data.data){
           const a=data.data.current_session_authority||null;
+          const nextSessionNum=(a&&Number.isInteger(Number(a.session_num)))?Number(a.session_num):null;
+          if(nextSessionNum!==null && lastSessionNum!==null && nextSessionNum!==lastSessionNum){
+            resetSessionScopedReviewState();
+          }
+          if(nextSessionNum!==null) lastSessionNum=nextSessionNum;
           lastSessionAuthority=a;
           lastSessionType=(a&&a.session_type&&a.session_type!=='unknown')?a.session_type:null;
           if(data.data.player_car_class&&String(data.data.player_car_class).trim().toLowerCase()!=='unknown') lastCarClass=data.data.player_car_class;
@@ -2589,7 +2653,9 @@ function connectBridge(){
         // summary配送が遅延／欠落しても、本人完走という権威状態からデブリーフへ必ず到達する。
         // 直前のPractice/Qualify summaryを使うと、Raceを「2周」等と誤報する。
         // FINISHED時点は現在のRace live値を暫定権威とし、後着する完全summaryで差し替える。
-        if(driverActivity==='FINISHED') scheduleAutoDebrief(buildFallbackSessionSummary());
+        if(driverActivity==='FINISHED' && String(lastSessionType||'').toLowerCase().includes('race')){
+          scheduleAutoDebrief(buildFallbackSessionSummary());
+        }
         return;
       }
       if(data.type==='session_summary'){
@@ -2708,6 +2774,12 @@ function oishiRadio(d, forSpeech=false){
     case 'lap_time':       return `${t}。${diff}落ち。`;
     case 'lap_slow':       return `${t}。ペースダウン。状況は？`;
     case 'pace_unstable':  return `2周連続ペースダウン。集中しよう。`;
+    case 'qualifying_provisional_result': {
+      const cp=Number(d.class_pos), op=Number(d.overall_pos);
+      if(cp>0&&op>0&&cp!==op) return `予選暫定、クラス${cp}番手、総合${op}番手。`;
+      const qp=cp>0?cp:op;
+      return qp>0?`予選暫定、${qp}番手。`:null;
+    }
     // ★2026-07-24 Yuji方針：ドライバー名を呼びかけに入れて呼吸を作る（{name}、大丈夫？…）。
     //   キャラ別バリエーション（LunaJP=優しく／HajimeJP=硬く／Default=中立）は個人感が含まれてるので残す。
     //   YujiパターンA（接触→停止→再走行できない）の入口。走行継続なら post_contact_ok が5秒後に続く。
@@ -3184,12 +3256,14 @@ function validFinishPosition(value){
 }
 function sanitizeSessionEvidence(data){
   const clean={...(data||{})};
-  clean.finish_pos=validFinishPosition(clean.finish_pos);
+  clean.finish_pos_confirmed=clean.finish_pos_confirmed===true;
+  clean.finish_pos=clean.finish_pos_confirmed?validFinishPosition(clean.finish_pos):null;
   return clean;
 }
 
 // ── Debrief auto-trigger ──
 function scheduleAutoDebrief(data){
+  if(!String(lastSessionType||data?.event_type||'').toLowerCase().includes('race')) return;
   // FINISHED が summary より先に届いた場合、後着した完全な summary へ差し替える。
   if(data){
     data=sanitizeSessionEvidence(data);
@@ -3198,6 +3272,7 @@ function scheduleAutoDebrief(data){
   if(autoDebriefStarted) return;
   if(selMode==='debrief'){
     autoDebriefStarted=true;
+    usageCount('debrief_offered');
     beginEvidenceDebrief(autoDebriefData||data||buildFallbackSessionSummary());
     return;
   }
@@ -3206,6 +3281,7 @@ function scheduleAutoDebrief(data){
     autoDebriefTimer=null;
     if(autoDebriefStarted) return;
     autoDebriefStarted=true;
+    usageCount('debrief_offered');
     const reviewData=autoDebriefData||data||buildFallbackSessionSummary();
     const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     const laps=reviewData.total_laps||'?';
@@ -3246,12 +3322,12 @@ function buildFallbackSessionSummary(){
     Number(lastTelemetry?.lap)||0,
     Number(lastTelemetry?.lap_completed)||0
   );
-  const livePosition=Number(lastTelemetry?.class_pos)||Number(lastTelemetry?.position)||null;
   return sanitizeSessionEvidence({
     type:'session_summary', track:lastTrack||'', car_class:lastCarClass||'',
     car_model:lastCarModel||'', event_type:lastSessionType||'Race', is_race:true,
     total_laps:liveLap,
-    finish_pos:livePosition,
+    finish_pos:null,
+    finish_pos_confirmed:false,
     best_lap:sessionBestLapSeconds||null,
     incidents:lastTelemetry?.incidents||0,
   });
@@ -3269,6 +3345,10 @@ const EVIDENCE_COPY={
     practice:['What felt best and most repeatable today?','What was the biggest issue: car, tyres, traffic, or your inputs?','If you change only one thing next run, what will it be?'],
     qualify:['What worked best on the attack lap?','Where did you lose the most time?','If you change only one thing next qualifying, what will it be?'],
     race:['What was your best decision or strongest part of the drive?','What caused the biggest time loss?','If you ran the same conditions again, what one thing would you change?'],
+    raceTop:['Which contributed most to this result: braking consistency, corner exits, tyre management, or traffic management?','Where did you have the clearest advantage over the cars around you?','Which decision from this race should we deliberately repeat next time?'],
+    raceMid:['Where did we lose the chance to move forward: pace, traffic, pit timing, or an incident?','Which phase cost the most time: the opening laps, the middle stint, or the final stint?','If we changed one decision, which one offered the best chance to gain positions?'],
+    raceLow:['Where did the result first begin to slip away: pace, traffic, an incident, pit timing, or the car?','What was the main cause of the lost time: your inputs, tyre behaviour, damage, or strategy?','Despite the result, what worked well enough that we should keep it for the next race?'],
+    productFeedback:'One last thing for product improvement: give me your honest view of my support today. Tell me what helped or what got in the way.',
     fuelQ:'Did fuel use and the pit decision match the plan? Tell me what differed.',
     save:'Save this',restart:'Revise answers',discard:'Don’t save',cancel:'End review',start:'Review this session',
     preview:'Ready to save',ready:'I linked your answers to the measured session data. Review them and choose whether to save.',
@@ -3282,6 +3362,10 @@ const EVIDENCE_COPY={
     practice:['今日いちばん再現できた、良い感触はどこ？','最大の問題は車、タイヤ、交通、それとも自分の操作のどれ？','次の走行で一つだけ変えるなら何にする？'],
     qualify:['アタックで一番うまく決まった部分はどこ？','一番タイムを失った原因は何だった？','次の予選で一つだけ変えるなら何にする？'],
     race:['今日いちばん良かった判断や走りはどこ？','最大のタイムロスは何が原因だった？','同じ条件でもう一度走るなら、一つだけ何を変える？'],
+    raceTop:['この結果に一番効いたのは、ブレーキングの安定、コーナー出口、タイヤ管理、それともトラフィック処理のどれ？','周囲の車に対して、最も明確な強みがあったのはどこ？','次のレースでも意識して再現したい判断はどれ？'],
+    raceMid:['順位を上げる機会を失った主因は、ペース、トラフィック、ピット判断、それとも接触のどれ？','最もタイムを失ったのは、序盤、中盤のスティント、それとも終盤のどこ？','一つだけ判断を変えられるなら、最も順位につながりそうなのはどれ？'],
+    raceLow:['結果が崩れ始めたのは、ペース、トラフィック、接触、ピット判断、それとも車の問題のどこ？','タイムを失った主因は、自分の操作、タイヤの挙動、ダメージ、それとも戦略のどれ？','結果とは別に、次のレースでも残すべき良かった部分はどこ？'],
+    productFeedback:'最後に、製品向上のため、今日の私のサポートへの素直な意見を聞かせて。役に立ったことでも、邪魔だったことでも構わないよ。',
     fuelQ:'燃料とピット判断は想定どおりだった？違った点があれば教えて。',
     save:'この内容を保存',restart:'回答を修正',discard:'保存しない',cancel:'振り返りを終了',start:'このセッションを振り返る',
     preview:'保存予定',ready:'回答を実測データと結びつけたよ。内容を確認して、保存するか選んでね。',
@@ -3295,6 +3379,10 @@ const EVIDENCE_COPY={
     practice:['Was fühlte sich heute am besten und reproduzierbar an?','Was war das größte Problem: Auto, Reifen, Verkehr oder deine Eingaben?','Wenn du im nächsten Run nur eine Sache änderst, welche?'],
     qualify:['Was hat auf der schnellen Runde am besten funktioniert?','Wo hast du am meisten Zeit verloren?','Wenn du im nächsten Qualifying nur eine Sache änderst, welche?'],
     race:['Was war deine beste Entscheidung oder stärkste Phase?','Was hat den größten Zeitverlust verursacht?','Was würdest du unter denselben Bedingungen einmal ändern?'],
+    raceTop:['Was trug am meisten zum Ergebnis bei: konstantes Bremsen, Kurvenausgänge, Reifenmanagement oder Verkehr?','Wo hattest du den klarsten Vorteil gegenüber den Autos um dich herum?','Welche Entscheidung sollten wir im nächsten Rennen bewusst wiederholen?'],
+    raceMid:['Wo verloren wir die Chance auf bessere Positionen: Pace, Verkehr, Boxenzeitpunkt oder Zwischenfall?','Welche Phase kostete am meisten Zeit: Anfang, mittlerer Stint oder Schlussphase?','Welche einzelne andere Entscheidung hätte am ehesten Positionen gebracht?'],
+    raceLow:['Wo begann das Ergebnis zu kippen: Pace, Verkehr, Zwischenfall, Boxenzeitpunkt oder Auto?','Was war die Hauptursache des Zeitverlusts: deine Eingaben, Reifenverhalten, Schaden oder Strategie?','Was funktionierte trotz des Ergebnisses gut genug, um es beizubehalten?'],
+    productFeedback:'Zum Schluss eine Frage zur Produktverbesserung: Sag mir ehrlich, wie meine Unterstützung heute war – was geholfen oder gestört hat.',
     fuelQ:'Entsprachen Verbrauch und Boxenentscheidung dem Plan? Was war anders?',
     save:'Speichern',restart:'Antworten ändern',discard:'Nicht speichern',cancel:'Auswertung beenden',start:'Session auswerten',
     preview:'Zum Speichern bereit',ready:'Ich habe deine Antworten mit den Messdaten verknüpft. Prüfe sie und entscheide, ob sie gespeichert werden.',
@@ -3308,6 +3396,10 @@ const EVIDENCE_COPY={
     practice:['O que funcionou melhor e foi mais repetível hoje?','Qual foi o maior problema: carro, pneus, tráfego ou seus comandos?','Se mudar apenas uma coisa na próxima saída, qual será?'],
     qualify:['O que funcionou melhor na volta rápida?','Onde você perdeu mais tempo?','Se mudar apenas uma coisa na próxima classificação, qual será?'],
     race:['Qual foi sua melhor decisão ou parte mais forte da pilotagem?','O que causou a maior perda de tempo?','Nas mesmas condições, o que você mudaria uma única vez?'],
+    raceTop:['O que mais contribuiu para o resultado: frenagem consistente, saídas de curva, pneus ou tráfego?','Onde você teve a vantagem mais clara sobre os carros ao redor?','Qual decisão devemos repetir de propósito na próxima corrida?'],
+    raceMid:['Onde perdemos a chance de avançar: ritmo, tráfego, momento do pit ou incidente?','Qual fase custou mais tempo: início, stint intermediário ou final?','Se mudássemos uma decisão, qual teria mais chance de render posições?'],
+    raceLow:['Onde o resultado começou a escapar: ritmo, tráfego, incidente, pit ou carro?','Qual foi a principal causa da perda: seus comandos, pneus, dano ou estratégia?','Apesar do resultado, o que funcionou bem e deve ser mantido?'],
+    productFeedback:'Por fim, para melhorar o produto: diga com sinceridade como foi meu apoio hoje, o que ajudou ou atrapalhou.',
     fuelQ:'O consumo e a decisão de pit corresponderam ao plano? O que foi diferente?',
     save:'Salvar',restart:'Revisar respostas',discard:'Não salvar',cancel:'Encerrar revisão',start:'Revisar esta sessão',
     preview:'Pronto para salvar',ready:'Vinculei suas respostas aos dados medidos. Revise e escolha se deseja salvar.',
@@ -3335,21 +3427,62 @@ function evidenceLines(data){
   if(data.incidents!=null) lines.push(`${c.incidents} ${data.incidents}`);
   return lines;
 }
+const DEBRIEF_QUESTION_HISTORY_KEY='pw_debrief_question_history_v1';
+const PRODUCT_FEEDBACK_CADENCE_KEY='pw_product_feedback_cadence_v1';
+function pickRotatingQuestion(pool){
+  if(!Array.isArray(pool)||!pool.length) return '';
+  let history=[];
+  try{ history=JSON.parse(localStorage.getItem(DEBRIEF_QUESTION_HISTORY_KEY)||'[]'); }catch(e){}
+  if(!Array.isArray(history)) history=[];
+  const available=pool.filter(q=>!history.slice(-3).includes(q));
+  const choices=available.length?available:pool;
+  const picked=choices[Math.floor(Math.random()*choices.length)];
+  history.push(picked);
+  try{ localStorage.setItem(DEBRIEF_QUESTION_HISTORY_KEY,JSON.stringify(history.slice(-12))); }catch(e){}
+  return picked;
+}
+function shouldAskProductFeedback(){
+  let state={};
+  try{ state=JSON.parse(localStorage.getItem(PRODUCT_FEEDBACK_CADENCE_KEY)||'{}')||{}; }catch(e){}
+  const records=loadEvidenceRecords().length;
+  const lastAt=Number(state.lastAt)||0;
+  const reviewsSince=Math.max(0,records-(Number(state.recordCount)||0));
+  const buildChanged=String(state.build||'')!==String(usageBuild||'unknown');
+  const cooldownElapsed=!lastAt||(Date.now()-lastAt)>=7*24*60*60*1000;
+  if(!cooldownElapsed || (lastAt && !buildChanged && reviewsSince<4)) return false;
+  try{ localStorage.setItem(PRODUCT_FEEDBACK_CADENCE_KEY,JSON.stringify({lastAt:Date.now(),recordCount:records,build:String(usageBuild||'unknown')})); }catch(e){}
+  usageCount('feedback_prompted');
+  return true;
+}
 function buildEvidenceQuestions(data){
   const c=evidenceCopy();
   const st=String(data.event_type||lastSessionType||'').toLowerCase();
   const practice=st.includes('practice');
   const qualify=st.includes('qualif');
-  const qs=(practice?c.practice:qualify?c.qualify:c.race).slice();
-  if(data.avg_fuel_per_lap!=null) qs.push(c.fuelQ);
-  return qs;
+  if(practice||qualify) return (practice?c.practice:c.qualify).slice(0,3);
+  const pos=validFinishPosition(data.finish_pos);
+  const resultPool=pos&&pos<=3?c.raceTop:pos&&pos<=10?c.raceMid:c.raceLow;
+  const qs=[pickRotatingQuestion(resultPool)];
+  if(Number(data.incidents)>0) qs.push(c.raceLow[1]);
+  else if(data.pace_first_half&&data.pace_last_half&&Number(data.pace_last_half)>Number(data.pace_first_half)+0.3){
+    qs.push(evidenceLanguage()==='ja'
+      ? `スティント後半は前半より平均${(Number(data.pace_last_half)-Number(data.pace_first_half)).toFixed(1)}秒落ちている。タイヤ、集中力、それともトラフィックの影響に近かった？`
+      : `Your second-half average was ${(Number(data.pace_last_half)-Number(data.pace_first_half)).toFixed(1)} seconds slower. Was that mainly tyres, concentration, or traffic?`);
+  } else if(data.avg_fuel_per_lap!=null) qs.push(c.fuelQ);
+  qs.push(c.race[2]);
+  if(shouldAskProductFeedback()) qs.push(c.productFeedback);
+  return qs.filter(Boolean).slice(0,4);
 }
 function beginEvidenceDebrief(data){
+  const isRestart=arguments[1]===true;
   const panel=document.getElementById('debrief-guide');
   if(!panel) return;
+  if(!isRestart) usageCount('debrief_started');
   const c=evidenceCopy();
   const safeData=sanitizeSessionEvidence(data||buildFallbackSessionSummary());
-  evidenceDebrief={active:true,index:0,data:safeData,questions:buildEvidenceQuestions(safeData),answers:[],acceptAfter:0};
+  const questions=buildEvidenceQuestions(safeData);
+  evidenceDebrief={active:true,index:0,data:safeData,questions,answers:[],acceptAfter:0,
+    feedbackIndex:questions.indexOf(c.productFeedback)};
   panel.style.display='block';
   document.getElementById('debrief-guide-title').textContent=c.title;
   document.getElementById('debrief-guide-evidence').textContent=evidenceLines(safeData).join(' · ');
@@ -3387,17 +3520,20 @@ function recordEvidenceAnswer(text){
     return;
   }
   evidenceDebrief.answers[evidenceDebrief.index]=text;
+  if(evidenceDebrief.index===evidenceDebrief.feedbackIndex) usageCount('feedback_answered');
   evidenceDebrief.index++;
   if(evidenceDebrief.index<evidenceDebrief.questions.length){ askEvidenceQuestion(); return; }
   evidenceDebrief.active=false;
+  usageCount('debrief_completed');
   const preview=evidenceDebrief.questions.map((q,i)=>`・${q}\n  ${evidenceDebrief.answers[i]||'—'}`).join('\n');
   document.getElementById('debrief-guide-question').textContent=c.preview+'\n'+preview;
   document.getElementById('debrief-guide-actions').style.display='flex';
   const msg=c.ready;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg);
 }
-function restartEvidenceDebrief(){ if(evidenceDebrief) beginEvidenceDebrief(evidenceDebrief.data); }
-function dismissEvidenceDebrief(){
+function restartEvidenceDebrief(){ if(evidenceDebrief) beginEvidenceDebrief(evidenceDebrief.data,true); }
+function dismissEvidenceDebrief(reason='manual'){
+  if(evidenceDebrief&&evidenceDebrief.active&&reason==='manual') usageCount('debrief_dismissed');
   evidenceDebrief=null;
   const p=document.getElementById('debrief-guide'); if(p) p.style.display='none';
 }
@@ -3440,12 +3576,13 @@ function confirmEvidenceMemory(){
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
     addMsg('sys',c.saved);
   }catch(e){ addMsg('sys',c.failed); }
-  dismissEvidenceDebrief();
+  dismissEvidenceDebrief('saved');
 }
 function offerSessionReview(data){
   data=sanitizeSessionEvidence(data);
   // Practice/Qualifyは次セッション開始を邪魔しない。画面に任意開始の証拠カードだけ出す。
   if(autoDebriefStarted || (evidenceDebrief && evidenceDebrief.active)) return;
+  usageCount('debrief_offered');
   const panel=document.getElementById('debrief-guide'); if(!panel) return;
   panel.style.display='block';
   const c=evidenceCopy();
@@ -3835,9 +3972,12 @@ function buildWeekendAuthorityNote(isJ){
     return `${n}:${d.session_type||'unknown'}:${length}`;
   }).join(' / ');
   const facts=`entries=${w.num_drivers||'unknown'} / classes=${classRows||'unknown'} / player_class=${w.player_class||'unknown'} / player_class_entries=${w.player_class_entry_count||'unknown'} / ${qFact} / sessions=${sessions||'unknown'}`;
+  const finalResult=(lastSessionSummary&&lastSessionSummary.is_race&&lastSessionSummary.finish_pos_confirmed===true)
+    ? `final_class_position=P${lastSessionSummary.finish_pos}`
+    : 'final_class_position=unconfirmed';
   return isJ
-    ? `\n\n━━ レース週末権威 ━━\n${facts}\n上記だけを事実として使え。entriesは総台数、player_class_entriesは同クラス台数。予選がno_valid_timeなら「有効タイムなし」と言え。ライブ順位・iRating・エントリー順から予選順位やグリッドを作るな。グリッドの正式権威値が無ければ「グリッド未確定」と答えろ。`
-    : `\n\n━━ WEEKEND AUTHORITY ━━\n${facts}\nUse only these facts. If qualifying=no_valid_time, report no valid qualifying time. Never derive qualifying or grid position from live position, iRating, or entry order. Without an explicit authoritative grid value, say the grid is not confirmed.`;
+    ? `\n\n━━ レース週末権威 ━━\n${facts} / ${finalResult}\n上記だけを事実として使え。entriesは総台数、player_class_entriesは同クラス台数。予選がno_valid_timeなら「有効タイムなし」と言え。ライブ順位・iRating・エントリー順から予選順位やグリッドを作るな。グリッドの正式権威値が無ければ「グリッド未確定」と答えろ。final_class_position=unconfirmedなら、会話中の順位やライブ順位から最終順位を作らず「確定順位データをまだ確認できない」と答えろ。`
+    : `\n\n━━ WEEKEND AUTHORITY ━━\n${facts} / ${finalResult}\nUse only these facts. If qualifying=no_valid_time, report no valid qualifying time. Never derive qualifying or grid position from live position, iRating, or entry order. Without an explicit authoritative grid value, say the grid is not confirmed. If final_class_position=unconfirmed, never assert a finishing position; say the authoritative final result is not yet available.`;
 }
 function buildRaceHistoryContext(){
   try{

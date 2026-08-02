@@ -18,6 +18,180 @@
 - **Phase C–E（期限 2026-08-07）**：復帰順位予測、戦略比較、
   アンダーカット／オーバーカット提案を、実測根拠・テスト・独立レビュー・実走検証付きで完成させる。
 
+## 🏁 Build 240 Field Update / Build 240 実走アップデート（2026-08-02）
+
+### English
+
+#### ✅ Confirmed in the Hockenheim endurance race
+
+- Build 240 ran through the Hockenheim endurance event in fully dry conditions.
+- The stopped-car warning heard near the beginning of the race was valid: a car had actually stopped ahead, and the incident was also observed live by Yuji.
+- Stopped-car detection is intentionally active in mixed Practice and Race sessions when a stopped car is genuinely present.
+- Other-car detection, including stopped-car warnings, is already suppressed during Qualifying because the driver is shown an isolated track state.
+- The main Build 240 log operated normally. The separate 14:57 log was a short Build 238 startup session and is not the endurance-race evidence log.
+
+#### 📻 Radio-volume finding
+
+- Hideo Yagi reported that the amount of radio communication felt extremely low. Log review supports that observation.
+- During approximately one hour of his driving stint, most automatic calls were immediate event notifications: side-by-side cars, position changes, fuel warnings and pit procedures.
+- There was an approximately 16-minute period without a meaningful engineering call.
+- This was not a TTS or radio-system failure. Build 240 currently speaks mainly when a discrete event trigger fires; it does not yet provide strategic pace reports over a long stint.
+- Do not add filler radio merely to make Luna sound busy. The intended improvement is evidence-based strategy communication after Phase C–E can provide the required decision inputs.
+
+#### ⚠️ Safety-radio improvement
+
+- Tester request: warnings should include the number and, when trustworthy data exists, the location of stopped cars—for example, “Stopped car ahead on the right” or “Two stopped cars ahead in the middle.”
+- The current telemetry can identify multiple stopped cars individually, so nearby incidents can be grouped and the number of cars can be reported.
+- The current public telemetry used by PITWALL does not provide a trustworthy left/centre/right position for a distant stopped car. PITWALL must not guess the location.
+- Planned safe first step: “One stopped car ahead,” “Two stopped cars ahead,” or “Multiple stopped cars ahead.” Add left/centre/right only after an authoritative data source is verified.
+
+#### 🅰️ Phase A — Telemetry Truth and Session Authority
+
+- Status: implemented, reviewed and corrected.
+- Provides the trusted telemetry and session-state foundation used by all later strategy phases.
+
+#### 🅱️ Phase B — Pit Loss Calibration
+
+- Status: implemented, reviewed and corrected.
+- Calibration remains specific to track × car × condition and requires local measured pit-stop samples.
+
+#### 🔭 Phase C — Pit-Exit Forecast
+
+- Status: shadow measurement and logging exist; driver-facing advice is not yet enabled.
+- Next objective: validate best / likely / worst pit-exit position against actual pit exits.
+
+#### ⚖️ Phase D — Strategy Comparison
+
+- Status: planned, not yet implemented as live driver advice.
+- Target comparisons include pit now versus later, fuel-only versus fuel plus tyres, and alternative stop timing.
+
+#### 🔀 Phase E — Undercut, Overcut and Stint Extension
+
+- Status: planned, not yet implemented as live driver advice.
+- Target decisions include undercut, overcut, fuel saving, stint extension and response to traffic.
+
+#### 🧪 Next controlled test — Monza 55-minute AI Race
+
+- Track: Autodromo Nazionale Monza — Grand Prix.
+- Car: Chevrolet Corvette Z06 GT3.R for every tester during the baseline comparison.
+- Session: 55-minute multiclass AI Race with at least 12 same-class opponents and approximately 25–30 cars in total.
+- Conditions: fixed dry weather; target air temperature 26°C and track temperature approximately 35°C.
+- Fuel: restricted so that one pit stop is required.
+- Tyres: maximum one tyre change; compare fuel-only against fuel plus tyres only after the baseline run is validated.
+- Fast Repair: disabled.
+- Baseline procedure: Yuji first completes at least three local pit-loss calibration samples under the same track, car and condition, then runs the full 55-minute race.
+- Expansion roles after the baseline is confirmed: Yuji = standard stop plus tyres; Yagi = early stop for clear air; Masato = fuel saving and one-to-three-lap extension; Dirt = fuel-only stop without tyres.
+- Required evidence: unedited bridge debug log, official race result, actual pit lap, position before and after the stop, fuel added, tyre decision, and timestamps of any incorrect or unclear radio calls.
+
+#### 🎯 Planned endurance pace reporting after Phase C–E validation
+
+- Evaluate the previous three-to-five laps internally rather than speaking on a fixed timer.
+- Compare pace consistency, measured fuel consumption, traffic effects, relative pace and the active Plan A target.
+- Speak only when the evaluation creates a useful decision, such as maintaining target pace, saving enough fuel to extend the stint, increasing pace within the fuel target, or avoiding a false response to traffic-induced lap loss.
+- Any instruction such as “slow by 0.3 seconds” must be tied to measured fuel consumption and the stint objective, not lap time alone.
+
+### 日本語
+
+#### ✅ Hockenheim耐久レースで確認できたこと
+
+- Build 240は、終始ドライだったHockenheim耐久イベントで稼働した。
+- レース序盤に発話した停止車両警告は正しかった。実際に前方で車両が停止しており、Yujiもリアルタイムで確認していた。
+- 練習走行とレースは混走であるため、実際に停止車両が存在する場合は停止車両検知を有効にする。
+- 予選は画面上の単走状態となるため、停止車両警告を含む他車検知はすでに抑制されている。
+- Build 240の本体ログは正常に動作した。別の14:57ログはBuild 238の短い起動セッションであり、耐久レースの証拠ログではない。
+
+#### 📻 無線量についての発見
+
+- 八木氏から「無線量が極端に少なかった気がする」と報告があり、ログ確認でもその感覚は妥当だった。
+- 約1時間の担当スティント中、自動発話の大半は左右の車、順位変動、燃料警告、ピット手順など、単発イベントへの通知だった。
+- 意味のあるエンジニアリング無線が約16分間なかった区間も存在した。
+- TTSや無線システムの故障ではない。Build 240は現在、明確なイベントトリガーが発火した時を中心に話す設計で、長いスティントに対する戦略的ペースレポートはまだ実装されていない。
+- Lunaを忙しそうに見せるためだけの埋め草無線は追加しない。Phase C〜Eで判断根拠が整った後、実測に基づく戦略無線として追加する。
+
+#### ⚠️ 安全無線の改善
+
+- テスター要望：停止車両警告では、台数と、信頼できるデータがある場合は位置も伝える。「前方右側、停止車両」「前方中央、2台停止」など。
+- 現在のテレメトリは停止車両を1台ずつ識別できるため、近接した事故をまとめ、台数を発話することは可能。
+- 現在PITWALLが利用している公開テレメトリには、遠方の停止車両が左・中央・右のどこにいるかを信頼して判断できる値がない。位置を推測で話してはならない。
+- 安全な第一段階として、「前方、停止車両1台」「前方、停止車両2台」「前方、複数台停止」を実現する。左・中央・右は、権威あるデータ源を確認できた場合のみ追加する。
+
+#### 🅰️ Phase A — Telemetry TruthとSession Authority
+
+- 状態：実装・レビュー・修正済み。
+- 後続する全戦略Phaseが利用する、信頼できるテレメトリとセッション状態の基盤。
+
+#### 🅱️ Phase B — Pit Loss Calibration
+
+- 状態：実装・レビュー・修正済み。
+- 校正値はコース × 車両 × コンディションごとに分かれ、各PCで実測ピットサンプルが必要。
+
+#### 🔭 Phase C — Pit-Exit Forecast
+
+- 状態：シャドー計測とログ記録は存在するが、ドライバー向け提案はまだ有効化していない。
+- 次の目標：Best／Likely／Worstのピットアウト予測順位を、実際の復帰順位と照合する。
+
+#### ⚖️ Phase D — Strategy Comparison
+
+- 状態：計画段階。ドライバー向けのライブ提案は未実装。
+- 今ピットする場合と後で入る場合、給油のみと給油＋タイヤ、異なる停止タイミングを比較する。
+
+#### 🔀 Phase E — Undercut／Overcut／Stint Extension
+
+- 状態：計画段階。ドライバー向けのライブ提案は未実装。
+- アンダーカット、オーバーカット、燃料セーブ、スティント延長、トラフィックへの対応を判断対象とする。
+
+#### 🧪 次回の統制テスト — Monza 55分 AI Race
+
+- コース：Autodromo Nazionale Monza — Grand Prix。
+- 車両：基準比較中は全テスターがChevrolet Corvette Z06 GT3.Rを使用する。
+- セッション：55分のマルチクラスAI Race。同一クラスを最低12台、全体で約25〜30台。
+- コンディション：ドライ固定。目標気温26°C、路面温度約35°C。
+- 燃料：1回のピットストップが必須になるよう搭載量を制限する。
+- タイヤ：交換上限1回。基準走行の成立後に、給油のみと給油＋タイヤを比較する。
+- Fast Repair：無効。
+- 基準手順：最初にYujiが同じコース・車両・コンディションで最低3回のローカルPit Loss校正サンプルを作り、その後55分レースを完走する。
+- 基準確認後の役割：Yuji＝標準ピット＋タイヤ、八木氏＝早めのピットでクリアエア狙い、まーぼー＝燃料セーブ＋1〜3周延長、ダート＝給油のみ・タイヤ無交換。
+- 必須証拠：無編集のBridgeデバッグログ、公式リザルト、実際のピット周回、ピット前後の順位、給油量、タイヤ交換判断、誤答または不明瞭な無線の時刻。
+
+#### 🎯 Phase C〜E検証後に追加する耐久ペースレポート
+
+- 固定時間で話すのではなく、直近3〜5周を内部で評価する。
+- ペースの安定性、実測燃料消費、トラフィックの影響、相対ペース、現在のPlan A目標と比較する。
+- ターゲットペース維持、燃料セーブによるスティント延長、燃料目標内でのペースアップ、トラフィックによる一時的なタイム損失への誤反応回避など、判断に価値が生じた時だけ話す。
+- 「0.3秒落とせ」などの指示は、ラップタイムだけでなく、実測燃料消費とスティント目標に結び付いている場合のみ行う。
+- **Revenue Readiness（Microsoft Store提出と並行・2026-07-31追加）**：
+  ユーザー／テスター／セッション別の総原価と粗利益を算出できる管理者向け集計を完成させる。
+  Claude推定費だけでなく、Google STT/TTS、Stripe決済手数料、Railway等の共通費配賦を統合し、
+  $12.99 / $19.99 / $29.99 各案の損益分岐を実ログで判断可能にする。
+  Store公開時点までの同時完成を目標とし、価格・利用上限・Fair Useの最終決定条件とする。
+
+### Revenue Readiness 完成条件（P0：収益化継続性）
+
+- 既存 `api_usage_log` / `google_usage_log` / `usage_session_checkpoints` を正とし、二重計上しない。
+- 認証会員は `user_id`、ベータ参加者は `tester_name` / `beta_token_hash`、個別走行は `session_id` で帰属する。
+- Claude：モデル別トークン、キャッシュ、`estimated_cost_usd` を集計し、Console請求額との差を監査できる。
+- Google STT/TTS：記録済みの秒数・文字数を有効日付き単価でUSD換算する。失敗リクエストの課金契約も明示する。
+- Stripe：実決済額、返金、割引、Stripe手数料、純売上を決済単位で取得する。
+- Railway等：月次共通費を「有料会員均等」「実走時間」「API原価比」から選べる配賦ルールとして扱う。
+- ユーザー別に、期間、実走時間、レース／セッション数、Claude費、Google費、共通費配賦、
+  Stripe後純売上、総原価、粗利益、粗利率を表示またはCSV出力する。
+- 1時間・1セッション・1アクティブ日・1ユーザー月当たりの原価を出す。
+- $12.99 / $19.99 / $29.99 の価格別に、通常利用・ヘビーユース時の損益分岐人数と安全余裕を出す。
+- テスト環境 (`is_test=true`) と本番を混ぜず、単価不明・ユーザー帰属不能・セッション欠損を明示する。
+- 機械テスト、独立レビュー、Yuji確認を通す。commit / push / build / deploy / 公開は別途Yuji承認まで禁止。
+
+### 次回最優先：アクセスIDによる全API共通認可（2026-08-01予定）
+
+- Stripeは決済状態の通知だけを担当し、利用可否の最終判断はPITWALLサーバーが持つ。
+- 個別アクセスIDを初回認証し、短時間有効な認証トークンへ交換する。
+- Claude chat、translate、Google TTS、Google STTを含む全ての有料APIで毎回同じ認可を行う。
+- テスターはStripe不要。初回認証時を開始として、サーバー時刻で5日後に自動失効させる。
+- 有料会員はStripeの契約状態をアクセス権へ反映し、解約・未払い・管理者停止を即時遮断する。
+- 現状はchat/translateの会員遮断はあるが、TTS/STTに会員チェックがなく、起動中のベータコード再検証もない。
+  このため「完全無効化」は未完成であり、有料公開・5日間テスター配布前のP0出荷ブロッカーとする。
+- 期限、状態、端末、Build、利用量、原価をアクセスIDへ帰属させ、管理者が延長・即時停止できるようにする。
+- Storeのテスターグループに残っていても、期限切れ後は費用発生機能をサーバー側で完全停止する。
+
 ## 出荷手順（2026-07-20 Yuji決定・必須）
 **修正 → ①機械チェック → ②Codexの最終確認 → ③ビルド → ④実走**
 1. **`./preflight.sh` を必ず通す**（未定義変数・構文・競合テスト）。通らないものは出荷しない
@@ -108,7 +282,12 @@ Yuji「これオフィシャルレースじゃないからまだ対応できる�
 ## HYPOTHESIS
 *まだ計測されていない仮説（＝根拠として使ってはいけない）*
 
-- **API 実原価 / 利益率80%**：**未計測**。1セッションあたりの Claude・STT・TTS・Railway・決済手数料の実額が無い。**価格議論はここが埋まるまで推測。**（Codex の指摘は正しい）
+- **API 実原価 / 利益率**：**部分計測済み・総原価は未完成**。Claudeは
+  `api_usage_log.estimated_cost_usd` によりユーザー／セッション別USD集計が可能。
+  Google STT/TTSも `google_usage_log` に秒数・文字数を記録済みだがUSD換算未実装。
+  Railway共通費配賦とStripe手数料・純売上の統合も未実装。
+  2026-07-31、Anthropic Consoleの `pitwall-production` APIキーで7月累計 $10.57を確認。
+  Revenue ReadinessタスクをMicrosoft Store提出と並行するP0として追加した。
 - **PTT 遅延 1〜3秒の内訳**：**未計装**。どの区間で時間を使っているか不明。Codex 提示の計測点（ptt_release〜playback_started）を採用予定。
 - **オーバル/ロードのシステム分割の価値**：テスター（まーぼー）の実需要はあるが、市場規模・実装コストとも未評価。
 - **「40人・半年で自己資金化」**：事業計画上の仮定であり実績ではない。

@@ -228,6 +228,12 @@ async function init() {
       auto_pace_calls     INTEGER NOT NULL DEFAULT 0,
       briefing_calls      INTEGER NOT NULL DEFAULT 0,
       insight_calls       INTEGER NOT NULL DEFAULT 0,
+      debrief_offered     INTEGER NOT NULL DEFAULT 0,
+      debrief_started     INTEGER NOT NULL DEFAULT 0,
+      debrief_completed   INTEGER NOT NULL DEFAULT 0,
+      debrief_dismissed   INTEGER NOT NULL DEFAULT 0,
+      feedback_prompted   INTEGER NOT NULL DEFAULT 0,
+      feedback_answered   INTEGER NOT NULL DEFAULT 0,
       normal_exit         BOOLEAN NOT NULL DEFAULT false,
       last_reason         TEXT,
       created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -236,6 +242,9 @@ async function init() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_usage_session_checkpoint_user_id ON usage_session_checkpoints (user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_usage_session_checkpoint_beta_hash ON usage_session_checkpoints (beta_token_hash);`);
+  for (const column of ['debrief_offered','debrief_started','debrief_completed','debrief_dismissed','feedback_prompted','feedback_answered']) {
+    await pool.query(`ALTER TABLE usage_session_checkpoints ADD COLUMN IF NOT EXISTS ${column} INTEGER NOT NULL DEFAULT 0;`);
+  }
 
   // Google TTS/STT の生課金単位（正確な単価はまだ固定せず、Google Cloud請求と後から照合する）。
   await pool.query(`
@@ -1064,8 +1073,10 @@ async function recordUsageSessionCheckpoint(data) {
     `INSERT INTO usage_session_checkpoints (
        session_id,user_id,beta_token_hash,tester_name,device_id_hash,build,sequence,
        started_at,ended_at,total_seconds,iracing_seconds,ptt_calls,typed_calls,
-       auto_judge_calls,auto_pace_calls,briefing_calls,insight_calls,normal_exit,last_reason
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+       auto_judge_calls,auto_pace_calls,briefing_calls,insight_calls,
+       debrief_offered,debrief_started,debrief_completed,debrief_dismissed,feedback_prompted,feedback_answered,
+       normal_exit,last_reason
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
      ON CONFLICT (session_id) DO UPDATE SET
        user_id=COALESCE(EXCLUDED.user_id,usage_session_checkpoints.user_id),
        beta_token_hash=COALESCE(EXCLUDED.beta_token_hash,usage_session_checkpoints.beta_token_hash),
@@ -1076,7 +1087,10 @@ async function recordUsageSessionCheckpoint(data) {
        iracing_seconds=EXCLUDED.iracing_seconds,ptt_calls=EXCLUDED.ptt_calls,
        typed_calls=EXCLUDED.typed_calls,auto_judge_calls=EXCLUDED.auto_judge_calls,
        auto_pace_calls=EXCLUDED.auto_pace_calls,briefing_calls=EXCLUDED.briefing_calls,
-       insight_calls=EXCLUDED.insight_calls,normal_exit=EXCLUDED.normal_exit,
+       insight_calls=EXCLUDED.insight_calls,debrief_offered=EXCLUDED.debrief_offered,
+       debrief_started=EXCLUDED.debrief_started,debrief_completed=EXCLUDED.debrief_completed,
+       debrief_dismissed=EXCLUDED.debrief_dismissed,feedback_prompted=EXCLUDED.feedback_prompted,
+       feedback_answered=EXCLUDED.feedback_answered,normal_exit=EXCLUDED.normal_exit,
        last_reason=EXCLUDED.last_reason,updated_at=now()
      WHERE EXCLUDED.sequence >= usage_session_checkpoints.sequence
      RETURNING session_id,sequence`,
@@ -1084,6 +1098,8 @@ async function recordUsageSessionCheckpoint(data) {
      data.deviceIdHash || null, data.build || null, data.sequence, data.startedAt || null,
      data.endedAt || null, data.totalSeconds, data.iracingSeconds, data.pttCalls, data.typedCalls,
      data.autoJudgeCalls, data.autoPaceCalls, data.briefingCalls, data.insightCalls,
+     data.debriefOffered, data.debriefStarted, data.debriefCompleted, data.debriefDismissed,
+     data.feedbackPrompted, data.feedbackAnswered,
      !!data.normalExit, data.lastReason || null]
   );
   return rows[0] || { session_id: data.sessionId, sequence: data.sequence };
@@ -1168,6 +1184,8 @@ async function getUsageSessionStats({ from, to } = {}) {
      SELECT c.session_id,c.user_id,c.tester_name,c.build,c.started_at,c.ended_at,
             c.total_seconds,c.iracing_seconds,c.ptt_calls,c.typed_calls,
             c.auto_judge_calls,c.auto_pace_calls,c.briefing_calls,c.insight_calls,
+            c.debrief_offered,c.debrief_started,c.debrief_completed,c.debrief_dismissed,
+            c.feedback_prompted,c.feedback_answered,
             c.normal_exit,c.last_reason,
             COALESCE(api.api_calls,0) api_calls,api.anthropic_cost_usd,
             COALESCE(google.tts_calls,0) tts_calls,COALESCE(google.stt_calls,0) stt_calls,

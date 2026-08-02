@@ -51,7 +51,7 @@ function waitForServer(child) {
 }
 
 async function withServer(port, extraEnv, fn) {
-  const child = spawn(process.execPath, ['server.js'], {
+  const child = spawn(process.execPath, ['-r', './tests-auth-ready-preload.js', 'server.js'], {
     cwd: __dirname,
     env: {
       ...process.env,

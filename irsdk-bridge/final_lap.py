@@ -174,6 +174,26 @@ def select_milestone_laps(is_time_race, timed_evaluation,
     return legacy_laps_remaining
 
 
+def leader_is_inactive(*, on_pit_road, track_surface, lap,
+                       lap_dist_pct, overall_position):
+    """Classify the official leader without trusting TrackSurface alone.
+
+    AI cars can report an unavailable TrackSurface while their authoritative
+    position/lap progress continues to update.  A real pit-road flag remains
+    decisive; otherwise position 1 plus valid lap progress is sufficient.
+    """
+    if bool(on_pit_road):
+        return True
+    if track_surface in (2, 3):
+        return False
+    try:
+        valid_progress = (int(overall_position) == 1 and int(lap) > 0
+                          and 0.0 <= float(lap_dist_pct) <= 1.0)
+    except (TypeError, ValueError):
+        valid_progress = False
+    return not valid_progress
+
+
 def select_milestone(laps_remaining, lifecycle_state, sent):
     """Return ``(milestone, crossed)`` without consuming state.
 

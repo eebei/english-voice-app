@@ -13,8 +13,17 @@ function check(label, ok){
   ok?pass++:fail++;
 }
 
-check('FINISHEDからsummary欠落時も自動デブリーフへ到達',
-  renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(buildFallbackSessionSummary())"));
+check('RaceのFINISHEDだけsummary欠落時も自動デブリーフへ到達',
+  renderer.includes("driverActivity==='FINISHED' && String(lastSessionType||'').toLowerCase().includes('race')")
+  && renderer.includes('scheduleAutoDebrief(buildFallbackSessionSummary())'));
+check('SessionNum変更でセッション単位のデブリーフ状態を再武装',
+  renderer.includes('function resetSessionScopedReviewState()')
+  && renderer.includes('nextSessionNum!==lastSessionNum')
+  && renderer.includes('autoDebriefStarted=false;'));
+check('最終順位はconfirmedだけを表示しlive順位で補完しない',
+  renderer.includes('clean.finish_pos_confirmed=clean.finish_pos_confirmed===true;')
+  && renderer.includes('clean.finish_pos=clean.finish_pos_confirmed?validFinishPosition(clean.finish_pos):null;')
+  && renderer.includes('finish_pos_confirmed:false'));
 check('FINISHED後着summaryを完全データへ差し替える',
   renderer.includes('autoDebriefData=data;')
   && renderer.includes('data=sanitizeSessionEvidence(data);')
@@ -29,6 +38,18 @@ check('Practice/Qualifyは任意レビューカードを表示',
 check('必須Q&Aは一問ずつ回答を記録',
   renderer.includes('function recordEvidenceAnswer(text)')
   && renderer.includes('askEvidenceQuestion()'));
+check('結果帯別の具体質問をローテーション',
+  renderer.includes('raceTop:') && renderer.includes('raceMid:') && renderer.includes('raceLow:')
+  && renderer.includes('pickRotatingQuestion(resultPool)')
+  && renderer.includes("history.slice(-3).includes(q)"));
+check('製品評価は低頻度で提示し回答有無だけ中央計測',
+  renderer.includes('function shouldAskProductFeedback()')
+  && renderer.includes('7*24*60*60*1000')
+  && renderer.includes("usageCount('feedback_prompted')")
+  && renderer.includes("usageCount('feedback_answered')"));
+check('デブリーフ導線を提示・開始・完了・中断で計測',
+  ['debrief_offered','debrief_started','debrief_completed','debrief_dismissed']
+    .every(k=>renderer.includes(`usageCount('${k}')`)));
 check('保存前に本人確認ボタンを要求',
   renderer.includes('confirmEvidenceMemory()')
   && renderer.includes("confidence:'confirmed_by_driver'"));

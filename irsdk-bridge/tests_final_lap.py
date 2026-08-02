@@ -181,6 +181,22 @@ def test_milestone_path():
           fl.select_milestone(1, fl.CHECKER_OUT, sent) == (None, ()))
 
 
+def test_ai_leader_activity_fallback():
+    print('\n══ AI leader activity fallback ══')
+    check('missing surface with advancing P1 remains active',
+          not fl.leader_is_inactive(
+              on_pit_road=False, track_surface=-1, lap=30,
+              lap_dist_pct=.488, overall_position=1))
+    check('pit-road flag always wins',
+          fl.leader_is_inactive(
+              on_pit_road=True, track_surface=3, lap=30,
+              lap_dist_pct=.488, overall_position=1))
+    check('missing surface and invalid progress fails closed',
+          fl.leader_is_inactive(
+              on_pit_road=False, track_surface=-1, lap=-1,
+              lap_dist_pct=None, overall_position=1))
+
+
 def test_checker_edge():
     print('\n══ CHECKER_OUT edge ══')
     check('RACING -> CHECKER_OUT dispatches',
@@ -243,6 +259,7 @@ def run_all():
     test_timed_cases()
     test_fail_closed()
     test_milestone_path()
+    test_ai_leader_activity_fallback()
     test_checker_edge()
     test_mutations()
     print('\n[final_lap] 合格 %d / 不合格 %d' % (passed, failed))
