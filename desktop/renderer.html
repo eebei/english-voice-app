@@ -1808,9 +1808,54 @@ function hasTelemetryOwnedVehicleClaim(text){
   ].some(re=>re.test(s));
   const pitContext=/(?:ボックス|ピット|\bbox\b|\bpit\b)/i.test(s);
   const pitCountdown=/(?:100|50|20)\s*(?:メートル|m\b|metres?\b|meters?\b)/i.test(s);
-  return stateClaim || (pitContext && pitCountdown);
+  // Strategy numbers are telemetry-owned too.  Streaming LLM text must not
+  // speak a fabricated lap/fuel/time/gap number before the prompt can recover.
+  const strategyNumber=/(?:\d+(?:\.\d+)?)\s*(?:周|ラップ|リットル|L\b|秒|分|laps?\b|lit(?:er|re)s?\b|seconds?\b|minutes?\b)/i.test(s);
+  return stateClaim || strategyNumber || (pitContext && pitCountdown);
 }
 function telemetryTruthFallback(live, userText, isJP){
+  const asked=String(userText||'');
+  const fs=(live&&live.fuel_strategy&&typeof live.fuel_strategy==='object')?live.fuel_strategy:{};
+  if(/何分|レース時間|残り時間|how (?:long|much time)|time (?:left|remaining)/i.test(asked)){
+    const sec=Number(live?.session_time_remaining_s);
+    if(Number.isFinite(sec)) return isJP ? `残り${Math.max(0,Math.round(sec))}秒。` : `${Math.max(0,Math.round(sec))} seconds remaining.`;
+    const race=Object.values(lastWeekendAuthority?.session_details||{}).find(s=>/race/i.test(String(s?.session_type||'')));
+    const raw=String(race?.session_time||'');
+    const m=raw.match(/(\d+(?:\.\d+)?)\s*(?:min|minute)/i);
+    if(m) return isJP ? `レース時間は${Number(m[1])}分。` : `Race duration is ${Number(m[1])} minutes.`;
+  }
+  if(/残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(asked)){
+    const crossings=Number(live?.finish_crossings_authority);
+    if(Number.isInteger(crossings)&&crossings>=1) return isJP ? `チェッカーまで、自車のS/F通過はあと${crossings}回。` : `${crossings} driver S/F crossing${crossings===1?'':'s'} to the finish.`;
+    const sec=Number(live?.session_time_remaining_s);
+    return Number.isFinite(sec)
+      ? (isJP ? `残り${Math.max(0,Math.round(sec))}秒。残り周回はまだ確定できない。` : `${Math.max(0,Math.round(sec))} seconds remain; finish crossings are not confirmed.`)
+      : (isJP ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.');
+  }
+  if(/燃料|給油|足りる|fuel|lit(?:er|re)|make it/i.test(asked)){
+    const required=Number(fs.required_fuel_l), margin=Number(fs.margin_l), crossings=Number(fs.estimated_crossings_to_finish);
+    if(Number.isFinite(required)&&Number.isFinite(margin)&&Number.isInteger(crossings)){
+      return isJP
+        ? `あと${crossings}回のS/F通過に必要燃料${required.toFixed(1)}リットル、${margin>=0?margin.toFixed(1)+'リットル余裕':Math.abs(margin).toFixed(1)+'リットル不足'}。`
+        : `${required.toFixed(1)} litres required for ${crossings} S/F crossing${crossings===1?'':'s'}; ${margin>=0?margin.toFixed(1)+' litres margin':Math.abs(margin).toFixed(1)+' litres short'}.`;
+    }
+    const fuel=Number(live?.fuel), sec=Number(live?.session_time_remaining_s);
+    const fact=Number.isFinite(fuel)?(isJP?`燃料${fuel.toFixed(1)}リットル。`:`Fuel ${fuel.toFixed(1)} litres. `):'';
+    return fact+(Number.isFinite(sec)
+      ? (isJP?`残り${Math.round(sec)}秒だが、必要量はまだ確定できない。`:`${Math.round(sec)} seconds remain, but required fuel is not confirmed.`)
+      : (isJP?'必要量はまだ確定できない。':'Required fuel is not confirmed.'));
+  }
+  if(/トップ|首位|P1|何秒|ギャップ|差|leader|gap/i.test(asked)){
+    const wantsOverall=/総合|GTP|gdp|overall/i.test(asked);
+    const target=wantsOverall?live?.leaders?.overall:live?.leaders?.player_class;
+    const gap=Number(target?.gap_s);
+    if(Number.isFinite(gap)) return isJP
+      ? `${wantsOverall?'総合首位':'クラス首位'}まで${Math.abs(gap).toFixed(1)}秒。`
+      : `${Math.abs(gap).toFixed(1)} seconds to the ${wantsOverall?'overall':'class'} leader.`;
+    return isJP
+      ? `${wantsOverall?'総合首位':'クラス首位'}とのGAPは取得できない。直前車のGAPでは代用しない。`
+      : `Gap to the ${wantsOverall?'overall':'class'} leader is unavailable; I will not substitute the nearest-car gap.`;
+  }
   const pitIntent=/ボックス|ピット|\bbox\b|\bpit\b/i.test(String(userText||''));
   if(isJP){
     if(live && live.on_pit_road===true) return 'ピットレーン内。';
@@ -3944,7 +3989,7 @@ function buildFuelAuthorityNote(isJ){
   return isJ
     ? `\n\n━━ 燃料戦略・最優先権威契約 ━━\n${body}\n`
       +'燃料残量・平均燃費・残り周回・必要給油量は上記の確定値だけを使え。タンク容量はconfirmed_bop_tank_capacity_lがある時だけ使え。'
-      +'現在燃料とタンク容量を混同するな。authoritative_laps_to_finishが無い時は残り周回、完走可否、ピット周回を推測せず、「残り周回の権威データ待ち」と短く答えろ。'
+      +'現在燃料とタンク容量を混同するな。authoritative_laps_to_finishが無い時は残り周回、必要燃料、完走可否、ピット周回を推測せず、残り秒数があればその秒数だけ答えろ。残り秒数も無ければ「残り周回の権威データ待ち」と短く答えろ。'
       +'measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無いレース開始前は、ピット周回を絶対に提示するな。confirmed_bop_tank_capacity_lがある場合は「53Lスタート。実測燃費が3周そろったらピット周回を確定するね」の形式で答えろ。'
       +'ピット実行前に「ピット済み」「今のピットで給油」と完了形で言うな。現在燃料が必要量を下回る時は、セーブだけで済むように言わず「今周ピット」を優先しろ。'
       +'一般的なGT3容量、過去会話、質問に含まれる周回数で確定値を上書きするな。計算器との矛盾は禁止。'

@@ -182,9 +182,10 @@ def leader_is_inactive(*, on_pit_road, track_surface, lap,
     position/lap progress continues to update.  A real pit-road flag remains
     decisive; otherwise position 1 plus valid lap progress is sufficient.
     """
-    if bool(on_pit_road):
-        return True
-    if track_surface in (2, 3):
+    # The overall leader may legitimately be on pit road while still
+    # controlling the timed-race finish.  Valid official P1 progress remains
+    # authoritative even when AI pit/surface flags are unreliable.
+    if track_surface in (2, 3) and not bool(on_pit_road):
         return False
     try:
         valid_progress = (int(overall_position) == 1 and int(lap) > 0

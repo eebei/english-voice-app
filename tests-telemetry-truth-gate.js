@@ -24,12 +24,12 @@ if(claimFn){
     'Box here. Limiter on.',
     'Refuelling now.',
     'ピットまで100メートル。',
+    'あと30L必要。',
   ].forEach(text=>check('誤った状態遷移を遮断: '+text,
     context.hasTelemetryOwnedVehicleClaim(text)));
   [
     'うん、ボックス準備。',
     'この周ボックスね。',
-    'あと30L必要。',
     'Box prepared.',
     '前方停止車まで100メートル。',
     'リミッターオフにはしないで。',

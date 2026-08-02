@@ -187,8 +187,8 @@ def test_ai_leader_activity_fallback():
           not fl.leader_is_inactive(
               on_pit_road=False, track_surface=-1, lap=30,
               lap_dist_pct=.488, overall_position=1))
-    check('pit-road flag always wins',
-          fl.leader_is_inactive(
+    check('official P1 progress remains authoritative on pit road',
+          not fl.leader_is_inactive(
               on_pit_road=True, track_surface=3, lap=30,
               lap_dist_pct=.488, overall_position=1))
     check('missing surface and invalid progress fails closed',

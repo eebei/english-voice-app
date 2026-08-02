@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 241 (Monza 15 truth + debrief + rival hardening)"
+BUILD_VERSION = "Build 242 (timed race fuel + leader truth hardening)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -4183,12 +4183,22 @@ def poll_iracing():
         # なのでレース中のみ、クラス内の全順位について{順位: 自分とのギャップ秒}を作って毎回同送する。
         standings_gaps = None
         competitor_status = []
+        overall_leader_gap_s = None
         if is_race_session and player_car_idx >= 0:
             _cls_pos_arr = reader.read_int_array('CarIdxClassPosition', 64)
             _f2_arr = reader.read_float_array('CarIdxF2Time', 64)
             if _cls_pos_arr and _f2_arr and player_car_idx < len(_f2_arr):
                 _player_f2 = _f2_arr[player_car_idx]
                 if _player_f2 is not None and _player_f2 >= 0:
+                    if (overall_leader_idx is not None
+                            and overall_leader_idx < len(_f2_arr)
+                            and _f2_arr[overall_leader_idx] is not None
+                            and _f2_arr[overall_leader_idx] >= 0):
+                        # Positive means the official overall leader is behind
+                        # the player; negative means ahead, matching competitor
+                        # signed-gap semantics.
+                        overall_leader_gap_s = round(
+                            _f2_arr[overall_leader_idx] - _player_f2, 1)
                     standings_gaps = {}
                     for _si, _spos in enumerate(_cls_pos_arr):
                         # ★2026-07-21 Codex指示R2：同クラス判定はfail-closedな_same_class_mainを使う。
@@ -4235,6 +4245,21 @@ def poll_iracing():
                 'last': round(lapTime, 3) if (lapTime and lapTime > 0) else None,
                 'lap': lap,
                 'laps_total': lapsTot if (lapsTot and lapsTot > 0) else None,
+                # Never expose SessionLapsRemain for timed races: AI sessions
+                # have supplied sentinel/stale values that became fabricated
+                # 18/19-lap answers.  The clock model is the sole authority.
+                'session_time_remaining_s': (
+                    round(timeRemain, 1)
+                    if (_is_time_race and isinstance(timeRemain, (int, float))
+                        and 0 <= timeRemain < 100000)
+                    else None),
+                'finish_crossings_authority': (
+                    _milestone_laps if _milestone_laps is not None else None),
+                'finish_crossings_status': (
+                    'valid' if _milestone_laps is not None
+                    else str(_timed_final_eval.get('reason') or 'unavailable')
+                    if _is_time_race else
+                    ('valid' if _legacy_laps_remaining is not None else 'unavailable')),
                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,
@@ -4247,6 +4272,26 @@ def poll_iracing():
                 'weather': weather,
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,
+                'leaders': {
+                    'overall': ({
+                        'car_idx': overall_leader_idx,
+                        'name': car_name_map.get(overall_leader_idx),
+                        'car_number': car_number_map.get(overall_leader_idx),
+                        'class_name': car_class_name_map.get(overall_leader_idx),
+                        'overall_pos': 1,
+                        'gap_s': overall_leader_gap_s,
+                    } if overall_leader_idx is not None else None),
+                    'player_class': next(({
+                        'car_idx': c.get('car_idx'), 'name': c.get('name'),
+                        'car_number': c.get('car_number'),
+                        'class_pos': c.get('class_pos'), 'gap_s': c.get('gap_s'),
+                    } for c in competitor_status if c.get('class_pos') == 1),
+                    ({'car_idx': player_car_idx,
+                      'name': car_name_map.get(player_car_idx),
+                      'car_number': car_number_map.get(player_car_idx),
+                      'class_pos': 1, 'gap_s': 0.0}
+                     if class_pos == 1 else None)),
+                },
             })
             last_telem_ts = _tnow
 

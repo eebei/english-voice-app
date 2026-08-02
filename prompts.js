@@ -836,6 +836,9 @@ function buildSystem(p) {
     if (live.pos != null)        { jp.push('総合 ' + live.pos + '番手'); en.push('Overall P' + live.pos); }
     if (live.fuel != null)       { jp.push('燃料 ' + live.fuel + 'L'); en.push('Fuel ' + live.fuel + ' L'); }
     if (live.lap != null)        { jp.push('周回 ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); }
+    if (live.session_time_remaining_s != null) { jp.push('レース残り時間 ' + live.session_time_remaining_s + '秒'); en.push('Race time remaining ' + live.session_time_remaining_s + 's'); }
+    if (live.finish_crossings_authority != null) { jp.push('チェッカーまでの自車S/F通過 ' + live.finish_crossings_authority + '回'); en.push('Authoritative driver S/F crossings to finish ' + live.finish_crossings_authority); }
+    else if (live.finish_crossings_status) { jp.push('残り周回権威=取得不能（理由:' + live.finish_crossings_status + '）'); en.push('Finish-crossing authority unavailable (reason: ' + live.finish_crossings_status + ')'); }
     if (live.best != null)       { const b = fmtLap(live.best); jp.push('自己ベスト ' + b); en.push('Best ' + b); }
     if (live.last != null)       { const l = fmtLap(live.last); jp.push('直近ラップ ' + l); en.push('Last ' + l); }
     if (live.gap_ahead != null)  { jp.push('前とのギャップ ' + live.gap_ahead + '秒'); en.push('Gap ahead ' + live.gap_ahead + 's'); }
@@ -857,6 +860,16 @@ function buildSystem(p) {
     if (live.on_pit_road === true) { jp.push('OnPitRoad=true（現在ピットレーン内）'); en.push('OnPitRoad=true (currently in pit lane)'); }
     else if (live.on_pit_road === false) { jp.push('OnPitRoad=false（現在ピットレーン外）'); en.push('OnPitRoad=false (currently outside pit lane)'); }
     if (live.on_track === false && live.on_pit_road !== true) { jp.push('IsOnTrack=false（コース上とは断定できない）'); en.push('IsOnTrack=false (do not claim the car is on track)'); }
+    if (live.leaders && live.leaders.overall) {
+      const o=live.leaders.overall;
+      jp.push('総合首位: ' + (o.name||('car #'+(o.car_number||'?'))) + ' / class=' + (o.class_name||'unknown') + ' / CarIdx=' + o.car_idx);
+      en.push('Overall leader: ' + (o.name||('car #'+(o.car_number||'?'))) + ' / class=' + (o.class_name||'unknown') + ' / CarIdx=' + o.car_idx);
+    }
+    if (live.leaders && live.leaders.player_class) {
+      const c=live.leaders.player_class;
+      jp.push('自クラス首位: ' + (c.name||('car #'+(c.car_number||'?'))) + ' / GAP=' + Math.abs(Number(c.gap_s||0)).toFixed(1) + '秒');
+      en.push('Player-class leader: ' + (c.name||('car #'+(c.car_number||'?'))) + ' / gap=' + Math.abs(Number(c.gap_s||0)).toFixed(1) + 's');
+    }
     if (live.player_track_surface != null) { jp.push('PlayerTrackSurface=' + live.player_track_surface); en.push('PlayerTrackSurface=' + live.player_track_surface); }
     if (live.pit_service_status != null) { jp.push('PlayerCarPitSvStatus=' + live.pit_service_status); en.push('PlayerCarPitSvStatus=' + live.pit_service_status); }
     if (sessionType) { jp.push('実セッション種別: ' + sessionType); en.push('Actual session type: ' + sessionType); }
@@ -887,10 +900,12 @@ function buildSystem(p) {
           + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
       }
     }
+    const timedRaceTruthJP = '\n【時間制レースの絶対規則】残り周回は「チェッカーまでの自車S/F通過」がある時だけその回数を答えろ。無い時はレース残り時間だけを答え、SessionLapsRemain、会話履歴、現在Lap、燃料から残り周回を作るな。「18周」「19周」のような推測は禁止。総合首位・自クラス首位・直前車は別の対象だ。質問対象の値が無ければ別対象のGAPで代用するな。';
+    const timedRaceTruthEN = '\n[TIMED-RACE ABSOLUTE RULE] State laps remaining only when authoritative driver S/F crossings to finish is present. Otherwise state only race time remaining. Never derive laps remaining from SessionLapsRemain, conversation history, current lap, or fuel. Overall leader, player-class leader, and nearest car are distinct targets; never substitute one target gap for another.';
     if (jp.length) {
       liveNote = isJ
-        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目は「その数字は届いてない」と言い切れ（「確認する」は禁止）。絶対に推測で数字を作るな。\n【車両状態の権限境界・最優先】ピット境界、ボックス位置、距離カウント、リミッターON/OFF、給油・作業中/完了はSDK駆動の固定無線だけが発話する。会話AIは「ボックス準備」まで。たとえドライバーがboxと言っても「ボックスここ」「ピットアウト」「リミッターオフ」「給油中」等の状態遷移を先回りして断定するな。\n【ラップタイムの言い方・厳守】完全なタイムを維持する。1:40.493なら表示は「1:40.493」、日本語発話は「1分40秒493」。分を落として「40.5」とだけ言うな。ベスト/直近を聞かれたら、届いている最新値で答えろ。'
-        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. For items NOT listed here, say plainly that the value is not coming through — never "let me check". Never invent a number.\n[VEHICLE-STATE AUTHORITY — HIGHEST PRIORITY] Pit boundaries, box position/countdown, limiter transitions and service/fuelling state are spoken only by the SDK-driven deterministic radio. Conversational AI may say "box prepared" but must never jump ahead with "box here", "pit exit", "limiter off" or "refuelling now".\n[How to say lap times] Preserve the complete M:SS.mmm time; never drop the minute. Answer with the latest value you have, not an older lap.';
+        ? '\n\n【現在のライブテレメトリ（実値・数秒前の値）】' + jp.join(' / ') + '\n順位・燃料・ギャップ等を聞かれたら、必ずこの実値で答えろ。ここに無い項目は「その数字は届いてない」と言い切れ（「確認する」は禁止）。絶対に推測で数字を作るな。' + timedRaceTruthJP + '\n【車両状態の権限境界・最優先】ピット境界、ボックス位置、距離カウント、リミッターON/OFF、給油・作業中/完了はSDK駆動の固定無線だけが発話する。会話AIは「ボックス準備」まで。たとえドライバーがboxと言っても「ボックスここ」「ピットアウト」「リミッターオフ」「給油中」等の状態遷移を先回りして断定するな。\n【ラップタイムの言い方・厳守】完全なタイムを維持する。1:40.493なら表示は「1:40.493」、日本語発話は「1分40秒493」。分を落として「40.5」とだけ言うな。ベスト/直近を聞かれたら、届いている最新値で答えろ。'
+        : '\n\n[CURRENT LIVE TELEMETRY (real, a few seconds old)] ' + en.join(' / ') + '\nWhen asked about position, fuel, gap etc., ALWAYS answer with these real values. For items NOT listed here, say plainly that the value is not coming through — never "let me check". Never invent a number.' + timedRaceTruthEN + '\n[VEHICLE-STATE AUTHORITY — HIGHEST PRIORITY] Pit boundaries, box position/countdown, limiter transitions and service/fuelling state are spoken only by the SDK-driven deterministic radio. Conversational AI may say "box prepared" but must never jump ahead with "box here", "pit exit", "limiter off" or "refuelling now".\n[How to say lap times] Preserve the complete M:SS.mmm time; never drop the minute. Answer with the latest value you have, not an older lap.';
     }
     // ── タイヤ詳細＆損傷（項目7）：聞かれた時だけ答える。走行中は自分から言うな ──
     const tr = live.tires;
