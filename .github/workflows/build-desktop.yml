@@ -50,11 +50,17 @@ jobs:
         shell: pwsh
 
       - name: Write build-info.json (for in-app update check)
+        id: product
         run: |
           $iso = Get-Date -Format 'o'
+          $bridgeSource = Get-Content -Raw irsdk-bridge/bridge.py
+          $buildMatch = [regex]::Match($bridgeSource, 'BUILD_VERSION\s*=\s*"Build\s+(\d+)')
+          if (-not $buildMatch.Success) { throw 'BUILD_VERSION product number not found' }
+          $productBuild = [int]$buildMatch.Groups[1].Value
+          echo "BUILD=$productBuild" >> $env:GITHUB_OUTPUT
           # buildTag(=タイムスタンプ)は更新ゲートの数値比較に使うので従来どおり維持（後方互換）。
-          # buildNum(=連番)は利用者に分かりやすい「Build N」表示用。
-          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"${{ steps.date.outputs.DATE }}`", `"buildNum`": ${{ github.run_number }}}"
+          # buildNumはGitHub run番号ではなく、bridgeと同じ製品Build番号を使う。
+          Set-Content -Path desktop/build-info.json -Value "{`"buildDate`": `"$iso`", `"buildTag`": `"${{ steps.date.outputs.DATE }}`", `"buildNum`": $productBuild}"
         shell: pwsh
 
       - name: Install & build Electron app
@@ -75,7 +81,7 @@ jobs:
       - name: Upload private build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OMORAY-PITWALL-Desktop-Build-${{ github.run_number }}-${{ steps.date.outputs.DATE }}
+          name: OMORAY-PITWALL-Desktop-Build-${{ steps.product.outputs.BUILD }}-${{ steps.date.outputs.DATE }}
           path: |
             desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
             desktop/dist/OMORAY-PITWALL-Setup-latest.exe
@@ -86,10 +92,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: desktop-latest
-          name: OMORAY PITWALL Desktop — Build ${{ github.run_number }}
+          name: OMORAY PITWALL Desktop — Build ${{ steps.product.outputs.BUILD }}
           body: |
-            ## OMORAY PITWALL Desktop — Build ${{ github.run_number }}  (${{ steps.date.outputs.DATE }})
-            最新版は常に **Build ${{ github.run_number }}**。初回だけinstallerを実行し、以後はデスクトップまたはスタートメニューのショートカットから起動。Node/Python不要。bridge内蔵・自動起動。
+            ## OMORAY PITWALL Desktop — Build ${{ steps.product.outputs.BUILD }}  (${{ steps.date.outputs.DATE }})
+            最新版は常に **Build ${{ steps.product.outputs.BUILD }}**。初回だけinstallerを実行し、以後はデスクトップまたはスタートメニューのショートカットから起動。Node/Python不要。bridge内蔵・自動起動。
 
             Webサイトのダウンロードリンクは常に `OMORAY-PITWALL-Setup-latest.exe` を指します。旧build向けの `OMORAY-PITWALL-Desktop-latest.exe` も同じinstallerへ更新します。
           files: |
