@@ -1200,7 +1200,7 @@ async function reconcileCreditLedger() {
   if (!ready) return null;
   const anthropic = await pool.query(
     `INSERT INTO credit_ledger (account_id,event_key,event_type,credits_delta,vendor_cost_usd,vendor,source,session_id,note)
-     SELECT a.id,'anthropic:'||u.id,'debit',-(u.estimated_cost_usd*$1),u.estimated_cost_usd,
+     SELECT a.id,'anthropic:'||u.id,'debit',-(u.estimated_cost_usd*($1::numeric)),u.estimated_cost_usd,
             'anthropic',u.source,u.session_id,'reconciled from api_usage_log'
        FROM api_usage_log u JOIN credit_accounts a
          ON ((u.user_id IS NOT NULL AND a.user_id=u.user_id)
@@ -1210,10 +1210,10 @@ async function reconcileCreditLedger() {
   const google = await pool.query(
     `INSERT INTO credit_ledger (account_id,event_key,event_type,credits_delta,vendor_cost_usd,vendor,source,session_id,note)
      SELECT a.id,'google:'||g.id,'debit',
-            -(CASE WHEN g.kind='tts' THEN COALESCE(g.char_count,0)*$1
-                   WHEN g.kind='stt' THEN COALESCE(g.audio_seconds,0)*$2 ELSE 0 END)*$3,
-            CASE WHEN g.kind='tts' THEN COALESCE(g.char_count,0)*$1
-                 WHEN g.kind='stt' THEN COALESCE(g.audio_seconds,0)*$2 ELSE 0 END,
+            -(CASE WHEN g.kind='tts' THEN COALESCE(g.char_count,0)*($1::numeric)
+                   WHEN g.kind='stt' THEN COALESCE(g.audio_seconds,0)*($2::numeric) ELSE 0 END)*($3::numeric),
+            CASE WHEN g.kind='tts' THEN COALESCE(g.char_count,0)*($1::numeric)
+                 WHEN g.kind='stt' THEN COALESCE(g.audio_seconds,0)*($2::numeric) ELSE 0 END,
             'google_'||g.kind,g.kind,g.session_id,'reconciled from google_usage_log'
        FROM google_usage_log g JOIN credit_accounts a
          ON ((g.user_id IS NOT NULL AND a.user_id=g.user_id)

@@ -82,6 +82,7 @@ const auth = require('./auth');
   const authSource = fs.readFileSync(__dirname + '/auth.js', 'utf8');
   check('Credits台帳にAccess Code生値カラムを持たない', !/credit_accounts[\s\S]{0,1000}\baccess_code\b/i.test(authSource));
   check('台帳event_keyにUNIQUE制約', /event_key\s+TEXT NOT NULL UNIQUE/.test(authSource));
+  check('reconciliation単価をnumericへ明示変換', /\$1::numeric/.test(authSource) && /\$2::numeric/.test(authSource));
 
   console.log(`\nShadow Credits: ${pass}/${pass + fail}`);
   if (fail) process.exit(1);
