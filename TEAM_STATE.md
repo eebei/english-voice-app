@@ -288,6 +288,12 @@ Yuji「これオフィシャルレースじゃないからまだ対応できる�
   Railway共通費配賦とStripe手数料・純売上の統合も未実装。
   2026-07-31、Anthropic Consoleの `pitwall-production` APIキーで7月累計 $10.57を確認。
   Revenue ReadinessタスクをMicrosoft Store提出と並行するP0として追加した。
+  - **2026-08-03 Build 243候補（未commit・未deploy）**：プリペイド構想の最初の検証として
+    `credit_accounts` / `credit_ledger` のShadow台帳を実装。Access ID生値は保存せずSHA-256帰属、
+    Anthropic実測推定原価とGoogle STT/TTS保守単価を `1 USD = 10 PITWALL Credits` の内部換算で
+    append-only減算する。`event_key UNIQUE` と原価ログからのreconciliationにより二重減算と
+    台帳書込漏れを防ぐ。Shadow対象者は残高ゼロでも一切停止しない。管理者APIとRevenue Dashboard
+    表示を追加。八木・まーぼー・ダートの登録、本番反映、価格境界の本人表示、強制制御は未実施。
 - **PTT 遅延 1〜3秒の内訳**：**未計装**。どの区間で時間を使っているか不明。Codex 提示の計測点（ptt_release〜playback_started）を採用予定。
 - **オーバル/ロードのシステム分割の価値**：テスター（まーぼー）の実需要はあるが、市場規模・実装コストとも未評価。
 - **「40人・半年で自己資金化」**：事業計画上の仮定であり実績ではない。

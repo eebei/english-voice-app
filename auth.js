@@ -206,6 +206,8 @@ async function init() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_session_id ON api_usage_log (session_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_user_id ON api_usage_log (user_id);`);
   await pool.query(`ALTER TABLE api_usage_log ADD COLUMN IF NOT EXISTS usage_context TEXT NOT NULL DEFAULT 'unknown';`);
+  await pool.query(`ALTER TABLE api_usage_log ADD COLUMN IF NOT EXISTS beta_token_hash TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_usage_log_beta_hash ON api_usage_log (beta_token_hash);`);
 
   // Desktop の累積チェックポイント。session_id を主キーにすることで定期送信・終了時送信・
   // 次回起動時再送が重なっても二重計上しない。アクセスコードの生値は保存しない。
@@ -265,6 +267,45 @@ async function init() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_google_usage_log_created_at ON google_usage_log (created_at);`);
+  await pool.query(`ALTER TABLE google_usage_log ADD COLUMN IF NOT EXISTS beta_token_hash TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_google_usage_log_beta_hash ON google_usage_log (beta_token_hash);`);
+
+  // PITWALL Credits shadow ledger. Access codes are never persisted here;
+  // beta testers are keyed only by the same SHA-256 hash used by session telemetry.
+  // The append-only ledger makes grants/debits auditable and event_key prevents
+  // retries from charging the same vendor call twice.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS credit_accounts (
+      id                  BIGSERIAL PRIMARY KEY,
+      user_id             BIGINT REFERENCES users(id) ON DELETE CASCADE,
+      beta_token_hash     TEXT,
+      display_name        TEXT,
+      mode                TEXT NOT NULL DEFAULT 'shadow' CHECK (mode IN ('shadow','enforced','disabled')),
+      memory_tier         TEXT NOT NULL DEFAULT 'session' CHECK (memory_tier IN ('session','rolling','full','team')),
+      memory_active_until TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((user_id IS NOT NULL)::int + (beta_token_hash IS NOT NULL)::int = 1)
+    );
+  `);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_accounts_user ON credit_accounts(user_id) WHERE user_id IS NOT NULL;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_accounts_beta ON credit_accounts(beta_token_hash) WHERE beta_token_hash IS NOT NULL;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS credit_ledger (
+      id               BIGSERIAL PRIMARY KEY,
+      account_id       BIGINT NOT NULL REFERENCES credit_accounts(id) ON DELETE CASCADE,
+      event_key        TEXT NOT NULL UNIQUE,
+      event_type       TEXT NOT NULL CHECK (event_type IN ('grant','debit','adjustment','expiry','upgrade','grace')),
+      credits_delta    NUMERIC(14, 6) NOT NULL,
+      vendor_cost_usd  NUMERIC(14, 8),
+      vendor           TEXT,
+      source           TEXT,
+      session_id       TEXT,
+      note             TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_credit_ledger_account_created ON credit_ledger(account_id, created_at);`);
 
   if (BREVO_API_KEY) {
     mailer = 'brevo';
@@ -1048,7 +1089,7 @@ function estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tok
 
 // environment !== 'production' は自動でis_test扱い（本番以外の実験を顧客集計に混ぜない）。
 // 本番上でのYujiの明示的コスト試験は、後からsession_id単位でis_test=trueへ変更する運用。
-async function recordApiUsage({ userId, sessionId, character, mode, source, trigger, usageContext, model, usage, environment }) {
+async function recordApiUsage({ userId, betaTokenHash, sessionId, character, mode, source, trigger, usageContext, model, usage, environment }) {
   if (!ready || !usage) return null;
   const input_tokens = usage.input_tokens || 0;
   const output_tokens = usage.output_tokens || 0;
@@ -1057,14 +1098,131 @@ async function recordApiUsage({ userId, sessionId, character, mode, source, trig
   const estimated_cost_usd = estimateApiCostUsd(model, { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens });
   const is_test = (environment || 'production') !== 'production';
   const { rows } = await pool.query(
-    `INSERT INTO api_usage_log (user_id, session_id, character, mode, source, "trigger", usage_context, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, environment, is_test)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+    `INSERT INTO api_usage_log (user_id, session_id, character, mode, source, "trigger", usage_context, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, environment, is_test, beta_token_hash)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
     [userId || null, sessionId || null, character || null, mode || null, source || 'other', trigger || null,
      usageContext || 'unknown', model,
      input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-     estimated_cost_usd, environment || null, is_test]
+     estimated_cost_usd, environment || null, is_test, betaTokenHash || null]
   );
-  return { id: rows[0].id };
+  const id = rows[0].id;
+  await recordAnthropicCreditDebit({ userId, betaTokenHash, usageLogId: id, estimatedCostUsd: estimated_cost_usd, source, sessionId });
+  return { id, estimatedCostUsd: estimated_cost_usd };
+}
+
+const PITWALL_CREDITS_PER_USD = 10;
+const GOOGLE_STT_USD_PER_SECOND = 0.024 / 60; // conservative post-free-tier V1 price
+const GOOGLE_TTS_USD_PER_CHAR = 16 / 1_000_000; // Neural2 post-free-tier list price
+
+function normalizeCreditIdentity({ userId, betaTokenHash } = {}) {
+  if (userId) return { column: 'user_id', value: userId };
+  if (typeof betaTokenHash === 'string' && /^[a-f0-9]{64}$/.test(betaTokenHash)) {
+    return { column: 'beta_token_hash', value: betaTokenHash };
+  }
+  return null;
+}
+
+async function enrollShadowCreditAccount({ userId, betaTokenHash, displayName, memoryTier = 'session' }) {
+  if (!ready) return null;
+  const identity = normalizeCreditIdentity({ userId, betaTokenHash });
+  if (!identity) throw new Error('invalid_credit_identity');
+  const safeMemoryTier = ['session','rolling','full','team'].includes(memoryTier) ? memoryTier : 'session';
+  const userValue = identity.column === 'user_id' ? identity.value : null;
+  const betaValue = identity.column === 'beta_token_hash' ? identity.value : null;
+  const { rows } = await pool.query(
+    `INSERT INTO credit_accounts (user_id,beta_token_hash,display_name,mode,memory_tier)
+     VALUES ($1,$2,$3,'shadow',$4)
+     ON CONFLICT (${identity.column}) WHERE ${identity.column} IS NOT NULL DO UPDATE SET
+       display_name=COALESCE(EXCLUDED.display_name,credit_accounts.display_name),
+       mode='shadow',memory_tier=EXCLUDED.memory_tier,updated_at=now()
+     RETURNING id,mode,memory_tier`,
+    [userValue,betaValue,String(displayName || '').slice(0,80) || null,safeMemoryTier]
+  );
+  return rows[0] || null;
+}
+
+async function recordCreditLedgerEvent({ userId, betaTokenHash, eventKey, eventType = 'debit', creditsDelta, vendorCostUsd, vendor, source, sessionId, note }) {
+  if (!ready) return null;
+  const identity = normalizeCreditIdentity({ userId, betaTokenHash });
+  if (!identity || typeof eventKey !== 'string' || !eventKey || !Number.isFinite(Number(creditsDelta))) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO credit_ledger (account_id,event_key,event_type,credits_delta,vendor_cost_usd,vendor,source,session_id,note)
+     SELECT id,$2,$3,$4,$5,$6,$7,$8,$9 FROM credit_accounts
+      WHERE ${identity.column}=$1 AND mode IN ('shadow','enforced')
+     ON CONFLICT (event_key) DO NOTHING
+     RETURNING id`,
+    [identity.value,eventKey,eventType,Number(creditsDelta),vendorCostUsd == null ? null : Number(vendorCostUsd),
+     vendor || null,source || null,sessionId || null,note || null]
+  );
+  return rows[0] || null;
+}
+
+async function recordAnthropicCreditDebit({ userId, betaTokenHash, usageLogId, estimatedCostUsd, source, sessionId }) {
+  if (!usageLogId || estimatedCostUsd == null) return null;
+  const cost = Number(estimatedCostUsd);
+  return recordCreditLedgerEvent({
+    userId,betaTokenHash,eventKey:`anthropic:${usageLogId}`,eventType:'debit',
+    creditsDelta:-(cost * PITWALL_CREDITS_PER_USD),vendorCostUsd:cost,
+    vendor:'anthropic',source,sessionId,
+  });
+}
+
+async function recordGoogleCreditDebit({ userId, betaTokenHash, usageLogId, kind, charCount, audioSeconds, success, sessionId }) {
+  if (!usageLogId || !success) return null;
+  let cost = null;
+  if (kind === 'tts' && Number.isFinite(Number(charCount))) cost = Number(charCount) * GOOGLE_TTS_USD_PER_CHAR;
+  if (kind === 'stt' && Number.isFinite(Number(audioSeconds))) cost = Number(audioSeconds) * GOOGLE_STT_USD_PER_SECOND;
+  if (cost == null) return null;
+  return recordCreditLedgerEvent({
+    userId,betaTokenHash,eventKey:`google:${usageLogId}`,eventType:'debit',
+    creditsDelta:-(cost * PITWALL_CREDITS_PER_USD),vendorCostUsd:cost,
+    vendor:`google_${kind}`,source:kind,sessionId,
+  });
+}
+
+async function getCreditAccountStats() {
+  if (!ready) return [];
+  await reconcileCreditLedger();
+  const { rows } = await pool.query(
+    `SELECT a.id,a.display_name,a.mode,a.memory_tier,a.memory_active_until,
+            COALESCE(SUM(l.credits_delta),0)::numeric AS balance,
+            COALESCE(-SUM(l.credits_delta) FILTER (WHERE l.event_type='debit'),0)::numeric AS consumed_credits,
+            COALESCE(SUM(l.vendor_cost_usd) FILTER (WHERE l.event_type='debit'),0)::numeric AS vendor_cost_usd,
+            COUNT(l.id) FILTER (WHERE l.event_type='debit')::int AS debit_events,
+            MIN(l.created_at) FILTER (WHERE l.event_type='debit') AS first_usage_at,
+            MAX(l.created_at) FILTER (WHERE l.event_type='debit') AS last_usage_at
+       FROM credit_accounts a LEFT JOIN credit_ledger l ON l.account_id=a.id
+      GROUP BY a.id ORDER BY consumed_credits DESC`);
+  return rows;
+}
+
+async function reconcileCreditLedger() {
+  if (!ready) return null;
+  const anthropic = await pool.query(
+    `INSERT INTO credit_ledger (account_id,event_key,event_type,credits_delta,vendor_cost_usd,vendor,source,session_id,note)
+     SELECT a.id,'anthropic:'||u.id,'debit',-(u.estimated_cost_usd*$1),u.estimated_cost_usd,
+            'anthropic',u.source,u.session_id,'reconciled from api_usage_log'
+       FROM api_usage_log u JOIN credit_accounts a
+         ON ((u.user_id IS NOT NULL AND a.user_id=u.user_id)
+          OR (u.beta_token_hash IS NOT NULL AND a.beta_token_hash=u.beta_token_hash))
+      WHERE u.estimated_cost_usd IS NOT NULL AND a.mode IN ('shadow','enforced')
+     ON CONFLICT (event_key) DO NOTHING RETURNING id`, [PITWALL_CREDITS_PER_USD]);
+  const google = await pool.query(
+    `INSERT INTO credit_ledger (account_id,event_key,event_type,credits_delta,vendor_cost_usd,vendor,source,session_id,note)
+     SELECT a.id,'google:'||g.id,'debit',
+            -(CASE WHEN g.kind='tts' THEN COALESCE(g.char_count,0)*$1
+                   WHEN g.kind='stt' THEN COALESCE(g.audio_seconds,0)*$2 ELSE 0 END)*$3,
+            CASE WHEN g.kind='tts' THEN COALESCE(g.char_count,0)*$1
+                 WHEN g.kind='stt' THEN COALESCE(g.audio_seconds,0)*$2 ELSE 0 END,
+            'google_'||g.kind,g.kind,g.session_id,'reconciled from google_usage_log'
+       FROM google_usage_log g JOIN credit_accounts a
+         ON ((g.user_id IS NOT NULL AND a.user_id=g.user_id)
+          OR (g.beta_token_hash IS NOT NULL AND a.beta_token_hash=g.beta_token_hash))
+      WHERE g.success=true AND g.kind IN ('tts','stt') AND a.mode IN ('shadow','enforced')
+        AND ((g.kind='tts' AND g.char_count IS NOT NULL) OR (g.kind='stt' AND g.audio_seconds IS NOT NULL))
+     ON CONFLICT (event_key) DO NOTHING RETURNING id`,
+    [GOOGLE_TTS_USD_PER_CHAR,GOOGLE_STT_USD_PER_SECOND,PITWALL_CREDITS_PER_USD]);
+  return { anthropic: anthropic.rows.length, google: google.rows.length };
 }
 
 async function recordUsageSessionCheckpoint(data) {
@@ -1105,16 +1263,18 @@ async function recordUsageSessionCheckpoint(data) {
   return rows[0] || { session_id: data.sessionId, sequence: data.sequence };
 }
 
-async function recordGoogleUsage({ userId, sessionId, kind, charCount, audioBytes, audioSeconds, voice, language, success, environment }) {
+async function recordGoogleUsage({ userId, betaTokenHash, sessionId, kind, charCount, audioBytes, audioSeconds, voice, language, success, environment }) {
   if (!ready) return null;
   const is_test = (environment || 'production') !== 'production';
   const { rows } = await pool.query(
-    `INSERT INTO google_usage_log (user_id, session_id, kind, char_count, audio_bytes, audio_seconds, voice, language, success, environment, is_test)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    `INSERT INTO google_usage_log (user_id, session_id, kind, char_count, audio_bytes, audio_seconds, voice, language, success, environment, is_test, beta_token_hash)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [userId || null, sessionId || null, kind, charCount ?? null, audioBytes ?? null, audioSeconds ?? null,
-     voice || null, language || null, !!success, environment || null, is_test]
+     voice || null, language || null, !!success, environment || null, is_test, betaTokenHash || null]
   );
-  return { id: rows[0].id };
+  const id = rows[0].id;
+  await recordGoogleCreditDebit({ userId, betaTokenHash, usageLogId: id, kind, charCount, audioSeconds, success, sessionId });
+  return { id };
 }
 
 // 既存の日別集計は後方互換のため残し、任意フィルタ＋source/trigger/session別の内訳を追加。
@@ -1224,6 +1384,7 @@ module.exports = {
   createFoundingApplication, listFoundingApplications,
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
   recordApiUsage, getApiUsageStats, recordGoogleUsage, recordUsageSessionCheckpoint, getUsageSessionStats,
+  enrollShadowCreditAccount, recordCreditLedgerEvent, recordAnthropicCreditDebit, recordGoogleCreditDebit, reconcileCreditLedger, getCreditAccountStats,
   FOUNDING_CAP,
   _pool: () => pool,
 };

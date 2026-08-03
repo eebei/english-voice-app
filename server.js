@@ -72,7 +72,7 @@ function recordGoogleUsageSafe(req, fields) {
   const usageSessionId = (typeof req.body.usageSessionId === 'string' && req.body.usageSessionId.length <= 64)
     ? req.body.usageSessionId : null;
   auth.recordGoogleUsage({
-    userId: req.user ? req.user.id : null, sessionId: usageSessionId,
+    userId: req.user ? req.user.id : null, betaTokenHash: req.betaTokenHash || null, sessionId: usageSessionId,
     environment: PITWALL_ENVIRONMENT, ...fields,
   }).catch(err => console.error('[USAGE] Google usage DB write failed:', err.message));
 }
@@ -394,6 +394,27 @@ app.get('/api/usage/session-stats', requireAdmin, async (req, res) => {
     res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 });
+app.get('/api/admin/credits/stats', requireAdmin, async (_req, res) => {
+  try { res.json({ ok: true, accounts: await auth.getCreditAccountStats() }); }
+  catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
+app.post('/api/admin/credits/shadow-enroll', requireAdmin, express.json(), async (req, res) => {
+  try {
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    if (!code) return res.status(400).json({ ok: false, error: 'code_required' });
+    const verified = await auth.verifyBetaToken(code, '');
+    if (!verified.ok) return res.status(400).json({ ok: false, error: 'invalid_access_code' });
+    const betaTokenHash = crypto.createHash('sha256').update(code.toUpperCase()).digest('hex');
+    const account = await auth.enrollShadowCreditAccount({
+      betaTokenHash, displayName: verified.name, memoryTier: req.body?.memoryTier || 'session',
+    });
+    await auth.recordCreditLedgerEvent({
+      betaTokenHash, eventKey: `shadow-starter-grant:${betaTokenHash}`, eventType: 'grant', creditsDelta: 30,
+      source: 'admin', note: '$9.99 Starter shadow allocation',
+    });
+    res.json({ ok: true, account });
+  } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
+});
 
 // ── 課金会員（Founding Season等）の強制遮断／復帰（Stripe解約を待たず即座に反映・悪質ユーザー対応） ──
 //   POST /api/admin/member/revoke {email}            → 即座にis_member=false
@@ -431,6 +452,7 @@ async function requirePitwallEntitlement(req, res, next) {
       return res.status(status).json({ error: 'access_' + (access.reason || 'denied') });
     }
     req.betaAccess = access;
+    req.betaTokenHash = crypto.createHash('sha256').update(code.trim().toUpperCase()).digest('hex');
     next();
   } catch (err) {
     console.error('[entitlement] verification failed:', err.message);
@@ -763,7 +785,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} source=${usageSource} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
       if (auth.isReady()) {
         auth.recordApiUsage({
-          userId: req.user ? req.user.id : null, sessionId: usageSessionId,
+          userId: req.user ? req.user.id : null, betaTokenHash: req.betaTokenHash || null, sessionId: usageSessionId,
           character, mode, source: usageSource, trigger: usageTrigger, usageContext, model, usage,
           environment: PITWALL_ENVIRONMENT,
         }).catch(err => console.error('[USAGE] DB write failed:', err.message));
@@ -897,7 +919,7 @@ app.post('/api/translate', ttsLimiter, async (req, res) => {
       const usageSessionId = (typeof req.body.usageSessionId === 'string' && req.body.usageSessionId.length <= 64)
         ? req.body.usageSessionId : null;
       auth.recordApiUsage({
-        userId: req.user ? req.user.id : null, sessionId: usageSessionId,
+        userId: req.user ? req.user.id : null, betaTokenHash: req.betaTokenHash || null, sessionId: usageSessionId,
         source: 'translate', trigger: null, model: translateModel, usage: r.usage,
         environment: PITWALL_ENVIRONMENT,
       }).catch(err => console.error('[USAGE] DB write failed (translate):', err.message));

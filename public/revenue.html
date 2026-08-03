@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Revenue Dashboard — OMORAY PITWALL</title>
+<link rel="icon" type="image/png" href="/PITWALL_logo_mark.png">
+<style>
+*{box-sizing:border-box} :root{--bg:#07080f;--panel:#0d0e1a;--border:#252a40;--text:#f0f4ff;--muted:#94a3b8;--purple:#9d4edd;--green:#19d36b;--amber:#fbbf24}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,sans-serif}.wrap{max-width:1280px;margin:auto;padding:24px}
+header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:24px}header img{height:58px}h1{font-size:24px;margin:0}h2{font-size:16px;margin:0 0 14px}.sub,.muted{color:var(--muted)}
+.auth,.filters{display:flex;gap:10px;flex-wrap:wrap}.auth{background:var(--panel);border:1px solid var(--border);padding:18px;border-radius:14px;margin-bottom:18px}
+input,button{border-radius:8px;padding:10px 12px;font:inherit}input{background:#111424;border:1px solid var(--border);color:var(--text)}button{border:0;background:var(--purple);color:#fff;font-weight:700;cursor:pointer}button:disabled{opacity:.45}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}.card,.panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px}.value{font-size:27px;font-weight:800;margin-top:6px}.label{color:var(--muted);font-size:12px}.warn{color:var(--amber)}.ok{color:var(--green)}
+.panel{margin-top:14px;overflow:auto}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;padding:10px;border-bottom:1px solid var(--border)}th{color:var(--muted);font-size:12px}td.num{text-align:right;font-variant-numeric:tabular-nums}.empty{text-align:center;color:var(--muted);padding:28px}
+#status{align-self:center}.hidden{display:none}@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}header{align-items:flex-start;flex-direction:column}}@media(max-width:480px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><div class="wrap">
+<header><div><img src="/PITWALL_logo_full.png" alt="OMORAY PITWALL"><h1>Revenue Dashboard</h1><div class="sub">実測利用量とAPI原価（管理者専用）</div></div></header>
+<section class="auth">
+  <input id="secret" type="password" autocomplete="current-password" placeholder="ADMIN_SECRET">
+  <input id="from" type="date"><input id="to" type="date">
+  <button id="load" onclick="loadData()">集計を更新</button><span id="status" class="muted"></span>
+</section>
+<main id="dashboard" class="hidden">
+  <div class="grid">
+    <div class="card"><div class="label">テスター／ユーザー</div><div class="value" id="users">—</div></div>
+    <div class="card"><div class="label">iRacing接続時間</div><div class="value" id="driving">—</div></div>
+    <div class="card"><div class="label">Claude推定原価</div><div class="value" id="claude">—</div></div>
+    <div class="card"><div class="label">セッション数</div><div class="value" id="sessions">—</div></div>
+  </div>
+  <div class="panel"><h2>利用者別集計</h2><table><thead><tr><th>利用者</th><th>Build</th><th>セッション</th><th>起動時間</th><th>iRacing時間</th><th>API呼出</th><th>Claude原価</th><th>PTT</th><th>自動判定</th></tr></thead><tbody id="by-user"></tbody></table></div>
+  <div class="panel"><h2>セッション明細</h2><table><thead><tr><th>開始</th><th>利用者</th><th>Build</th><th>iRacing時間</th><th>API呼出</th><th>Claude原価</th><th>Google TTS</th><th>Google STT</th><th>終了状態</th></tr></thead><tbody id="by-session"></tbody></table></div>
+  <div class="panel"><h2>Shadow PITWALL Credits</h2><table><thead><tr><th>利用者</th><th>モード</th><th>記憶</th><th>残高</th><th>消費Credits</th><th>従量原価</th><th>減算イベント</th><th>最終利用</th></tr></thead><tbody id="by-credit"></tbody></table></div>
+  <p class="muted warn">Shadow CreditsではGoogle STT/TTSを無料枠適用前の保守的な公式単価でUSD換算します。Railway共通費、決済手数料、税、粗利益はまだ含めていません。</p>
+</main>
+</div><script>
+const $=id=>document.getElementById(id), n=v=>Number(v||0), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function duration(sec){sec=n(sec);const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h?`${h}時間 ${m}分`:`${m}分`;}
+function money(v,unknown=false){return unknown||v==null?'未計測':'$'+n(v).toFixed(4)}
+function identity(r){return r.tester_name||((r.user_id!=null)?`会員 #${r.user_id}`:'帰属不明')}
+function dateParam(id,end){const v=$(id).value;if(!v)return '';return end?new Date(v+'T23:59:59.999Z').toISOString():new Date(v+'T00:00:00Z').toISOString()}
+async function loadData(){
+ const secret=$('secret').value.trim();if(!secret){$('status').textContent='ADMIN_SECRETを入力してください';return}
+ sessionStorage.setItem('pitwall_admin_secret',secret);$('load').disabled=true;$('status').textContent='取得中…';
+ try{
+  const q=new URLSearchParams();const from=dateParam('from',false),to=dateParam('to',true);if(from)q.set('from',from);if(to)q.set('to',to);
+  const headers={'x-admin-secret':secret};
+  const [usageRes,creditRes]=await Promise.all([fetch('/api/usage/session-stats?'+q,{headers}),fetch('/api/admin/credits/stats',{headers})]);
+  const [body,creditBody]=await Promise.all([usageRes.json(),creditRes.json()]);
+  if(!usageRes.ok)throw new Error(body.error||`HTTP ${usageRes.status}`);if(!creditRes.ok)throw new Error(creditBody.error||`HTTP ${creditRes.status}`);
+  render(body.stats||[],creditBody.accounts||[]);$('status').textContent=`${new Date().toLocaleString('ja-JP')} 更新`;$('status').className='ok';
+ }catch(e){$('status').textContent='取得失敗: '+e.message;$('status').className='warn';$('dashboard').classList.add('hidden')}
+ finally{$('load').disabled=false}
+}
+function render(rows,credits){
+ const groups=new Map();for(const r of rows){const key=identity(r),g=groups.get(key)||{name:key,builds:new Set(),sessions:0,total:0,drive:0,calls:0,cost:0,costUnknown:false,ptt:0,auto:0};g.builds.add(r.build||'—');g.sessions++;g.total+=n(r.total_seconds);g.drive+=n(r.iracing_seconds);g.calls+=n(r.api_calls);if(n(r.api_calls)>0&&r.anthropic_cost_usd==null)g.costUnknown=true;else g.cost+=n(r.anthropic_cost_usd);g.ptt+=n(r.ptt_calls);g.auto+=n(r.auto_judge_calls)+n(r.auto_pace_calls);groups.set(key,g)}
+ const total=[...groups.values()].reduce((a,g)=>({drive:a.drive+g.drive,cost:a.cost+g.cost,costUnknown:a.costUnknown||g.costUnknown}),{drive:0,cost:0,costUnknown:false});$('users').textContent=groups.size;$('driving').textContent=duration(total.drive);$('claude').textContent=money(total.cost,total.costUnknown);$('sessions').textContent=rows.length;
+ $('by-user').innerHTML=[...groups.values()].sort((a,b)=>b.cost-a.cost).map(g=>`<tr><td>${esc(g.name)}</td><td>${esc([...g.builds].join(', '))}</td><td class="num">${g.sessions}</td><td class="num">${duration(g.total)}</td><td class="num">${duration(g.drive)}</td><td class="num">${g.calls}</td><td class="num">${money(g.cost,g.costUnknown)}</td><td class="num">${g.ptt}</td><td class="num">${g.auto}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">該当データなし</td></tr>';
+ $('by-session').innerHTML=rows.map(r=>`<tr><td>${r.started_at?new Date(r.started_at).toLocaleString('ja-JP'):'—'}</td><td>${esc(identity(r))}</td><td>${esc(r.build||'—')}</td><td class="num">${duration(r.iracing_seconds)}</td><td class="num">${n(r.api_calls)}</td><td class="num">${money(r.anthropic_cost_usd)}</td><td class="num">${n(r.tts_calls)}回 / ${n(r.tts_chars)}字</td><td class="num">${n(r.stt_calls)}回 / ${n(r.stt_seconds).toFixed(1)}秒</td><td>${r.normal_exit?'正常終了':esc(r.last_reason||'継続中')}</td></tr>`).join('')||'<tr><td colspan="9" class="empty">該当データなし</td></tr>';
+ $('by-credit').innerHTML=credits.map(a=>`<tr><td>${esc(a.display_name||`Account #${a.id}`)}</td><td>${esc(a.mode)}</td><td>${esc(a.memory_tier)}</td><td class="num">${n(a.balance).toFixed(2)}</td><td class="num">${n(a.consumed_credits).toFixed(2)}</td><td class="num">${money(a.vendor_cost_usd)}</td><td class="num">${n(a.debit_events)}</td><td>${a.last_usage_at?new Date(a.last_usage_at).toLocaleString('ja-JP'):'—'}</td></tr>`).join('')||'<tr><td colspan="8" class="empty">Shadow Credits対象者なし</td></tr>';
+ $('dashboard').classList.remove('hidden');
+}
+$('secret').value=sessionStorage.getItem('pitwall_admin_secret')||'';const d=new Date();$('to').value=d.toISOString().slice(0,10);d.setDate(d.getDate()-7);$('from').value=d.toISOString().slice(0,10);
+</script></body></html>
