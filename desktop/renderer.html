@@ -595,20 +595,15 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
     <div id="screen-mode" class="app-screen">
       <div class="field-label" id="mode-label" data-i18n="mode_select_label">モードを選択</div>
       <div class="mode-grid">
-        <div class="mode-btn" id="mode-strategy" onclick="selectMode('strategy')">
+        <div class="mode-btn" id="mode-strategy" onclick="selectMode('race_weekend')">
           <div class="micon">🗺️</div>
-          <div class="mtitle" id="mode-strategy-title" data-i18n="mode_strategy_title">Strategy</div>
-          <div class="mdesc" id="mode-strategy-desc" data-i18n="mode_strategy_desc">レース前の作戦相談</div>
+          <div class="mtitle" id="mode-strategy-title" data-i18n="mode_strategy_title">Strategy / Race Weekend</div>
+          <div class="mdesc" id="mode-strategy-desc" data-i18n="mode_strategy_desc">前回の振り返りからレース後まで</div>
         </div>
-        <div class="mode-btn" id="mode-race" onclick="selectMode('race')">
-          <div class="micon">🏎️</div>
-          <div class="mtitle" id="mode-race-title" data-i18n="mode_race_title">Race Mode</div>
-          <div class="mdesc" id="mode-race-desc" data-i18n="mode_race_desc">走行中のリアルタイム無線</div>
-        </div>
-        <div class="mode-btn" id="mode-debrief" onclick="selectMode('debrief')">
-          <div class="micon">📋</div>
-          <div class="mtitle" id="mode-debrief-title" data-i18n="mode_debrief_title">Debrief</div>
-          <div class="mdesc" id="mode-debrief-desc" data-i18n="mode_debrief_desc">セッション後の分析</div>
+        <div class="mode-btn" id="mode-practice" onclick="selectMode('practice')">
+          <div class="micon">🧪</div>
+          <div class="mtitle" id="mode-practice-title" data-i18n="mode_practice_title">Practice</div>
+          <div class="mdesc" id="mode-practice-desc" data-i18n="mode_practice_desc">Test Driveと練習セッション</div>
         </div>
       </div>
       <button class="start-btn" id="btn-start-session" data-i18n="next_btn" disabled onclick="goToEngineer()">次へ →</button>
@@ -625,6 +620,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <div class="chat-header-top">
             <div style="display:flex;gap:6px">
               <button class="back-btn" data-i18n="settings_btn" onclick="openSessionSettings()">⚙ Settings</button>
+              <button class="back-btn" id="review-run-btn" onclick="startManualRunReview()">📋 Review Run</button>
               <button class="back-btn" data-i18n="end_session_btn" onclick="endSession()">End Session</button>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
@@ -769,12 +765,10 @@ const I18N = {
     end_session_btn:'End Session',
     // ── Mode select ──
     mode_select_label:'Select Mode',
-    mode_strategy_title:'Strategy',
-    mode_strategy_desc:'Pre-race strategy briefing',
-    mode_race_title:'Race Mode',
-    mode_race_desc:'Live radio during your race',
-    mode_debrief_title:'Debrief',
-    mode_debrief_desc:'Post-session analysis',
+    mode_strategy_title:'Strategy / Race Weekend',
+    mode_strategy_desc:'Review the last run, brief the plan, race, then debrief',
+    mode_practice_title:'Practice',
+    mode_practice_desc:'Test Drive and practice-session development',
     // ── Chat ──
     voice_on:'🔊 Voice',
     voice_off:'🔇 Muted',
@@ -896,12 +890,10 @@ const I18N = {
     settings_btn:'⚙ 設定',
     end_session_btn:'セッション終了',
     mode_select_label:'モードを選択',
-    mode_strategy_title:'戦略',
-    mode_strategy_desc:'レース前の作戦相談',
-    mode_race_title:'レースモード',
-    mode_race_desc:'走行中のリアルタイム無線',
-    mode_debrief_title:'デブリーフ',
-    mode_debrief_desc:'セッション後の分析',
+    mode_strategy_title:'ストラテジー／レースウィークエンド',
+    mode_strategy_desc:'前回の振り返り、作戦、レース、レース後まで',
+    mode_practice_title:'プラクティス',
+    mode_practice_desc:'TEST DRIVEと練習セッションの習熟',
     voice_on:'🔊 音声',
     voice_off:'🔇 ミュート',
     ph_chat_input:'エンジニアに話しかける…',
@@ -977,7 +969,7 @@ function applyLang(lang){
 }
 function toggleLang(){ applyLang((window.uiLang==='en') ? 'ja' : 'en'); }
 // ── State ──
-let sel = null, selMode = null, userName = '', messages = [], turns = 0, sessionMsgCount = 0;
+let sel = null, selMode = null, sessionPurpose = null, userName = '', messages = [], turns = 0, sessionMsgCount = 0;
 // サーバー側の上限(server.js MAX_MESSAGES=100)を超えると/api/chatが400で拒否し、以後の会話が
 // 全部失敗し続ける無言故障になる（2026-07-12の実走で発覚：自動ラジオコールも全部この配列に
 // 積まれるので、長いレースだと確実に上限に達する）。上限手前で古い方から間引く。
@@ -1002,6 +994,7 @@ let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = false, autoDebriefData = null;
 let evidenceDebrief = null;
+let practiceRun = null;
 let fuelCapacityConfirmedThisSession = null;
 let lastFuelCapacityContext = null;
 let namedRival = null; // {carIdx,name,carNumber}; reset at SessionNum boundary
@@ -1013,6 +1006,19 @@ function resetSessionScopedReviewState(){
   lastSessionSummary=null;
   namedRival=null;
   if(evidenceDebrief && evidenceDebrief.active) dismissEvidenceDebrief();
+  resetPracticeRunState();
+}
+
+const PRACTICE_REVIEW_MIN_LAPS=6;
+const PRACTICE_REVIEW_MIN_TRACK_MS=15*60*1000;
+const PRACTICE_REVIEW_GARAGE_DELAY_MS=45*1000;
+function newPracticeRunState(){
+  return {trackStartedAt:null,trackMs:0,lapTimes:[],lapKeys:new Set(),lastOnTrack:false,
+    offerTimer:null,offered:false,eligibleCounted:false,summaryEligible:false};
+}
+function resetPracticeRunState(){
+  if(practiceRun&&practiceRun.offerTimer) clearTimeout(practiceRun.offerTimer);
+  practiceRun=newPracticeRunState();
 }
 
 const RIVAL_FIRST_NAME_ALIASES={
@@ -1182,6 +1188,8 @@ function usageNewRecord(id){
   return {sessionId:id,sequence:0,startedAt:usageNowIso(),endedAt:null,totalSeconds:0,iracingSeconds:0,
     pttCalls:0,typedCalls:0,autoJudgeCalls:0,autoPaceCalls:0,briefingCalls:0,insightCalls:0,
     debriefOffered:0,debriefStarted:0,debriefCompleted:0,debriefDismissed:0,
+    practiceReviewEligible:0,practiceReviewOffered:0,practiceReviewStarted:0,
+    practiceReviewCompleted:0,practiceReviewSaved:0,practiceReviewManual:0,
     feedbackPrompted:0,feedbackAnswered:0,
     normalExit:false,reason:'start',_lastTickMs:Date.now()};
 }
@@ -1198,7 +1206,10 @@ function usageCount(kind){
     briefing:'briefingCalls',insight:'insightCalls',debrief_offered:'debriefOffered',
     debrief_started:'debriefStarted',debrief_completed:'debriefCompleted',
     debrief_dismissed:'debriefDismissed',feedback_prompted:'feedbackPrompted',
-    feedback_answered:'feedbackAnswered'}[kind];
+    feedback_answered:'feedbackAnswered',practice_review_eligible:'practiceReviewEligible',
+    practice_review_offered:'practiceReviewOffered',practice_review_started:'practiceReviewStarted',
+    practice_review_completed:'practiceReviewCompleted',practice_review_saved:'practiceReviewSaved',
+    practice_review_manual:'practiceReviewManual'}[kind];
   if(key) usageTelemetry[key]++;
 }
 function usagePublicRecord(reason, normalExit){
@@ -1465,9 +1476,9 @@ function onNameInput(){
 function goToModeStep(){
   if(!userName) return;
   if(micTesting) toggleMicTest();   // 設定画面を離れる時はマイクテストを止める（無駄な常時キャプチャ防止）
-  selMode = null;
-  document.getElementById('mode-race').classList.remove('selected');
-  document.getElementById('mode-debrief').classList.remove('selected');
+  selMode = null; sessionPurpose=null;
+  document.getElementById('mode-strategy').classList.remove('selected');
+  document.getElementById('mode-practice').classList.remove('selected');
   document.getElementById('btn-start-session').disabled = true;
   showScreen('screen-mode');
 }
@@ -1480,17 +1491,14 @@ function goToMode(){
   if(!sel || !userName) return;
   const isJP = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // Update mode labels for JP engineers
-  document.getElementById('mode-strategy-title').textContent = isJP ? '戦略' : 'Strategy';
-  document.getElementById('mode-strategy-desc').textContent  = isJP ? 'レース前の作戦相談' : 'Pre-race strategy briefing';
-  document.getElementById('mode-race-title').textContent  = isJP ? 'レースモード' : 'Race Mode';
-  document.getElementById('mode-race-desc').textContent   = isJP ? '走行中のリアルタイム無線' : 'Live radio during your race';
-  document.getElementById('mode-debrief-title').textContent = isJP ? 'デブリーフ' : 'Debrief';
-  document.getElementById('mode-debrief-desc').textContent  = isJP ? 'セッション後の分析' : 'Post-session analysis';
+  document.getElementById('mode-strategy-title').textContent = isJP ? 'ストラテジー／レースウィークエンド' : 'Strategy / Race Weekend';
+  document.getElementById('mode-strategy-desc').textContent  = isJP ? '前回の振り返り、作戦、レース、レース後まで' : 'Review the last run, brief the plan, race, then debrief';
+  document.getElementById('mode-practice-title').textContent = isJP ? 'プラクティス' : 'Practice';
+  document.getElementById('mode-practice-desc').textContent = isJP ? 'TEST DRIVEと練習セッションの習熟' : 'Test Drive and practice-session development';
   document.getElementById('mode-label').textContent = isJP ? 'モードを選択' : 'Select Mode';
-  selMode = null;
+  selMode = null; sessionPurpose=null;
   document.getElementById('mode-strategy').classList.remove('selected');
-  document.getElementById('mode-race').classList.remove('selected');
-  document.getElementById('mode-debrief').classList.remove('selected');
+  document.getElementById('mode-practice').classList.remove('selected');
   document.getElementById('btn-start-session').disabled = true;
   // Profile banner
   const profile = loadProfile();
@@ -1505,10 +1513,11 @@ function goToMode(){
   showScreen('screen-mode');
 }
 function selectMode(mode){
-  selMode = mode;
-  document.getElementById('mode-strategy').classList.toggle('selected', mode==='strategy');
-  document.getElementById('mode-race').classList.toggle('selected', mode==='race');
-  document.getElementById('mode-debrief').classList.toggle('selected', mode==='debrief');
+  sessionPurpose = mode;
+  // 利用者が選ぶのは目的だけ。Race/Debriefは後続の自動フェーズ。
+  selMode = mode==='practice' ? 'practice' : 'strategy';
+  document.getElementById('mode-strategy').classList.toggle('selected', mode==='race_weekend');
+  document.getElementById('mode-practice').classList.toggle('selected', mode==='practice');
   document.getElementById('btn-start-session').disabled = false;
 }
 
@@ -1530,28 +1539,30 @@ function startSession(){
   fuelCapacityConfirmedThisSession=null;
   if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
   evidenceDebrief=null;
+  resetPracticeRunState();
   const debriefGuide=document.getElementById('debrief-guide');
   if(debriefGuide) debriefGuide.style.display='none';
   const profile = loadProfile()||{};
   saveProfile({ name:userName, sessions:(profile.sessions||0)+1, lastDate:new Date().toISOString().slice(0,10), notes:profile.notes||[], trackMemory:profile.trackMemory||{} });
   // Greeting
-  const greeting = GREETINGS[sel](userName, selMode);
+  const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+  const greeting = sessionPurpose==='practice'
+    ? (isJP
+      ? `${userName||'ドライバー'}、プラクティスを始めよう。今日確かめたい課題を一つ教えて。走行データと結びつけて振り返るよ。`
+      : `${userName||'Driver'}, let's start the practice programme. Give me one objective for this run. I'll connect it to the measured data when we review the stint.`)
+    : GREETINGS[sel](userName, 'strategy');
   addMsg('ai', greeting);
   pushMsg({role:'assistant',content:greeting});
   speak(greeting);
   // Mic setup
-  jamesAutoMicEnabled = (selMode==='race');
+  jamesAutoMicEnabled = false;
   jamesMuted = false;
   const micBtn = document.getElementById('mic-btn');
-  if(selMode==='race'){
-    micBtn.onclick = activateAlwaysOnMic;
-    micBtn.title = t('tip_go_live');
-    setHint(t('hint_go_live'));
-  } else {
-    micBtn.onclick = toggleMic;
-    micBtn.title = t('tip_hold_speak');
-    setHint('');
-  }
+  micBtn.onclick = toggleMic;
+  micBtn.title = t('tip_hold_speak');
+  setHint('');
+  const reviewBtn=document.getElementById('review-run-btn');
+  if(reviewBtn) reviewBtn.textContent=isJP?'📋 この走行を振り返る':'📋 Review Run';
   // Bridge
   connectBridge();
 }
@@ -1584,7 +1595,7 @@ function switchMode(newMode){
 }
 // コースイン検知＝Briefing/Debrief から Race へ自動遷移（走り出したら即レース挙動）
 function maybeAutoRace(state){
-  if(state==='track' && (selMode==='strategy' || selMode==='debrief')){
+  if(state==='track' && (selMode==='strategy' || selMode==='practice' || selMode==='debrief')){
     switchMode('race');
   }
 }
@@ -1755,6 +1766,11 @@ async function sendMsg(inputSource){
     }
     usageCount(inputSource==='ptt'?'ptt':'typed');
     recordEvidenceAnswer(text);
+    return;
+  }
+  if(isManualReviewCommand(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    startManualRunReview();
     return;
   }
   const explicitMemoryRequest = isExplicitMemoryRequest(text);
@@ -2691,7 +2707,10 @@ function connectBridge(){
         injectBriefing(data.data);
       }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
-      if(data.type==='telemetry_live') lastTelemetry=data;
+      if(data.type==='telemetry_live'){
+        lastTelemetry=data;
+        updatePracticeRun(data);
+      }
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
       if(data.type==='driver_activity'){
         driverActivity=String(data.state||'UNKNOWN');
@@ -2709,6 +2728,7 @@ function connectBridge(){
         saveSessionSummary(data);
         reconcileEvidenceSummary(data);
         if(data.is_race) scheduleAutoDebrief(data);
+        else if(sessionPurpose==='practice') handlePracticeSessionSummary(data);
         else offerSessionReview(data);
       }
       if(data.type==='pit_timing'){ savePitTiming(data); }
@@ -3306,6 +3326,119 @@ function sanitizeSessionEvidence(data){
   return clean;
 }
 
+function isPracticeLikeSession(){
+  const st=String(lastSessionType||'').toLowerCase();
+  return !st.includes('race') && (st.includes('practice')||st.includes('test'));
+}
+function isPracticeSummary(data){
+  const st=String(data?.event_type||'').toLowerCase();
+  return data?.is_race!==true && (st.includes('practice')||st.includes('test'));
+}
+function isManualReviewCommand(text){
+  const value=String(text||'').trim();
+  if(!value||/(?:しない|しなく|やめ|不要|まだ|not now|don'?t|do not|no review)/i.test(value)) return false;
+  return /^(?:(?:ルナ|luna)[、,\s]*)?(?:(?:デブリーフ|振り返り)(?:を)?(?:しよう|始め(?:よう|て)?|やろう)|(?:let'?s|start)(?:\s+(?:the|this))?\s+(?:debrief|review))(?:[！!。.]*)$/i.test(value);
+}
+function practiceTrackMs(now=Date.now()){
+  if(!practiceRun) return 0;
+  return practiceRun.trackMs+(practiceRun.trackStartedAt?Math.max(0,now-practiceRun.trackStartedAt):0);
+}
+function buildPracticeRunSummary(){
+  const times=(practiceRun?.lapTimes||[]).filter(v=>Number.isFinite(v)&&v>0);
+  return sanitizeSessionEvidence({
+    type:'session_summary',track:lastTrack||'',car_class:lastCarClass||'',car_model:lastCarModel||'',
+    event_type:lastSessionType||'Practice',is_race:false,total_laps:times.length,
+    finish_pos:null,finish_pos_confirmed:false,best_lap:times.length?Math.min(...times):(sessionBestLapSeconds||null),
+    worst_lap:times.length?Math.max(...times):null,
+    avg_lap:times.length?times.reduce((a,b)=>a+b,0)/times.length:null,
+    incidents:lastTelemetry?.incidents||0,laps:times.map((time,i)=>({lap:i+1,time}))
+  });
+}
+function practiceReviewEligible(){
+  return !!practiceRun && (practiceRun.summaryEligible||practiceRun.lapTimes.length>=PRACTICE_REVIEW_MIN_LAPS
+    || practiceTrackMs()>=PRACTICE_REVIEW_MIN_TRACK_MS);
+}
+function updatePracticeRun(data){
+  if(sessionPurpose!=='practice'||!isPracticeLikeSession()||!practiceRun) return;
+  const now=Date.now(),onTrack=data?.on_track===true;
+  if(onTrack){
+    if(practiceRun.offerTimer){clearTimeout(practiceRun.offerTimer);practiceRun.offerTimer=null;}
+    if(practiceRun.offered&&!(evidenceDebrief&&evidenceDebrief.active)){
+      practiceRun.offered=false;
+      const panel=document.getElementById('debrief-guide');if(panel)panel.style.display='none';
+    }
+    if(!practiceRun.trackStartedAt) practiceRun.trackStartedAt=now;
+    const lapTime=Number(data.last),lap=Number(data.lap);
+    if(Number.isFinite(lapTime)&&lapTime>0&&Number.isFinite(lap)&&lap>0){
+      const key=`${lastSessionNum??'x'}:${lap}:${lapTime.toFixed(3)}`;
+      if(!practiceRun.lapKeys.has(key)){
+        practiceRun.lapKeys.add(key);practiceRun.lapTimes.push(lapTime);
+      }
+    }
+  }else if(practiceRun.trackStartedAt){
+    practiceRun.trackMs+=Math.max(0,now-practiceRun.trackStartedAt);
+    practiceRun.trackStartedAt=null;
+  }
+  practiceRun.lastOnTrack=onTrack;
+  if(practiceReviewEligible()&&!practiceRun.eligibleCounted){
+    practiceRun.eligibleCounted=true;usageCount('practice_review_eligible');
+  }
+  if(!onTrack&&driverState==='garage'&&practiceReviewEligible()) schedulePracticeReviewOffer(buildPracticeRunSummary());
+}
+function schedulePracticeReviewOffer(data){
+  if(sessionPurpose!=='practice'||!practiceRun||practiceRun.lastOnTrack||driverState!=='garage'
+      ||!practiceReviewEligible()||practiceRun.offered||practiceRun.offerTimer||!isPracticeSummary(data)) return;
+  practiceRun.offerTimer=setTimeout(()=>{
+    practiceRun.offerTimer=null;
+    if(sessionPurpose==='practice'&&practiceRun&&!practiceRun.lastOnTrack&&driverState==='garage'
+        &&practiceReviewEligible()&&!practiceRun.offered&&isPracticeSummary(data)){
+      offerPracticeRunReview(data);
+    }
+  },PRACTICE_REVIEW_GARAGE_DELAY_MS);
+}
+function handlePracticeSessionSummary(data){
+  if(!isPracticeSummary(data)) return;
+  lastSessionSummary=data;
+  if(Number(data.total_laps)>=PRACTICE_REVIEW_MIN_LAPS&&!practiceRun.eligibleCounted){
+    practiceRun.summaryEligible=true;practiceRun.eligibleCounted=true;usageCount('practice_review_eligible');
+  }
+  schedulePracticeReviewOffer(data);
+}
+function offerPracticeRunReview(data){
+  if(!data||!isPracticeSummary(data)||!practiceReviewEligible()||practiceRun?.offered) return;
+  practiceRun.offered=true;lastSessionSummary=data;
+  usageCount('debrief_offered');usageCount('practice_review_offered');
+  const panel=document.getElementById('debrief-guide');if(!panel)return;
+  const c=evidenceCopy(),isJP=evidenceLanguage()==='ja';
+  panel.style.display='block';
+  document.getElementById('debrief-guide-title').textContent=c.optionalTitle;
+  document.getElementById('debrief-guide-evidence').textContent=evidenceLines(data).join(' · ');
+  const question=document.getElementById('debrief-guide-question');question.textContent='';
+  const startButton=document.createElement('button');startButton.className='back-btn';
+  startButton.textContent=c.start;startButton.onclick=()=>startPracticeRunReview(data);
+  question.appendChild(startButton);
+  document.getElementById('debrief-guide-cancel').textContent=c.cancel;
+  document.getElementById('debrief-guide-actions').style.display='none';
+  const msg=isJP?'練習データがまとまったよ。このスティントを振り返る？'
+    :'The practice data is ready. Shall we review this stint?';
+  addMsg('ai',msg);pushMsg({role:'assistant',content:msg});speak(msg);
+}
+function startPracticeRunReview(data){
+  switchMode('debrief');beginEvidenceDebrief(data||buildPracticeRunSummary());
+}
+function startManualRunReview(){
+  if(driverState==='track'||driverState==='pit'){
+    const isJP=evidenceLanguage()==='ja';
+    addMsg('sys',isJP?'走行中は振り返りを開始できません。安全にガレージへ戻ってから始めてください。'
+      :'Run review is unavailable while driving. Return safely to the garage first.');
+    return false;
+  }
+  const data=lastSessionSummary||(sessionPurpose==='practice'?buildPracticeRunSummary():buildFallbackSessionSummary());
+  if(sessionPurpose==='practice') usageCount('practice_review_manual');
+  switchMode('debrief');beginEvidenceDebrief(data);
+  return true;
+}
+
 // ── Debrief auto-trigger ──
 function scheduleAutoDebrief(data){
   if(!String(lastSessionType||data?.event_type||'').toLowerCase().includes('race')) return;
@@ -3522,7 +3655,10 @@ function beginEvidenceDebrief(data){
   const isRestart=arguments[1]===true;
   const panel=document.getElementById('debrief-guide');
   if(!panel) return;
-  if(!isRestart) usageCount('debrief_started');
+  if(!isRestart){
+    usageCount('debrief_started');
+    if(sessionPurpose==='practice') usageCount('practice_review_started');
+  }
   const c=evidenceCopy();
   const safeData=sanitizeSessionEvidence(data||buildFallbackSessionSummary());
   const questions=buildEvidenceQuestions(safeData);
@@ -3570,6 +3706,7 @@ function recordEvidenceAnswer(text){
   if(evidenceDebrief.index<evidenceDebrief.questions.length){ askEvidenceQuestion(); return; }
   evidenceDebrief.active=false;
   usageCount('debrief_completed');
+  if(sessionPurpose==='practice') usageCount('practice_review_completed');
   const preview=evidenceDebrief.questions.map((q,i)=>`・${q}\n  ${evidenceDebrief.answers[i]||'—'}`).join('\n');
   document.getElementById('debrief-guide-question').textContent=c.preview+'\n'+preview;
   document.getElementById('debrief-guide-actions').style.display='flex';
@@ -3619,6 +3756,7 @@ function confirmEvidenceMemory(){
     });
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
+    if(sessionPurpose==='practice') usageCount('practice_review_saved');
     addMsg('sys',c.saved);
   }catch(e){ addMsg('sys',c.failed); }
   dismissEvidenceDebrief('saved');

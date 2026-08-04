@@ -234,6 +234,12 @@ async function init() {
       debrief_started     INTEGER NOT NULL DEFAULT 0,
       debrief_completed   INTEGER NOT NULL DEFAULT 0,
       debrief_dismissed   INTEGER NOT NULL DEFAULT 0,
+      practice_review_eligible  INTEGER NOT NULL DEFAULT 0,
+      practice_review_offered   INTEGER NOT NULL DEFAULT 0,
+      practice_review_started   INTEGER NOT NULL DEFAULT 0,
+      practice_review_completed INTEGER NOT NULL DEFAULT 0,
+      practice_review_saved     INTEGER NOT NULL DEFAULT 0,
+      practice_review_manual    INTEGER NOT NULL DEFAULT 0,
       feedback_prompted   INTEGER NOT NULL DEFAULT 0,
       feedback_answered   INTEGER NOT NULL DEFAULT 0,
       normal_exit         BOOLEAN NOT NULL DEFAULT false,
@@ -244,7 +250,10 @@ async function init() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_usage_session_checkpoint_user_id ON usage_session_checkpoints (user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_usage_session_checkpoint_beta_hash ON usage_session_checkpoints (beta_token_hash);`);
-  for (const column of ['debrief_offered','debrief_started','debrief_completed','debrief_dismissed','feedback_prompted','feedback_answered']) {
+  for (const column of ['debrief_offered','debrief_started','debrief_completed','debrief_dismissed',
+    'practice_review_eligible','practice_review_offered','practice_review_started',
+    'practice_review_completed','practice_review_saved','practice_review_manual',
+    'feedback_prompted','feedback_answered']) {
     await pool.query(`ALTER TABLE usage_session_checkpoints ADD COLUMN IF NOT EXISTS ${column} INTEGER NOT NULL DEFAULT 0;`);
   }
 
@@ -1232,9 +1241,12 @@ async function recordUsageSessionCheckpoint(data) {
        session_id,user_id,beta_token_hash,tester_name,device_id_hash,build,sequence,
        started_at,ended_at,total_seconds,iracing_seconds,ptt_calls,typed_calls,
        auto_judge_calls,auto_pace_calls,briefing_calls,insight_calls,
-       debrief_offered,debrief_started,debrief_completed,debrief_dismissed,feedback_prompted,feedback_answered,
+       debrief_offered,debrief_started,debrief_completed,debrief_dismissed,
+       practice_review_eligible,practice_review_offered,practice_review_started,
+       practice_review_completed,practice_review_saved,practice_review_manual,
+       feedback_prompted,feedback_answered,
        normal_exit,last_reason
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
      ON CONFLICT (session_id) DO UPDATE SET
        user_id=COALESCE(EXCLUDED.user_id,usage_session_checkpoints.user_id),
        beta_token_hash=COALESCE(EXCLUDED.beta_token_hash,usage_session_checkpoints.beta_token_hash),
@@ -1247,7 +1259,14 @@ async function recordUsageSessionCheckpoint(data) {
        auto_pace_calls=EXCLUDED.auto_pace_calls,briefing_calls=EXCLUDED.briefing_calls,
        insight_calls=EXCLUDED.insight_calls,debrief_offered=EXCLUDED.debrief_offered,
        debrief_started=EXCLUDED.debrief_started,debrief_completed=EXCLUDED.debrief_completed,
-       debrief_dismissed=EXCLUDED.debrief_dismissed,feedback_prompted=EXCLUDED.feedback_prompted,
+       debrief_dismissed=EXCLUDED.debrief_dismissed,
+       practice_review_eligible=EXCLUDED.practice_review_eligible,
+       practice_review_offered=EXCLUDED.practice_review_offered,
+       practice_review_started=EXCLUDED.practice_review_started,
+       practice_review_completed=EXCLUDED.practice_review_completed,
+       practice_review_saved=EXCLUDED.practice_review_saved,
+       practice_review_manual=EXCLUDED.practice_review_manual,
+       feedback_prompted=EXCLUDED.feedback_prompted,
        feedback_answered=EXCLUDED.feedback_answered,normal_exit=EXCLUDED.normal_exit,
        last_reason=EXCLUDED.last_reason,updated_at=now()
      WHERE EXCLUDED.sequence >= usage_session_checkpoints.sequence
@@ -1257,6 +1276,8 @@ async function recordUsageSessionCheckpoint(data) {
      data.endedAt || null, data.totalSeconds, data.iracingSeconds, data.pttCalls, data.typedCalls,
      data.autoJudgeCalls, data.autoPaceCalls, data.briefingCalls, data.insightCalls,
      data.debriefOffered, data.debriefStarted, data.debriefCompleted, data.debriefDismissed,
+     data.practiceReviewEligible, data.practiceReviewOffered, data.practiceReviewStarted,
+     data.practiceReviewCompleted, data.practiceReviewSaved, data.practiceReviewManual,
      data.feedbackPrompted, data.feedbackAnswered,
      !!data.normalExit, data.lastReason || null]
   );
@@ -1345,6 +1366,8 @@ async function getUsageSessionStats({ from, to } = {}) {
             c.total_seconds,c.iracing_seconds,c.ptt_calls,c.typed_calls,
             c.auto_judge_calls,c.auto_pace_calls,c.briefing_calls,c.insight_calls,
             c.debrief_offered,c.debrief_started,c.debrief_completed,c.debrief_dismissed,
+            c.practice_review_eligible,c.practice_review_offered,c.practice_review_started,
+            c.practice_review_completed,c.practice_review_saved,c.practice_review_manual,
             c.feedback_prompted,c.feedback_answered,
             c.normal_exit,c.last_reason,
             COALESCE(api.api_calls,0) api_calls,api.anthropic_cost_usd,

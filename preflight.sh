@@ -50,6 +50,9 @@ if node tests-cost-telemetry.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── Shadow PITWALL Credits台帳・原価換算・二重減算防止（2026-08-03）"
 if node tests-shadow-credits.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-shadow-credits.js 2>&1|tail -15; fail=1; fi
 
+echo "── 2モード化・Practice振り返り（Build 243）"
+if node tests-practice-mode.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-practice-mode.js 2>&1|tail -15; fail=1; fi
+
 echo "── Update Gate即時遮断・並列確認（2026-07-26）"
 if node tests-update-gate-latency.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-update-gate-latency.js 2>&1|tail -15; fail=1; fi
 
