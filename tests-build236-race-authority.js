@@ -26,7 +26,7 @@ if (normalize) {
   const ctx = { sel:'LunaJP', userName:'Yuji' };
   vm.runInNewContext(normalize[0], ctx);
   const got = ctx.normalizeLunaSpeech('データ受け取った。リミッターオフ。全開でいい。');
-  const claim = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text\)\{[\s\S]*?\n\}/);
+  const claim = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text, includeStrategyNumbers=false\)\{[\s\S]*?\n\}/);
   if(claim) vm.runInNewContext(claim[0], ctx);
   check('機械的データ文言を整え、車両状態はtruth gateへ委譲',
     !/データ受け取った/.test(got)

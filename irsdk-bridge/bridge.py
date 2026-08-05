@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 245 (closing-only multiclass + concise lap speech)"
+BUILD_VERSION = "Build 246 (telemetry liveness + authoritative pit entry)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -577,6 +577,9 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
     'driver_state', 'driver_activity', 'speak_gate', 'lap_sectors', 'pit_timing',
+    # UI の liveness 判定に必要。ガレージ/ピット中も正常 telemetry は流れているため、
+    # activity gate で落とすと desktop が「停止」と誤認する。音声イベントではない。
+    'telemetry_live',
     'pit_loss_calibration',
     # session_summary は呼び出し側で should_fire_race_summary() ガード。
     # broadcast() は素通しし、broadcast() の戻り値で送信成功を確認する契約。
@@ -795,9 +798,11 @@ def director_gate(event):
 #       等間隔で来てる場合、"GTPが等間隔に7台くるぞ"」
 #   固まって来る＝一度譲れば終わる／分かれて来る＝間に息継ぎがある／
 #   等間隔の列車＝長時間付き合う覚悟が要る。対処が全く変わるので形を伝える。
-MC_OBSERVE_SEC = 15.0     # 隊列を見るための観測窓（発話の引き金は近い5秒/2秒のまま）
+MC_OBSERVE_SEC = 15.0     # 隊列を見るための観測窓
+MC_PREPARE_SEC = 6.0      # 上位クラス接近：準備コール
+MC_IMMINENT_SEC = 3.0     # 上位クラス接近：直前コール
 MC_PACK_SEC    = 3.0      # この秒数以内に続いていれば「固まっている」
-MC_REARM_SEC   = 8.0      # 発火は5秒。再武装はここまで離れた時だけ（境界振動での連呼防止）
+MC_REARM_SEC   = 8.0      # 準備発話は6秒。再武装はここまで離れた時だけ（境界振動での連呼防止）
 MC_TRAIN_TOLERANCE = 0.5  # 等間隔判定：車間のばらつきが平均のこの割合以内なら「列車」
 
 # ★2026-07-23 Codex設計：LLM頭脳・自動発火(judge_call)のコスト間引き。
@@ -3534,21 +3539,15 @@ def poll_iracing():
         prev_limiter_on = limiter_on
 
         # Pit in/out
-        # ★2026-07-27 Yuji実走：OnPitRoad=True は制限ライン通過後になるコースがある。
-        # PlayerTrackSurface 3(track)→2(approaching pits) を先行通知に使う。
-        # これはピット進入車だけに出るSDK境界なので、座標だけの30m判定のように毎周誤発火しない。
-        # 2を通知しないコース/車両では、下のOnPitRoad遷移をフォールバックにする。
+        # Build 246: PlayerTrackSurface 3→2 はピット出口側でも発生する（Road America実走）。
+        # 入口を一意に示さないため、これ単独で limiter-on を発話しない。
+        # limiter-on は下の authoritative な OnPitRoad False→True だけで発話する。
         _pit_surface_now = reader.read_int('PlayerTrackSurface')
         _pit_surface_prev = prev.get('_psurf')
         _spd_pit = reader.read_float('Speed')
         _pit_entry_speed_ok = (_spd_pit is not None and _spd_pit > 5.0)
-        if (_pit_surface_prev == 3 and _pit_surface_now == 2
-                and not onPit and not pit_entry_announced_stop and _pit_entry_speed_ok):
-            broadcast({'type': 'radio', 'trigger': 'pit_entry',
-                'message': 'Watch the limit line, limiter on.'})
-            pit_entry_announced_stop = True
-        elif (_pit_surface_prev == 2 and _pit_surface_now == 3 and not onPit):
-            pit_entry_announced_stop = False  # 進入を中止した場合は次回に備えて再武装
+        if _pit_surface_prev == 2 and _pit_surface_now == 3 and not onPit:
+            pit_entry_announced_stop = False
 
         # ★2026-07-24 pit_entry 誤発火対策（Yuji方針）:
         #   (1) 従来 `not prev['onPit']` は None→True（起動時spawn）でも発火して "ピットインだな" 誤爆。
@@ -4218,7 +4217,7 @@ def poll_iracing():
                             if _pd > 0.5: _pd -= 1.0
                             elif _pd < -0.5: _pd += 1.0
                             _mcgap = -_pd * player_last_lap   # 正=後方(迫っている) / 負=前方(抜かれ済み)
-                            # ★観測窓は広く(隊列の形を見るため)、発話の引き金は近い車だけ(5秒/2秒)。
+                            # ★観測窓は広く、発話は準備6秒/直前3秒。
                             if _mcgap <= 0 or _mcgap > MC_OBSERVE_SEC:
                                 multiclass_gap_history.pop(_mi, None)
                                 continue                       # 前方 or 観測範囲外
@@ -4235,10 +4234,10 @@ def poll_iracing():
                         for _cn, _gaps in _mc_groups.items():
                             _gaps.sort()
                             _near = _gaps[0]
-                            if _near > 5.0:
+                            if _near > MC_PREPARE_SEC:
                                 continue                        # まだ引き金の距離に入っていない
                             _seen_classes.add(_cn)
-                            _stg = 2 if _near <= 2.0 else 1     # 2秒後方=今譲る / 5秒後方=備える
+                            _stg = 2 if _near <= MC_IMMINENT_SEC else 1
                             if _stg > multiclass_stage.get(_cn, 0):
                                 multiclass_stage[_cn] = _stg
                                 _shape, _clusters = _describe_traffic(_gaps)

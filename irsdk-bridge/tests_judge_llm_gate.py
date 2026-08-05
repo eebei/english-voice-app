@@ -524,15 +524,13 @@ def test_removing_post_contact_reset_would_break_test():
 # ── pit_entry 再設計テスト（2026-07-24 Yuji設計・Codex差戻し対応） ────────
 
 def test_pit_entry_state_update_not_gated_by_speed():
-    print('\n══ 本番配線：pit接近境界で先行通知し、OnPitRoadをフォールバックにする ══')
+    print('\n══ 本番配線：pit入口は authoritative OnPitRoad 遷移だけで通知する ══')
     src = _bridge_source()
-    check('PlayerTrackSurface 3→2 の接近境界を先行通知に使用',
-          '_pit_surface_prev == 3 and _pit_surface_now == 2' in src)
-    check('先行通知は OnPitRoad 前だけに限定',
-          'and not onPit and not pit_entry_announced_stop' in src)
+    check('PlayerTrackSurface 3→2 だけでは入口通知しない',
+          '_pit_surface_prev == 3 and _pit_surface_now == 2' not in src)
     check('低速誤発火を Speed>5m/s で抑止',
           '_pit_entry_speed_ok = (_spd_pit is not None and _spd_pit > 5.0)' in src)
-    check('OnPitRoad False→True フォールバックを維持',
+    check('OnPitRoad False→True を唯一の入口通知に使用',
           "if onPit and prev['onPit'] is False:" in src
           and 'if not pit_entry_announced_stop and _pit_entry_speed_ok:' in src)
     check('1ストップ1回の通知フラグをセッション状態として保持',
@@ -541,14 +539,14 @@ def test_pit_entry_state_update_not_gated_by_speed():
 
 
 def test_low_speed_pit_entry_no_broadcast_but_state_updates():
-    print('\n══ 変異試験：先行通知の3→2境界を削除すると検出する ══')
+    print('\n══ 変異試験：3→2先行通知を戻すと検出する ══')
     src = _bridge_source()
     old = '_pit_surface_prev == 3 and _pit_surface_now == 2'
-    check('変異対象の先行通知境界が存在する', old in src)
-    mut = src.replace(old, 'False  # mutation: early trigger removed', 1)
+    check('禁止対象の先行通知境界が存在しない', old not in src)
+    marker = 'if _pit_surface_prev == 2 and _pit_surface_now == 3 and not onPit:'
+    mut = src.replace(marker, 'if ' + old + ':\n            pass\n        ' + marker, 1)
     check('変異が実際にソースを変更した', mut != src)
-    check('変異後は3→2先行通知契約を満たさない',
-          old not in mut)
+    check('変異後は3→2先行通知禁止契約に違反する', old in mut)
 
 
 def test_pit_entry_prev_onpit_guard_prevents_startup_spawn_misfire():

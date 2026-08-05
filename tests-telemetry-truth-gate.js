@@ -13,7 +13,7 @@ function check(label, ok) {
   ok ? pass++ : fail++;
 }
 
-const claimFn = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text\)\{[\s\S]*?\n\}/);
+const claimFn = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text, includeStrategyNumbers=false\)\{[\s\S]*?\n\}/);
 check('車両状態claim検出関数を抽出', !!claimFn);
 if(claimFn){
   const context={};
@@ -24,9 +24,12 @@ if(claimFn){
     'Box here. Limiter on.',
     'Refuelling now.',
     'ピットまで100メートル。',
-    'あと30L必要。',
   ].forEach(text=>check('誤った状態遷移を遮断: '+text,
     context.hasTelemetryOwnedVehicleClaim(text)));
+  check('戦略質問中の数値断定を遮断',
+    context.hasTelemetryOwnedVehicleClaim('あと30L必要。', true));
+  check('通常会話の「1周目」は遮断しない',
+    !context.hasTelemetryOwnedVehicleClaim('落ち着いて1周目を刻もう。'));
   [
     'うん、ボックス準備。',
     'この周ボックスね。',
@@ -72,7 +75,7 @@ if(speechFns){
 }
 
 check('stream発話前にtruth gateを適用',
-  renderer.includes("selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full)")
+  renderer.includes("selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)")
   && renderer.includes("convoLog('driver', '[TELEMETRY_TRUTH_GATE]"));
 check('bridgeがピット状態のSDK証拠を配信',
   bridge.includes("'on_pit_road': bool(onPit)")

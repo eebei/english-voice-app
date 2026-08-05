@@ -50,6 +50,7 @@ def main():
     check("dead telemetry thread is monitored", "monitor_poll_thread" in source)
     allowed = source[source.index("ACTIVITY_ALLOWED_META_TYPES"):source.index("def _activity_allows_broadcast")]
     check("telemetry failure bypasses activity gate", "'telemetry_error'" in allowed)
+    check("live telemetry bypasses inactive-driver gate", "'telemetry_live'" in allowed)
 
 
 if __name__ == "__main__":

@@ -1812,7 +1812,7 @@ async function sendMsg(inputSource){
 // LLMの会話は自由にするが、ピット境界・リミッター・サービス状態はSDKで成立した時だけ
 // deterministic radioが発話する。プロンプトで抑えるだけではstream途中の誤発話を止められないため、
 // TTSより前にクライアントでも遮断する。
-function hasTelemetryOwnedVehicleClaim(text){
+function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false){
   // 「まだリミッターオフにしないで」のような否定・禁止は状態成立の断定ではない。
   // その部分だけ除いてから、残る肯定的な状態claimを検査する。
   const s=String(text||'')
@@ -1838,7 +1838,7 @@ function hasTelemetryOwnedVehicleClaim(text){
   // Strategy numbers are telemetry-owned too.  Streaming LLM text must not
   // speak a fabricated lap/fuel/time/gap number before the prompt can recover.
   const strategyNumber=/(?:\d+(?:\.\d+)?)\s*(?:周|ラップ|リットル|L\b|秒|分|laps?\b|lit(?:er|re)s?\b|seconds?\b|minutes?\b)/i.test(s);
-  return stateClaim || strategyNumber || (pitContext && pitCountdown);
+  return stateClaim || (includeStrategyNumbers && strategyNumber) || (pitContext && pitCountdown);
 }
 function telemetryTruthFallback(live, userText, isJP){
   const asked=String(userText||'');
@@ -1998,7 +1998,7 @@ async function callAPI(inputSource, memoryStatus=''){
       const {done, value} = await reader.read();
       if(done) break;
       full += decoder.decode(value, {stream:true});
-      if(!truthBlocked && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full)){
+      if(!truthBlocked && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)){
         truthBlocked=true;
         truthFallback=telemetryTruthFallback(lastTelemetry, latestUserText, isJP);
         if(bubble) bubble.textContent=truthFallback;
