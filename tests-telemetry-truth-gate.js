@@ -43,10 +43,14 @@ check('日本語ラップ発話関数を抽出', !!lapFn);
 if(lapFn){
   const context={};
   vm.runInNewContext(lapFn[0], context);
-  check('1:48.867を完全発話へ変換',
-    context.lapTimeSpeechJP('1:48.867') === '1分48秒867');
+  check('1分台は無線で分を省略',
+    context.lapTimeSpeechJP('1:48.867') === '48秒867');
   check('1:06.630の日付誤読を避ける',
-    context.lapTimeSpeechJP('1:06.630') === '1分6秒630');
+    context.lapTimeSpeechJP('1:06.630') === '6秒630');
+  check('1:00.542は分を残す',
+    context.lapTimeSpeechJP('1:00.542') === '1分0秒542');
+  check('2分以上は分を残す',
+    context.lapTimeSpeechJP('2:14.321') === '2分14秒321');
 }
 
 const speechFns = renderer.match(/function numberWordsEN\(n\)\{[\s\S]*?function phonetify\(text, lang\)\{[\s\S]*?\n\}/);
@@ -55,7 +59,8 @@ if(speechFns){
   const context={};
   vm.runInNewContext(speechFns[0], context);
   const cases=[
-    ['ja-JP','ベスト 1:48.867','ベスト 1分48秒867'],
+    ['ja-JP','ベスト 1:48.867','ベスト 48秒867'],
+    ['ja-JP','ベスト 2:00.542','ベスト 2分0秒542'],
     ['en-GB','Best 1:48.867','Best one forty-eight point eight six seven'],
     ['de-DE','Bestzeit 1:48.867','Bestzeit eins achtundvierzig Komma acht sechs sieben'],
     ['pt-BR','Melhor 1:48.867','Melhor um quarenta e oito vírgula oito seis sete'],

@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 244 (telemetry startup recovery + liveness gate)"
+BUILD_VERSION = "Build 245 (closing-only multiclass + concise lap speech)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -887,6 +887,39 @@ def _describe_traffic(gaps):
     if len(clusters) == 1:
         return ('pack' if n > 1 else 'single'), clusters
     return 'split', clusters
+
+
+def evaluate_multiclass_approach(previous, current_gap, now_time,
+                                 min_gap_sec=0.25,
+                                 min_observation_sec=0.5,
+                                 max_observation_sec=2.0,
+                                 min_closure_sec=0.15):
+    """Require measured closing motion before calling a faster class.
+
+    A cross-class speed rating only says the car class is normally quicker; it
+    does not prove this particular car is approaching.  A spun/stopped P217
+    can sit just behind the player after being passed and used to produce
+    "P217, 0 seconds behind".  Keep a short gap history and fail closed until
+    the positive behind-gap has measurably shrunk.
+    """
+    if not isinstance(current_gap, (int, float)) or not isinstance(now_time, (int, float)):
+        return False, previous, 'invalid'
+    current = (float(current_gap), float(now_time))
+    if current_gap <= min_gap_sec:
+        return False, current, 'crossing_or_jitter'
+    if not previous or len(previous) != 2:
+        return False, current, 'warming'
+    previous_gap, previous_time = previous
+    if not isinstance(previous_gap, (int, float)) or not isinstance(previous_time, (int, float)):
+        return False, current, 'invalid_previous'
+    elapsed = now_time - previous_time
+    if elapsed < min_observation_sec:
+        return False, previous, 'warming'
+    if elapsed > max_observation_sec:
+        return False, current, 'stale_previous'
+    closure = previous_gap - current_gap
+    approaching = closure >= max(min_closure_sec, elapsed * 0.10)
+    return approaching, current, ('closing' if approaching else 'not_closing')
 
 def _mc_message_en(cls, nearest, gaps, shape, clusters, stage):
     """英語キャラ用の文言。日本語はrenderer側で組む。"""
@@ -1951,6 +1984,7 @@ def poll_iracing():
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
     multiclass_stage = {}       # car_idx -> 速いクラス接近の直近段階(0=未/1=5秒/2=2秒)。段階を跨いだ時だけ発火＝連呼防止
+    multiclass_gap_history = {} # car_idx -> (後方gap秒, wall time)。連続縮小した車だけ接近扱い
     last_mc_diag_ts = 0.0       # マルチクラス「コールゼロ」診断ログの最終出力時刻
     battle_warned = {}          # car_idx -> last warned time
     last_battle_global = 0.0    # 全車共通のバトルコール間隔（連鎖スパム防止）
@@ -2234,6 +2268,7 @@ def poll_iracing():
                         last_session_sig = sig
                         race_lifecycle_fsm.reset()
                         _sig_reset = _session_scoped_reset_values()
+                        multiclass_gap_history.clear()
                         checker_out_notice_sent = _sig_reset['checker_out_notice_sent']
                         last_laps_remaining_est = _sig_reset['last_laps_remaining_est']
                         final_lap_notice_sent = _sig_reset['final_lap_notice_sent']
@@ -2350,6 +2385,7 @@ def poll_iracing():
             cur_snum, last_session_num, race_lifecycle_fsm)
         if _changed:
             qualifying_checker_crossed = False
+            multiclass_gap_history.clear()
             # Practice/Qualify summaryはgarageで確定しない。SessionNum変更だけを権威ある終了
             # シグナルとして、reset前の旧セッション記録を一度送る。別ドライバーへのhandoff中でも
             # セッションそのものが切り替わった事実は確定しているため、安全にsummary化できる。
@@ -2538,6 +2574,7 @@ def poll_iracing():
                 multiclass_2s_warned.clear()
                 multiclass_armed.clear()
                 multiclass_stage.clear()
+                multiclass_gap_history.clear()
                 battle_warned.clear()
                 behind_armed.clear()
                 battle_ever_warned.clear()
@@ -4160,7 +4197,8 @@ def poll_iracing():
                     # ★2026-07-21 Codex指示R2：自車のClassIDが不明ならマルチクラス判定そのものを
                     #   行わない（"速いクラス"かどうかは自車のクラスが分かって初めて言える）。
                     if _ppct is not None and _ppct >= 0 and player_class_id != -1:
-                        _mc_groups = {}     # クラス名 -> {'gap':最近接の秒, 'count':近接台数, 'pos':代表の順位}
+                        _mc_groups = {}     # 実接近中の車だけ。クラス単位の発話候補
+                        _mc_observed_groups = {}  # 後方に存在する全車。stage再武装判定用
                         for _mi in range(len(car_dist_pct)):
                             if _mi == player_car_idx:
                                 continue
@@ -4182,8 +4220,15 @@ def poll_iracing():
                             _mcgap = -_pd * player_last_lap   # 正=後方(迫っている) / 負=前方(抜かれ済み)
                             # ★観測窓は広く(隊列の形を見るため)、発話の引き金は近い車だけ(5秒/2秒)。
                             if _mcgap <= 0 or _mcgap > MC_OBSERVE_SEC:
+                                multiclass_gap_history.pop(_mi, None)
                                 continue                       # 前方 or 観測範囲外
                             _cn = _norm_class_name(car_class_name_map.get(_mi)) or 'faster class'
+                            _mc_observed_groups.setdefault(_cn, []).append(_mcgap)
+                            _approaching, _mc_sample, _mc_reason = evaluate_multiclass_approach(
+                                multiclass_gap_history.get(_mi), _mcgap, now)
+                            multiclass_gap_history[_mi] = _mc_sample
+                            if not _approaching:
+                                continue                       # 後方でも停止・減速・離脱中なら黙る
                             _mc_groups.setdefault(_cn, []).append(_mcgap)
 
                         _seen_classes = set()
@@ -4206,8 +4251,10 @@ def poll_iracing():
                                     'message': _mc_message_en(_cn, _near, _gaps, _shape, _clusters, _stg)})
                         # ★2026-07-20 Codexレビュー P1-6：発火(5秒)と再武装が同じ境界に依存しており、
                         #   4.9↔5.1秒を揺れるだけで再発火できた。再武装は8秒超に離れた時だけにする。
+                        # Build 245：接近判定が一瞬途切れても、後方8秒以内にまだ存在する限り
+                        # stageを保持する。発話候補(_mc_groups)で再武装すると同じstageを連呼する。
                         for _cn in list(multiclass_stage.keys()):
-                            _g2 = _mc_groups.get(_cn)
+                            _g2 = _mc_observed_groups.get(_cn)
                             if _g2 is None or min(_g2) > MC_REARM_SEC:
                                 multiclass_stage.pop(_cn, None)     # 十分離れた/消えた＝再武装
 

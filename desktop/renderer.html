@@ -1759,6 +1759,15 @@ async function sendMsg(inputSource){
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
+  // 誤タップ/PTTで「ルール」だけ入った時に、内部プロンプトや文字数制限を長々と読み上げない。
+  if(/^(?:ルール|rules?|help)[。.!！?？]?$/i.test(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    const reply=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')
+      ? '走行中は必要な数字と行動だけ短く伝える。詳しい振り返りは走行後。'
+      : 'Short, useful calls while driving. Detailed review after the run.';
+    addMsg('ai',reply);pushMsg({role:'assistant',content:reply});speak(reply,true);
+    return;
+  }
   if(evidenceDebrief && evidenceDebrief.active){
     // Guided review stays active, but a question to the engineer must not be consumed
     // as the next evidence answer. Let the normal debrief LLM answer it.
@@ -2094,7 +2103,9 @@ function lapTimeForSpeech(value, lang){
   if(!m) return String(value||'');
   const minutes=Number(m[1]), seconds=Number(m[2]), millis=m[3].split('');
   if(lang && lang.startsWith('ja')){
-    return minutes>0
+    return minutes===1 && seconds>0
+      ? `${seconds}秒${m[3]}`
+      : minutes>0
       ? `${minutes}分${seconds}秒${m[3]}`
       : `${seconds}秒${m[3]}`;
   }
@@ -2850,9 +2861,11 @@ function sameClassIdDE(d){ return d.car_number ? `Wagen ${d.car_number}` : class
 function lapTimeSpeechJP(value){
   const s=String(value||'').trim();
   const m=s.match(/^(\d+):(\d{2})\.(\d{3})$/);
-  if(m) return Number(m[1])>0
-    ? `${Number(m[1])}分${Number(m[2])}秒${m[3]}`
-    : `${Number(m[2])}秒${m[3]}`;
+  if(m){
+    const minutes=Number(m[1]), seconds=Number(m[2]);
+    if(minutes===1 && seconds>0) return `${seconds}秒${m[3]}`;
+    return minutes>0 ? `${minutes}分${seconds}秒${m[3]}` : `${seconds}秒${m[3]}`;
+  }
   const short=s.match(/^(\d{1,2})\.(\d{3})$/);
   if(short) return `${Number(short[1])}秒${short[2]}`;
   return s;

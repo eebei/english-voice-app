@@ -170,6 +170,9 @@ if python3 irsdk-bridge/tests_weekend_authority.py >/dev/null 2>&1 && node tests
 echo "── Build 244 初回telemetry・LIVE truth gate（恒久出荷ゲート）"
 if python3 irsdk-bridge/tests_startup_liveness.py >/dev/null 2>&1 && node tests-telemetry-liveness.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_startup_liveness.py; node tests-telemetry-liveness.js; fail=1; fi
 
+echo "── Build 245 上位クラス実接近・簡潔ラップ発話"
+if python3 irsdk-bridge/tests_multiclass_approach.py >/dev/null 2>&1 && node tests-build245-radio.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_multiclass_approach.py; node tests-build245-radio.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
