@@ -18,8 +18,8 @@ check('Browser後着でも検出・Active状態を副作用なしsnapshot同期'
   && bridge.includes("'detected': bool(_iracing_mem_detected)")
   && bridge.includes("'telemetry_active': bool(_iracing_telemetry_active)")
   && renderer.includes("if(data.type==='iracing_status')"));
-check('Active late joinは緑バーへ同期',
-  renderer.includes("iracingLive=data.telemetry_active===true;")
+check('Active late joinも新鮮なsnapshot確認前は緑バーにしない',
+  renderer.includes("iracingLive=data.telemetry_active===true && lastTelemetryAt>0")
   && renderer.includes('usageIracingLive=iracingLive;')
   && !bridge.includes("if _iracing_mem_detected and not _iracing_telemetry_active:"));
 check('SDK非Activeを10秒周期でstatus/tick診断',

@@ -167,6 +167,9 @@ if node tests-fuel-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── Weekend authority・予選fail-close・Luna話法・修理時間（2026-07-29）"
 if python3 irsdk-bridge/tests_weekend_authority.py >/dev/null 2>&1 && node tests-weekend-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_weekend_authority.py; node tests-weekend-authority.js; fail=1; fi
 
+echo "── Build 244 初回telemetry・LIVE truth gate（恒久出荷ゲート）"
+if python3 irsdk-bridge/tests_startup_liveness.py >/dev/null 2>&1 && node tests-telemetry-liveness.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_startup_liveness.py; node tests-telemetry-liveness.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

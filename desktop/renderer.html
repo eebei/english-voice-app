@@ -983,6 +983,8 @@ let sessionActive = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
 let bridgeConnected = false, iracingDetected = false, iracingLive = false;
+let iracingConnectionSeen = false, iracingConnectedAt = 0, lastTelemetryAt = 0, telemetryStaleNotified = false;
+const TELEMETRY_STALE_MS = 12000;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null, lastSessionNum = null;
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
@@ -2608,6 +2610,7 @@ function bridgeVoiceNow(key){
     bridge_down:{ James:"System offline. Make sure the app is running — I'll reconnect automatically.", Luna:"System's offline. Keep the app open — I'll reconnect automatically.", Hajime:"System offline. Keep the app running. I'll reconnect automatically.", Kanbe:"システムが切れとる。アプリが起動しとるか確認してくれ。自動で繋ぎ直す。", Oishi:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。", HajimeJP:"システムが切れた。アプリの起動を確認してくれ。自動で再接続する。", LunaJP:"システムが切れちゃった。アプリが起動してるか確認して。自動で繋ぎ直すわ。", Matthias:"System offline. Bitte App-Start prüfen — automatische Wiederverbindung." },
     iracing_live:{ James:"iRacing connected. Data coming in. Stand by for briefing.", Luna:"iRacing connected. Data coming in. Stand by for your briefing.", Hajime:"iRacing connected. Data link confirmed.", Kanbe:"iRacing繋がったで。データ受信開始じゃ。", Oishi:"iRacing接続。データ受信開始。", HajimeJP:"iRacing接続。データ受信開始。", LunaJP:"iRacing繋がったわ。データ受信開始。", Matthias:"iRacing verbunden. Daten kommen an." },
     iracing_lost:{ James:"Lost iRacing signal.", Luna:"Lost iRacing signal.", Hajime:"iRacing signal lost.", Kanbe:"iRacingが切れたで。", Oishi:"iRacing切断。", HajimeJP:"iRacing切断。", LunaJP:"iRacingが切れちゃった。", Matthias:"iRacing-Signal verloren." },
+    telemetry_stale:{ James:"Telemetry stopped. Restart PITWALL before driving.", Luna:"Telemetry has stopped. Restart PITWALL before driving.", Hajime:"Telemetry stopped. Restart PITWALL.", Kanbe:"テレメトリが止まったで。走る前にPITWALLを再起動してくれ。", Oishi:"テレメトリ停止。走行前にPITWALLを再起動してほしい。", HajimeJP:"テレメトリ停止。走行前にPITWALLを再起動してくれ。", LunaJP:"テレメトリが止まったわ。走る前にPITWALLを再起動して。", Matthias:"Telemetrie gestoppt. Bitte PITWALL neu starten." },
     // PTTに割り当てたボタンのデバイスが見つからない＝押しても永久に無反応になる状態。無言の故障を防ぐため音声で必ず知らせる。
     ptt_mismatch:{ James:"Your push-to-talk button isn't responding. Please rebind it in Setup.", Luna:"Your push-to-talk isn't responding — rebind it in Setup when you get a chance.", Hajime:"PTT not responding. Rebind in Setup.", Kanbe:"PTTのボタンが反応しとらんで。設定画面で登録し直してくれ。", Oishi:"PTTが反応していない。設定画面で登録し直してほしい。", HajimeJP:"PTTが反応していない。設定画面で登録し直してくれ。", LunaJP:"PTTが反応してないわ。設定画面で登録し直して。", Matthias:"Push-to-talk reagiert nicht. Bitte in den Einstellungen neu zuweisen." }
   };
@@ -2624,6 +2627,18 @@ function updateBridgeStatus(){
   else if(bridgeConnected){ bar.textContent=t('status_bridge'); bar.style.background='#7a5c00'; bar.style.color='#fff'; }
   else{ bar.textContent=t('status_off'); bar.style.background='#6b0000'; bar.style.color='#fff'; }
 }
+function markTelemetryStale(reason){
+  if(!iracingDetected||telemetryStaleNotified) return;
+  iracingLive=false;usageIracingLive=false;lastTelemetry=null;lastSectors=null;
+  telemetryStaleNotified=true;updateBridgeStatus();
+  console.error('[TELEMETRY_STALE]',reason||'timeout');
+  bridgeVoice('telemetry_stale');
+}
+setInterval(()=>{
+  if(!iracingDetected||!iracingConnectedAt) return;
+  const newest=lastTelemetryAt||iracingConnectedAt;
+  if(Date.now()-newest>TELEMETRY_STALE_MS) markTelemetryStale('no_fresh_snapshot');
+},3000);
 function connectBridge(){
   if(irBridge&&irBridge.readyState<2) return;
   try{
@@ -2639,7 +2654,7 @@ function connectBridge(){
       let data; try{data=JSON.parse(e.data);}catch{return;}
       if(data.type==='iracing_status'){
         iracingDetected=data.detected===true;
-        iracingLive=data.telemetry_active===true;
+        iracingLive=data.telemetry_active===true && lastTelemetryAt>0 && Date.now()-lastTelemetryAt<=TELEMETRY_STALE_MS;
         usageIracingLive=iracingLive;
         updateBridgeStatus();
         return;
@@ -2651,13 +2666,19 @@ function connectBridge(){
         return;
       }
       if(data.type==='iracing_connected'){
-        const _wasLive = iracingLive;
-        iracingDetected=true; iracingLive=true; usageIracingLive=true; updateBridgeStatus(); bridgeVoice('iracing_live');
+        const _wasConnection = iracingConnectionSeen;
+        iracingConnectionSeen=true;iracingDetected=true;
+        // Bridgeが同じ接続通知を再送しても、新鮮なtelemetryを失効させない。
+        if(!_wasConnection){
+          iracingConnectedAt=Date.now();lastTelemetryAt=0;telemetryStaleNotified=false;
+          iracingLive=false;usageIracingLive=false;
+        }
+        updateBridgeStatus();
         // ★2026-07-23 Codex再指摘：iracing_connectedが同じ接続中に重複通知されるケースがあるため、
         //   false→trueへ遷移した最初の1回だけ新規発行する（重複では再発行しない）。
         //   暫定仕様：切断→再接続は新session_idとして扱う（同一SessionNum維持は今回スコープ外）。
         //   前IDをログへ残すことで、bridge_log.txt上で前後のIDを人力で結合できるようにする。
-        if(!_wasLive){
+        if(!_wasConnection){
           const _prevId = usageSessionId;
           newUsageSessionId();
           try{ if(irBridge && irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'log_line', text:'[USAGE_SESSION] prev='+_prevId+' -> new='+usageSessionId})); }catch(e){}
@@ -2668,6 +2689,7 @@ function connectBridge(){
       }
       if(data.type==='iracing_disconnected'){
         usageTick(); iracingDetected=false; iracingLive=false; usageIracingLive=false;
+        iracingConnectionSeen=false;iracingConnectedAt=0;lastTelemetryAt=0;telemetryStaleNotified=false;
         speakGateActive=false; speakWindowOk=true; drainQueue();
         flushUsageTelemetry('iracing_disconnected',false,false);
         updateBridgeStatus(); bridgeVoice('iracing_lost'); return;
@@ -2708,8 +2730,15 @@ function connectBridge(){
       }
       if(data.type==='lap_sectors') lastSectors=data.sectors;
       if(data.type==='telemetry_live'){
+        const _wasFresh=iracingLive;
+        lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
+        if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=data;
         updatePracticeRun(data);
+      }
+      if(data.type==='telemetry_error'){
+        markTelemetryStale(data.code||'bridge_error');
+        return;
       }
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
       if(data.type==='driver_activity'){
@@ -2785,7 +2814,8 @@ function connectBridge(){
       }
     };
     irBridge.onclose=()=>{
-      const was=bridgeConnected; bridgeConnected=false; iracingDetected=false; iracingLive=false; updateBridgeStatus();
+      const was=bridgeConnected; bridgeConnected=false; iracingDetected=false; iracingLive=false;
+      iracingConnectionSeen=false;iracingConnectedAt=0;lastTelemetryAt=0;telemetryStaleNotified=false;updateBridgeStatus();
       if(was) bridgeVoice('bridge_down');
       irBridgeReconnectTimer=setTimeout(connectBridge,3000);
     };
@@ -2798,6 +2828,7 @@ function disconnectBridge(){
   const bar=document.getElementById('bridge-status-bar');
   if(bar) bar.remove();
   bridgeConnected=false; iracingDetected=false; iracingLive=false;
+  iracingConnectionSeen=false;iracingConnectedAt=0;lastTelemetryAt=0;telemetryStaleNotified=false;
 }
 
 // ── Radio injection ──

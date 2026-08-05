@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 243 (practice workflow + review telemetry)"
+BUILD_VERSION = "Build 244 (telemetry startup recovery + liveness gate)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -573,7 +573,7 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'ptt_set', 'ptt_mismatch', 'ptt_config',
     'vol_set',
     # 接続状態
-    'iracing_connected', 'iracing_disconnected',
+    'iracing_connected', 'iracing_disconnected', 'telemetry_error',
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
     'driver_state', 'driver_activity', 'speak_gate', 'lap_sectors', 'pit_timing',
@@ -645,6 +645,8 @@ def _session_scoped_reset_values():
         'checker_out_notice_sent': False,
         'last_laps_remaining_est': None,
         'final_lap_notice_sent': {5: False, 3: False, 1: False},
+        '_timed_final_eval': {'reason': 'awaiting_completed_lap'},
+        '_milestone_laps': None,
         'fuel_strategy_warned': False,
         'fuel_per_lap_hist': [],
         'fuel_at_lap_start': None,
@@ -1878,6 +1880,29 @@ def fmt_radio(seconds):
     return fmt_time(seconds) if seconds >= 60 else "%.3f" % seconds
 
 
+def classify_race_clock(is_race_session, lap, laps_total, time_remaining):
+    """Classify lap-count vs timed-race authority on every telemetry poll.
+
+    This must be safe before the first completed lap.  Build 242/243 computed
+    the same values only inside ``lap_time_changed`` and then referenced them
+    from the first ``telemetry_live`` snapshot, killing the polling thread with
+    UnboundLocalError before any lap could complete.
+    """
+    laps_total_ok = (
+        isinstance(lap, (int, float))
+        and isinstance(laps_total, (int, float))
+        and 0 < laps_total < 3000
+        and laps_total > lap + 1)
+    is_time_race = bool(
+        is_race_session
+        and not laps_total_ok
+        and isinstance(time_remaining, (int, float))
+        and 0 <= time_remaining < 100000)
+    legacy_laps_remaining = (
+        max(0, int(laps_total - lap)) if laps_total_ok else None)
+    return laps_total_ok, is_time_race, legacy_laps_remaining
+
+
 _str_type_logged = False   # SDK型診断を1回だけ出すためのフラグ（2026-07-20）
 reader = IRacingReader()
 session_info_sent = False
@@ -1935,6 +1960,12 @@ def poll_iracing():
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
     last_telem_ts = 0.0         # ライブテレメトリ・スナップショットの最終送信時刻
+    # Build 244 startup authority.  These values exist before the first lap and
+    # are reset at every session boundary; telemetry_live may run immediately.
+    _is_time_race = False
+    _legacy_laps_remaining = None
+    _timed_final_eval = {'reason': 'awaiting_completed_lap'}
+    _milestone_laps = None
     nearest_ahead_gap = None    # 直前の車とのギャップ（秒）
     nearest_behind_gap = None   # 直後の車とのギャップ（秒）
     car_pos_hist = {}           # car_idx -> (LapDistPct, timestamp)（停止車両検知用）
@@ -2206,6 +2237,8 @@ def poll_iracing():
                         checker_out_notice_sent = _sig_reset['checker_out_notice_sent']
                         last_laps_remaining_est = _sig_reset['last_laps_remaining_est']
                         final_lap_notice_sent = _sig_reset['final_lap_notice_sent']
+                        _timed_final_eval = _sig_reset['_timed_final_eval']
+                        _milestone_laps = _sig_reset['_milestone_laps']
                         fuel_strategy_warned = _sig_reset['fuel_strategy_warned']
                         fuel_warning_band = _sig_reset['fuel_warning_band']
                         fuel_per_lap_hist = _sig_reset['fuel_per_lap_hist']
@@ -2348,6 +2381,8 @@ def poll_iracing():
             checker_out_notice_sent = _reset['checker_out_notice_sent']
             last_laps_remaining_est = _reset['last_laps_remaining_est']
             final_lap_notice_sent = _reset['final_lap_notice_sent']
+            _timed_final_eval = _reset['_timed_final_eval']
+            _milestone_laps = _reset['_milestone_laps']
             fuel_strategy_warned = _reset['fuel_strategy_warned']
             fuel_warning_band = _reset['fuel_warning_band']
             fuel_per_lap_hist = _reset['fuel_per_lap_hist']
@@ -2388,6 +2423,15 @@ def poll_iracing():
                     % _transition_summary.get('total_laps', 0))
         if cur_snum is not None:
             last_session_num = cur_snum
+
+        # Always classify the current session before any first-frame snapshot.
+        # Do not put this inside lap_time_changed: telemetry_live is emitted
+        # immediately after connection, before a lap can possibly complete.
+        _laps_total_ok, _is_time_race, _legacy_laps_remaining = classify_race_clock(
+            is_race_session, lap, lapsTot, timeRemain)
+        if not _is_time_race:
+            _timed_final_eval = {'reason': 'not_time_race'}
+            _milestone_laps = _legacy_laps_remaining
 
         # SessionState: 3=ParadeLaps(formation/rolling), 4=Racing
         if cur_ss == 4 and prev_session_state != 4:
@@ -2975,15 +3019,6 @@ def poll_iracing():
             # S/Fを通る時刻を壁時計上で比較する。周回番号の差し引きや
             # ceil(timeRemain / own pace) は、ラップダウン車を1周早くするため
             # Final Lapの根拠には使わない。
-            _laps_total_ok = (
-                lap is not None and lapsTot is not None
-                and 0 < lapsTot < 3000 and lapsTot > lap + 1)
-            _is_time_race = bool(
-                is_race_session and not _laps_total_ok
-                and timeRemain is not None and 0 <= timeRemain < 100000)
-            _legacy_laps_remaining = (
-                max(0, lapsTot - lap) if _laps_total_ok else None)
-
             _driver_dist = None
             _leader_dist = None
             if (car_dist_all and 0 <= player_car_idx < len(car_dist_all)):
@@ -4602,6 +4637,18 @@ async def handler(websocket):
     finally:
         connected_clients.discard(websocket)
 
+async def monitor_poll_thread(thread):
+    """Fail loudly when the telemetry worker dies instead of leaving a green UI."""
+    while thread.is_alive():
+        await asyncio.sleep(2)
+    log("FATAL TELEMETRY: poll_iracing thread stopped")
+    broadcast({
+        'type': 'telemetry_error',
+        'code': 'poll_thread_stopped',
+        'message': 'Telemetry processing stopped. Restart PITWALL.',
+    })
+
+
 async def main():
     global loop
     loop = asyncio.get_running_loop()
@@ -4627,8 +4674,12 @@ async def main():
     print("OMORAY PITWALL Bridge  BUILD " + BUILD_VERSION + "  started")
     print("WebSocket: ws://localhost:" + str(PORT))
     log("Waiting for iRacing...")
+    poll_watchdog = asyncio.create_task(monitor_poll_thread(t))
     async with websockets.serve(handler, "localhost", PORT):
-        await asyncio.Future()
+        try:
+            await asyncio.Future()
+        finally:
+            poll_watchdog.cancel()
 
 if __name__ == "__main__":
     asyncio.run(main())
