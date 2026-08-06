@@ -136,6 +136,12 @@ def summarize_record(record):
         "confidence": "medium" if usable >= 3 else "low",
         "prediction_ready": usable >= 3,
         "lane_total_median_s": _median(lane),
+        # The driver-facing Phase C calculation must use the directly
+        # observed IN-limit-line -> OUT-limit-line time.  ``observed_loss``
+        # is a diagnostic comparison against a moving on-track baseline and
+        # must never become the source of a radio prediction.
+        "lane_total_q1_s": _quartile(lane, 0.25),
+        "lane_total_q3_s": _quartile(lane, 0.75),
         "normal_segment_median_s": normal_median,
         "observed_loss_median_s": _median(losses),
         "observed_loss_q1_s": _quartile(losses, 0.25),

@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 246 (telemetry liveness + authoritative pit entry)"
+BUILD_VERSION = "Build 247 (authoritative pit timing + forecast fail-closed)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -2046,6 +2046,7 @@ def poll_iracing():
     pit_exit_forecast_shadow = None
     pit_exit_forecast_live = None
     pit_exit_forecast_live_at = None
+    last_pit_service = None  # latest exact IN-limit-line -> OUT-limit-line sample
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -3728,6 +3729,12 @@ def poll_iracing():
                     'session_num': cur_snum,
                 }
                 _pit_loss_summary = pit_loss_calibrator.add_pit_sample(_pit_sample)
+                last_pit_service = {
+                    'lane_total_s': pit_lane_sec,
+                    'stall_s': round(pit_stall_total_s, 2),
+                    'fuel_added_l': _fuel_added,
+                    'session_num': cur_snum,
+                }
                 _pit_exit_score = pit_exit_forecaster_mod.score_actual(
                     pit_exit_forecast_shadow, class_pos)
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
@@ -4439,6 +4446,7 @@ def poll_iracing():
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,
                 'pit_exit_forecast': _pit_now_forecast,
+                'last_pit_service': last_pit_service,
                 'leaders': {
                     'overall': ({
                         'car_idx': overall_leader_idx,

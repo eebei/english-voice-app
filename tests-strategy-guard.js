@@ -58,6 +58,14 @@ const normals = [
 normals.forEach(q => check('誤認しない: 「' + (q || '(空)') + '」',
   guard.classifyStrategyQuestion(q) === null));
 
+// ②b この周/次周のBOXは会話履歴の周回数を参照させない直接命令。
+check('直接命令: 「この週でbox」を今周BOXとして識別',
+  (guard.classifyDirectRaceCommand('この週でbox') || {}).topic === guard.TOPIC.PIT_THIS_LAP);
+check('直接命令: 次周BOXを識別',
+  (guard.classifyDirectRaceCommand('次の周でピット') || {}).topic === guard.TOPIC.PIT_NEXT_LAP);
+check('直接命令: ピットロスを識別',
+  (guard.classifyDirectRaceCommand('ピットロス何秒？') || {}).topic === guard.TOPIC.PIT_TIMING);
+
 // ③ Phase A では計算器が無いので、必ず「出せない」と判定される
 {
   const av = guard.evaluateAvailability(guard.TOPIC.REJOIN_POSITION, { hasRejoinCalculator: false });

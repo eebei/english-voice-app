@@ -193,6 +193,28 @@ async function testBaseline(port) {
     check('⑧live data不足: 未実装ではなくライブデータ不足を返す',
       /ライブデータ/.test(text) && !/入ってない/.test(text), text);
   }
+
+  // ── ⑨ STT「この週でbox」は履歴の数字を使わず今周BOXと返す ──
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP',
+      liveData: { lap: 5 },
+      messages: [{ role: 'user', content: 'この週でbox。' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('⑨今周BOX: 過去の周回数を参照せず固定返答', /今のラップの終わりでボックス/.test(text), text);
+  }
+
+  // ── ⑩ ピットロスは差分推定でなく実測IN->OUTだけを返す ──
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP',
+      liveData: { last_pit_service: { lane_total_s: 27.7, stall_s: 11.3, fuel_added_l: 8.8 } },
+      messages: [{ role: 'user', content: 'ピットロス何秒？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('⑩ピットロス: 実測INからOUTを返す', /27.7秒.*8.8L.*11.3秒/.test(text), text);
+  }
 }
 
 // ★P1-2再指摘（Codexレビュー）：分類後にevaluateAvailability/buildUnavailableReplyが

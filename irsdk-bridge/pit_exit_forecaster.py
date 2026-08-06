@@ -45,9 +45,19 @@ def _forward_progress(entry_pct, exit_pct):
 def _scenario(cars, player_exit_progress, projection_s, player_class_id):
     projected = []
     excluded = []
+    invalid_same_class_positions = []
     for car in cars:
         idx = car.get("car_idx")
         if player_class_id is None or car.get("class_id") != player_class_id:
+            excluded.append(idx)
+            continue
+        class_position = _num(car.get("class_position"))
+        # A zero/missing class position is not an innocent omission: it means
+        # this field cannot be ordered reliably (common in AI/race joins).
+        # Returning a precise P-number while such cars exist created the P17
+        # -> actual P8/P2 failures in the Monza Phase C run.
+        if class_position is None or class_position < 1:
+            invalid_same_class_positions.append(idx)
             excluded.append(idx)
             continue
         lap = _num(car.get("lap"))
@@ -65,7 +75,7 @@ def _scenario(cars, player_exit_progress, projection_s, player_class_id):
         progress = lap + pct + projection_s / lap_time
         projected.append({
             "car_idx": idx,
-            "class_position": car.get("class_position"),
+            "class_position": int(class_position),
             "car_number": car.get("car_number"),
             "progress": progress,
             "lap_time": lap_time,
@@ -112,6 +122,7 @@ def _scenario(cars, player_exit_progress, projection_s, player_class_id):
             "clear_air"),
         "projected_car_count": len(projected),
         "excluded_car_idxs": excluded,
+        "invalid_same_class_position_car_idxs": invalid_same_class_positions,
     }
 
 
@@ -138,20 +149,15 @@ def forecast_at_pit_entry(*, snapshot, calibration):
     player_lap = _num(snapshot.get("player_lap"))
     entry_pct = _num(calibration.get("pit_entry_pct"))
     exit_pct = _num(calibration.get("pit_exit_pct"))
-    normal_s = _num(calibration.get("normal_segment_median_s"))
-    q1 = _num(calibration.get("observed_loss_q1_s"))
-    median = _num(calibration.get("observed_loss_median_s"))
-    q3 = _num(calibration.get("observed_loss_q3_s"))
-    if None in (player_lap, entry_pct, exit_pct, normal_s, q1, median, q3):
+    q1 = _num(calibration.get("lane_total_q1_s"))
+    median = _num(calibration.get("lane_total_median_s"))
+    q3 = _num(calibration.get("lane_total_q3_s"))
+    if None in (player_lap, entry_pct, exit_pct, q1, median, q3):
         return _unavailable("calibration_fields_missing")
     progress_delta = _forward_progress(entry_pct, exit_pct)
     if progress_delta is None:
         return _unavailable("pit_coordinates_invalid")
-    lane_times = {
-        "best": normal_s + q1,
-        "likely": normal_s + median,
-        "worst": normal_s + q3,
-    }
+    lane_times = {"best": q1, "likely": median, "worst": q3}
     if not (5.0 < lane_times["best"] <= lane_times["likely"]
             <= lane_times["worst"] < 300.0):
         return _unavailable("calibration_distribution_invalid")
@@ -169,6 +175,13 @@ def forecast_at_pit_entry(*, snapshot, calibration):
     }
     if scenarios["likely"]["projected_car_count"] == 0:
         return _unavailable("no_projectable_same_class_cars")
+    if any(scenario["invalid_same_class_position_car_idxs"]
+           for scenario in scenarios.values()):
+        return _unavailable("class_standings_unreliable", {
+            "invalid_same_class_position_car_idxs": sorted(set(
+                idx for scenario in scenarios.values()
+                for idx in scenario["invalid_same_class_position_car_idxs"])),
+        })
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")
@@ -234,6 +247,9 @@ def forecast_pit_now(*, snapshot, calibration):
     }
     if scenarios["likely"]["projected_car_count"] == 0:
         return _unavailable("no_projectable_same_class_cars")
+    if any(scenario["invalid_same_class_position_car_idxs"]
+           for scenario in scenarios.values()):
+        return _unavailable("class_standings_unreliable")
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")

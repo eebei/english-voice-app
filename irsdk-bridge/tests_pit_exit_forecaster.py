@@ -14,10 +14,9 @@ calibration = {
     "prediction_ready": True,
     "pit_entry_pct": .98,
     "pit_exit_pct": .06,
-    "normal_segment_median_s": 8.0,
-    "observed_loss_q1_s": 20.0,
-    "observed_loss_median_s": 24.0,
-    "observed_loss_q3_s": 28.0,
+    "lane_total_q1_s": 28.0,
+    "lane_total_median_s": 32.0,
+    "lane_total_q3_s": 36.0,
     "pit_sample_count": 4,
     "normal_sample_count": 5,
     "usable_sample_count": 4,
@@ -81,8 +80,8 @@ two_sample_result = forecast_at_pit_entry(snapshot=snapshot, calibration=two_sam
 check("remaining calibration samples exposed",
       two_sample_result["evidence"]["remaining_sample_count"] == 1)
 
-bad_distribution = dict(calibration, observed_loss_q1_s=30,
-                        observed_loss_q3_s=20)
+bad_distribution = dict(calibration, lane_total_q1_s=36,
+                        lane_total_q3_s=28)
 check("bad distribution unavailable",
       forecast_at_pit_entry(snapshot=snapshot, calibration=bad_distribution)
       ["unavailable_reason"] == "calibration_distribution_invalid")
@@ -108,5 +107,13 @@ check("pit-now exposes all six evidence families",
 check("pit-now classifies traffic state",
       pit_now["likely"]["traffic_state"] in
       ("clear_air", "traffic", "blend_risk"))
+
+unreliable_snapshot = dict(snapshot, cars=snapshot["cars"] + [{
+    "car_idx": 7, "class_position": 0, "car_number": "77", "class_id": 101,
+    "lap": 10, "lap_dist_pct": .65, "last_lap_time": 100, "on_pit_road": False,
+}])
+check("invalid same-class standings fail closed",
+      forecast_at_pit_entry(snapshot=unreliable_snapshot, calibration=calibration)
+      ["unavailable_reason"] == "class_standings_unreliable")
 
 print("✅ pit exit forecaster: %d checks" % passed)

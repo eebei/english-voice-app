@@ -28,6 +28,9 @@
 /** 戦略の話題。証拠付き計算器が使える時だけ available にする。 */
 const TOPIC = {
   REJOIN_POSITION: 'rejoin_position',   // 「今入ったら何位で戻れる？」
+  PIT_THIS_LAP: 'pit_this_lap',
+  PIT_NEXT_LAP: 'pit_next_lap',
+  PIT_TIMING: 'pit_timing',
 };
 
 /** 計算できない理由。LLMに渡さず、この理由から定型文を組む。 */
@@ -69,6 +72,21 @@ function classifyStrategyQuestion(text) {
   const hasPit = PIT_INTENT.some(re => re.test(t));
   const hasPos = POSITION_ASK.some(re => re.test(t));
   if (hasPit && hasPos) return { topic: TOPIC.REJOIN_POSITION };
+  return null;
+}
+
+// Spoken Japanese is commonly transcribed as 「この週でbox」.  This is an
+// instruction, not a request for an LLM to reconstruct a lap number from
+// chat history.  Keep it deliberately narrow and deterministic.
+function classifyDirectRaceCommand(text) {
+  if (!text || typeof text !== 'string') return null;
+  const t = text.trim();
+  if (!t) return null;
+  const pit = /(ピット|ボックス|box|pit)/i;
+  if (!pit.test(t)) return null;
+  if (/(この\s*(周|週)|今\s*周|this\s*lap)/i.test(t)) return { topic: TOPIC.PIT_THIS_LAP };
+  if (/(次\s*(の)?\s*(周|週)|next\s*lap)/i.test(t)) return { topic: TOPIC.PIT_NEXT_LAP };
+  if (/(ピットロス|ロスタイム|pit\s*loss|pit\s*time)/i.test(t)) return { topic: TOPIC.PIT_TIMING };
   return null;
 }
 
@@ -150,6 +168,7 @@ function containsForbiddenHedge(text) {
 module.exports = {
   TOPIC, REASON,
   classifyStrategyQuestion,
+  classifyDirectRaceCommand,
   evaluateAvailability,
   buildUnavailableReply,
   containsForbiddenHedge,

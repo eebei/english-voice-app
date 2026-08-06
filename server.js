@@ -681,6 +681,42 @@ function buildPitCalibrationReply(forecast, lang) {
   return `Pit calibration for this car and track is ${usable}/${required}. ${remaining} more required.`;
 }
 
+// These answers are facts from the current live payload, never LLM inference.
+function buildDirectPitReply(command, liveData, lang) {
+  const live = liveData && typeof liveData === 'object' ? liveData : {};
+  if (command.topic === strategyGuard.TOPIC.PIT_THIS_LAP) {
+    return lang === 'ja' ? '了解。今のラップの終わりでボックス。'
+      : 'Copy. Box at the end of this lap.';
+  }
+  if (command.topic === strategyGuard.TOPIC.PIT_NEXT_LAP) {
+    return lang === 'ja' ? '了解。次のラップの終わりでボックス。'
+      : 'Copy. Box at the end of the next lap.';
+  }
+  if (command.topic === strategyGuard.TOPIC.PIT_TIMING) {
+    const sample = live.last_pit_service;
+    const lane = Number(sample && sample.lane_total_s);
+    if (!Number.isFinite(lane) || lane <= 0) {
+      return lang === 'ja' ? '直近のピット総時間は、まだ実測できていない。'
+        : 'I do not have an exact measured pit-lane time yet.';
+    }
+    const fuel = Number(sample.fuel_added_l);
+    const stall = Number(sample.stall_s);
+    if (lang === 'ja') {
+      const detail = [
+        Number.isFinite(fuel) ? `給油${fuel.toFixed(1)}L` : null,
+        Number.isFinite(stall) ? `停止${stall.toFixed(1)}秒` : null,
+      ].filter(Boolean).join('、');
+      return `直近のINからOUTまで${lane.toFixed(1)}秒。${detail || 'サービス内訳は未計測'}。`;
+    }
+    const detail = [
+      Number.isFinite(fuel) ? `${fuel.toFixed(1)}L fuel` : null,
+      Number.isFinite(stall) ? `${stall.toFixed(1)}s stationary` : null,
+    ].filter(Boolean).join(', ');
+    return `Last measured pit lane, IN to OUT: ${lane.toFixed(1)}s. ${detail || 'Service detail unavailable'}.`;
+  }
+  return null;
+}
+
 function unicodeLength(text) {
   return Array.from(String(text || '')).length;
 }
@@ -737,13 +773,24 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     //   ※分類は狭い（ピットに入る意図×順位を問う の両方が揃った時だけ）。
     //     通常会話を禁止語で置換するようなことはしない。
     let _strategyQ = null;
+    let _directPitCommand = null;
     try {
       const _msgs = Array.isArray(req.body.messages) ? req.body.messages : [];
       const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
       _strategyQ = _lastUser && typeof _lastUser.content === 'string'
         ? strategyGuard.classifyStrategyQuestion(_lastUser.content) : null;
+      _directPitCommand = _lastUser && typeof _lastUser.content === 'string'
+        ? strategyGuard.classifyDirectRaceCommand(_lastUser.content) : null;
     } catch (e) {
       console.log('[strategy_guard] classify skipped: ' + e.message);   // 分類前の失敗のみ通常経路へ
+    }
+    if (_directPitCommand) {
+      const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
+      const _reply = buildDirectPitReply(_directPitCommand, req.body.liveData, _lang);
+      if (_reply) {
+        console.log(`[strategy_guard] direct=${_directPitCommand.topic} -> authoritative reply`);
+        return sendGuardReply(req, res, _reply, 100);
+      }
     }
     if (_strategyQ) {
       // ★P1-2（Codexレビュー）：対象質問だと分かった後は fail-closed。
