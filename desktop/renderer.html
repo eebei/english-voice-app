@@ -1900,7 +1900,7 @@ async function callAPI(inputSource, memoryStatus=''){
   isBusy=true;
   document.getElementById('busy-ind').classList.add('show');
   const telemetry = iracingLive?'live':(bridgeConnected?'bridge':'off');
-  const profile = loadProfile()||{};
+  const profile = hydrateLegacyStrategyObjective()||loadProfile()||{};
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
   const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildFuelAuthorityNote(_isJP_pre)
@@ -2739,6 +2739,7 @@ function connectBridge(){
             qualifying_result:data.data.qualifying_result||null
           };
           applySessionFuelAuthority(data.data);
+          hydrateLegacyStrategyObjective();
         }
         injectBriefing(data.data);
       }
@@ -3938,10 +3939,42 @@ function deriveStrategyObjective(answers){
   // decorative personality note.  "Change the engineer" is accepted here
   // because it was immediately tied to race-total pit prediction in the
   // driver review; later outcomes determine whether this instruction worked.
-  if(/エンジニア.*(?:変え|問題)|最終.*順位|アンダー\s*カット|オーバー\s*カット|ピット.*(?:予測|戦略|判断)|(?:final|overall).*position|under ?cut|over ?cut|pit.*(?:forecast|strategy)/i.test(text)){
+  if(/エンジニア.*(?:変え|問題)|最終.*順位|アンダー\s*カット|オーバー\s*カット|ピット.*(?:予測|戦略|判断)|(?:change|replace).*engineer|engineer.*(?:change|replace|problem)|(?:final|overall).*position|under ?cut|over ?cut|pit.*(?:forecast|strategy)/i.test(text)){
     return {kind:'pit_total_race_outcome',status:'active',createdAt:new Date().toISOString(),outcomeCount:0,errors:[]};
   }
   return null;
+}
+function legacyPitHistoryExists(){
+  try{
+    const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    const track=String(lastTrack||'').trim().toLowerCase();
+    const model=String(lastCarModel||lastCarClass||'').trim().toLowerCase();
+    return Object.values(mem).some(rec=>{
+      if(!rec||!Number.isFinite(Number(rec.pitLaneSec))) return false;
+      const recTrack=String(rec.track||'').trim().toLowerCase();
+      const recCar=String(rec.car||'').trim().toLowerCase();
+      return (!track||recTrack===track) && (!model||recCar===model);
+    });
+  }catch{return false;}
+}
+function hydrateLegacyStrategyObjective(){
+  const profile=loadProfile()||{name:userName,sessions:1};
+  if(profile.strategyObjective&&profile.strategyObjective.status==='active') return profile;
+  let legacyText=(profile.notes||[]).join('\n');
+  try{
+    legacyText+='\n'+loadEvidenceRecords().map(record=>(record.qa||[])
+      .map(item=>item.answer||'').join('\n')).join('\n');
+  }catch{}
+  const explicit=deriveStrategyObjective([legacyText]);
+  // Existing Phase C pit data is driver effort, not disposable setup noise.
+  // Upgrade it into an active race objective automatically; no repeat
+  // debrief is required merely because the software gained this feature.
+  const objective=explicit || (legacyPitHistoryExists()
+    ? {kind:'pit_total_race_outcome',status:'active',createdAt:new Date().toISOString(),
+       outcomeCount:0,errors:[],migratedFromLegacy:true} : null);
+  if(!objective) return profile;
+  saveProfile({...profile,strategyObjective:objective});
+  return {...profile,strategyObjective:objective};
 }
 function saveStrategyObjectiveFromDebrief(answers){
   const next=deriveStrategyObjective(answers);
@@ -3968,7 +4001,7 @@ function recordStrategyForecastOutcome(data){
     lastLikelyPosition:score.likely_position}});
 }
 function announceActiveStrategyObjective(data){
-  const profile=loadProfile()||{};
+  const profile=hydrateLegacyStrategyObjective()||loadProfile()||{};
   const objective=profile.strategyObjective;
   if(!objective||objective.status!=='active'||objective.kind!=='pit_total_race_outcome') return;
   if(!String(lastSessionType||'').toLowerCase().includes('race')||!data||data.on_track!==true) return;
@@ -4438,6 +4471,11 @@ function dumpLearnedMemory(reason){
     const notes = prof.notes||[];
     lines.push('[人物理解 '+notes.length+'件] ' + (notes.length? '' : '(まだ無し)'));
     notes.forEach(n=> lines.push('   ・'+String(n).replace(/\s+/g,' ').slice(0,300)));
+    const objective=prof.strategyObjective||{};
+    lines.push('[能動戦略課題] '+(objective.status==='active'
+      ? (objective.kind+' / 予測採点 '+(objective.outcomeCount||0)+'/3'
+        +(objective.migratedFromLegacy?' / legacy migrated':''))
+      : '(なし)'));
     const keys = Object.keys(ct);
     lines.push('[コース×車種の記憶 '+keys.length+'件]');
     keys.slice(-8).forEach(k=>{
