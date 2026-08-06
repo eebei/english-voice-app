@@ -35,6 +35,69 @@ def _quartile(values, fraction):
     return round(values[lo] + (values[hi] - values[lo]) * (pos - lo), 3)
 
 
+def _fuel_service_summary(record):
+    """Estimate stationary fuel-service time without assuming tyre status.
+
+    The driver-facing pit loss is IN limit line -> OUT limit line.  Fuel flow
+    itself happens while stationary, therefore this diagnostic fit uses
+    ``stall_s``.  It is not strategy authority until tyre-service telemetry is
+    explicitly verified.
+    """
+    samples = []
+    for sample in (record or {}).get("pit_samples", []):
+        litres = _num(sample.get("fuel_added_l"))
+        stall_s = _num(sample.get("stall_s"))
+        repair_s = _num(sample.get("repair_s")) or 0.0
+        if (litres is None or litres < 0.2 or stall_s is None or stall_s < 1.0
+                or repair_s > 0.5
+                or sample.get("classification") in ("repair", "long_stop", "drive_through")):
+            continue
+        samples.append((litres, stall_s))
+    if len(samples) < 2:
+        return {
+            "available": False,
+            "sample_count": len(samples),
+            "required_sample_count": 2,
+            "remaining_sample_count": max(0, 2 - len(samples)),
+            "reason": "insufficient_fuel_service_samples",
+        }
+
+    mean_l = sum(litres for litres, _ in samples) / len(samples)
+    mean_s = sum(stall_s for _, stall_s in samples) / len(samples)
+    denominator = sum((litres - mean_l) ** 2 for litres, _ in samples)
+    if denominator <= 0.0001:
+        return {
+            "available": False,
+            "sample_count": len(samples),
+            "required_sample_count": 2,
+            "remaining_sample_count": 0,
+            "reason": "fuel_amounts_not_varied",
+        }
+    rate = sum((litres - mean_l) * (stall_s - mean_s)
+               for litres, stall_s in samples) / denominator
+    fixed_s = mean_s - rate * mean_l
+    # A negative or implausibly high coefficient signals another unobserved
+    # service (normally tyres).  Retain the samples but never invent a number.
+    if rate <= 0.0 or rate > 5.0 or fixed_s < -1.0:
+        return {
+            "available": False,
+            "sample_count": len(samples),
+            "required_sample_count": 2,
+            "remaining_sample_count": 0,
+            "reason": "service_mix_not_clean",
+        }
+    residuals = [abs(stall_s - (fixed_s + rate * litres))
+                 for litres, stall_s in samples]
+    return {
+        "available": True,
+        "sample_count": len(samples),
+        "fuel_rate_s_per_l": round(rate, 3),
+        "fixed_stall_s": round(max(0.0, fixed_s), 3),
+        "median_abs_error_s": _median(residuals),
+        "service_mix": "tyre_status_unverified",
+    }
+
+
 def crossed_forward(previous_pct, current_pct, target_pct, max_step=0.08):
     """Reject reverse movement/teleports; accept a forward crossing including S/F wrap."""
     previous_pct, current_pct, target_pct = (
@@ -77,6 +140,7 @@ def summarize_record(record):
         "observed_loss_median_s": _median(losses),
         "observed_loss_q1_s": _quartile(losses, 0.25),
         "observed_loss_q3_s": _quartile(losses, 0.75),
+        "fuel_service": _fuel_service_summary(record),
         "calculator_version": CALCULATOR_VERSION,
     }
 

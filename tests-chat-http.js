@@ -135,6 +135,64 @@ async function testBaseline(port) {
     const text = parsed && parsed.content && parsed.content[0] && parsed.content[0].text || '';
     check('⑤sessionType(トップレベル)がPracticeでNOT_RACE_SESSION文言になる', /レースじゃない/.test(text), text);
   }
+
+  // ── ⑥ Phase C: live forecast はLLMを通さず6項目を数値で返す ──
+  {
+    const forecast = {
+      available: true, snapshot_id: 'live:test',
+      best: { position: 2 }, worst: { position: 4 },
+      likely: {
+        position: 3,
+        nearest_ahead: { car_number: '15', gap_s: 4.9 },
+        nearest_behind: { car_number: '67', gap_s: -2.6 },
+        traffic_state: 'blend_risk',
+        blend_conflicts: [{ car_number: '67', gap_s: -2.6 }],
+      },
+    };
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { pit_exit_forecast: forecast },
+      messages: [{ role: 'user', content: '今ピットに入ったら何位で戻れる？' }],
+    });
+    let parsed = null;
+    try { parsed = JSON.parse(r.body); } catch (e) {}
+    const text = parsed && parsed.content && parsed.content[0] && parsed.content[0].text || '';
+    check('⑥Phase C: LikelyとBest/Worstを返す', /P3.*P2〜P4/.test(text), text);
+    check('⑥Phase C: 前後車両を返す', /#15.*#67/.test(text), text);
+    check('⑥Phase C: trafficとblend riskを返す', /トラフィック内.*合流注意/.test(text), text);
+  }
+
+  // ── ⑦ 個人calibration不足: 残り回数を明示する ──
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { pit_exit_forecast: {
+        available: false, unavailable_reason: 'calibration_insufficient_samples',
+        evidence: { usable_sample_count: 1, required_sample_count: 3, remaining_sample_count: 2 },
+      } },
+      messages: [{ role: 'user', content: '今ピットに入ったら何位で戻れる？' }],
+    });
+    let parsed = null;
+    try { parsed = JSON.parse(r.body); } catch (e) {}
+    const text = parsed && parsed.content && parsed.content[0] && parsed.content[0].text || '';
+    check('⑦calibration: 個人実測1/3と残り2回を返す', /1\/3.*あと2回/.test(text), text);
+  }
+
+  // ── ⑧ 計算器はあるが瞬間データ不足: 古い「未実装」文言へ戻さない ──
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { pit_exit_forecast: {
+        available: false, unavailable_reason: 'player_progress_missing',
+      } },
+      messages: [{ role: 'user', content: '今ピットに入ったら何位で戻れる？' }],
+    });
+    let parsed = null;
+    try { parsed = JSON.parse(r.body); } catch (e) {}
+    const text = parsed && parsed.content && parsed.content[0] && parsed.content[0].text || '';
+    check('⑧live data不足: 未実装ではなくライブデータ不足を返す',
+      /ライブデータ/.test(text) && !/入ってない/.test(text), text);
+  }
 }
 
 // ★P1-2再指摘（Codexレビュー）：分類後にevaluateAvailability/buildUnavailableReplyが

@@ -1,4 +1,4 @@
-from pit_exit_forecaster import forecast_at_pit_entry, score_actual
+from pit_exit_forecaster import forecast_at_pit_entry, forecast_pit_now, score_actual
 
 passed = 0
 
@@ -77,6 +77,9 @@ two_samples = dict(calibration, usable_sample_count=2)
 check("two samples unavailable",
       forecast_at_pit_entry(snapshot=snapshot, calibration=two_samples)
       ["unavailable_reason"] == "calibration_insufficient_samples")
+two_sample_result = forecast_at_pit_entry(snapshot=snapshot, calibration=two_samples)
+check("remaining calibration samples exposed",
+      two_sample_result["evidence"]["remaining_sample_count"] == 1)
 
 bad_distribution = dict(calibration, observed_loss_q1_s=30,
                         observed_loss_q3_s=20)
@@ -89,5 +92,21 @@ check("actual score", scored["likely_error_positions"] == 0)
 check("range hit", scored["inside_best_worst"])
 check("unavailable score omitted",
       score_actual({"available": False}, 4) is None)
+
+pit_now_snapshot = dict(snapshot, player_lap_dist_pct=.50,
+                        player_last_lap_time=100)
+pit_now = forecast_pit_now(snapshot=pit_now_snapshot, calibration=calibration)
+check("pit-now forecast available", pit_now["available"])
+check("pit-now is driver facing", pit_now["driver_facing"]
+      and not pit_now["shadow_mode"] and pit_now["model_version"] == 2)
+check("pit-now includes time to entry", pit_now["time_to_entry_s"] == 48.0)
+check("pit-now exposes all six evidence families",
+      all(k in pit_now for k in ("best", "likely", "worst"))
+      and "nearest_ahead" in pit_now["likely"]
+      and "nearest_behind" in pit_now["likely"]
+      and "blend_conflicts" in pit_now["likely"])
+check("pit-now classifies traffic state",
+      pit_now["likely"]["traffic_state"] in
+      ("clear_air", "traffic", "blend_risk"))
 
 print("✅ pit exit forecaster: %d checks" % passed)

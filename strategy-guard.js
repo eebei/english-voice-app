@@ -13,9 +13,9 @@
 //   構造化された理由から**正直な返答を組み立てる**。
 //   ＝「答えられないのに答えたふりをする」経路を、プロンプトでなくコードで塞ぐ。
 //
-// 【Phase A の約束（Yuji指示）】
-//   **復帰順位を計算したふりをしない。** Phase A では計算器が存在しないので、
-//   復帰順位の質問には必ず「まだ出せない」と理由付きで答える。
+// 【Phase C の約束（Yuji指示）】
+//   **復帰順位を計算したふりをしない。** 実測calibrationとライブ予測が揃った時だけ
+//   serverが数値を返す。足りない時は理由付きで止め、自由文LLMへ流さない。
 //
 // 【意図的にやらないこと】
 //   - 通常会話全体を禁止語フィルタで置換すること（誤爆で会話を壊す）
@@ -25,7 +25,7 @@
 
 'use strict';
 
-/** 戦略の話題。Phase B/C で計算器が付いた順に available へ移していく。 */
+/** 戦略の話題。証拠付き計算器が使える時だけ available にする。 */
 const TOPIC = {
   REJOIN_POSITION: 'rejoin_position',   // 「今入ったら何位で戻れる？」
 };
@@ -73,7 +73,7 @@ function classifyStrategyQuestion(text) {
 }
 
 /**
- * その話題に今答えられるかを判定する。Phase A は計算器が無いので常に不可。
+ * その話題に今答えられるかを判定する。
  * @param {string} topic
  * @param {{hasRejoinCalculator?:boolean, isRaceSession?:boolean}} ctx
  * @returns {{available:boolean, reason:string|null}}
@@ -91,7 +91,7 @@ function evaluateAvailability(topic, ctx) {
   const c = ctx || {};
   if (topic === TOPIC.REJOIN_POSITION) {
     if (c.isRaceSession === false) return { available: false, reason: REASON.NOT_RACE_SESSION };
-    // ★Phase A：復帰順位の計算器は存在しない。ここを true にできるのは Phase C 完了後だけ。
+    // Phase C：serverが証拠付きlive forecastを持つ時だけtrue。
     if (!c.hasRejoinCalculator) return { available: false, reason: REASON.NO_CALCULATOR };
     return { available: true, reason: null };
   }

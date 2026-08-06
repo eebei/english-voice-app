@@ -2044,6 +2044,8 @@ def poll_iracing():
     pit_stall_total_s = 0.0
     pit_loss_calibrator = pit_loss_calibrator_mod.PitLossCalibrator(PIT_LOSS_PATH)
     pit_exit_forecast_shadow = None
+    pit_exit_forecast_live = None
+    pit_exit_forecast_live_at = None
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -3569,9 +3571,9 @@ def poll_iracing():
             pit_repair_start_s = damage_s
             pit_stall_start_time = None
             pit_stall_total_s = 0.0
-            # Phase C shadow mode: forecast only at a genuine pit-entry edge.
-            # Log and score it, but never speak or use it as strategy authority
-            # until field accuracy has been established.
+            # Phase C scoring edge.  Prefer the fresh driver-facing forecast
+            # that was available immediately before entry, then score it
+            # against the actual class position at pit exit.
             _pit_flags_entry = reader.read_int('SessionFlags') or 0
             _pit_caution_entry = 'caution' if (_pit_flags_entry & 0xC000) else 'green'
             _pit_calibration_entry = pit_loss_calibrator.get_summary(
@@ -3612,7 +3614,7 @@ def poll_iracing():
                 cur_snum,
                 round(pit_enter_time, 3) if pit_enter_time is not None else 'na',
                 player_car_idx)
-            pit_exit_forecast_shadow = pit_exit_forecaster_mod.forecast_at_pit_entry(
+            _pit_entry_forecast = pit_exit_forecaster_mod.forecast_at_pit_entry(
                 snapshot={
                     'snapshot_id': _pit_snapshot_id,
                     'session_num': cur_snum,
@@ -3624,6 +3626,20 @@ def poll_iracing():
                     'cars': _pit_snapshot_cars,
                 },
                 calibration=_pit_calibration_entry)
+            # The forecast the driver could see immediately before committing
+            # to pit road is the value that must be scored after exit.  Reuse
+            # it only while it is fresh; otherwise fall back to the entry-edge
+            # snapshot rather than carrying a stale forecast across a lap.
+            if (isinstance(pit_exit_forecast_live, dict)
+                    and pit_exit_forecast_live.get('available')
+                    and isinstance(pit_exit_forecast_live_at, (int, float))
+                    and isinstance(pit_enter_time, (int, float))
+                    # telemetry_live is intentionally emitted every 3s; allow
+                    # one full cadence plus scheduling jitter.
+                    and 0 <= pit_enter_time - pit_exit_forecast_live_at <= 4.0):
+                pit_exit_forecast_shadow = pit_exit_forecast_live
+            else:
+                pit_exit_forecast_shadow = _pit_entry_forecast
             log("PIT EXIT SHADOW forecast: " + json.dumps(
                 pit_exit_forecast_shadow, ensure_ascii=False, separators=(',', ':')))
             limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
@@ -3729,6 +3745,18 @@ def poll_iracing():
                     'score': _pit_exit_score,
                 }, ensure_ascii=False, separators=(',', ':')))
                 log('PIT timing: lane ' + str(pit_lane_sec) + 's  P' + str(pit_enter_pos) + '->P' + str(class_pos))
+                # Exact fill + IN-line -> OUT-line loss.  This makes the
+                # per-litre service estimate auditable from a normal debug log.
+                log('PIT SERVICE sample: ' + json.dumps({
+                    'fuel_added_l': _fuel_added,
+                    'stall_s': round(pit_stall_total_s, 2),
+                    'lane_total_s': pit_lane_sec,
+                    'tire_service': _pit_sample['tire_service'],
+                    'classification': _classification,
+                    'fuel_service': (
+                        _pit_loss_summary.get('fuel_service')
+                        if isinstance(_pit_loss_summary, dict) else None),
+                }, ensure_ascii=False, separators=(',', ':')))
                 pit_exit_forecast_shadow = None
 
         # ── ピット秒読み診断 v2（2026-07-17）──
@@ -4317,6 +4345,63 @@ def poll_iracing():
         #   すぎないよう、走行中でなくても(session接続中は)更新し続ける。
         _tnow = time.time()
         if player_car_idx >= 0 and _tnow - last_telem_ts > 3:
+            # Phase C driver-facing forecast.  Unlike the entry-edge shadow
+            # score, this projects from the player's current track position so
+            # 「今入ったら？」 can be answered before committing to pit road.
+            _pit_now_forecast = None
+            if is_race_session and not onPit and onTrack:
+                _pit_now_session_time = reader.read_double('SessionTime')
+                _pit_now_flags = reader.read_int('SessionFlags') or 0
+                _pit_now_caution = 'caution' if (_pit_now_flags & 0xC000) else 'green'
+                _pit_now_calibration = pit_loss_calibrator.get_summary(
+                    session_track, session_car_model, _pit_now_caution)
+                _pit_now_last_laps = reader.read_float_array('CarIdxLastLapTime', 64)
+                _pit_now_cls_positions = reader.read_int_array('CarIdxClassPosition', 64)
+                _pit_now_cars = []
+                for _pci in range(64):
+                    if _pci == player_car_idx:
+                        continue
+                    _pit_now_cars.append({
+                        'car_idx': _pci,
+                        'class_id': car_class_map.get(_pci),
+                        'car_number': car_number_map.get(_pci),
+                        'class_position': (
+                            _pit_now_cls_positions[_pci]
+                            if _pit_now_cls_positions
+                            and _pci < len(_pit_now_cls_positions)
+                            else None),
+                        'lap': (car_laps_all[_pci]
+                                if car_laps_all and _pci < len(car_laps_all) else None),
+                        'lap_dist_pct': (car_dist_all[_pci]
+                                         if car_dist_all and _pci < len(car_dist_all) else None),
+                        'last_lap_time': (
+                            _pit_now_last_laps[_pci]
+                            if _pit_now_last_laps and _pci < len(_pit_now_last_laps) else None),
+                        'on_pit_road': bool(
+                            car_on_pitroad_all[_pci]
+                            if car_on_pitroad_all and _pci < len(car_on_pitroad_all)
+                            else False),
+                    })
+                _pit_now_forecast = pit_exit_forecaster_mod.forecast_pit_now(
+                    snapshot={
+                        'snapshot_id': 'live:%s:%s' % (
+                            cur_snum,
+                            round(_pit_now_session_time, 3)
+                            if isinstance(_pit_now_session_time, (int, float)) else 'na'),
+                        'player_lap': lap,
+                        'player_lap_dist_pct': (
+                            car_dist_all[player_car_idx]
+                            if car_dist_all and player_car_idx < len(car_dist_all) else None),
+                        'player_last_lap_time': lapTime or personal_best,
+                        'player_class_id': player_class_id,
+                        'cars': _pit_now_cars,
+                    },
+                    calibration=_pit_now_calibration)
+                pit_exit_forecast_live = _pit_now_forecast
+                pit_exit_forecast_live_at = _pit_now_session_time
+            else:
+                pit_exit_forecast_live = None
+                pit_exit_forecast_live_at = None
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -4353,6 +4438,7 @@ def poll_iracing():
                 'weather': weather,
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,
+                'pit_exit_forecast': _pit_now_forecast,
                 'leaders': {
                     'overall': ({
                         'car_idx': overall_leader_idx,

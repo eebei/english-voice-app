@@ -12,7 +12,10 @@ checks = {
     "actual score": "pit_exit_forecaster_mod.score_actual(" in source,
     "actual score logged": "PIT EXIT SHADOW actual:" in source,
     "payload carries shadow": "'pit_exit_forecast_shadow': pit_exit_forecast_shadow" in source,
-    "no shadow radio": "'trigger': 'pit_exit_forecast" not in source,
+    "live pre-pit forecast": "pit_exit_forecaster_mod.forecast_pit_now(" in source,
+    "live payload carries forecast": "'pit_exit_forecast': _pit_now_forecast" in source,
+    "fresh driver forecast is scored": "pit_exit_forecast_shadow = pit_exit_forecast_live" in source,
+    "forecast freshness uses session clock": "pit_exit_forecast_live_at = _pit_now_session_time" in source,
 }
 
 failed = [name for name, ok in checks.items() if not ok]

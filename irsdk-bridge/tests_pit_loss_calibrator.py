@@ -28,6 +28,18 @@ check("full refuel reference excluded", summary["pit_sample_count"] == 3)
 check("ready at three", summary["prediction_ready"])
 check("median loss", summary["observed_loss_median_s"] == 24.1)
 
+fuel_summary = summarize_record({
+    "pit_samples": [
+        {"lane_total_s": 27.9, "stall_s": 8.0, "fuel_added_l": 9.0,
+         "classification": "calibration", "service_profile_version": 1},
+        {"lane_total_s": 29.7, "stall_s": 10.0, "fuel_added_l": 13.0,
+         "classification": "calibration", "service_profile_version": 1},
+    ],
+    "normal_samples": [],
+})["fuel_service"]
+check("fuel service fit produced", fuel_summary["available"])
+check("fuel service rate positive", fuel_summary["fuel_rate_s_per_l"] > 0)
+
 two_sample_summary = summarize_record({
     "pit_samples": [{"lane_total_s": x, "classification": "calibration",
                      "service_profile_version": 1}
