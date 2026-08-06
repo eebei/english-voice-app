@@ -654,9 +654,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         <div id="debrief-guide-question" style="font-size:14px;line-height:1.55"></div>
         <button id="debrief-guide-cancel" class="back-btn" style="margin-top:10px" onclick="dismissEvidenceDebrief()">End review</button>
         <div id="debrief-guide-actions" style="display:none;gap:8px;margin-top:10px">
-          <button id="debrief-guide-save" class="back-btn" onclick="confirmEvidenceMemory()">Save</button>
+          <button id="debrief-guide-save" class="back-btn" onclick="confirmEvidenceMemory()">Confirm memory</button>
           <button id="debrief-guide-restart" class="back-btn" onclick="restartEvidenceDebrief()">Revise answers</button>
-          <button id="debrief-guide-discard" class="back-btn" onclick="dismissEvidenceDebrief()">Don’t save</button>
+          <button id="debrief-guide-discard" class="back-btn" onclick="discardEvidenceMemory()">Delete memory</button>
         </div>
       </div>
       <div class="busy-indicator" id="busy-ind" data-i18n="busy">Engineer thinking…</div>
@@ -3577,9 +3577,10 @@ const EVIDENCE_COPY={
     raceLow:['Where did the result first begin to slip away: pace, traffic, an incident, pit timing, or the car?','What was the main cause of the lost time: your inputs, tyre behaviour, damage, or strategy?','Despite the result, what worked well enough that we should keep it for the next race?'],
     productFeedback:'One last thing for product improvement: give me your honest view of my support today. Tell me what helped or what got in the way.',
     fuelQ:'Did fuel use and the pit decision match the plan? Tell me what differed.',
-    save:'Save this',restart:'Revise answers',discard:'Don’t save',cancel:'End review',start:'Review this session',
-    preview:'Ready to save',ready:'I linked your answers to the measured session data. Review them and choose whether to save.',
-    saved:'✅ Saved to your session memory for next time.',failed:'⚠️ Session memory could not be saved.',
+    save:'Confirm memory',restart:'Revise answers',discard:'Delete memory',cancel:'End review',start:'Review this session',
+    preview:'Auto-saved memory',ready:'I linked your answers to the measured session data and auto-saved them as driver-reported memory. Confirm them or revise the answers.',
+    saved:'✅ Memory confirmed for the next session.',autoSaved:'✅ Auto-saved as driver-reported memory for the next session.',
+    discarded:'🗑️ This session memory was deleted.',failed:'⚠️ Session memory could not be saved.',
     missing:'⚠️ Not saved because driver, track, or car could not be confirmed.',
     wait:'⏳ Answer after the question has finished playing.'
   },
@@ -3594,9 +3595,10 @@ const EVIDENCE_COPY={
     raceLow:['結果が崩れ始めたのは、ペース、トラフィック、接触、ピット判断、それとも車の問題のどこ？','タイムを失った主因は、自分の操作、タイヤの挙動、ダメージ、それとも戦略のどれ？','結果とは別に、次のレースでも残すべき良かった部分はどこ？'],
     productFeedback:'最後に、製品向上のため、今日の私のサポートへの素直な意見を聞かせて。役に立ったことでも、邪魔だったことでも構わないよ。',
     fuelQ:'燃料とピット判断は想定どおりだった？違った点があれば教えて。',
-    save:'この内容を保存',restart:'回答を修正',discard:'保存しない',cancel:'振り返りを終了',start:'このセッションを振り返る',
-    preview:'保存予定',ready:'回答を実測データと結びつけたよ。内容を確認して、保存するか選んでね。',
-    saved:'✅ 次回用のセッション記憶に保存しました。',failed:'⚠️ セッション記憶を保存できませんでした。',
+    save:'記憶を確認',restart:'回答を修正',discard:'記憶を削除',cancel:'振り返りを終了',start:'このセッションを振り返る',
+    preview:'自動保存済みの記憶',ready:'回答を実測データと結びつけ、ドライバー申告の記憶として自動保存したよ。内容を確認するか、回答を修正してね。',
+    saved:'✅ 次回用の確認済み記憶にしました。',autoSaved:'✅ 次回用のドライバー申告記憶として自動保存しました。',
+    discarded:'🗑️ このセッション記憶を削除しました。',failed:'⚠️ セッション記憶を保存できませんでした。',
     missing:'⚠️ ドライバー・コース・車両を確認できないため保存しませんでした。',
     wait:'⏳ 質問の読み上げが終わってから答えてください。'
   },
@@ -3611,9 +3613,10 @@ const EVIDENCE_COPY={
     raceLow:['Wo begann das Ergebnis zu kippen: Pace, Verkehr, Zwischenfall, Boxenzeitpunkt oder Auto?','Was war die Hauptursache des Zeitverlusts: deine Eingaben, Reifenverhalten, Schaden oder Strategie?','Was funktionierte trotz des Ergebnisses gut genug, um es beizubehalten?'],
     productFeedback:'Zum Schluss eine Frage zur Produktverbesserung: Sag mir ehrlich, wie meine Unterstützung heute war – was geholfen oder gestört hat.',
     fuelQ:'Entsprachen Verbrauch und Boxenentscheidung dem Plan? Was war anders?',
-    save:'Speichern',restart:'Antworten ändern',discard:'Nicht speichern',cancel:'Auswertung beenden',start:'Session auswerten',
-    preview:'Zum Speichern bereit',ready:'Ich habe deine Antworten mit den Messdaten verknüpft. Prüfe sie und entscheide, ob sie gespeichert werden.',
-    saved:'✅ Für die nächste Session gespeichert.',failed:'⚠️ Session-Erinnerung konnte nicht gespeichert werden.',
+    save:'Erinnerung bestätigen',restart:'Antworten ändern',discard:'Erinnerung löschen',cancel:'Auswertung beenden',start:'Session auswerten',
+    preview:'Automatisch gespeichert',ready:'Ich habe deine Antworten mit den Messdaten verknüpft und als Fahreraussage gespeichert. Bestätige oder überarbeite sie.',
+    saved:'✅ Für die nächste Session bestätigt.',autoSaved:'✅ Als Fahreraussage für die nächste Session gespeichert.',
+    discarded:'🗑️ Diese Session-Erinnerung wurde gelöscht.',failed:'⚠️ Session-Erinnerung konnte nicht gespeichert werden.',
     missing:'⚠️ Nicht gespeichert: Fahrer, Strecke oder Auto konnten nicht bestätigt werden.',
     wait:'⏳ Antworte erst, wenn die Frage vollständig abgespielt wurde.'
   },
@@ -3628,9 +3631,10 @@ const EVIDENCE_COPY={
     raceLow:['Onde o resultado começou a escapar: ritmo, tráfego, incidente, pit ou carro?','Qual foi a principal causa da perda: seus comandos, pneus, dano ou estratégia?','Apesar do resultado, o que funcionou bem e deve ser mantido?'],
     productFeedback:'Por fim, para melhorar o produto: diga com sinceridade como foi meu apoio hoje, o que ajudou ou atrapalhou.',
     fuelQ:'O consumo e a decisão de pit corresponderam ao plano? O que foi diferente?',
-    save:'Salvar',restart:'Revisar respostas',discard:'Não salvar',cancel:'Encerrar revisão',start:'Revisar esta sessão',
-    preview:'Pronto para salvar',ready:'Vinculei suas respostas aos dados medidos. Revise e escolha se deseja salvar.',
-    saved:'✅ Salvo na memória da sessão para a próxima vez.',failed:'⚠️ Não foi possível salvar a memória da sessão.',
+    save:'Confirmar memória',restart:'Revisar respostas',discard:'Excluir memória',cancel:'Encerrar revisão',start:'Revisar esta sessão',
+    preview:'Memória salva automaticamente',ready:'Vinculei suas respostas aos dados medidos e salvei como relato do piloto. Confirme ou revise as respostas.',
+    saved:'✅ Memória confirmada para a próxima sessão.',autoSaved:'✅ Relato do piloto salvo para a próxima sessão.',
+    discarded:'🗑️ Esta memória da sessão foi excluída.',failed:'⚠️ Não foi possível salvar a memória da sessão.',
     missing:'⚠️ Não foi salvo porque piloto, pista ou carro não puderam ser confirmados.',
     wait:'⏳ Responda depois que a pergunta terminar de tocar.'
   }
@@ -3702,6 +3706,7 @@ function buildEvidenceQuestions(data){
 }
 function beginEvidenceDebrief(data){
   const isRestart=arguments[1]===true;
+  const existingRecordId=arguments[2]||'';
   const panel=document.getElementById('debrief-guide');
   if(!panel) return;
   if(!isRestart){
@@ -3712,6 +3717,7 @@ function beginEvidenceDebrief(data){
   const safeData=sanitizeSessionEvidence(data||buildFallbackSessionSummary());
   const questions=buildEvidenceQuestions(safeData);
   evidenceDebrief={active:true,index:0,data:safeData,questions,answers:[],acceptAfter:0,
+    recordId:existingRecordId,autoSaved:false,
     feedbackIndex:questions.indexOf(c.productFeedback)};
   panel.style.display='block';
   document.getElementById('debrief-guide-title').textContent=c.title;
@@ -3756,13 +3762,16 @@ function recordEvidenceAnswer(text){
   evidenceDebrief.active=false;
   usageCount('debrief_completed');
   if(sessionPurpose==='practice') usageCount('practice_review_completed');
+  const autoSaved=autoSaveEvidenceMemory();
   const preview=evidenceDebrief.questions.map((q,i)=>`・${q}\n  ${evidenceDebrief.answers[i]||'—'}`).join('\n');
   document.getElementById('debrief-guide-question').textContent=c.preview+'\n'+preview;
   document.getElementById('debrief-guide-actions').style.display='flex';
-  const msg=c.ready;
+  const msg=autoSaved?c.ready:c.failed;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg);
 }
-function restartEvidenceDebrief(){ if(evidenceDebrief) beginEvidenceDebrief(evidenceDebrief.data,true); }
+function restartEvidenceDebrief(){
+  if(evidenceDebrief) beginEvidenceDebrief(evidenceDebrief.data,true,evidenceDebrief.recordId||'');
+}
 function dismissEvidenceDebrief(reason='manual'){
   if(evidenceDebrief&&evidenceDebrief.active&&reason==='manual') usageCount('debrief_dismissed');
   evidenceDebrief=null;
@@ -3780,38 +3789,81 @@ function loadEvidenceRecords(){
     return [];
   }
 }
-function confirmEvidenceMemory(){
-  if(!evidenceDebrief) return;
-  const c=evidenceCopy();
+function evidenceReviewId(data){
+  data=sanitizeSessionEvidence(data||{});
+  const car=data.car_model||lastCarModel||data.car_class||lastCarClass||'';
+  return [userName||'',usageSessionId||'local',String(lastSessionNum??''),
+    data.event_type||lastSessionType||'',data.track||lastTrack||'',car].join('|');
+}
+function buildEvidenceRecord(confidence='driver_reported'){
+  if(!evidenceDebrief) return null;
   const memoryTrack=evidenceDebrief.data.track||lastTrack||'';
   const memoryCar=evidenceDebrief.data.car_model||lastCarModel
     ||evidenceDebrief.data.car_class||lastCarClass||'';
-  if(!userName || !memoryTrack || !memoryCar){
-    addMsg('sys',c.missing);
-    return;
-  }
+  if(!userName || !memoryTrack || !memoryCar) return null;
+  const now=new Date().toISOString();
+  return {
+    version:2, review_id:evidenceDebrief.recordId||evidenceReviewId(evidenceDebrief.data),
+    driver:userName||'', created_at:now, updated_at:now,
+    scope:{session_type:evidenceDebrief.data.event_type||lastSessionType||'',
+      track:memoryTrack,car:memoryCar,
+      car_class:evidenceDebrief.data.car_class||lastCarClass||''},
+    evidence:{finish_pos:validFinishPosition(evidenceDebrief.data.finish_pos),total_laps:evidenceDebrief.data.total_laps||0,
+      best_lap:evidenceDebrief.data.best_lap||null,avg_lap:evidenceDebrief.data.avg_lap||null,
+      avg_fuel_per_lap:evidenceDebrief.data.avg_fuel_per_lap??null,incidents:evidenceDebrief.data.incidents??null},
+    qa:evidenceDebrief.questions.map((question,i)=>({question,answer:evidenceDebrief.answers[i]||''})),
+    confidence
+  };
+}
+function upsertEvidenceRecord(record){
+  if(!record) return {saved:false,created:false};
   try{
     const records=loadEvidenceRecords();
-    records.push({
-      version:1, driver:userName||'', created_at:new Date().toISOString(),
-      scope:{session_type:evidenceDebrief.data.event_type||lastSessionType||'',
-        track:memoryTrack,car:memoryCar,
-        car_class:evidenceDebrief.data.car_class||lastCarClass||''},
-      evidence:{finish_pos:validFinishPosition(evidenceDebrief.data.finish_pos),total_laps:evidenceDebrief.data.total_laps||0,
-        best_lap:evidenceDebrief.data.best_lap||null,avg_lap:evidenceDebrief.data.avg_lap||null,
-        avg_fuel_per_lap:evidenceDebrief.data.avg_fuel_per_lap??null,incidents:evidenceDebrief.data.incidents??null},
-      qa:evidenceDebrief.questions.map((question,i)=>({question,answer:evidenceDebrief.answers[i]||''})),
-      confidence:'confirmed_by_driver'
-    });
+    const index=records.findIndex(r=>r.review_id&&r.review_id===record.review_id);
+    const created=index<0;
+    if(created) records.push(record);
+    else records[index]={...record,created_at:records[index].created_at||record.created_at};
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
-    const objective=saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
-    if(sessionPurpose==='practice') usageCount('practice_review_saved');
-    addMsg('sys',objective&&evidenceLanguage()==='ja'
-      ? '✅ 次回の能動課題として「総合順位を見据えたピット戦略」を保存しました。'
-      : c.saved);
-  }catch(e){ addMsg('sys',c.failed); }
+    return {saved:true,created};
+  }catch(e){ return {saved:false,created:false}; }
+}
+function autoSaveEvidenceMemory(){
+  if(!evidenceDebrief) return false;
+  const record=buildEvidenceRecord('driver_reported');
+  const result=upsertEvidenceRecord(record);
+  if(!result.saved) return false;
+  evidenceDebrief.recordId=record.review_id;
+  evidenceDebrief.autoSaved=true;
+  if(result.created&&sessionPurpose==='practice') usageCount('practice_review_saved');
+  saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
+  return true;
+}
+function confirmEvidenceMemory(){
+  if(!evidenceDebrief) return;
+  const c=evidenceCopy();
+  let record=buildEvidenceRecord('confirmed_by_driver');
+  if(!record){ addMsg('sys',c.missing); return; }
+  record={...record,confirmed_at:new Date().toISOString()};
+  const result=upsertEvidenceRecord(record);
+  if(!result.saved){ addMsg('sys',c.failed); return; }
+  evidenceDebrief.recordId=record.review_id;
+  const objective=saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
+  addMsg('sys',objective&&evidenceLanguage()==='ja'
+    ? '✅ 確認済み記憶として保存し、次回の能動課題へ接続しました。'
+    : c.saved);
   dismissEvidenceDebrief('saved');
+}
+function discardEvidenceMemory(){
+  if(!evidenceDebrief) return;
+  const c=evidenceCopy();
+  const recordId=evidenceDebrief.recordId||evidenceReviewId(evidenceDebrief.data);
+  try{
+    const records=loadEvidenceRecords().filter(r=>!r.review_id||r.review_id!==recordId);
+    localStorage.setItem('pw_session_evidence',JSON.stringify(records));
+    addMsg('sys',c.discarded);
+  }catch(e){ addMsg('sys',c.failed); return; }
+  dismissEvidenceDebrief('discarded');
 }
 function offerSessionReview(data){
   data=sanitizeSessionEvidence(data);
@@ -4142,6 +4194,9 @@ function saveSessionSummary(data){
       localStorage.setItem('pw_ctmem',JSON.stringify(mem));
     }
   }catch{}
+  // Free-form race conversation is also part of the engineer's working memory.
+  // Save it at the session boundary when it has not already been checkpointed.
+  saveMemory({reason:'session_summary'});
 }
 // ピットレーン所要時間を実測値として記憶（コース×車種）。耐久ピットウィンドウ予測の土台。
 function savePitTiming(data){
@@ -4341,14 +4396,14 @@ function buildSessionEvidenceNote(){
     if(!relevant.length) return '';
     const lang=evidenceLanguage();
     const promptCopy={
-      en:{heading:'Confirmed evidence from matching sessions',confirmed:'Driver-confirmed',
-        rule:'This is reference evidence from the past 90 days, not proof that it is still true. Keep measured facts separate from driver answers. Do not force an optimistic or pessimistic conclusion. Confirm current conditions, then use at most one relevant point for a question, strategy, or handover.'},
-      ja:{heading:'同条件の本人確認済みセッション証拠',confirmed:'本人確認済み',
-        rule:'これは過去90日以内の参考証拠であり、現在も正しいという結論ではない。実測値と本人回答を区別し、楽観・悲観の結論を強要せず、現在条件を確認してから次の質問・作戦・申し送りへ一つだけ活かせ。'},
-      de:{heading:'Bestätigte Nachweise aus vergleichbaren Sessions',confirmed:'Vom Fahrer bestätigt',
-        rule:'Dies sind Referenzdaten aus den letzten 90 Tagen, kein Beweis für die aktuelle Situation. Messwerte und Fahreraussagen getrennt halten. Keine optimistische oder pessimistische Schlussfolgerung erzwingen. Aktuelle Bedingungen prüfen und höchstens einen relevanten Punkt für Frage, Strategie oder Übergabe nutzen.'},
-      pt:{heading:'Evidências confirmadas de sessões equivalentes',confirmed:'Confirmado pelo piloto',
-        rule:'Estas são evidências de referência dos últimos 90 dias, não prova de que ainda sejam verdadeiras. Separe fatos medidos das respostas do piloto. Não force uma conclusão otimista ou pessimista. Confirme as condições atuais e use no máximo um ponto relevante para pergunta, estratégia ou passagem.'}
+      en:{heading:'Evidence from matching sessions',confirmed:'Driver-confirmed',reported:'Driver-reported (auto-saved)',
+        rule:'This is reference evidence from the past 90 days, not proof that it is still true. Driver-reported items are usable working hypotheses, while driver-confirmed items carry higher confidence. Keep measured facts separate from driver answers. Confirm current conditions, then use at most one relevant point for a question, strategy, or handover.'},
+      ja:{heading:'同条件のセッション記憶',confirmed:'本人確認済み',reported:'ドライバー申告・自動保存',
+        rule:'これは過去90日以内の参考証拠であり、現在も正しいという結論ではない。ドライバー申告は次回に使える作業仮説、本人確認済みはより信頼度の高い記憶として扱え。実測値と本人回答を区別し、現在条件を確認してから次の質問・作戦・申し送りへ一つだけ活かせ。'},
+      de:{heading:'Nachweise aus vergleichbaren Sessions',confirmed:'Vom Fahrer bestätigt',reported:'Fahreraussage (automatisch gespeichert)',
+        rule:'Dies sind Referenzdaten aus den letzten 90 Tagen, kein Beweis für die aktuelle Situation. Fahreraussagen sind nutzbare Arbeitshypothesen; bestätigte Aussagen haben höheres Vertrauen. Messwerte und Fahreraussagen getrennt halten, aktuelle Bedingungen prüfen und höchstens einen relevanten Punkt nutzen.'},
+      pt:{heading:'Evidências de sessões equivalentes',confirmed:'Confirmado pelo piloto',reported:'Relato do piloto (salvo automaticamente)',
+        rule:'Estas são evidências de referência dos últimos 90 dias, não prova de que ainda sejam verdadeiras. Relatos do piloto são hipóteses de trabalho utilizáveis; itens confirmados têm maior confiança. Separe fatos medidos das respostas, confirme as condições atuais e use no máximo um ponto relevante.'}
     }[lang]||null;
     const rows=relevant.map(r=>{
       const facts=[
@@ -4357,7 +4412,8 @@ function buildSessionEvidenceNote(){
         r.evidence?.avg_fuel_per_lap!=null?`${r.evidence.avg_fuel_per_lap}L/周`:''
       ].filter(Boolean).join(' / ');
       const qa=(r.qa||[]).map(x=>`${x.question} → ${x.answer}`).join(' | ');
-      return `${facts}\n${promptCopy.confirmed}: ${qa}`;
+      const memoryLabel=r.confidence==='confirmed_by_driver'?promptCopy.confirmed:promptCopy.reported;
+      return `${facts}\n${memoryLabel}: ${qa}`;
     });
     return `\n\n━━ ${promptCopy.heading} ━━\n`+rows.join('\n')+'\n'+promptCopy.rule;
   }catch{return '';}

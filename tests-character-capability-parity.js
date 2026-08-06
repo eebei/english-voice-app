@@ -54,7 +54,7 @@ check('speech safety gate is character-independent',
   bridge.includes('_set_speak_gate(speak_window_ok, _speech_gate_active)')
   && !bridge.includes('LunaJP'));
 check('confirmed storage schema is character-independent',
-  renderer.includes("confidence:'confirmed_by_driver'")
+  renderer.includes("buildEvidenceRecord('confirmed_by_driver')")
   && renderer.includes('driver:userName'));
 
 console.log(`\nCharacter capability parity: ${pass}/${pass+fail}`);

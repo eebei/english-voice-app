@@ -50,9 +50,15 @@ check('製品評価は低頻度で提示し回答有無だけ中央計測',
 check('デブリーフ導線を提示・開始・完了・中断で計測',
   ['debrief_offered','debrief_started','debrief_completed','debrief_dismissed']
     .every(k=>renderer.includes(`usageCount('${k}')`)));
-check('保存前に本人確認ボタンを要求',
-  renderer.includes('confirmEvidenceMemory()')
-  && renderer.includes("confidence:'confirmed_by_driver'"));
+check('回答完了時にドライバー申告記憶を自動保存',
+  renderer.includes('const autoSaved=autoSaveEvidenceMemory();')
+  && renderer.includes("buildEvidenceRecord('driver_reported')"));
+check('確認操作は新規保存ではなく同一記憶を昇格',
+  renderer.includes("buildEvidenceRecord('confirmed_by_driver')")
+  && renderer.includes('records[index]={...record,created_at:records[index].created_at||record.created_at};'));
+check('記憶削除は自動保存済みレコードを明示的に除去',
+  renderer.includes('onclick="discardEvidenceMemory()"')
+  && renderer.includes('function discardEvidenceMemory()'));
 check('質問途中でも終了できRace復帰時はガイドを解除',
   renderer.includes('id="debrief-guide-cancel"')
   && renderer.includes("if(newMode==='race' && evidenceDebrief) dismissEvidenceDebrief();"));
@@ -88,8 +94,11 @@ check('破損localStorageは対象keyだけ自動復旧',
   && renderer.includes('localStorage.removeItem(key)'));
 check('保存済み証拠を次回同条件のプロンプトへ配線',
   renderer.includes('buildSessionEvidenceNote()')
-  && renderer.includes('Confirmed evidence from matching sessions')
-  && renderer.includes('同条件の本人確認済みセッション証拠'));
+  && renderer.includes('Evidence from matching sessions')
+  && renderer.includes('同条件のセッション記憶'));
+check('未確認記憶も作業仮説として次回へ配線',
+  renderer.includes("r.confidence==='confirmed_by_driver'?promptCopy.confirmed:promptCopy.reported")
+  && renderer.includes('ドライバー申告は次回に使える作業仮説'));
 check('ドライバー・コース・車両が未確定ならmemory参照をfail-closed',
   renderer.includes("if(!userName || !track || !car) return '';")
   && renderer.includes('if(r.driver!==userName) return false;')
@@ -98,6 +107,40 @@ check('記憶は90日で失効し現在の結論として扱わない',
   renderer.includes('const maxAgeMs=90*24*60*60*1000;')
   && renderer.includes('現在も正しいという結論ではない')
   && renderer.includes('not proof that it is still true'));
+
+const memoryStart=renderer.indexOf('function evidenceReviewId(data)');
+const memoryEnd=renderer.indexOf('function offerSessionReview(data)',memoryStart);
+if(memoryStart>=0&&memoryEnd>memoryStart){
+  const store=new Map();
+  const usage=[];
+  const memoryContext={
+    evidenceDebrief:{active:false,recordId:'',data:{event_type:'Practice',track:'Monza',car_model:'GT3',total_laps:8},questions:['Q1','Q2'],answers:['front entry','raise rear']},
+    userName:'Driver',usageSessionId:'usage-1',lastSessionNum:2,lastSessionType:'Practice',lastTrack:'Monza',lastCarModel:'GT3',lastCarClass:'GT3',
+    sessionPurpose:'practice',Date,
+    sanitizeSessionEvidence:d=>d,validFinishPosition:v=>v||null,
+    localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},
+    loadEvidenceRecords:()=>JSON.parse(store.get('pw_session_evidence')||'[]'),
+    usageCount:k=>usage.push(k),saveStrategyObjectiveFromDebrief:()=>null,
+    evidenceCopy:()=>({missing:'missing',failed:'failed',saved:'saved',discarded:'discarded'}),
+    evidenceLanguage:()=> 'en',addMsg:()=>{},dismissEvidenceDebrief:()=>{}
+  };
+  vm.runInNewContext(renderer.slice(memoryStart,memoryEnd),memoryContext);
+  const first=memoryContext.autoSaveEvidenceMemory();
+  let rows=JSON.parse(store.get('pw_session_evidence')||'[]');
+  check('実コードで回答完了時に仮記憶が1件作られる',first&&rows.length===1&&rows[0].confidence==='driver_reported');
+  memoryContext.evidenceDebrief.answers[0]='front entry revised';
+  memoryContext.autoSaveEvidenceMemory();
+  rows=JSON.parse(store.get('pw_session_evidence')||'[]');
+  check('実コードで同一走行の再回答は重複せず上書き',rows.length===1&&rows[0].qa[0].answer==='front entry revised');
+  memoryContext.confirmEvidenceMemory();
+  rows=JSON.parse(store.get('pw_session_evidence')||'[]');
+  check('実コードで確認後も1件のまま信頼度だけ昇格',rows.length===1&&rows[0].confidence==='confirmed_by_driver');
+  memoryContext.discardEvidenceMemory();
+  rows=JSON.parse(store.get('pw_session_evidence')||'[]');
+  check('実コードで削除後は記憶が残らない',rows.length===0);
+}else{
+  check('Spec B記憶関数を実コードから抽出',false);
+}
 check('停止・グリッドでは発話安全窓を無効化',
   bridge.includes('_speech_speed >= 5.0')
   && bridge.includes('_set_speak_gate(speak_window_ok, _speech_gate_active)'));
