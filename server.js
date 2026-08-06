@@ -778,7 +778,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const _msgs = Array.isArray(req.body.messages) ? req.body.messages : [];
       const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
       _strategyQ = _lastUser && typeof _lastUser.content === 'string'
-        ? strategyGuard.classifyStrategyQuestion(_lastUser.content) : null;
+        ? strategyGuard.classifyStrategyQuestion(_lastUser.content, {
+          activePitObjective: req.body.strategyObjective?.kind === 'pit_total_race_outcome'
+            && req.body.strategyObjective?.status === 'active',
+        }) : null;
       _directPitCommand = _lastUser && typeof _lastUser.content === 'string'
         ? strategyGuard.classifyDirectRaceCommand(_lastUser.content) : null;
     } catch (e) {

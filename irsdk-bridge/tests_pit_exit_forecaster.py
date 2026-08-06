@@ -97,7 +97,7 @@ pit_now_snapshot = dict(snapshot, player_lap_dist_pct=.50,
 pit_now = forecast_pit_now(snapshot=pit_now_snapshot, calibration=calibration)
 check("pit-now forecast available", pit_now["available"])
 check("pit-now is driver facing", pit_now["driver_facing"]
-      and not pit_now["shadow_mode"] and pit_now["model_version"] == 2)
+      and not pit_now["shadow_mode"] and pit_now["model_version"] == 3)
 check("pit-now includes time to entry", pit_now["time_to_entry_s"] == 48.0)
 check("pit-now exposes all six evidence families",
       all(k in pit_now for k in ("best", "likely", "worst"))
@@ -107,6 +107,17 @@ check("pit-now exposes all six evidence families",
 check("pit-now classifies traffic state",
       pit_now["likely"]["traffic_state"] in
       ("clear_air", "traffic", "blend_risk"))
+
+learned = dict(calibration, forecast_learning={
+    "outcome_count": 3, "required_outcome_count": 3, "bias_ready": True,
+    "likely_bias_positions": -2, "error_q1_positions": -3, "error_q3_positions": 1,
+})
+learned_result = forecast_at_pit_entry(snapshot=snapshot, calibration=learned)
+check("three scored exits apply learned likely correction",
+      learned_result["likely"]["position"] == result["likely"]["position"] - 2)
+check("learned correction remains ordered range",
+      learned_result["best"]["position"] <= learned_result["likely"]["position"]
+      <= learned_result["worst"]["position"])
 
 unreliable_snapshot = dict(snapshot, cars=snapshot["cars"] + [{
     "car_idx": 7, "class_position": 0, "car_number": "77", "class_id": 101,

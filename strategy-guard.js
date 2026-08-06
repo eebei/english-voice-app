@@ -65,13 +65,22 @@ const POSITION_ASK = [
  * @param {string} text ドライバーの発言
  * @returns {{topic:string}|null} 該当しなければ null（＝通常会話としてLLMへ流す）
  */
-function classifyStrategyQuestion(text) {
+function classifyStrategyQuestion(text, options = {}) {
   if (!text || typeof text !== 'string') return null;
   const t = text.trim();
   if (!t) return null;
   const hasPit = PIT_INTENT.some(re => re.test(t));
   const hasPos = POSITION_ASK.some(re => re.test(t));
   if (hasPit && hasPos) return { topic: TOPIC.REJOIN_POSITION };
+  // Once the driver has explicitly made total-race pit strategy an active
+  // objective, spoken shorthand such as "first stint ends — roughly where do
+  // I come back?" is a rejoin question too.  Without that stored objective
+  // it remains normal conversation, avoiding a broad global interception.
+  const implicitRejoin = /何\s*(位|番手|番目).{0,18}(戻|出)/.test(t)
+    || /(?:戻|出).{0,18}何\s*(位|番手|番目)/.test(t);
+  if (options.activePitObjective === true && implicitRejoin) {
+    return { topic: TOPIC.REJOIN_POSITION, implicit: true };
+  }
   return null;
 }
 

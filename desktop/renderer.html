@@ -1000,6 +1000,7 @@ let practiceRun = null;
 let fuelCapacityConfirmedThisSession = null;
 let lastFuelCapacityContext = null;
 let namedRival = null; // {carIdx,name,carNumber}; reset at SessionNum boundary
+let strategyObjectiveAnnouncedKey = '';
 
 function resetSessionScopedReviewState(){
   if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
@@ -1945,6 +1946,8 @@ async function callAPI(inputSource, memoryStatus=''){
         carClass:lastCarClass,   // シリーズ検出用（例IMSA23→IMSAルール注入）
         carModel:lastCarModel,
         profileNote:profileNote+buildNamedRivalNote(isJP),
+        strategyObjective:(profile.strategyObjective&&profile.strategyObjective.status==='active')
+          ? {kind:profile.strategyObjective.kind,status:profile.strategyObjective.status}:null,
         raceHistory,
         max_tokens:maxTok,
         max_chars:maxChars,
@@ -2746,6 +2749,7 @@ function connectBridge(){
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=data;
         updatePracticeRun(data);
+        announceActiveStrategyObjective(data);
       }
       if(data.type==='telemetry_error'){
         markTelemetryStale(data.code||'bridge_error');
@@ -2771,7 +2775,7 @@ function connectBridge(){
         else if(sessionPurpose==='practice') handlePracticeSessionSummary(data);
         else offerSessionReview(data);
       }
-      if(data.type==='pit_timing'){ savePitTiming(data); }
+      if(data.type==='pit_timing'){ savePitTiming(data); recordStrategyForecastOutcome(data); }
       if(data.type==='pace_check') checkPaceJudgment(data);
       if(data.type==='judge_call') judgeAndSpeak(data);   // ★2026-07-19 LLM判断コール（catchup/defend）
       // ── マイク選択＋レベルメーター（bridge側デバイスの受け皿）──
@@ -3800,8 +3804,11 @@ function confirmEvidenceMemory(){
     });
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
+    const objective=saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
     if(sessionPurpose==='practice') usageCount('practice_review_saved');
-    addMsg('sys',c.saved);
+    addMsg('sys',objective&&evidenceLanguage()==='ja'
+      ? '✅ 次回の能動課題として「総合順位を見据えたピット戦略」を保存しました。'
+      : c.saved);
   }catch(e){ addMsg('sys',c.failed); }
   dismissEvidenceDebrief('saved');
 }
@@ -3915,8 +3922,65 @@ function buildProfileNote(profile){
   if(profile.notes&&profile.notes.length) lines.push(isJP
     ?`このドライバーについて分かっていること（過去セッションの観察）：\n${profile.notes.slice(-5).join('\n')}`
     :`What you know about this driver (observations from past sessions):\n${profile.notes.slice(-5).join('\n')}`);
+  const objective=profile.strategyObjective;
+  if(objective&&objective.status==='active'&&objective.kind==='pit_total_race_outcome'){
+    const learned=Number(objective.outcomeCount)||0;
+    lines.push(isJP
+      ? `【次回レースの能動課題】総合順位を見据え、各ピット前に復帰順位レンジ・前後トラフィック・アンダー/オーバーカットの影響を示す。ピット後は予測と実際を照合する。学習済み${learned}/3回。`
+      : `[ACTIVE RACE OBJECTIVE] Before each pit, state the rejoin range, traffic and undercut/overcut impact on the final result. Compare forecast with actual after the stop. Learned ${learned}/3 exits.`);
+  }
   if(!lines.length) return '';
   return isJP?'\n\n━━ ドライバープロファイル ━━\n'+lines.join('\n'):'\n\n━━ DRIVER PROFILE ━━\n'+lines.join('\n');
+}
+function deriveStrategyObjective(answers){
+  const text=(answers||[]).join('\n');
+  // Concrete debrief feedback becomes an operational instruction, not a
+  // decorative personality note.  "Change the engineer" is accepted here
+  // because it was immediately tied to race-total pit prediction in the
+  // driver review; later outcomes determine whether this instruction worked.
+  if(/エンジニア.*(?:変え|問題)|最終.*順位|アンダー\s*カット|オーバー\s*カット|ピット.*(?:予測|戦略|判断)|(?:final|overall).*position|under ?cut|over ?cut|pit.*(?:forecast|strategy)/i.test(text)){
+    return {kind:'pit_total_race_outcome',status:'active',createdAt:new Date().toISOString(),outcomeCount:0,errors:[]};
+  }
+  return null;
+}
+function saveStrategyObjectiveFromDebrief(answers){
+  const next=deriveStrategyObjective(answers);
+  if(!next) return null;
+  const profile=loadProfile()||{name:userName,sessions:1};
+  const current=profile.strategyObjective;
+  // Keep hard-earned scored exits when the driver reiterates the same goal.
+  if(current&&current.kind===next.kind){
+    next.outcomeCount=Number(current.outcomeCount)||0;
+    next.errors=Array.isArray(current.errors)?current.errors.slice(-12):[];
+  }
+  saveProfile({...profile,strategyObjective:next});
+  return next;
+}
+function recordStrategyForecastOutcome(data){
+  const score=data&&data.pit_exit_forecast_score;
+  if(!score||!Number.isFinite(Number(score.likely_error_positions))) return;
+  const profile=loadProfile()||{};
+  const objective=profile.strategyObjective;
+  if(!objective||objective.status!=='active'||objective.kind!=='pit_total_race_outcome') return;
+  const errors=[...(Array.isArray(objective.errors)?objective.errors:[]),Number(score.likely_error_positions)].slice(-12);
+  saveProfile({...profile,strategyObjective:{...objective,outcomeCount:errors.length,errors,
+    lastOutcomeAt:new Date().toISOString(),lastActualPosition:score.actual_class_position,
+    lastLikelyPosition:score.likely_position}});
+}
+function announceActiveStrategyObjective(data){
+  const profile=loadProfile()||{};
+  const objective=profile.strategyObjective;
+  if(!objective||objective.status!=='active'||objective.kind!=='pit_total_race_outcome') return;
+  if(!String(lastSessionType||'').toLowerCase().includes('race')||!data||data.on_track!==true) return;
+  if(Number(data.lap)||0 < 1) return;
+  const key=String(lastSessionNum||'')+'|'+String(objective.createdAt||'');
+  if(strategyObjectiveAnnouncedKey===key) return;
+  strategyObjectiveAnnouncedKey=key;
+  const jp=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+  const message=jp
+    ? '前回の課題、総合順位を見据えたピット戦略で行く。最初のピット前に復帰レンジと前後を出して、ピット後に実際と照合する。'
+    : 'Your active objective is total-race pit strategy. Before the first stop I will give the rejoin range and traffic, then score it against the actual exit.';
+  addMsg('ai',message); speak(message,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'strategy_objective',dedupeKey:'strategy_objective_'+key});
 }
 function isExplicitMemoryRequest(text){
   const s=String(text||'').trim();

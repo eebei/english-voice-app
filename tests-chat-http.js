@@ -215,6 +215,24 @@ async function testBaseline(port) {
     const text = JSON.parse(r.body).content[0].text;
     check('⑩ピットロス: 実測INからOUTを返す', /27.7秒.*8.8L.*11.3秒/.test(text), text);
   }
+
+  // ── ⑪ デブリーフで保存した能動課題は、次レースの話し言葉の質問にも効く ──
+  {
+    const forecast = {
+      available: true, snapshot_id: 'live:objective',
+      best: { position: 2 }, worst: { position: 4 },
+      likely: { position: 3, nearest_ahead: null, nearest_behind: null,
+        traffic_state: 'clear_air', blend_conflicts: [] },
+    };
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      strategyObjective: { kind: 'pit_total_race_outcome', status: 'active' },
+      liveData: { pit_exit_forecast: forecast },
+      messages: [{ role: 'user', content: 'これ第一スティント終わったら何番目ぐらいに戻るかな？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('⑪能動課題: ショートハンドを復帰予測として返す', /P3.*P2〜P4/.test(text), text);
+  }
 }
 
 // ★P1-2再指摘（Codexレビュー）：分類後にevaluateAvailability/buildUnavailableReplyが

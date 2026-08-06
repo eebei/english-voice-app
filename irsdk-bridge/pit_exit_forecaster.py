@@ -6,7 +6,7 @@ with the same evidence families and then scored against the actual exit.
 """
 
 MODEL_VERSION = 1
-DRIVER_MODEL_VERSION = 2
+DRIVER_MODEL_VERSION = 3
 MIN_LAP_TIME_S = 20.0
 MAX_LAP_TIME_S = 600.0
 BLEND_WINDOW_S = 3.0
@@ -126,6 +126,27 @@ def _scenario(cars, player_exit_progress, projection_s, player_class_id):
     }
 
 
+def _apply_learned_position_error(scenarios, calibration):
+    """Apply a persisted, observed rejoin bias after three scored exits.
+
+    The sign is actual position minus predicted position.  Negative means the
+    prior model predicted a worse rejoin than reality; positive means it was
+    optimistic.  Until three outcomes exist, every forecast is still emitted
+    and scored but no arbitrary correction is invented.
+    """
+    learning = calibration.get("forecast_learning") if isinstance(calibration, dict) else None
+    if not isinstance(learning, dict) or not learning.get("bias_ready"):
+        return learning or {"outcome_count": 0, "required_outcome_count": 3, "bias_ready": False}
+    q1 = _num(learning.get("error_q1_positions"))
+    median = _num(learning.get("likely_bias_positions"))
+    q3 = _num(learning.get("error_q3_positions"))
+    if None in (q1, median, q3):
+        return learning
+    for name, correction in (("best", q1), ("likely", median), ("worst", q3)):
+        scenarios[name]["position"] = max(1, int(round(scenarios[name]["position"] + correction)))
+    return learning
+
+
 def forecast_at_pit_entry(*, snapshot, calibration):
     """Forecast best/likely/worst class position from a pit-entry snapshot."""
     if not isinstance(calibration, dict) or not calibration.get("prediction_ready"):
@@ -182,6 +203,7 @@ def forecast_at_pit_entry(*, snapshot, calibration):
                 idx for scenario in scenarios.values()
                 for idx in scenario["invalid_same_class_position_car_idxs"])),
         })
+    learning = _apply_learned_position_error(scenarios, calibration)
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")
@@ -200,6 +222,7 @@ def forecast_at_pit_entry(*, snapshot, calibration):
             "pit_sample_count": calibration.get("pit_sample_count"),
             "normal_sample_count": calibration.get("normal_sample_count"),
             "usable_sample_count": calibration.get("usable_sample_count"),
+            "forecast_learning": learning,
         },
         "assumptions": {
             "other_car_pit_intent": "not_inferred",
@@ -250,6 +273,7 @@ def forecast_pit_now(*, snapshot, calibration):
     if any(scenario["invalid_same_class_position_car_idxs"]
            for scenario in scenarios.values()):
         return _unavailable("class_standings_unreliable")
+    learning = _apply_learned_position_error(scenarios, calibration)
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")
@@ -260,6 +284,7 @@ def forecast_pit_now(*, snapshot, calibration):
         "model_candidate": "C_pit_now_projection",
         "model_version": DRIVER_MODEL_VERSION,
         "time_to_entry_s": round(time_to_entry_s, 3),
+        "forecast_learning": learning,
         "best": scenarios["best"],
         "likely": scenarios["likely"],
         "worst": scenarios["worst"],
@@ -277,6 +302,7 @@ def score_actual(forecast, actual_class_position):
     worst = int(forecast["worst"]["position"])
     return {
         "actual_class_position": actual,
+        "likely_position": likely,
         "likely_error_positions": actual - likely,
         "inside_best_worst": best <= actual <= worst,
         "model_version": forecast.get("model_version"),

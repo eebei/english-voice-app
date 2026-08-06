@@ -74,6 +74,15 @@ with tempfile.TemporaryDirectory() as directory:
             previous = pct
     check("normal samples captured", result["normal_sample_count"] == 3)
     check("prediction unlocked", result["prediction_ready"])
+    for actual, likely in ((6, 8), (5, 7), (7, 8)):
+        result = c.record_forecast_outcome("Monza", "Mercedes-AMG GT3", "green", {
+            "actual_class_position": actual, "likely_position": likely,
+            "inside_best_worst": True,
+        })
+    check("three forecast outcomes unlock learned correction",
+          result["forecast_learning"]["bias_ready"])
+    check("learned bias retains actual-minus-likely sign",
+          result["forecast_learning"]["likely_bias_positions"] == -2.0)
     with open(path, encoding="utf-8") as handle:
         saved = json.load(handle)
         check("atomic persistence", saved["version"] == 1)

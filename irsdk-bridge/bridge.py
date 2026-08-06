@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 247 (authoritative pit timing + forecast fail-closed)"
+BUILD_VERSION = "Build 248 (pit forecast learning loop)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -3737,6 +3737,10 @@ def poll_iracing():
                 }
                 _pit_exit_score = pit_exit_forecaster_mod.score_actual(
                     pit_exit_forecast_shadow, class_pos)
+                _pit_learning_summary = pit_loss_calibrator.record_forecast_outcome(
+                    session_track, session_car_model, _caution, _pit_exit_score)
+                if isinstance(_pit_learning_summary, dict):
+                    _pit_loss_summary = _pit_learning_summary
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
                            'car_model': session_car_model,

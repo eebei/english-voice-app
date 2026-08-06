@@ -65,6 +65,11 @@ check('直接命令: 次周BOXを識別',
   (guard.classifyDirectRaceCommand('次の周でピット') || {}).topic === guard.TOPIC.PIT_NEXT_LAP);
 check('直接命令: ピットロスを識別',
   (guard.classifyDirectRaceCommand('ピットロス何秒？') || {}).topic === guard.TOPIC.PIT_TIMING);
+check('能動課題中: スティント後の復帰順位ショートハンドを識別',
+  (guard.classifyStrategyQuestion('これ第一スティント終わったら何番目ぐらいに戻るかな？',
+    {activePitObjective:true}) || {}).topic === guard.TOPIC.REJOIN_POSITION);
+check('通常時: 同じショートハンドは広く横取りしない',
+  guard.classifyStrategyQuestion('これ第一スティント終わったら何番目ぐらいに戻るかな？') === null);
 
 // ③ Phase A では計算器が無いので、必ず「出せない」と判定される
 {

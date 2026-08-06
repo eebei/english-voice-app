@@ -127,6 +127,23 @@ def summarize_record(record):
     losses = ([round(float(v) - normal_median, 3) for v in lane
                if _num(v) is not None] if normal_median is not None else [])
     usable = min(len(pits), len(normals))
+    outcomes = [o for o in record.get("forecast_outcomes", [])
+                if _num(o.get("actual_class_position")) is not None
+                and _num(o.get("likely_position")) is not None]
+    errors = [round(float(o["actual_class_position"]) - float(o["likely_position"]), 3)
+              for o in outcomes]
+    # Three observed pit exits are the first point at which an empirical
+    # correction is allowed to influence a forecast.  Before then we still
+    # predict and score every stop, rather than hiding behind "not enough
+    # data".  This is the Phase C learning contract.
+    learning = {
+        "outcome_count": len(errors),
+        "required_outcome_count": 3,
+        "bias_ready": len(errors) >= 3,
+        "likely_bias_positions": _median(errors) if len(errors) >= 3 else None,
+        "error_q1_positions": _quartile(errors, 0.25) if len(errors) >= 3 else None,
+        "error_q3_positions": _quartile(errors, 0.75) if len(errors) >= 3 else None,
+    }
     return {
         "pit_sample_count": len(pits),
         "excluded_pit_sample_count": max(
@@ -147,6 +164,7 @@ def summarize_record(record):
         "observed_loss_q1_s": _quartile(losses, 0.25),
         "observed_loss_q3_s": _quartile(losses, 0.75),
         "fuel_service": _fuel_service_summary(record),
+        "forecast_learning": learning,
         "calculator_version": CALCULATOR_VERSION,
     }
 
@@ -215,7 +233,32 @@ class PitLossCalibrator:
             "track": track, "car_model": car_model, "caution_state": caution,
             "pit_entry_pct": None, "pit_exit_pct": None,
             "pit_samples": [], "normal_samples": [],
+            "forecast_outcomes": [],
         })
+
+    def record_forecast_outcome(self, track, car_model, caution_state, score):
+        """Persist the prediction-vs-actual result for the next pit forecast.
+
+        A forecast is allowed to be wrong; silently throwing that evidence
+        away is not.  The correction only becomes active after three exits.
+        """
+        if not track or not car_model or not isinstance(score, dict):
+            return None
+        actual = _num(score.get("actual_class_position"))
+        likely = _num(score.get("likely_position"))
+        if actual is None or likely is None:
+            return self.get_summary(track, car_model, caution_state or "unknown")
+        record = self._record(track, car_model, caution_state or "unknown")
+        record["forecast_outcomes"] = (record.get("forecast_outcomes", []) + [{
+            "actual_class_position": int(actual),
+            "likely_position": int(likely),
+            "likely_error_positions": round(actual - likely, 3),
+            "inside_best_worst": bool(score.get("inside_best_worst")),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model_version": score.get("model_version"),
+        }])[-MAX_SAMPLES:]
+        self._save()
+        return summarize_record(record)
 
     def add_pit_sample(self, sample):
         track, car = sample.get("track"), sample.get("car_model")
