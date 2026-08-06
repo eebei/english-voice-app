@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 249 (legacy memory to race objective)"
+BUILD_VERSION = "Build 250 (debrief memory draft-confirm-delete flow)"
 PORT = 8765
 connected_clients = set()
 loop = None
