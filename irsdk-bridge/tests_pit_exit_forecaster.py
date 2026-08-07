@@ -113,9 +113,9 @@ learned = dict(calibration, forecast_learning={
     "likely_bias_positions": -2, "error_q1_positions": -3, "error_q3_positions": 1,
 })
 learned_result = forecast_at_pit_entry(snapshot=snapshot, calibration=learned)
-check("three scored exits apply learned likely correction",
-      learned_result["likely"]["position"] == result["likely"]["position"] - 2)
-check("learned correction remains ordered range",
+check("stored position bias is not applied without pit-intent evidence",
+      learned_result["likely"]["position"] == result["likely"]["position"])
+check("unbiased range remains ordered",
       learned_result["best"]["position"] <= learned_result["likely"]["position"]
       <= learned_result["worst"]["position"])
 

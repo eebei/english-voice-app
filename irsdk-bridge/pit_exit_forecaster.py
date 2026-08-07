@@ -126,7 +126,7 @@ def _scenario(cars, player_exit_progress, projection_s, player_class_id):
     }
 
 
-def _apply_learned_position_error(scenarios, calibration):
+def _forecast_learning_status(calibration):
     """Apply a persisted, observed rejoin bias after three scored exits.
 
     The sign is actual position minus predicted position.  Negative means the
@@ -142,8 +142,6 @@ def _apply_learned_position_error(scenarios, calibration):
     q3 = _num(learning.get("error_q3_positions"))
     if None in (q1, median, q3):
         return learning
-    for name, correction in (("best", q1), ("likely", median), ("worst", q3)):
-        scenarios[name]["position"] = max(1, int(round(scenarios[name]["position"] + correction)))
     return learning
 
 
@@ -203,7 +201,13 @@ def forecast_at_pit_entry(*, snapshot, calibration):
                 idx for scenario in scenarios.values()
                 for idx in scenario["invalid_same_class_position_car_idxs"])),
         })
-    learning = _apply_learned_position_error(scenarios, calibration)
+    # Field evidence (Monza AI Race, 2026-08-07) proved that a raw position
+    # bias combines incompatible worlds: simultaneous AI stops made one
+    # forecast look 10 places pessimistic, while a later normal stop looked
+    # 11 places optimistic. Preserve outcomes for evaluation, but never apply
+    # their aggregate as a driver-facing correction until pit intent is an
+    # explicit model input.
+    learning = _forecast_learning_status(calibration)
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")
@@ -273,7 +277,7 @@ def forecast_pit_now(*, snapshot, calibration):
     if any(scenario["invalid_same_class_position_car_idxs"]
            for scenario in scenarios.values()):
         return _unavailable("class_standings_unreliable")
-    learning = _apply_learned_position_error(scenarios, calibration)
+    learning = _forecast_learning_status(calibration)
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")

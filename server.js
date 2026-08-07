@@ -754,6 +754,74 @@ function buildDirectPitReply(command, liveData, lang) {
   return null;
 }
 
+function isFuelQuestion(text) {
+  return /燃料|給油|足りる|何(?:リットル|L)|fuel|lit(?:er|re)|make it/i.test(String(text || ''));
+}
+
+function isAccountChangeRequest(text) {
+  return /契約解除|解約|退会|返金|subscription\s*(?:cancel|cancellation)|cancel\s*(?:my\s*)?subscription|refund/i.test(String(text || ''));
+}
+
+// Fuel arithmetic and account entitlement are server-owned facts.  Do not
+// let conversational text improvise either one during a race.
+function buildFuelAuthorityReply(liveData, lang) {
+  const live = liveData && typeof liveData === 'object' ? liveData : {};
+  const fs = live.fuel_strategy && typeof live.fuel_strategy === 'object'
+    ? live.fuel_strategy : {};
+  const required = Number(fs.required_fuel_l);
+  const margin = Number(fs.margin_l);
+  const exact = Number(fs.estimated_crossings_to_finish);
+  const provisional = Number(fs.provisional_laps_to_time_expiry);
+  if (Number.isFinite(required) && Number.isFinite(margin) && Number.isInteger(exact)) {
+    return lang === 'ja'
+      ? `チェッカーまで${exact}回。必要${required.toFixed(1)}L、${margin >= 0 ? margin.toFixed(1) + 'L余裕' : Math.abs(margin).toFixed(1) + 'L不足'}。`
+      : `${exact} crossings to the finish: ${required.toFixed(1)}L required, ${margin >= 0 ? margin.toFixed(1) + 'L margin' : Math.abs(margin).toFixed(1) + 'L short'}.`;
+  }
+  if (Number.isFinite(required) && Number.isFinite(margin) && Number.isInteger(provisional)) {
+    return lang === 'ja'
+      ? `暫定であと${provisional}周分。必要${required.toFixed(1)}L、${margin >= 0 ? margin.toFixed(1) + 'L余裕' : Math.abs(margin).toFixed(1) + 'L不足'}。チェッカー周は確定後に更新する。`
+      : `Provisional plan: ${provisional} laps, ${required.toFixed(1)}L required, ${margin >= 0 ? margin.toFixed(1) + 'L margin' : Math.abs(margin).toFixed(1) + 'L short'}. I will update it when the checker lap is confirmed.`;
+  }
+  const average = Number(fs.avg_fuel_per_lap);
+  if (Number.isFinite(average)) {
+    return lang === 'ja'
+      ? `平均${average.toFixed(2)}L/周。必要量はクリーン3周そろい次第、計算で出す。`
+      : `Average ${average.toFixed(2)}L per lap. I will calculate the requirement after three clean laps.`;
+  }
+  return lang === 'ja'
+    ? '燃料の実測がまだ足りない。クリーンラップを待つ。'
+    : 'I need clean-lap fuel data before I can calculate the requirement.';
+}
+
+function buildAccountChangeReply(lang) {
+  return lang === 'ja'
+    ? '契約状態はここでは変更できない。手続き先を案内するね。'
+    : 'I cannot change subscription status here. I can point you to the cancellation process.';
+}
+
+function isRaceRuleQuestion(text) {
+  return /(?:レース|race).{0,12}(?:何分|時間|何周|laps?)|(?:何分|何周|laps?).{0,12}(?:レース|race)/i.test(String(text || ''));
+}
+
+function buildRacePlanReply(liveData, lang) {
+  const plan = liveData && liveData.race_plan && typeof liveData.race_plan === 'object'
+    ? liveData.race_plan : {};
+  const duration = Number(plan.configured_duration_s);
+  const remaining = Number(liveData && liveData.session_time_remaining_s);
+  const minutes = Number.isFinite(duration) ? Math.round(duration / 60) : null;
+  if (plan.kind === 'timed' && minutes != null) {
+    const remain = Number.isFinite(remaining)
+      ? (lang === 'ja' ? `残り${Math.max(0, Math.round(remaining))}秒。` : `${Math.max(0, Math.round(remaining))} seconds remaining. `)
+      : '';
+    return lang === 'ja'
+      ? `${minutes}分のタイムレース。${remain}チェッカーまでの周回数は確定後に伝える。`
+      : `${minutes}-minute timed race. ${remain}I will give the checker crossings once confirmed.`;
+  }
+  return lang === 'ja'
+    ? 'このレースの時間・周回ルールはまだ確定できない。'
+    : 'The race duration and lap rule are not confirmed yet.';
+}
+
 function unicodeLength(text) {
   return Array.from(String(text || '')).length;
 }
@@ -814,13 +882,28 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     try {
       const _msgs = Array.isArray(req.body.messages) ? req.body.messages : [];
       const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
-      _strategyQ = _lastUser && typeof _lastUser.content === 'string'
+      const _lastText = _lastUser && typeof _lastUser.content === 'string'
+        ? _lastUser.content : '';
+      _strategyQ = _lastText
         ? strategyGuard.classifyStrategyQuestion(_lastUser.content, {
           activePitObjective: req.body.strategyObjective?.kind === 'pit_total_race_outcome'
             && req.body.strategyObjective?.status === 'active',
         }) : null;
-      _directPitCommand = _lastUser && typeof _lastUser.content === 'string'
+      _directPitCommand = _lastText
         ? strategyGuard.classifyDirectRaceCommand(_lastUser.content) : null;
+      const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
+      if (isAccountChangeRequest(_lastText)) {
+        console.log('[account_guard] conversational account change blocked');
+        return sendGuardReply(req, res, buildAccountChangeReply(_lang), 100);
+      }
+      if (isFuelQuestion(_lastText)) {
+        console.log('[fuel_guard] authoritative fuel reply');
+        return sendGuardReply(req, res, buildFuelAuthorityReply(req.body.liveData, _lang), 110);
+      }
+      if (isRaceRuleQuestion(_lastText)) {
+        console.log('[race_plan_guard] authoritative race-plan reply');
+        return sendGuardReply(req, res, buildRacePlanReply(req.body.liveData, _lang), 110);
+      }
     } catch (e) {
       console.log('[strategy_guard] classify skipped: ' + e.message);   // 分類前の失敗のみ通常経路へ
     }

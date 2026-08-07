@@ -122,6 +122,41 @@ async function testBaseline(port) {
     check('④non-stream judge_call: JSON内のtextがNO_CALL', !!(parsed && parsed.content && parsed.content[0] && parsed.content[0].text === 'NO_CALL'), r.body);
   }
 
+  // ── Race Plan / Fuel / Account は会話LLMでなく権威データから返す ──
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP',
+      liveData: { fuel: 20.0, fuel_strategy: {
+        avg_fuel_per_lap: 3.65, provisional_laps_to_time_expiry: 7,
+        required_fuel_l: 25.55, margin_l: -5.55,
+      } },
+      messages: [{ role: 'user', content: '最後まで足りる？何リッター必要？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④a timed provisional fuel plan is deterministic',
+      /暫定.*7周.*25.6L.*5.5L不足/.test(text), text);
+  }
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP',
+      liveData: { session_time_remaining_s: 594, race_plan: {
+        kind: 'timed', configured_duration_s: 1200, session_state: 4,
+      } },
+      messages: [{ role: 'user', content: 'このレース何分？何周？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④b timed race rule comes from SessionInfo', /20分.*594秒/.test(text), text);
+  }
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP',
+      messages: [{ role: 'user', content: '契約解除だ！' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④c conversational cancellation cannot change entitlement',
+      /ここでは変更できない/.test(text), text);
+  }
+
   // ── ⑤ P1-5: sessionType はトップレベル参照。Practice + 復帰順位質問 → NOT_RACE_SESSION ──
   {
     const r = await post(port, {

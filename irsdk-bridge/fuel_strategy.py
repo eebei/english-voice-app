@@ -26,6 +26,8 @@ MIN_CLEAN_LAPS = 3
 MAX_FUEL_L = 500.0
 MAX_FUEL_PER_LAP_L = 50.0
 MAX_CROSSINGS = 500
+MIN_LAP_TIME_S = 20.0
+MAX_LAP_TIME_S = 600.0
 
 
 def _finite(value):
@@ -134,6 +136,44 @@ def evaluate_fuel_to_finish(
         transition=transition,
         should_warn=should_warn,
         warning_kind=warning_kind)
+
+
+def estimate_timed_fuel_provisional(
+        fuel_level_l, avg_fuel_per_lap_l, time_remaining_s,
+        avg_lap_time_s, clean_laps_sampled):
+    """Conservative pre-checker fuel estimate for a timed race.
+
+    This deliberately does *not* claim the authoritative checkered crossing.
+    Before the Final Lap model can identify the leader/checker relationship,
+    it gives the driver a safe planning number: enough whole laps to reach
+    time zero plus one possible final lap after time expiry.
+    """
+    if not _finite(fuel_level_l) or not 0.0 <= fuel_level_l <= MAX_FUEL_L:
+        return {'available': False, 'reason': 'invalid_fuel_level'}
+    if (not _finite(avg_fuel_per_lap_l)
+            or not 0.0 < avg_fuel_per_lap_l <= MAX_FUEL_PER_LAP_L):
+        return {'available': False, 'reason': 'invalid_average'}
+    if (not _finite(time_remaining_s) or not 0.0 <= time_remaining_s < 100000):
+        return {'available': False, 'reason': 'invalid_time_remaining'}
+    if (not _finite(avg_lap_time_s)
+            or not MIN_LAP_TIME_S <= avg_lap_time_s <= MAX_LAP_TIME_S):
+        return {'available': False, 'reason': 'invalid_lap_time'}
+    if (not isinstance(clean_laps_sampled, int)
+            or isinstance(clean_laps_sampled, bool)
+            or clean_laps_sampled < MIN_CLEAN_LAPS):
+        return {'available': False, 'reason': 'insufficient_clean_laps'}
+    laps = max(1, int(math.ceil(time_remaining_s / avg_lap_time_s)) + 1)
+    required = avg_fuel_per_lap_l * laps
+    margin = fuel_level_l - required
+    return {
+        'available': True,
+        'reason': 'timed_provisional',
+        'estimated_laps': laps,
+        'required_fuel_l': round(required, 3),
+        'margin_l': round(margin, 3),
+        'reserve_l': RESERVE_L,
+        'basis': 'time_to_zero_plus_final_lap',
+    }
 
 
 def commit_band_after_dispatch(previous_band, evaluation, dispatch_result):

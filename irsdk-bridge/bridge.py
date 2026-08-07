@@ -45,7 +45,7 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 251 (historical memory import)"
+BUILD_VERSION = "Build 252 (race plan and fuel authority)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1918,6 +1918,17 @@ def fmt_radio(seconds):
     return fmt_time(seconds) if seconds >= 60 else "%.3f" % seconds
 
 
+def session_time_to_seconds(value):
+    """Parse SessionInfo values such as ``20 min`` without guessing."""
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*(?:min|minute|minutes)\s*', value, re.I)
+    if not match:
+        return None
+    seconds = float(match.group(1)) * 60.0
+    return round(seconds, 3) if 0 < seconds < 100000 else None
+
+
 def classify_race_clock(is_race_session, lap, laps_total, time_remaining):
     """Classify lap-count vs timed-race authority on every telemetry poll.
 
@@ -1960,6 +1971,7 @@ def poll_iracing():
     player_class_id = -1
     car_class_map = {}          # car_idx -> class_id
     sessions_map = {}           # SessionNum -> SessionType（現在のセッション種別判定用）
+    session_details_map = {}    # SessionNum -> configured duration/lap contract
     car_relspeed_map = {}       # car_idx -> rel speed
     car_irating_map = {}        # car_idx -> iRating（危険ドライバー警告用）
     car_sr_map = {}             # car_idx -> Safety Rating値（例 2.34）
@@ -2211,6 +2223,7 @@ def poll_iracing():
                 info['current_session_authority'] = _session_authority
                 info['current_session_num'] = _session_authority['session_num']
                 info['current_session_type'] = _session_authority['session_type']
+                session_details_map = info.get('session_details') or {}
                 latest_qualifying_result = info.get('qualifying_result')
                 latest_session_results = info.get('session_results') or {}
                 # ★2026-07-21 Codex指示R2「原因修正」：read-only診断。DriverInfoから解析できた人数と、
@@ -2473,6 +2486,9 @@ def poll_iracing():
         # immediately after connection, before a lap can possibly complete.
         _laps_total_ok, _is_time_race, _legacy_laps_remaining = classify_race_clock(
             is_race_session, lap, lapsTot, timeRemain)
+        _active_session_detail = session_details_map.get(cur_snum, {})
+        _configured_duration_s = session_time_to_seconds(
+            _active_session_detail.get('session_time'))
         if not _is_time_race:
             _timed_final_eval = {'reason': 'not_time_race'}
             _milestone_laps = _legacy_laps_remaining
@@ -3196,6 +3212,32 @@ def poll_iracing():
                             _fuel_eval['band']
                             == fuel_strategy_mod.CRITICAL),
                     })
+                elif _is_time_race:
+                    # Before the Final Lap unit can prove the exact checker
+                    # crossing, drivers still need a safe fuel plan.  This is
+                    # explicitly provisional: whole laps to time zero plus a
+                    # possible final lap, never a fabricated official lap
+                    # count or a replacement for the checker authority.
+                    _avg_lap_for_fuel = (
+                        sum(lap_time_hist) / len(lap_time_hist)
+                        if lap_time_hist else None)
+                    _provisional = fuel_strategy_mod.estimate_timed_fuel_provisional(
+                        fuel_level_l=fuel,
+                        avg_fuel_per_lap_l=avg_fuel_lap,
+                        time_remaining_s=timeRemain,
+                        avg_lap_time_s=_avg_lap_for_fuel,
+                        clean_laps_sampled=len(fuel_per_lap_hist))
+                    if _provisional.get('available'):
+                        fuel_strategy.update({
+                            'provisional': True,
+                            'provisional_laps_to_time_expiry': _provisional['estimated_laps'],
+                            'required_fuel_l': _provisional['required_fuel_l'],
+                            'fuel_needed': _provisional['required_fuel_l'],
+                            'margin_l': _provisional['margin_l'],
+                            'reserve_l': _provisional['reserve_l'],
+                            'finish_basis': _provisional['basis'],
+                            'pit_required': _provisional['margin_l'] < 0,
+                        })
 
                 _fuel_dispatch_result = None
                 if _fuel_eval.get('should_warn') and not onPit:
@@ -4430,6 +4472,12 @@ def poll_iracing():
                     if (_is_time_race and isinstance(timeRemain, (int, float))
                         and 0 <= timeRemain < 100000)
                     else None),
+                'race_plan': {
+                    'kind': 'timed' if _is_time_race else ('laps' if _laps_total_ok else 'unknown'),
+                    'configured_duration_s': _configured_duration_s,
+                    'session_state': cur_ss,
+                    'racing_started': cur_ss == 4,
+                },
                 'finish_crossings_authority': (
                     _milestone_laps if _milestone_laps is not None else None),
                 'finish_crossings_status': (

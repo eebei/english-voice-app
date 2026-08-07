@@ -177,6 +177,24 @@ def test_invalid_inputs():
         check(name, not r['available'] and r['reason'] == reason, r)
 
 
+def test_timed_provisional():
+    print('\n══ timed-race provisional fuel plan ══')
+    r = fs.estimate_timed_fuel_provisional(
+        fuel_level_l=20.0, avg_fuel_per_lap_l=3.65,
+        time_remaining_s=594.0, avg_lap_time_s=108.0,
+        clean_laps_sampled=3)
+    check('9:54 at 1:48 plans six laps to time zero plus final lap',
+          r['available'] and r['estimated_laps'] == 7, r)
+    check('provisional required fuel is deterministic',
+          r['required_fuel_l'] == 25.55 and r['margin_l'] == -5.55, r)
+    short = fs.estimate_timed_fuel_provisional(
+        fuel_level_l=20.0, avg_fuel_per_lap_l=3.65,
+        time_remaining_s=594.0, avg_lap_time_s=108.0,
+        clean_laps_sampled=2)
+    check('two clean laps do not unlock provisional plan',
+          not short['available'] and short['reason'] == 'insufficient_clean_laps', short)
+
+
 def test_mutations():
     print('\n══ deterministic mutation evidence ══')
     source = open(
@@ -241,6 +259,7 @@ def run_all():
     test_dispatch_commit()
     test_lifecycle()
     test_invalid_inputs()
+    test_timed_provisional()
     test_mutations()
     print('\n[fuel_strategy] 合格 %d / 不合格 %d'
           % (passed, failed))

@@ -837,6 +837,13 @@ function buildSystem(p) {
     if (live.fuel != null)       { jp.push('燃料 ' + live.fuel + 'L'); en.push('Fuel ' + live.fuel + ' L'); }
     if (live.lap != null)        { jp.push('周回 ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); }
     if (live.session_time_remaining_s != null) { jp.push('レース残り時間 ' + live.session_time_remaining_s + '秒'); en.push('Race time remaining ' + live.session_time_remaining_s + 's'); }
+    if (live.race_plan && live.race_plan.kind === 'timed') {
+      const duration = Number(live.race_plan.configured_duration_s);
+      if (Number.isFinite(duration) && duration > 0) {
+        jp.push('レース規則: ' + Math.round(duration / 60) + '分タイムレース（SessionInfo確定）');
+        en.push('Race rule: ' + Math.round(duration / 60) + '-minute timed race (SessionInfo authority)');
+      }
+    }
     if (live.finish_crossings_authority != null) { jp.push('チェッカーまでの自車S/F通過 ' + live.finish_crossings_authority + '回'); en.push('Authoritative driver S/F crossings to finish ' + live.finish_crossings_authority); }
     else if (live.finish_crossings_status) { jp.push('残り周回権威=取得不能（理由:' + live.finish_crossings_status + '）'); en.push('Finish-crossing authority unavailable (reason: ' + live.finish_crossings_status + ')'); }
     if (live.best != null)       { const b = fmtLap(live.best); jp.push('自己ベスト ' + b); en.push('Best ' + b); }
@@ -888,13 +895,19 @@ function buildSystem(p) {
           : Math.abs(fs.margin_l) + 'L不足（給油必須）';
         // 時間制は総合首位の予測チェッカー時刻と自車のS/F到達時刻を比較した権威値。
         // 旧own-pace/lap差フォールバックは使わない。
-        const basisJp = { overall_leader_clock: '総合首位のチェッカー時刻基準', laps_total: null };
-        const basisEn = { overall_leader_clock: 'based on the overall leader checkered time', laps_total: null };
+        const basisJp = { overall_leader_clock: '総合首位のチェッカー時刻基準', time_to_zero_plus_final_lap: '時間切れまで＋最終周1周の保守的暫定値', laps_total: null };
+        const basisEn = { overall_leader_clock: 'based on the overall leader checkered time', time_to_zero_plus_final_lap: 'conservative provisional time-to-zero plus one final lap', laps_total: null };
         const bj = basisJp[fs.finish_basis]; const be = basisEn[fs.finish_basis];
-        jp.push('to-フィニッシュ: S/F通過あと' + fs.estimated_crossings_to_finish + '回'
+        const crossings = fs.estimated_crossings_to_finish != null
+          ? 'S/F通過あと' + fs.estimated_crossings_to_finish + '回'
+          : (fs.provisional_laps_to_time_expiry != null ? '暫定あと' + fs.provisional_laps_to_time_expiry + '周分' : '残距離未確定');
+        const crossingsEn = fs.estimated_crossings_to_finish != null
+          ? fs.estimated_crossings_to_finish + ' S/F crossing(s)'
+          : (fs.provisional_laps_to_time_expiry != null ? 'provisional ' + fs.provisional_laps_to_time_expiry + ' laps' : 'finish distance unconfirmed');
+        jp.push('to-フィニッシュ: ' + crossings
           + (bj ? '（' + bj + '）' : '') + '・必要燃料' + fs.required_fuel_l + 'L・'
-          + marginTxt + '・判定' + fs.fuel_band);
-        en.push('To finish: ' + fs.estimated_crossings_to_finish + ' S/F crossing(s)'
+          + marginTxt + '・判定' + (fs.provisional ? '暫定' : fs.fuel_band));
+        en.push('To finish: ' + crossingsEn
           + (be ? ' (' + be + ')' : '') + ', required ' + fs.required_fuel_l
           + 'L, margin ' + fs.margin_l + 'L, band ' + fs.fuel_band
           + (fs.pit_required ? ' (PIT REQUIRED)' : ''));

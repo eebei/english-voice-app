@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bridge import parse_session_info  # noqa: E402
+from bridge import parse_session_info, session_time_to_seconds  # noqa: E402
 
 
 def fixture(fastest):
@@ -74,6 +74,8 @@ assert valid['qualifying_result']['class_position'] == 4
 assert valid['qualifying_result']['position_base_verified'] is True
 assert valid['qualifying_result']['class_position_base_verified'] is True
 assert valid['session_details'][1]['session_laps'] == 2
+assert session_time_to_seconds('20 min') == 1200.0
+assert session_time_to_seconds('2 laps') is None
 
 missing = parse_session_info(fixture('-1.000'))
 assert missing['qualifying_result']['status'] == 'no_valid_time'
