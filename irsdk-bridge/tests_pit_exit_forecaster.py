@@ -107,6 +107,12 @@ check("pit-now exposes all six evidence families",
 check("pit-now classifies traffic state",
       pit_now["likely"]["traffic_state"] in
       ("clear_air", "traffic", "blend_risk"))
+check("pit-now labels physical and conditional cycle worlds separately",
+      pit_now["pit_cycle"]["intent"] == "not_inferred"
+      and pit_now["pit_cycle"]["if_pack_stops"] is not None)
+check("cycle scenario cannot worsen physical exit",
+      pit_now["pit_cycle"]["if_pack_stops"]["likely"]["position"]
+      <= pit_now["likely"]["position"])
 
 learned = dict(calibration, forecast_learning={
     "outcome_count": 3, "required_outcome_count": 3, "bias_ready": True,

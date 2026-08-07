@@ -696,15 +696,25 @@ function buildPitExitForecastReply(forecast, lang) {
   const behindGap = likely.nearest_behind && gap(likely.nearest_behind.gap_s);
   const blendRisk = Array.isArray(likely.blend_conflicts) && likely.blend_conflicts.length > 0;
   const traffic = likely.traffic_state === 'clear_air' ? 'clear_air' : 'traffic';
+  const cycle = forecast && forecast.pit_cycle;
+  const cycleLikely = cycle && cycle.if_pack_stops && cycle.if_pack_stops.likely;
+  const cyclePosition = pos(cycleLikely && cycleLikely.position);
+  const packCount = Number(cycleLikely && cycleLikely.pack_car_count);
 
   if (lang === 'ja') {
     const ahead = aheadCar && aheadGap ? `前${aheadCar} ${aheadGap}秒` : '前なし';
     const behind = behindCar && behindGap ? `後${behindCar} ${behindGap}秒` : '後なし';
-    return `今ならP${likelyPos}、範囲P${bestPos}〜P${worstPos}。${ahead}、${behind}。${traffic === 'clear_air' ? 'クリアエア' : 'トラフィック内'}、${blendRisk ? '合流注意' : '合流リスク低い'}。`;
+    const cycleText = Number.isFinite(cyclePosition) && packCount > 0
+      ? `近傍${packCount}台が次の停止窓で入れば、サイクル後P${cyclePosition}。停止意図は未確認。`
+      : 'サイクル後順位は、前方の停止意図が未確認。';
+    return `物理復帰P${likelyPos}、範囲P${bestPos}〜P${worstPos}。${cycleText}${ahead}、${behind}。${traffic === 'clear_air' ? 'クリアエア' : 'トラフィック内'}、${blendRisk ? '合流注意' : '合流リスク低い'}。`;
   }
   const ahead = aheadCar && aheadGap ? `${aheadCar} ${aheadGap}s ahead` : 'none ahead';
   const behind = behindCar && behindGap ? `${behindCar} ${behindGap}s behind` : 'none behind';
-  return `Pit now: P${likelyPos}, P${bestPos}-${worstPos}. ${ahead}; ${behind}. ${traffic === 'clear_air' ? 'Clear air' : 'Traffic'}; ${blendRisk ? 'blend risk' : 'low blend risk'}.`;
+  const cycleText = Number.isFinite(cyclePosition) && packCount > 0
+    ? `If the ${packCount}-car nearby pack stops in the next window, cycle P${cyclePosition}; their pit intent is unconfirmed.`
+    : 'Cycle position unavailable: rival pit intent is unconfirmed.';
+  return `Physical exit P${likelyPos}, P${bestPos}-${worstPos}. ${cycleText} ${ahead}; ${behind}. ${traffic === 'clear_air' ? 'Clear air' : 'Traffic'}; ${blendRisk ? 'blend risk' : 'low blend risk'}.`;
 }
 
 function buildPitCalibrationReply(forecast, lang) {
@@ -772,15 +782,20 @@ function buildFuelAuthorityReply(liveData, lang) {
   const margin = Number(fs.margin_l);
   const exact = Number(fs.estimated_crossings_to_finish);
   const provisional = Number(fs.provisional_laps_to_time_expiry);
+  const current = Number(live.fuel);
+  const add = Number(fs.add_fuel_l);
+  const setFuel = Number.isFinite(add) && add > 0
+    ? (lang === 'ja' ? `、${add.toFixed(1)}L追加。${Math.ceil(add)}Lセット` : `, add ${add.toFixed(1)}L; set ${Math.ceil(add)}L`)
+    : '';
   if (Number.isFinite(required) && Number.isFinite(margin) && Number.isInteger(exact)) {
     return lang === 'ja'
-      ? `チェッカーまで${exact}回。必要${required.toFixed(1)}L、${margin >= 0 ? margin.toFixed(1) + 'L余裕' : Math.abs(margin).toFixed(1) + 'L不足'}。`
-      : `${exact} crossings to the finish: ${required.toFixed(1)}L required, ${margin >= 0 ? margin.toFixed(1) + 'L margin' : Math.abs(margin).toFixed(1) + 'L short'}.`;
+      ? `現在${Number.isFinite(current) ? current.toFixed(1) + 'L。' : ''}チェッカーまで${exact}回、必要${required.toFixed(1)}L。${margin >= 0 ? margin.toFixed(1) + 'L余裕' : Math.abs(margin).toFixed(1) + 'L不足'}${setFuel}。`
+      : `${Number.isFinite(current) ? `Current ${current.toFixed(1)}L. ` : ''}${exact} crossings to the finish: ${required.toFixed(1)}L required, ${margin >= 0 ? margin.toFixed(1) + 'L margin' : Math.abs(margin).toFixed(1) + 'L short'}${setFuel}.`;
   }
   if (Number.isFinite(required) && Number.isFinite(margin) && Number.isInteger(provisional)) {
     return lang === 'ja'
-      ? `暫定であと${provisional}周分。必要${required.toFixed(1)}L、${margin >= 0 ? margin.toFixed(1) + 'L余裕' : Math.abs(margin).toFixed(1) + 'L不足'}。チェッカー周は確定後に更新する。`
-      : `Provisional plan: ${provisional} laps, ${required.toFixed(1)}L required, ${margin >= 0 ? margin.toFixed(1) + 'L margin' : Math.abs(margin).toFixed(1) + 'L short'}. I will update it when the checker lap is confirmed.`;
+      ? `現在${Number.isFinite(current) ? current.toFixed(1) + 'L。' : ''}暫定であと${provisional}周分、必要${required.toFixed(1)}L。${margin >= 0 ? margin.toFixed(1) + 'L余裕' : Math.abs(margin).toFixed(1) + 'L不足'}${setFuel}。チェッカー周は確定後に更新する。`
+      : `${Number.isFinite(current) ? `Current ${current.toFixed(1)}L. ` : ''}Provisional plan: ${provisional} laps, ${required.toFixed(1)}L required, ${margin >= 0 ? margin.toFixed(1) + 'L margin' : Math.abs(margin).toFixed(1) + 'L short'}${setFuel}. I will update it when the checker lap is confirmed.`;
   }
   const average = Number(fs.avg_fuel_per_lap);
   if (Number.isFinite(average)) {

@@ -43,9 +43,10 @@ import fuel_strategy as fuel_strategy_mod
 import session_authority as session_authority_mod
 import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
+import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 252 (race plan and fuel authority)"
+BUILD_VERSION = "Build 253 (fuel set and pit-cycle grading)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1919,13 +1920,29 @@ def fmt_radio(seconds):
 
 
 def session_time_to_seconds(value):
-    """Parse SessionInfo values such as ``20 min`` without guessing."""
+    """Parse explicit SessionInfo duration strings without guessing.
+
+    iRacing SessionInfo has appeared as both ``20 min`` and ``20:00.000``.
+    The latter is a duration, not a wall-clock inference, so accepting it is
+    safe.  Bare numbers and lap-count strings remain invalid on purpose.
+    """
     if not isinstance(value, str):
         return None
     match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*(?:min|minute|minutes)\s*', value, re.I)
-    if not match:
+    if match:
+        seconds = float(match.group(1)) * 60.0
+        return round(seconds, 3) if 0 < seconds < 100000 else None
+    # Explicit MM:SS(.mmm) or HH:MM:SS(.mmm), as supplied by SessionInfo.
+    clock = re.fullmatch(
+        r'\s*(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)\s*', value)
+    if not clock:
         return None
-    seconds = float(match.group(1)) * 60.0
+    hours = int(clock.group(1) or 0)
+    minutes = int(clock.group(2))
+    seconds_part = float(clock.group(3))
+    if minutes >= 60 or seconds_part >= 60:
+        return None
+    seconds = hours * 3600.0 + minutes * 60.0 + seconds_part
     return round(seconds, 3) if 0 < seconds < 100000 else None
 
 
@@ -2058,6 +2075,7 @@ def poll_iracing():
     pit_exit_forecast_shadow = None
     pit_exit_forecast_live = None
     pit_exit_forecast_live_at = None
+    pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
     last_pit_service = None  # latest exact IN-limit-line -> OUT-limit-line sample
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
@@ -3211,6 +3229,9 @@ def poll_iracing():
                         'pit_required': (
                             _fuel_eval['band']
                             == fuel_strategy_mod.CRITICAL),
+                        # This is the number the driver must set in iRacing,
+                        # not merely the total fuel needed to finish.
+                        'add_fuel_l': round(max(0.0, -_fuel_eval['margin_l']), 3),
                     })
                 elif _is_time_race:
                     # Before the Final Lap unit can prove the exact checker
@@ -3237,6 +3258,7 @@ def poll_iracing():
                             'reserve_l': _provisional['reserve_l'],
                             'finish_basis': _provisional['basis'],
                             'pit_required': _provisional['margin_l'] < 0,
+                            'add_fuel_l': round(max(0.0, -_provisional['margin_l']), 3),
                         })
 
                 _fuel_dispatch_result = None
@@ -3246,14 +3268,15 @@ def poll_iracing():
                     _fuel_message = (
                         'Fuel margin is under half a liter. Save fuel now.'
                         if _fuel_band == fuel_strategy_mod.TIGHT
-                        else 'Fuel is short by %.1f liters. We need the pit.'
-                        % abs(_fuel_margin))
+                        else 'Fuel short %.1f liters. Set %.1f liters; pit this lap.'
+                        % (abs(_fuel_margin), fuel_strategy.get('add_fuel_l', 0.0)))
                     _fuel_dispatch_result = broadcast({
                         'type': 'radio',
                         'trigger': 'fuel_strategy_warning',
                         'fuel_band': _fuel_band,
                         'margin_l': _fuel_margin,
                         'required_fuel_l': _fuel_eval['required_fuel_l'],
+                        'add_fuel_l': fuel_strategy.get('add_fuel_l'),
                         'estimated_crossings_to_finish': _milestone_laps,
                         'message': _fuel_message,
                     })
@@ -3683,6 +3706,11 @@ def poll_iracing():
                 pit_exit_forecast_shadow = pit_exit_forecast_live
             else:
                 pit_exit_forecast_shadow = _pit_entry_forecast
+            _pit_cycle_armed = pit_cycle_tracker.begin(
+                pit_exit_forecast_shadow, pit_enter_time, lap)
+            if _pit_cycle_armed:
+                log('PIT CYCLE armed: ' + json.dumps(
+                    _pit_cycle_armed, ensure_ascii=False, separators=(',', ':')))
             log("PIT EXIT SHADOW forecast: " + json.dumps(
                 pit_exit_forecast_shadow, ensure_ascii=False, separators=(',', ':')))
             limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
@@ -4452,6 +4480,15 @@ def poll_iracing():
                     calibration=_pit_now_calibration)
                 pit_exit_forecast_live = _pit_now_forecast
                 pit_exit_forecast_live_at = _pit_now_session_time
+                _pit_cycle_outcome = pit_cycle_tracker.observe(
+                    session_time=_pit_now_session_time, player_lap=lap,
+                    player_on_pit_road=onPit, player_class_position=class_pos,
+                    cars=_pit_now_cars)
+                if _pit_cycle_outcome:
+                    broadcast({'type': 'pit_cycle_outcome',
+                               'outcome': _pit_cycle_outcome})
+                    log('PIT CYCLE outcome: ' + json.dumps(
+                        _pit_cycle_outcome, ensure_ascii=False, separators=(',', ':')))
             else:
                 pit_exit_forecast_live = None
                 pit_exit_forecast_live_at = None

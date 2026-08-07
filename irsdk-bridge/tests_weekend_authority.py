@@ -75,6 +75,9 @@ assert valid['qualifying_result']['position_base_verified'] is True
 assert valid['qualifying_result']['class_position_base_verified'] is True
 assert valid['session_details'][1]['session_laps'] == 2
 assert session_time_to_seconds('20 min') == 1200.0
+assert session_time_to_seconds('20:00.000') == 1200.0
+assert session_time_to_seconds('1:20:00') == 4800.0
+assert session_time_to_seconds('20:60') is None
 assert session_time_to_seconds('2 laps') is None
 
 missing = parse_session_info(fixture('-1.000'))

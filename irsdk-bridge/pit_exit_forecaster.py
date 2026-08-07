@@ -10,6 +10,7 @@ DRIVER_MODEL_VERSION = 3
 MIN_LAP_TIME_S = 20.0
 MAX_LAP_TIME_S = 600.0
 BLEND_WINDOW_S = 3.0
+PACK_WINDOW_S = 15.0
 
 
 def _num(value):
@@ -124,6 +125,52 @@ def _scenario(cars, player_exit_progress, projection_s, player_class_id):
         "excluded_car_idxs": excluded,
         "invalid_same_class_position_car_idxs": invalid_same_class_positions,
     }
+
+
+def _nearby_pack(snapshot, player_class_id):
+    """Return observed nearby same-class cars, never claimed pit intent.
+
+    The pack is only an evidence set for a conditional pit-cycle outcome:
+    "if this observed pack stops in the next window".  It deliberately does
+    not label those cars as intending to pit—fuel/service state is not exposed
+    for competitors by the SDK.
+    """
+    player_lap = _num(snapshot.get("player_lap"))
+    player_pct = _num(snapshot.get("player_lap_dist_pct"))
+    player_lap_time = _valid_lap_time(snapshot.get("player_last_lap_time"))
+    if None in (player_lap, player_pct, player_lap_time):
+        return []
+    player_progress = player_lap + player_pct
+    pack = []
+    for car in snapshot.get("cars", []):
+        if car.get("class_id") != player_class_id or car.get("on_pit_road"):
+            continue
+        lap = _num(car.get("lap"))
+        pct = _num(car.get("lap_dist_pct"))
+        if lap is None or pct is None:
+            continue
+        gap_s = (lap + pct - player_progress) * player_lap_time
+        if abs(gap_s) <= PACK_WINDOW_S:
+            pack.append({"car_idx": car.get("car_idx"),
+                         "car_number": car.get("car_number"),
+                         "class_position": car.get("class_position"),
+                         "gap_s": round(gap_s, 3)})
+    return sorted(pack, key=lambda item: item["gap_s"])
+
+
+def _cycle_if_pack_stops(scenario, pack):
+    """Conditional post-cycle position if every observed pack car stops.
+
+    This is intentionally a scenario, not an assertion that rivals will pit.
+    The event tracker grades it only once those actual pit events arrive.
+    """
+    pack_ids = {item.get("car_idx") for item in pack}
+    # Only cars that would be ahead at the physical exit can cost position.
+    recovered = sum(1 for item in pack
+                    if item.get("car_idx") in pack_ids and item.get("gap_s", 0) > 0)
+    position = max(1, int(scenario["position"]) - recovered)
+    return {"position": position, "recovered_positions": recovered,
+            "pack_car_count": len(pack), "condition": "observed_pack_stops"}
 
 
 def _forecast_learning_status(calibration):
@@ -281,6 +328,7 @@ def forecast_pit_now(*, snapshot, calibration):
     positions = [scenarios[name]["position"] for name in ("best", "likely", "worst")]
     if positions != sorted(positions):
         return _unavailable("position_range_invalid")
+    pack = _nearby_pack(snapshot, player_class_id)
     result = dict(base)
     result.update({
         "shadow_mode": False,
@@ -292,6 +340,15 @@ def forecast_pit_now(*, snapshot, calibration):
         "best": scenarios["best"],
         "likely": scenarios["likely"],
         "worst": scenarios["worst"],
+        "pit_cycle": {
+            "available": bool(pack),
+            "intent": "not_inferred",
+            "observed_pack": pack,
+            "if_pack_stops": {
+                name: _cycle_if_pack_stops(scenarios[name], pack)
+                for name in ("best", "likely", "worst")
+            } if pack else None,
+        },
     })
     return result
 
