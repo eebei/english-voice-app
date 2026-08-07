@@ -1547,6 +1547,10 @@ function startSession(){
   if(debriefGuide) debriefGuide.style.display='none';
   const profile = loadProfile()||{};
   saveProfile({ name:userName, sessions:(profile.sessions||0)+1, lastDate:new Date().toISOString().slice(0,10), notes:profile.notes||[], trackMemory:profile.trackMemory||{} });
+  // Non-blocking Build 251 migration. It is intentionally started after the
+  // driver identity is fixed, so imported records can never be written under a
+  // previous user's displayed name.
+  void importHistoricalMemorySeeds();
   // Greeting
   const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   const greeting = sessionPurpose==='practice'
@@ -3789,6 +3793,73 @@ function loadEvidenceRecords(){
     return [];
   }
 }
+// Build 251: a protected server seed can restore selected historical driver
+// statements onto the authenticated tester's own PC. It never transfers raw
+// chat/log text, never calls the LLM, and is acknowledged only after the local
+// write succeeds. review_id makes a retry idempotent if an ACK is interrupted.
+function buildHistoricalEvidenceRecord(seed, item, index){
+  if(!seed || !item || !userName) return null;
+  const scope=item.scope&&typeof item.scope==='object'?item.scope:{};
+  const text=(value,max)=>String(value==null?'':value).trim().slice(0,max);
+  const kind=item.kind==='driver_preference'?'driver_preference':'session_evidence';
+  const track=text(scope.track,120), car=text(scope.car||scope.car_class,160);
+  const qa=(Array.isArray(item.qa)?item.qa:[]).slice(0,6).map(pair=>({
+    question:text(pair&&pair.question,240),answer:text(pair&&pair.answer,700)
+  })).filter(pair=>pair.question||pair.answer);
+  if((kind!=='driver_preference'&&(!track || !car)) || !qa.length || !/^\d{1,18}$/.test(String(seed.id||''))) return null;
+  const parsed=Date.parse(item.source_date||'');
+  const createdAt=Number.isFinite(parsed)?new Date(parsed).toISOString():new Date().toISOString();
+  return {
+    version:2, kind, review_id:`legacy:${seed.id}:${index}`, driver:userName,
+    created_at:createdAt, updated_at:new Date().toISOString(),
+    scope:{session_type:text(scope.session_type,80),track,car,car_class:text(scope.car_class,80)},
+    evidence:{finish_pos:null,total_laps:0,best_lap:null,avg_lap:null,avg_fuel_per_lap:null,incidents:null},
+    qa, confidence:'historical_driver_reported',
+    provenance:{kind:'selected_historical_driver_statement',source_label:text(seed.sourceLabel,120),note:text(item.note,360)}
+  };
+}
+async function importHistoricalMemorySeeds(){
+  if(!userName || !localStorage.getItem('pw_beta_code')) return;
+  try{
+    const headers=applyPitwallAccess({});
+    const response=await fetch('/api/memory/import-seeds',{headers});
+    if(!response.ok) return;
+    const payload=await response.json();
+    const seeds=Array.isArray(payload&&payload.seeds)?payload.seeds:[];
+    if(!seeds.length) return;
+    const records=loadEvidenceRecords();
+    const known=new Set(records.map(record=>record&&record.review_id).filter(Boolean));
+    const acknowledged=[]; let added=0;
+    for(const seed of seeds){
+      const additions=(Array.isArray(seed.records)?seed.records:[])
+        .map((item,index)=>buildHistoricalEvidenceRecord(seed,item,index)).filter(Boolean);
+      // Invalid/incomplete server data must remain pending for correction, not
+      // be silently discarded by the client.
+      if(!additions.length) continue;
+      for(const record of additions){
+        if(!known.has(record.review_id)){ records.push(record);known.add(record.review_id);added++; }
+      }
+      acknowledged.push(String(seed.id));
+    }
+    if(!acknowledged.length) return;
+    // Keep the newest 40 records. Historical import is deliberately dated to
+    // the source session, so it cannot evict a driver's newer local reviews.
+    records.sort((a,b)=>Date.parse(a&&a.created_at||0)-Date.parse(b&&b.created_at||0));
+    while(records.length>40) records.shift();
+    localStorage.setItem('pw_session_evidence',JSON.stringify(records));
+    const ackHeaders=applyPitwallAccess({'Content-Type':'application/json'});
+    fetch('/api/memory/import-seeds/ack',{method:'POST',headers:ackHeaders,body:JSON.stringify({seedIds:acknowledged})}).catch(()=>{});
+    if(added){
+      const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+      addMsg('sys',isJP
+        ? `📚 過去ログから${added}件のドライバー申告を記憶へ取り込みました。次回、同じ車両・コースの会話で作業仮説として活かします。`
+        : `📚 Imported ${added} selected driver statements from prior sessions. They will be used as working hypotheses in matching car-and-track conversations.`);
+    }
+  }catch(e){
+    // A network problem must never block session start. The unacknowledged
+    // seed remains available on the next launch.
+  }
+}
 function evidenceReviewId(data){
   data=sanitizeSessionEvidence(data||{});
   const car=data.car_model||lastCarModel||data.car_class||lastCarClass||'';
@@ -3823,6 +3894,7 @@ function upsertEvidenceRecord(record){
     const created=index<0;
     if(created) records.push(record);
     else records[index]={...record,created_at:records[index].created_at||record.created_at};
+    records.sort((a,b)=>Date.parse(a&&a.created_at||0)-Date.parse(b&&b.created_at||0));
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
     return {saved:true,created};
@@ -4389,6 +4461,10 @@ function buildSessionEvidenceNote(){
       if(r.driver!==userName) return false;
       const created=Date.parse(r.created_at||'');
       if(!Number.isFinite(created) || now-created>maxAgeMs || created>now+24*60*60*1000) return false;
+      // Historical driver preferences (for example preferred callout detail)
+      // deliberately apply across tracks. All run evidence stays fail-closed to
+      // exact car-and-track matching.
+      if(r.kind==='driver_preference') return true;
       const rt=String(r.scope?.track||'').toLowerCase();
       const rc=String(r.scope?.car||r.scope?.car_class||'').toLowerCase();
       return rt===track && rc===car;
@@ -4407,7 +4483,7 @@ function buildSessionEvidenceNote(){
     }[lang]||null;
     const rows=relevant.map(r=>{
       const facts=[
-        r.scope?.session_type||'Session',r.scope?.track||'',
+        r.kind==='driver_preference'?(lang==='ja'?'ドライバー設定':'Driver preference'):(r.scope?.session_type||'Session'),r.scope?.track||'',
         validFinishPosition(r.evidence?.finish_pos)?`P${validFinishPosition(r.evidence.finish_pos)}`:'',
         r.evidence?.avg_fuel_per_lap!=null?`${r.evidence.avg_fuel_per_lap}L/周`:''
       ].filter(Boolean).join(' / ');

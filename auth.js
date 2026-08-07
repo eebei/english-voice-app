@@ -117,6 +117,27 @@ async function init() {
   // reinstalls and device changes cannot reset these values.
   await pool.query(`ALTER TABLE beta_tokens ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE beta_tokens ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;`);
+  // 過去ログから抽出した本人申告を、該当テスターの認証済みPCへ一度だけ渡すための台帳。
+  // 生ログやアクセスコードは保存しない。codeはサーバー内でのみハッシュ化して紐付ける。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS memory_import_seeds (
+      id              BIGSERIAL PRIMARY KEY,
+      beta_token_hash TEXT NOT NULL,
+      target_name     TEXT NOT NULL,
+      source_label    TEXT NOT NULL,
+      records         JSONB NOT NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      acknowledged_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS memory_import_seeds_target_source_uq
+      ON memory_import_seeds(beta_token_hash, source_label);
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS memory_import_seeds_pending_idx
+      ON memory_import_seeds(beta_token_hash, acknowledged_at, created_at);
+  `);
   // exe起動コードのデバイス紐付け（2026-07-11深夜追加）。
   //   従来はactiveフラグのみでゲートしていたため、1コードを友達に配ると無制限に無課金で使い放題になる
   //   穴があった。ここで「1コードにつき使える端末はMAX_DEVICES_PER_CODE台まで」に制限する。
@@ -1016,6 +1037,85 @@ async function expireBetaToken(rawCode) {
   return { ok: rowCount > 0 };
 }
 
+// ── 過去ログ記憶の一回限りインポート ─────────────────────────────────────
+// 管理側は名前だけ指定する。アクセスコード／ハッシュはレスポンス・ログへ返さない。
+function sanitizeMemoryImportRecords(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > 16) {
+    throw new Error('records must contain 1-16 entries');
+  }
+  return input.map((item) => {
+    const scope = item && typeof item.scope === 'object' ? item.scope : {};
+    const qa = Array.isArray(item && item.qa) ? item.qa.slice(0, 6) : [];
+    const text = (v, max) => String(v == null ? '' : v).trim().slice(0, max);
+    const cleanQa = qa.map((pair) => ({
+      question: text(pair && pair.question, 240),
+      answer: text(pair && pair.answer, 700),
+    })).filter((pair) => pair.question || pair.answer);
+    if (!cleanQa.length) throw new Error('each record needs a question or answer');
+    return {
+      kind: item && item.kind === 'driver_preference' ? 'driver_preference' : 'session_evidence',
+      scope: {
+        session_type: text(scope.session_type, 80),
+        track: text(scope.track, 120),
+        car: text(scope.car, 160),
+        car_class: text(scope.car_class, 80),
+      },
+      qa: cleanQa,
+      source_date: text(item && item.source_date, 32),
+      note: text(item && item.note, 360),
+    };
+  });
+}
+
+async function queueMemoryImportSeed({ targetName, sourceLabel, records }) {
+  if (!ready) throw new Error('unavailable');
+  const name = String(targetName || '').trim().slice(0, 80);
+  const label = String(sourceLabel || '').trim().slice(0, 120);
+  if (!name || !label) throw new Error('targetName and sourceLabel are required');
+  const cleanRecords = sanitizeMemoryImportRecords(records);
+  const { rows } = await pool.query(
+    `SELECT code, name FROM beta_tokens WHERE lower(name) = lower($1) ORDER BY created_at DESC LIMIT 2`, [name]
+  );
+  if (rows.length !== 1) throw new Error(rows.length ? 'ambiguous_tester_name' : 'tester_not_found');
+  const tokenHash = crypto.createHash('sha256').update(rows[0].code).digest('hex');
+  const result = await pool.query(
+    `INSERT INTO memory_import_seeds (beta_token_hash, target_name, source_label, records)
+     VALUES ($1,$2,$3,$4::jsonb)
+     ON CONFLICT (beta_token_hash, source_label)
+     DO UPDATE SET records = EXCLUDED.records, target_name = EXCLUDED.target_name,
+                   created_at = now(), acknowledged_at = NULL
+     RETURNING id`,
+    [tokenHash, rows[0].name, label, JSON.stringify(cleanRecords)]
+  );
+  return { ok: true, targetName: rows[0].name, sourceLabel: label, count: cleanRecords.length, seedId: result.rows[0].id };
+}
+
+async function getPendingMemoryImportSeeds(betaTokenHash) {
+  if (!ready) throw new Error('unavailable');
+  if (!/^[a-f0-9]{64}$/.test(String(betaTokenHash || ''))) throw new Error('invalid_token_hash');
+  const { rows } = await pool.query(
+    `SELECT id, source_label, records, created_at
+       FROM memory_import_seeds
+      WHERE beta_token_hash = $1 AND acknowledged_at IS NULL
+      ORDER BY created_at ASC`, [betaTokenHash]
+  );
+  return rows.map((row) => ({ id: String(row.id), sourceLabel: row.source_label, records: row.records, createdAt: row.created_at }));
+}
+
+async function acknowledgeMemoryImportSeeds(betaTokenHash, seedIds) {
+  if (!ready) throw new Error('unavailable');
+  if (!/^[a-f0-9]{64}$/.test(String(betaTokenHash || ''))) throw new Error('invalid_token_hash');
+  const ids = Array.from(new Set((Array.isArray(seedIds) ? seedIds : [])
+    .map((id) => String(id)).filter((id) => /^\d{1,18}$/.test(id)))).slice(0, 32);
+  if (!ids.length) return { ok: true, acknowledged: 0 };
+  const { rowCount } = await pool.query(
+    `UPDATE memory_import_seeds SET acknowledged_at = now()
+      WHERE beta_token_hash = $1 AND id = ANY($2::bigint[]) AND acknowledged_at IS NULL`,
+    [betaTokenHash, ids]
+  );
+  return { ok: true, acknowledged: rowCount };
+}
+
 // Authorizationヘッダ（Bearer）or ?token= から現在ユーザーを解決するミドルウェア
 async function attachUser(req, _res, next) {
   try {
@@ -1404,6 +1504,7 @@ module.exports = {
   createFoundingCheckout,
   createBillingPortalSession,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive, expireBetaToken,
+  queueMemoryImportSeed, getPendingMemoryImportSeeds, acknowledgeMemoryImportSeeds,
   createFoundingApplication, listFoundingApplications,
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
   recordApiUsage, getApiUsageStats, recordGoogleUsage, recordUsageSessionCheckpoint, getUsageSessionStats,

@@ -276,6 +276,19 @@ app.post('/api/beta/admin/expire', requireAdmin, express.json(), async (req, res
     res.json(await auth.expireBetaToken(code));
   } catch (err) { res.status(500).json({ ok: false, error: String(err.message || err) }); }
 });
+// 過去ログから厳選した本人申告を、対象テスターの認証済みPCへ一回だけ移植する。
+// targetNameでDB内検索するため、管理操作の応答にもアクセスコードは出さない。
+app.post('/api/beta/admin/memory-import/queue', requireAdmin, express.json({ limit: '64kb' }), async (req, res) => {
+  try {
+    const { targetName, sourceLabel, records } = req.body || {};
+    const result = await auth.queueMemoryImportSeed({ targetName, sourceLabel, records });
+    res.json(result);
+  } catch (err) {
+    const message = String(err.message || err);
+    const status = ['tester_not_found', 'ambiguous_tester_name'].includes(message) ? 400 : 422;
+    res.status(status).json({ ok: false, error: message });
+  }
+});
 
 // ── Founding Checkout（LP→Stripe Checkout直行・5日トライアル付き） ──
 app.post('/api/founding/checkout', express.json(), async (req, res) => {
@@ -461,6 +474,30 @@ async function requirePitwallEntitlement(req, res, next) {
 }
 
 app.use(['/api/chat', '/api/translate', '/api/tts', '/api/stt'], requirePitwallEntitlement);
+
+// Build 251: beta access code hash is resolved by the entitlement middleware.
+// The desktop receives only its own pending seed and acknowledges only after
+// its local memory write succeeds. Paid accounts do not receive beta seeds.
+app.get('/api/memory/import-seeds', requirePitwallEntitlement, async (req, res) => {
+  try {
+    if (!req.betaTokenHash) return res.json({ ok: true, seeds: [] });
+    const seeds = await auth.getPendingMemoryImportSeeds(req.betaTokenHash);
+    res.json({ ok: true, seeds });
+  } catch (err) {
+    console.error('[memory-import] fetch failed:', err.message);
+    res.status(503).json({ ok: false, error: 'memory_import_unavailable' });
+  }
+});
+app.post('/api/memory/import-seeds/ack', requirePitwallEntitlement, async (req, res) => {
+  try {
+    if (!req.betaTokenHash) return res.status(400).json({ ok: false, error: 'beta_access_required' });
+    const result = await auth.acknowledgeMemoryImportSeeds(req.betaTokenHash, req.body && req.body.seedIds);
+    res.json(result);
+  } catch (err) {
+    console.error('[memory-import] acknowledgement failed:', err.message);
+    res.status(400).json({ ok: false, error: 'invalid_memory_import_ack' });
+  }
+});
 
 const usageCheckpointLimiter = rateLimit({ windowMs: 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false });
 app.post('/api/usage/session-checkpoint', usageCheckpointLimiter, async (req, res) => {
