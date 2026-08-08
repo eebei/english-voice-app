@@ -46,7 +46,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 255 (intent substrate, verified memory and owned strategy plan)"
+BUILD_VERSION = "Build 256 (pit phase, numeric truth gate and blend outcome hardening)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -667,6 +667,7 @@ def _session_scoped_reset_values():
         'race_start_time': None,
         'pit_enter_time': None,
         'pit_enter_pos': None,
+        'pit_exit_lap': None,
         'pit_entry_announced_stop': False,
         # ★2026-07-21 五度目の指摘で追加
         'summary_sent': False,
@@ -697,6 +698,18 @@ def _session_scoped_reset_values():
         '_pending_non_race_summary': None,
         '_pending_checker_notice': None,
     }
+
+
+def derive_pit_phase(lifecycle_state, on_pit_road, lap, pit_exit_lap):
+    """Return the driver-facing pit phase from SDK-owned state only."""
+    if lifecycle_state in (race_lifecycle.PLAYER_FINISHED, race_lifecycle.DEBRIEF):
+        return 'finished'
+    if bool(on_pit_road):
+        return 'pit_lane'
+    if (isinstance(lap, (int, float)) and isinstance(pit_exit_lap, (int, float))
+            and lap <= pit_exit_lap):
+        return 'out_lap'
+    return 'racing'
 
 
 def maybe_reset_on_session_num_change(cur_snum, last_session_num, race_lifecycle_fsm):
@@ -2066,6 +2079,7 @@ def poll_iracing():
     session_effective_fuel_capacity_l = None
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
     pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
+    pit_exit_lap = None     # 退出時のLap。次のS/F通過までout_lapを保持する
     pit_enter_pct = None
     pit_enter_fuel = None
     pit_repair_start_s = 0.0
@@ -2332,6 +2346,7 @@ def poll_iracing():
                         race_start_time = _sig_reset['race_start_time']
                         pit_enter_time = _sig_reset['pit_enter_time']
                         pit_enter_pos = _sig_reset['pit_enter_pos']
+                        pit_exit_lap = _sig_reset['pit_exit_lap']
                         pit_entry_announced_stop = _sig_reset['pit_entry_announced_stop']
                         summary_sent = _sig_reset['summary_sent']
                         checkered_pending = _sig_reset['checkered_pending']
@@ -2479,6 +2494,7 @@ def poll_iracing():
             race_start_time = _reset['race_start_time']
             pit_enter_time = _reset['pit_enter_time']
             pit_enter_pos = _reset['pit_enter_pos']
+            pit_exit_lap = _reset['pit_exit_lap']
             pit_entry_announced_stop = _reset['pit_entry_announced_stop']
             summary_sent = _reset['summary_sent']
             checkered_pending = _reset['checkered_pending']
@@ -3628,7 +3644,7 @@ def poll_iracing():
         _spd_ok    = (_spd_limit is not None and _spd_limit > 8.33)   # 30 km/h ゲート
         if prev_limiter_on and not limiter_on and onTrack and not limiter_off_announced_stop and _spd_ok:
             broadcast({'type': 'radio', 'trigger': 'limiter_off',
-                'message': 'Limiter off. Watch tyre temps and pick up the pace.'})
+                'message': 'Limiter off. Hold pace on the out-lap.'})
             limiter_off_announced_stop = True
         prev_limiter_on = limiter_on
 
@@ -3658,6 +3674,7 @@ def poll_iracing():
             # 状態更新は無条件（低速の正規進入でも必ず走らせる）
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_pos = class_pos
+            pit_exit_lap = None
             pit_enter_pct = reader.read_float('LapDistPct')
             pit_enter_fuel = fuel
             pit_repair_start_s = damage_s
@@ -3748,6 +3765,7 @@ def poll_iracing():
                 pit_entry_announced_stop = True
 
         if prev['onPit'] and not onPit and onTrack:
+            pit_exit_lap = lap
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
             # 耐久のピットウィンドウ予測(復帰順位・トラフィック回避)の土台。1階記憶に残す。
             pit_lane_sec = None
@@ -3764,7 +3782,7 @@ def poll_iracing():
             # いなければ、ピットレーン退出(OnPitRoad False)の瞬間に「リミッターオフ」を鳴らす。
             if not limiter_off_announced_stop:
                 broadcast({'type': 'radio', 'trigger': 'limiter_off',
-                    'message': 'Limiter off. Watch tyre temps and pick up the pace.'})
+                    'message': 'Limiter off. Hold pace on the out-lap.'})
                 limiter_off_announced_stop = True
             # 出口直後の二重コールは廃止。ここでは limiter_off だけを発話する。
             pit_entry_announced_stop = False
@@ -4529,6 +4547,14 @@ def poll_iracing():
                 _live_add = max(0.0, _fuel_strategy_live['required_fuel_l'] - fuel)
                 _fuel_strategy_live['add_fuel_l'] = round(_live_add, 3)
                 _fuel_strategy_live['set_fuel_l'] = int(math.ceil(_live_add))
+                _fuel_strategy_live['margin_l'] = round(
+                    fuel - _fuel_strategy_live['required_fuel_l'], 3)
+                _fuel_strategy_live['pit_required'] = _live_add > 0.05
+            _pit_phase_state = derive_pit_phase(
+                lifecycle_state, onPit, lap, pit_exit_lap)
+            if (_pit_phase_state == 'racing' and isinstance(lap, (int, float))
+                    and isinstance(pit_exit_lap, (int, float)) and lap > pit_exit_lap):
+                pit_exit_lap = None
             # Owned strategy plan.  It persists between requests and receives a
             # new revision only when an authoritative input changes.
             _plan_action = 'hold'
@@ -4544,6 +4570,14 @@ def poll_iracing():
                     _plan_action, _plan_reason = 'box', 'fuel_shortfall'
                 elif isinstance(_plan_margin, (int, float)) and _plan_margin >= 0:
                     _plan_action, _plan_reason = 'push', 'fuel_margin'
+            if not race_lifecycle.pit_plan_allowed(lifecycle_state):
+                _plan_action, _plan_reason, _plan_set_fuel = 'hold', 'race_finished', None
+            elif _pit_phase_state == 'pit_lane':
+                _plan_action, _plan_reason = 'hold', 'pit_lane'
+            elif _pit_phase_state == 'out_lap' and not (
+                    isinstance(_fuel_strategy_live, dict)
+                    and _fuel_strategy_live.get('pit_required') is True):
+                _plan_action, _plan_reason = 'hold', 'out_lap'
             _plan_physical = None
             _plan_cycle = None
             if isinstance(_pit_now_forecast, dict) and _pit_now_forecast.get('available'):
@@ -4553,8 +4587,7 @@ def poll_iracing():
                                .get('position'))
             _plan_signature = (
                 cur_snum, _plan_action, _plan_reason, _plan_set_fuel,
-                round(_plan_margin, 2) if isinstance(_plan_margin, (int, float)) else None,
-                _plan_physical, _plan_cycle)
+                round(_plan_margin, 2) if isinstance(_plan_margin, (int, float)) else None)
             if _plan_signature != strategy_plan_signature:
                 strategy_plan_revision += 1
                 strategy_plan_signature = _plan_signature
@@ -4571,6 +4604,11 @@ def poll_iracing():
                 }
                 log('STRATEGY PLAN update: ' + json.dumps(
                     strategy_plan, ensure_ascii=False, separators=(',', ':')))
+            elif isinstance(strategy_plan, dict):
+                # Forecast position is volatile evidence, not a strategy
+                # revision.  Refresh it without manufacturing revision churn.
+                strategy_plan['physical_exit_position'] = _plan_physical
+                strategy_plan['conditional_cycle_position'] = _plan_cycle
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -4605,6 +4643,8 @@ def poll_iracing():
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,
                 'on_pit_road': bool(onPit),
+                'lifecycle_state': lifecycle_state,
+                'pit_phase_state': _pit_phase_state,
                 'player_track_surface': player_track_surface,
                 'pit_service_status': pit_service_status,
                 'fuel_strategy': _fuel_strategy_live,

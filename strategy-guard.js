@@ -93,9 +93,16 @@ function classifyDirectRaceCommand(text) {
   if (!t) return null;
   const pit = /(ピット|ボックス|box|pit)/i;
   if (!pit.test(t)) return null;
+  if (/(ピットロス|ロスタイム|pit\s*loss|pit\s*time)/i.test(t)) return { topic: TOPIC.PIT_TIMING };
+  // A proposal or a strategy question is not an order.  Build 255 treated
+  // 「この周でピットもいいと思う。アンダーカットにはどう思う？」 as a
+  // PIT_THIS_LAP command and replied with a bare acknowledgement, skipping
+  // the deterministic pit-decision handler that should own the recommendation.
+  if (/(?:どう(?:思|する)|いいと思|あり(?:える|だと思)|べき|かな|でしょう|ですか|ますか|[?？])/i.test(t)) {
+    return null;
+  }
   if (/(この\s*(周|週)|今\s*周|this\s*lap)/i.test(t)) return { topic: TOPIC.PIT_THIS_LAP };
   if (/(次\s*(の)?\s*(周|週)|next\s*lap)/i.test(t)) return { topic: TOPIC.PIT_NEXT_LAP };
-  if (/(ピットロス|ロスタイム|pit\s*loss|pit\s*time)/i.test(t)) return { topic: TOPIC.PIT_TIMING };
   return null;
 }
 

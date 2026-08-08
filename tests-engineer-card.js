@@ -63,13 +63,14 @@ check('bare litre follow-up is still a fuel-plan card', card.topic === cards.TOP
 
 card = cards.classify('アンダーカット 狙えるよ。どうする？');
 reply = cards.build(card, beforePit, 'ja');
-check('undercut states physical and conditional positions separately',
-  /物理復帰P17.*P16〜P18.*10台.*P14.*未確認/.test(reply), reply);
+check('undercut opinion produces an owned box recommendation',
+  card.topic === cards.TOPIC.PIT_DECISION
+  && /Boxを推奨.*燃料不足.*14Lセット.*ブレンド後P14/.test(reply), reply);
 
 card = cards.classify('彼らが ピットイン 始めて、俺 何番手 ぐらいで復帰できそう？');
 reply = cards.build(card, afterPit, 'ja');
-check('active cycle says physical P20 and remains pending',
-  /現在P20.*0\/10台.*P14.*未確定/.test(reply), reply);
+check('active blend reports current position and observed stops',
+  /現在順位P20.*0\/10台.*ブレンド予測P14/.test(reply), reply);
 check('active cycle does not invent P5/P4', !/P5|P4/.test(reply), reply);
 
 reply = cards.build(card, {
@@ -116,7 +117,7 @@ const build255Live = {
 
 const intentCases = [
   ['燃費は？', cards.TOPIC.FUEL_USE, /3\.45L\/周/],
-  ['残り何周？', cards.TOPIC.RACE_DISTANCE, /残り時間5:02.*S\/Fあと4回/],
+  ['残り何周？', cards.TOPIC.RACE_DISTANCE, /残り5分2秒.*S\/Fあと4回/],
   ['ピットロス何秒？', cards.TOPIC.PIT_LOSS, /42\.8秒.*実測値/],
   ['今ボックスするべき？', cards.TOPIC.PIT_DECISION, /ステイアウトしてプッシュ/],
   ['直近のピットサービスは？', cards.TOPIC.PIT_SERVICE, /IN→OUT 42\.8秒.*給油12\.6L/],
@@ -125,7 +126,7 @@ const intentCases = [
   ['タイヤの状態は？', cards.TOPIC.TYRE_STATUS, /左前 残89\.0%/],
   ['ダメージは？', cards.TOPIC.DAMAGE_STATUS, /修理残り0\.0秒.*断定しない/],
   ['天候は？', cards.TOPIC.WEATHER_STATUS, /路面41\.2℃.*ドライ/],
-  ['トラフィックは？', cards.TOPIC.TRAFFIC_STATUS, /前0\.3秒/],
+  ['トラフィックは？', cards.TOPIC.TRAFFIC_STATUS, /直前車まで0\.3秒/],
   ['戦略プランは？', cards.TOPIC.PLAN_STATUS, /プラン改訂3.*プッシュ/],
 ];
 for (const [utterance, topic, expected] of intentCases) {
@@ -163,6 +164,63 @@ check('critical fuel radio proactively includes physical and conditional pit pos
   /今入ると物理P/.test(renderer) && /台が止まればP/.test(renderer));
 check('safe post-stop fuel transition authorises a pace increase',
   /燃料OK[^\n]+ペースを上げていい/.test(renderer));
+
+console.log('\n══ Build 255 11:23 real-run regression contract ══');
+check('770 seconds is spoken as 12 minutes 50 seconds',
+  cards.formatDuration(770, 'ja') === '12分50秒');
+const outLapLive = {
+  ...afterPit,
+  class_pos: 3,
+  pit_phase_state: 'out_lap',
+  fuel: 25.8,
+  fuel_strategy: {
+    ...afterPit.fuel_strategy,
+    required_fuel_l: 24.5,
+    margin_l: -10.6,
+    pit_required: true,
+    add_fuel_l: 0,
+  },
+  strategy_plan: { revision: 104, action: 'box', reason: 'fuel_shortfall' },
+  pit_cycle_status: {
+    active: true, physical_exit_position: 20, conditional_cycle_position: 4,
+    observed_pack_car_count: 14, observed_pack_pit_count: 4,
+  },
+};
+reply = cards.build(cards.classify('どう、ペース上げて行った方がいいね。'), outLapLive, 'ja');
+check('post-stop stale Box is suppressed on the out-lap',
+  /アウトラップ.*ペースキープ/.test(reply) && !/ピット優先|Box/.test(reply), reply);
+reply = cards.build(cards.classify('どう、ペース上げて行った方がいいね。'), {
+  ...outLapLive, fuel: 20.0,
+  fuel_strategy: { ...outLapLive.fuel_strategy, required_fuel_l: 24.5 },
+}, 'ja');
+check('a real post-stop fuel shortfall orders another stop instead of pace keep',
+  /給油不足が4\.5L.*次周再ピット/.test(reply) && !/ペースキープ/.test(reply), reply);
+reply = cards.build(cards.classify('ルナの予測通りじゃないか？この順位どう？'), outLapLive, 'ja');
+check('current P3 supersedes conditional P4 without saying unconfirmed',
+  /現在順位P3.*ブレンド予測P4.*1つ上/.test(reply) && !/未確定/.test(reply), reply);
+reply = cards.build(cards.classify('ブレンド予測はどうだった？'), {
+  class_pos: 3,
+  pit_cycle_outcome: {
+    condition_met: false, post_cycle_actual_position: 3,
+    conditional_cycle_position: 4, observed_pack_pit_count: 4,
+    observed_pack_car_count: 14,
+  },
+}, 'ja');
+check('condition-unmet blend outcome still reports actual P3 versus predicted P4',
+  /実績P3.*条件付き予測P4.*4\/14台/.test(reply), reply);
+reply = cards.build(cards.classify('前との差は？'), {
+  class_pos: 3, gap_ahead: 24.1, gap_behind: 22.2,
+}, 'ja');
+check('post-pit traffic uses current SDK gap, never pre-pit 0.6',
+  /直前車まで24\.1秒/.test(reply) && !/0\.6/.test(reply), reply);
+reply = cards.build(cards.classify('今ボックスするべき？'), {
+  ...outLapLive, pit_phase_state: 'racing', lifecycle_state: 'PLAYER_FINISHED',
+}, 'ja');
+check('finished race cannot produce another Box plan',
+  /レース終了/.test(reply) && !/Boxを推奨|ボックス/.test(reply), reply);
+reply = cards.build(cards.classify('了解'), outLapLive, 'ja');
+check('race acknowledgement is deterministic and number-free',
+  reply === '了解。', reply);
 
 console.log(`\n[Engineer cards] 合格 ${pass} / 不合格 ${fail}`);
 process.exit(fail ? 1 : 0);

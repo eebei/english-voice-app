@@ -21,6 +21,7 @@ const TOPIC = Object.freeze({
   WEATHER_STATUS: 'weather_status',
   TRAFFIC_STATUS: 'traffic_status',
   PLAN_STATUS: 'plan_status',
+  ACKNOWLEDGEMENT: 'acknowledgement',
   UNRESOLVED_OPERATIONAL: 'unresolved_operational',
 });
 
@@ -44,7 +45,8 @@ function classify(text, options = {}) {
 
   if (/残り.{0,8}(?:何周|周回|時間)|あと.{0,8}(?:何周|何分)|レース.{0,8}(?:何周|何分|時間)|チェッカー|ホワイトフラッグ|race distance|laps? left|time remaining|white flag/i.test(t)) return { topic: TOPIC.RACE_DISTANCE, confidence: 0.98 };
   if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|この(?:ラップ|周).*(?:入|ピット|判断)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
-  if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,8}(?:何位|何番手)|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
+  if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙)|(?:どう思う|どうする).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.98 };
+  if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略(?:は|どう|確認)|作戦(?:は|どう|確認)|プラン(?:は|どう|確認)|次の判断|strategy status|what(?:'s| is) the plan|plan status/i.test(t)) return { topic: TOPIC.PLAN_STATUS, confidence: 0.96 };
   if (/トラフィック|集団|クリアエア|前方.*(?:集団|車群)|traffic|pack|clear air/i.test(t)) return { topic: TOPIC.TRAFFIC_STATUS, confidence: 0.96 };
   if (/ペース|タイム.*上げ|上げて|プッシュ|攻め|飛ば|push|pace|speed up/i.test(t)) return { topic: TOPIC.PACE, confidence: 0.97 };
@@ -65,6 +67,9 @@ function classify(text, options = {}) {
     if (prior && ![TOPIC.CURRENT_POSITION, TOPIC.UNRESOLVED_OPERATIONAL].includes(prior.topic)) return { ...prior, confidence: Math.min(prior.confidence || 0.9, 0.9), inherited: true };
   }
   if (options.race === true && OPERATIONAL_RE.test(t)) return { topic: TOPIC.UNRESOLVED_OPERATIONAL, confidence: 0 };
+  if (/^(?:了解|了解です|分かった|わかった|なるほど|OK|オーケー|ありがとう|ナイス)[。.!！?？]*$/i.test(t)) {
+    return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1 };
+  }
   return null;
 }
 
@@ -77,6 +82,25 @@ const position = value => {
   return n != null && n >= 1 ? Math.trunc(n) : null;
 };
 const ja = lang => lang === 'ja';
+
+function formatDuration(seconds, lang = 'en') {
+  const value = finite(seconds);
+  if (value == null) return null;
+  const total = Math.max(0, Math.round(value));
+  const minutes = Math.floor(total / 60), rest = total % 60;
+  if (ja(lang)) return minutes > 0 ? `${minutes}分${rest}秒` : `${rest}秒`;
+  if (minutes > 0) return `${minutes} minute${minutes === 1 ? '' : 's'} ${rest} second${rest === 1 ? '' : 's'}`;
+  return `${rest} second${rest === 1 ? '' : 's'}`;
+}
+
+function pitPhase(live) {
+  const lifecycle = String(live && live.lifecycle_state || '').toUpperCase();
+  if (['PLAYER_FINISHED', 'DEBRIEF'].includes(lifecycle)) return 'finished';
+  const explicit = String(live && live.pit_phase_state || '').toLowerCase();
+  if (['in_lap', 'pit_lane', 'out_lap', 'racing', 'finished'].includes(explicit)) return explicit;
+  if (live && live.on_pit_road === true) return 'pit_lane';
+  return 'racing';
+}
 
 function fuelPlan(live) {
   const fs = live && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
@@ -128,8 +152,8 @@ function buildRaceDistance(live, lang) {
   const remaining = finite(live && live.session_time_remaining_s);
   const totalLaps = finite(live && live.laps_total), lap = finite(live && live.lap);
   if (plan.kind === 'timed') {
-    const clock = remaining != null ? `${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, '0')}` : null;
-    if (ja(lang)) return `${clock ? `残り時間${clock}。` : '残り時間は未取得。'}${crossings != null ? `チェッカーまでS/Fあと${Math.trunc(crossings)}回。` : '残り周回はまだ確定していない。'}`;
+    const clock = formatDuration(remaining, lang);
+    if (ja(lang)) return `${clock ? `残り${clock}。` : '残り時間は未取得。'}${crossings != null ? `チェッカーまでS/Fあと${Math.trunc(crossings)}回。` : '残り周回はまだ確定していない。'}`;
     return `${clock ? `${clock} remaining. ` : 'Remaining time unavailable. '}${crossings != null ? `${Math.trunc(crossings)} S/F crossings to the finish.` : 'Remaining laps are not confirmed yet.'}`;
   }
   if (plan.kind === 'laps' && totalLaps != null && lap != null) {
@@ -140,25 +164,44 @@ function buildRaceDistance(live, lang) {
 }
 
 function buildRejoin(live, lang) {
+  const outcome = live && live.pit_cycle_outcome;
+  if (outcome) {
+    const actual = position(outcome.post_cycle_actual_position), predicted = position(outcome.conditional_cycle_position);
+    const stopped = Number(outcome.observed_pack_pit_count) || 0;
+    const total = Number(outcome.observed_pack_car_count) || 0;
+    if (outcome.condition_met === true) {
+      return ja(lang) ? `ブレンド実績P${actual || '不明'}。事前予測P${predicted || '不明'}、${actual && predicted ? Math.abs(actual - predicted) + 'ポジション差。' : '誤差は未採点。'}`
+        : `Blended result P${actual || 'unknown'}. Forecast P${predicted || 'unknown'}${actual && predicted ? `, ${Math.abs(actual - predicted)} positions off.` : '; error ungraded.'}`;
+    }
+    if (actual && predicted) {
+      const delta = predicted - actual;
+      const comparison = delta > 0 ? (ja(lang) ? `予測より${delta}つ上。` : `${delta} position${delta === 1 ? '' : 's'} better than forecast. `)
+        : delta < 0 ? (ja(lang) ? `予測より${Math.abs(delta)}つ下。` : `${Math.abs(delta)} position${Math.abs(delta) === 1 ? '' : 's'} worse than forecast. `)
+          : (ja(lang) ? '予測通り。' : 'Matched the forecast. ');
+      return ja(lang)
+        ? `ブレンド実績P${actual}。事前の条件付き予測P${predicted}、${comparison}停止条件は${stopped}/${total}台で未成立。`
+        : `Blended result P${actual}. Conditional forecast P${predicted}; ${comparison}The stop condition was not met (${stopped}/${total}).`;
+    }
+  }
   const status = live && live.pit_cycle_status;
   if (status && status.active) {
     const current = position(live.class_pos), stopped = Number(status.observed_pack_pit_count) || 0;
     const total = Number(status.observed_pack_car_count) || 0, predicted = position(status.conditional_cycle_position);
-    return ja(lang) ? `現在P${current || '不明'}。対象集団の停止は${stopped}/${total}台。サイクル後P${predicted || '不明'}予測はまだ未確定。`
-      : `Currently P${current || 'unknown'}. ${stopped}/${total} target cars have stopped; projected cycle P${predicted || 'unknown'} is not confirmed yet.`;
-  }
-  const outcome = live && live.pit_cycle_outcome;
-  if (outcome && outcome.condition_met === true) {
-    const actual = position(outcome.post_cycle_actual_position), predicted = position(outcome.conditional_cycle_position);
-    return ja(lang) ? `ピットサイクル実績P${actual || '不明'}。条件付き予測P${predicted || '不明'}、${actual && predicted ? Math.abs(actual - predicted) + 'ポジション差。' : '誤差は未採点。'}`
-      : `Pit-cycle result P${actual || 'unknown'}. Conditional forecast P${predicted || 'unknown'}${actual && predicted ? `, ${Math.abs(actual - predicted)} positions off.` : '; error ungraded.'}`;
+    if (current && predicted && current <= predicted) {
+      const better = predicted - current;
+      return ja(lang)
+        ? `現在順位P${current}。事前の条件付きブレンド予測P${predicted}${better > 0 ? `より${better}つ上` : '通り'}。対象集団停止${stopped}/${total}台。`
+        : `Current position P${current}. ${better > 0 ? `${better} position${better === 1 ? '' : 's'} better than` : 'Matching'} the conditional P${predicted} blend forecast; ${stopped}/${total} target cars have stopped.`;
+    }
+    return ja(lang) ? `現在順位P${current || '不明'}。対象集団停止${stopped}/${total}台。条件付きブレンド予測P${predicted || '不明'}。`
+      : `Current position P${current || 'unknown'}. ${stopped}/${total} target cars have stopped; conditional blended forecast P${predicted || 'unknown'}.`;
   }
   const f = live && live.pit_exit_forecast;
   const likely = position(f && f.likely && f.likely.position), best = position(f && f.best && f.best.position), worst = position(f && f.worst && f.worst.position);
   if (!(f && f.available && likely && best && worst)) return ja(lang) ? '復帰予測のライブデータが揃っていない。順位は出さない。' : 'Live rejoin data is incomplete; I will not give a position.';
   const cycle = f.pit_cycle && f.pit_cycle.if_pack_stops && f.pit_cycle.if_pack_stops.likely;
   const cyclePos = position(cycle && cycle.position), pack = finite(cycle && cycle.pack_car_count);
-  if (ja(lang)) return `今入る物理復帰P${likely}、範囲P${best}〜P${worst}。${cyclePos && pack ? `近傍${Math.trunc(pack)}台が停止すればサイクル後P${cyclePos}。停止意図は未確認。` : '他車の停止意図は未確認。'}`;
+  if (ja(lang)) return `今入る物理復帰P${likely}、範囲P${best}〜P${worst}。${cyclePos && pack ? `近傍${Math.trunc(pack)}台が停止すればブレンド後P${cyclePos}。停止意図は未確認。` : '他車の停止意図は未確認。'}`;
   return `Physical exit P${likely}, range P${best}-P${worst}. ${cyclePos && pack ? `If the ${Math.trunc(pack)}-car pack stops, cycle P${cyclePos}; intent unconfirmed.` : 'Rival pit intent is unconfirmed.'}`;
 }
 
@@ -184,9 +227,20 @@ function buildPitService(live, lang) {
 }
 
 function derivedAction(live) {
-  const owned = live && live.strategy_plan;
-  if (owned && owned.action) return owned;
   const { fs, add, set } = fuelPlan(live || {});
+  const phase = pitPhase(live);
+  if (phase === 'finished') return { action: 'hold', reason: 'race_finished', set_fuel_l: 0 };
+  if (phase === 'out_lap' && add != null && add <= 0) {
+    return { action: 'hold', reason: 'out_lap', set_fuel_l: 0, margin_l: finite(fs.margin_l) };
+  }
+  const owned = live && live.strategy_plan;
+  if (owned && owned.action) {
+    if (owned.action === 'box' && add != null && add <= 0) {
+      return { action: phase === 'racing' ? 'push' : 'hold', reason: phase === 'racing' ? 'fuel_margin' : phase,
+        set_fuel_l: 0, margin_l: finite(fs.margin_l) };
+    }
+    return owned;
+  }
   if (fs.pit_required === true || (add != null && add > 0)) return { action: 'box', reason: 'fuel_shortfall', set_fuel_l: set };
   const margin = finite(fs.margin_l);
   if (margin != null && margin >= 0) return { action: 'push', reason: 'fuel_margin', margin_l: margin };
@@ -194,8 +248,23 @@ function derivedAction(live) {
 }
 
 function buildPitDecision(live, lang) {
-  const p = derivedAction(live);
-  if (p.action === 'box') return ja(lang) ? `判断はボックス。燃料不足が根拠。給油設定は${finite(p.set_fuel_l) == null ? '未確定' : Math.trunc(p.set_fuel_l) + 'L'}。` : `Decision: box for the fuel shortfall. Set ${finite(p.set_fuel_l) == null ? 'unconfirmed' : Math.trunc(p.set_fuel_l) + 'L'}.`;
+  const p = derivedAction(live), phase = pitPhase(live), shortage = fuelPlan(live || {}).add;
+  if (phase === 'finished') return ja(lang) ? 'レース終了。追加のピット判断は出さない。' : 'Race finished; no further pit decision.';
+  if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。今の作業を完了する。' : 'Currently in the pit lane; complete this stop.';
+  if (phase === 'out_lap') {
+    if (p.action === 'box') return ja(lang)
+      ? `給油不足が${finite(shortage) == null ? '残っている' : finite(shortage).toFixed(1) + 'L残っている'}。ペースは上げず、次周再ピット。`
+      : `Fuel shortfall remains. Do not push; box again next lap.`;
+    return ja(lang) ? 'ピット完了。アウトラップはタイヤを作ってペースキープ。' : 'Stop complete. Build the tyres and hold pace on the out-lap.';
+  }
+  if (p.action === 'box') {
+    const f = live && live.pit_exit_forecast || {};
+    const cycle = f.pit_cycle && f.pit_cycle.if_pack_stops && f.pit_cycle.if_pack_stops.likely;
+    const cyclePos = position(cycle && cycle.position), current = position(live && live.class_pos);
+    const strong = cyclePos && current && cyclePos < current;
+    if (ja(lang)) return `${strong ? '今周Boxを強く推奨' : 'Boxを推奨'}。燃料不足が根拠。${finite(p.set_fuel_l) == null ? '給油量は未確定' : Math.trunc(p.set_fuel_l) + 'Lセット'}。${cyclePos ? `条件成立ならブレンド後P${cyclePos}見込み。` : ''}`;
+    return `${strong ? 'Strong recommendation: box this lap' : 'Recommendation: box'}. Fuel shortfall is the reason. ${finite(p.set_fuel_l) == null ? 'Fuel amount unconfirmed' : `Set ${Math.trunc(p.set_fuel_l)}L`}.${cyclePos ? ` P${cyclePos} blended if the condition is met.` : ''}`;
+  }
   if (p.action === 'push') return ja(lang) ? `判断はステイアウトしてプッシュ。燃料余裕${finite(p.margin_l) == null ? '確認済み' : finite(p.margin_l).toFixed(1) + 'L'}。` : `Decision: stay out and push; fuel margin ${finite(p.margin_l) == null ? 'confirmed' : finite(p.margin_l).toFixed(1) + 'L'}.`;
   return ja(lang) ? '判断はホールド。確定データが足りないのでボックス指示は出さない。' : 'Decision: hold. Data is insufficient, so I will not call a stop.';
 }
@@ -209,7 +278,19 @@ function buildPlanStatus(live, lang) {
 }
 
 function buildPace(live, lang) {
-  const { fs, current, required, add } = fuelPlan(live || {}), margin = finite(fs.margin_l);
+  const { fs, current, required, add } = fuelPlan(live || {});
+  const computedMargin = current != null && required != null ? current - required : null;
+  const margin = computedMargin != null ? computedMargin : finite(fs.margin_l);
+  const phase = pitPhase(live);
+  if (phase === 'finished') return ja(lang) ? 'レース終了。ペース指示は終了。' : 'Race finished; pace calls are complete.';
+  if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。作業完了を優先。' : 'Currently in the pit lane; complete the stop.';
+  if (phase === 'out_lap') return ja(lang)
+    ? (add != null && add > 0
+      ? `給油不足が${add.toFixed(1)}L残っている。ペースは上げず、次周再ピット。`
+      : `ピット完了。${margin != null && margin >= 0 ? `ゴール時約${margin.toFixed(1)}L余る見込み。` : ''}タイヤを作って、アウトラップはペースキープ。`)
+    : (add != null && add > 0
+      ? `Fuel shortfall ${add.toFixed(1)}L. Do not push; box again next lap.`
+      : `Stop complete. ${margin != null && margin >= 0 ? `Projected finish margin ${margin.toFixed(1)}L. ` : ''}Build the tyres and hold pace.`);
   if (fs.pit_required === true || (add != null && add > 0)) return ja(lang) ? `今はペースアップよりピット優先。現在${current != null ? current.toFixed(1) : '不明'}L、必要総量${required != null ? required.toFixed(1) : '未確定'}L。` : `Prioritise the stop, not a pace increase. Current ${current != null ? current.toFixed(1) : 'unknown'}L; ${required != null ? required.toFixed(1) + 'L required' : 'requirement unconfirmed'}.`;
   if (margin != null && margin >= 0) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースを上げていい。ライバル比較は確定データがないので秒数は言わない。` : `${margin.toFixed(1)}L fuel margin. You can push; I do not have a verified rival pace delta to quote.`;
   return ja(lang) ? 'ペースアップ可否を決める燃料余裕がまだ確定していない。' : 'Fuel margin is not confirmed, so I cannot clear a push yet.';
@@ -281,16 +362,9 @@ function buildWeatherStatus(live, lang) {
 }
 
 function buildTrafficStatus(live, lang) {
-  const f = live && live.pit_exit_forecast || {}, likely = f && f.likely || {};
-  const state = String(likely.traffic_state || f.traffic_state || ''), ahead = likely.ahead || {}, behind = likely.behind || {};
-  if (!state) {
-    const a = finite(live && live.gap_ahead), b = finite(live && live.gap_behind);
-    if (a == null && b == null) return ja(lang) ? '前後トラフィックの確定データは取得できない。' : 'Verified traffic data is unavailable.';
-    return ja(lang) ? `走行中の前${a == null ? '不明' : a.toFixed(1) + '秒'}、後ろ${b == null ? '不明' : b.toFixed(1) + '秒'}。ピット復帰トラフィックは未計算。` : `On-track gaps: ahead ${a == null ? 'unknown' : a.toFixed(1) + 's'}, behind ${b == null ? 'unknown' : b.toFixed(1) + 's'}; pit-exit traffic is uncalculated.`;
-  }
-  const label = state === 'clear_air' ? (ja(lang) ? 'クリアエア' : 'clear air') : (ja(lang) ? 'トラフィック内' : 'in traffic');
-  const ag = finite(ahead.gap_s), bg = finite(behind.gap_s);
-  return ja(lang) ? `予測復帰は${label}。前${ag == null ? '不明' : ag.toFixed(1) + '秒'}、後ろ${bg == null ? '不明' : bg.toFixed(1) + '秒'}。` : `Predicted rejoin is ${label}; ahead ${ag == null ? 'unknown' : ag.toFixed(1) + 's'}, behind ${bg == null ? 'unknown' : bg.toFixed(1) + 's'}.`;
+  const a = finite(live && live.gap_ahead), b = finite(live && live.gap_behind);
+  if (a == null && b == null) return ja(lang) ? '現在の前後GAPは取得できない。' : 'Current verified gaps are unavailable.';
+  return ja(lang) ? `現在の直前車まで${a == null ? '不明' : a.toFixed(1) + '秒'}、直後車まで${b == null ? '不明' : b.toFixed(1) + '秒'}。` : `Current gaps: ${a == null ? 'unknown' : a.toFixed(1) + 's'} to the car ahead, ${b == null ? 'unknown' : b.toFixed(1) + 's'} to the car behind.`;
 }
 
 function buildUnresolved(lang) {
@@ -309,6 +383,7 @@ function build(card, live, lang = 'en') {
     [TOPIC.DAMAGE_STATUS]: buildDamageStatus, [TOPIC.WEATHER_STATUS]: buildWeatherStatus,
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
   };
+  if (card.topic === TOPIC.ACKNOWLEDGEMENT) return ja(lang) ? '了解。' : 'Copy.';
   if (card.topic === TOPIC.POSITION_GAP) return buildPositionGap(live || {}, card.targetPosition, lang);
   if (card.topic === TOPIC.UNRESOLVED_OPERATIONAL) return buildUnresolved(lang);
   const handler = handlers[card.topic];
@@ -322,4 +397,4 @@ function route(text, live, lang = 'en', options = {}) {
   return { card, reply, status: card.topic === TOPIC.UNRESOLVED_OPERATIONAL ? 'unavailable' : 'fired' };
 }
 
-module.exports = { TOPIC, classify, build, route, fuelPlan, OPERATIONAL_RE };
+module.exports = { TOPIC, classify, build, route, fuelPlan, formatDuration, pitPhase, OPERATIONAL_RE };

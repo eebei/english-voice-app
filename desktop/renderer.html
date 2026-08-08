@@ -1853,15 +1853,23 @@ function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false){
   const pitCountdown=/(?:100|50|20)\s*(?:メートル|m\b|metres?\b|meters?\b)/i.test(s);
   // Strategy numbers are telemetry-owned too.  Streaming LLM text must not
   // speak a fabricated lap/fuel/time/gap number before the prompt can recover.
-  const strategyNumber=/(?:\d+(?:\.\d+)?)\s*(?:周|ラップ|リットル|L\b|秒|分|laps?\b|lit(?:er|re)s?\b|seconds?\b|minutes?\b)/i.test(s);
+  const strategyNumber=[
+    /(?:\d+(?:\.\d+)?)\s*(?:周|ラップ|リットル|L\b|秒|分|laps?\b|lit(?:er|re)s?\b|seconds?\b|minutes?\b)/i,
+    /\bP\s*\d+\b/i,
+    /\b\d+:\d{2}\.\d{1,3}\b/,
+    /(?:前|後ろ|後方|ahead|behind|gap(?:\s+is)?)\s*(?:は|が|まで)?\s*\d+(?:\.\d+)?/i,
+  ].some(re=>re.test(s));
   return stateClaim || (includeStrategyNumbers && strategyNumber) || (pitContext && pitCountdown);
 }
 function telemetryTruthFallback(live, userText, isJP){
   const asked=String(userText||'');
   const fs=(live&&live.fuel_strategy&&typeof live.fuel_strategy==='object')?live.fuel_strategy:{};
+  if(/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(asked.trim())){
+    return isJP ? '了解。' : 'Copy.';
+  }
   if(/何分|レース時間|残り時間|how (?:long|much time)|time (?:left|remaining)/i.test(asked)){
     const sec=Number(live?.session_time_remaining_s);
-    if(Number.isFinite(sec)) return isJP ? `残り${Math.max(0,Math.round(sec))}秒。` : `${Math.max(0,Math.round(sec))} seconds remaining.`;
+    if(Number.isFinite(sec)) return isJP ? `残り${fmtDuration(Math.max(0,sec),true)}。` : `${fmtDuration(Math.max(0,sec),false)} remaining.`;
     const race=Object.values(lastWeekendAuthority?.session_details||{}).find(s=>/race/i.test(String(s?.session_type||'')));
     const raw=String(race?.session_time||'');
     const m=raw.match(/(\d+(?:\.\d+)?)\s*(?:min|minute)/i);
@@ -1872,7 +1880,7 @@ function telemetryTruthFallback(live, userText, isJP){
     if(Number.isInteger(crossings)&&crossings>=1) return isJP ? `チェッカーまで、自車のS/F通過はあと${crossings}回。` : `${crossings} driver S/F crossing${crossings===1?'':'s'} to the finish.`;
     const sec=Number(live?.session_time_remaining_s);
     return Number.isFinite(sec)
-      ? (isJP ? `残り${Math.max(0,Math.round(sec))}秒。残り周回はまだ確定できない。` : `${Math.max(0,Math.round(sec))} seconds remain; finish crossings are not confirmed.`)
+      ? (isJP ? `残り${fmtDuration(Math.max(0,sec),true)}。残り周回はまだ確定できない。` : `${fmtDuration(Math.max(0,sec),false)} remain; finish crossings are not confirmed.`)
       : (isJP ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.');
   }
   if(/燃料|給油|足りる|fuel|lit(?:er|re)|make it/i.test(asked)){
@@ -1885,7 +1893,7 @@ function telemetryTruthFallback(live, userText, isJP){
     const fuel=Number(live?.fuel), sec=Number(live?.session_time_remaining_s);
     const fact=Number.isFinite(fuel)?(isJP?`燃料${fuel.toFixed(1)}リットル。`:`Fuel ${fuel.toFixed(1)} litres. `):'';
     return fact+(Number.isFinite(sec)
-      ? (isJP?`残り${Math.round(sec)}秒だが、必要量はまだ確定できない。`:`${Math.round(sec)} seconds remain, but required fuel is not confirmed.`)
+      ? (isJP?`残り${fmtDuration(Math.max(0,sec),true)}だが、必要量はまだ確定できない。`:`${fmtDuration(Math.max(0,sec),false)} remain, but required fuel is not confirmed.`)
       : (isJP?'必要量はまだ確定できない。':'Required fuel is not confirmed.'));
   }
   if(/トップ|首位|P1|何秒|ギャップ|差|leader|gap/i.test(asked)){
@@ -2018,7 +2026,7 @@ async function callAPI(inputSource, memoryStatus=''){
       const {done, value} = await reader.read();
       if(done) break;
       full += decoder.decode(value, {stream:true});
-      if(!truthBlocked && responseAuthority!=='deterministic' && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)){
+      if(!truthBlocked && responseAuthority!=='deterministic' && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, true)){
         truthBlocked=true;
         truthFallback=telemetryTruthFallback(lastTelemetry, latestUserText, isJP);
         if(bubble) bubble.textContent=truthFallback;
@@ -2120,15 +2128,13 @@ function numberWordsPT(n){
   return tens[Math.floor(n/10)]+(n%10?' e '+ones[n%10]:'');
 }
 function lapTimeForSpeech(value, lang){
-  const m=String(value||'').match(/^(\d+):(\d{2})\.(\d{3})$/);
+  const m=String(value||'').match(/^(\d+):(\d{2})\.(\d{1,3})$/);
   if(!m) return String(value||'');
-  const minutes=Number(m[1]), seconds=Number(m[2]), millis=m[3].split('');
+  const minutes=Number(m[1]), seconds=Number(m[2]), fraction=m[3].padEnd(3,'0'), millis=fraction.split('');
   if(lang && lang.startsWith('ja')){
-    return minutes===1 && seconds>0
-      ? `${seconds}秒${m[3]}`
-      : minutes>0
-      ? `${minutes}分${seconds}秒${m[3]}`
-      : `${seconds}秒${m[3]}`;
+    return minutes>0
+      ? `${minutes}分${seconds}秒${fraction}`
+      : `${seconds}秒${fraction}`;
   }
   if(lang && lang.startsWith('de')){
     return `${numberWordsDE(minutes)} ${seconds<10?'null ':''}${numberWordsDE(seconds)} Komma ${millis.map(numberWordsDE).join(' ')}`;
@@ -2140,7 +2146,7 @@ function lapTimeForSpeech(value, lang){
 }
 function phonetify(text, lang){
   if(!text) return text;
-  const spoken=String(text).replace(/\b\d+:\d{2}\.\d{3}\b/g,
+  const spoken=String(text).replace(/\b\d+:\d{2}\.\d{1,3}\b/g,
     value=>lapTimeForSpeech(value,lang));
   if(lang && lang.startsWith('ja')){
     return spoken.replace(/iRacing/g,'アイレーシング');
@@ -2895,11 +2901,10 @@ function sameClassIdJP(d){ return d.car_number ? `${d.car_number}号車` : class
 function sameClassIdDE(d){ return d.car_number ? `Wagen ${d.car_number}` : classIdTxtDE(d.class_name, d.class_pos); }
 function lapTimeSpeechJP(value){
   const s=String(value||'').trim();
-  const m=s.match(/^(\d+):(\d{2})\.(\d{3})$/);
+  const m=s.match(/^(\d+):(\d{2})\.(\d{1,3})$/);
   if(m){
-    const minutes=Number(m[1]), seconds=Number(m[2]);
-    if(minutes===1 && seconds>0) return `${seconds}秒${m[3]}`;
-    return minutes>0 ? `${minutes}分${seconds}秒${m[3]}` : `${seconds}秒${m[3]}`;
+    const minutes=Number(m[1]), seconds=Number(m[2]), fraction=m[3].padEnd(3,'0');
+    return minutes>0 ? `${minutes}分${seconds}秒${fraction}` : `${seconds}秒${fraction}`;
   }
   const short=s.match(/^(\d{1,2})\.(\d{3})$/);
   if(short) return `${Number(short[1])}秒${short[2]}`;
@@ -2961,7 +2966,7 @@ function oishiRadio(d, forSpeech=false){
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
     case 'pit_entry':      return `制限ライン注意、リミッターオン。`;
     case 'pit_exit':       return ``;
-    case 'limiter_off':    return `リミッターオフ。タイヤ冷えてる、慎重に。`;
+    case 'limiter_off':    return `リミッターオフ。アウトラップ、ペースキープ。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     // ★2026-07-21 実走ログで発覚：ここにケースが無いとinjectRadioがbridge.pyの英語
@@ -3394,7 +3399,7 @@ function fmtLap(v){
 }
 function fmtDuration(v, isJP=true){
   const n=Number(v);
-  if(!Number.isFinite(n)||n<=0) return '';
+  if(!Number.isFinite(n)||n<0) return '';
   const total=Math.round(n), minutes=Math.floor(total/60), seconds=total%60;
   if(minutes>0) return isJP?`${minutes}分${seconds}秒`:`${minutes}m ${seconds}s`;
   return isJP?`${seconds}秒`:`${seconds}s`;
@@ -4470,6 +4475,7 @@ function buildFuelAuthorityNote(isJ){
     ['authoritative_laps_to_finish',Number(fs.estimated_crossings_to_finish),v=>v>=0],
     ['required_fuel_to_finish_l',Number(fs.required_fuel_l),v=>v>=0],
     ['fuel_margin_l',Number(fs.margin_l),()=>true],
+    ['effective_session_fuel_capacity_l',Number(lastFuelCapacityContext?.effective_fuel_capacity_l),v=>v>0],
     ['physical_tank_capacity_l',Number(lastFuelCapacityContext?.physical_tank_capacity_l),v=>v>0],
     ['session_fuel_limit_ratio',Number(lastFuelCapacityContext?.session_fuel_limit_ratio),v=>v>0&&v<=1],
     ['confirmed_bop_tank_capacity_l',Number(loadConfirmedFuelCapacity()),v=>v>0]
@@ -4480,9 +4486,9 @@ function buildFuelAuthorityNote(isJ){
   const sharedSafetyEN='\nShared safety contract for every engineer: for safety or vehicle trouble, verify condition and whether continuing is safe before discussing pace recovery. Never claim to have observed an incident or spin that telemetry did not establish.';
   return isJ
     ? `\n\n━━ 燃料戦略・最優先権威契約 ━━\n${body}\n`
-      +'燃料残量・平均燃費・残り周回・必要給油量は上記の確定値だけを使え。タンク容量はconfirmed_bop_tank_capacity_lがある時だけ使え。'
+      +'燃料残量・平均燃費・残り周回・必要給油量は上記の確定値だけを使え。タンク容量はeffective_session_fuel_capacity_lを最優先し、それが無い時だけconfirmed_bop_tank_capacity_lを使え。'
       +'現在燃料とタンク容量を混同するな。authoritative_laps_to_finishが無い時は残り周回、必要燃料、完走可否、ピット周回を推測せず、残り秒数があればその秒数だけ答えろ。残り秒数も無ければ「残り周回の権威データ待ち」と短く答えろ。'
-      +'measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無いレース開始前は、ピット周回を絶対に提示するな。confirmed_bop_tank_capacity_lがある場合は「53Lスタート。実測燃費が3周そろったらピット周回を確定するね」の形式で答えろ。'
+      +'measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無いレース開始前は、ピット周回を絶対に提示するな。容量を述べる場合はeffective_session_fuel_capacity_lを最優先し、その値をそのまま使え。数値を固定例から作るな。'
       +'ピット実行前に「ピット済み」「今のピットで給油」と完了形で言うな。現在燃料が必要量を下回る時は、セーブだけで済むように言わず「今周ピット」を優先しろ。'
       +'一般的なGT3容量、過去会話、質問に含まれる周回数で確定値を上書きするな。計算器との矛盾は禁止。'
       +sharedSafetyJP

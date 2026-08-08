@@ -28,6 +28,12 @@ if(claimFn){
     context.hasTelemetryOwnedVehicleClaim(text)));
   check('戦略質問中の数値断定を遮断',
     context.hasTelemetryOwnedVehicleClaim('あと30L必要。', true));
+  check('自由会話が作った前方ギャップを遮断',
+    context.hasTelemetryOwnedVehicleClaim('前0.6。詰まってきてる。', true));
+  check('自由会話が作った順位を遮断',
+    context.hasTelemetryOwnedVehicleClaim('現在P3。', true));
+  check('自由会話が作ったラップタイムを遮断',
+    context.hasTelemetryOwnedVehicleClaim('ベスト1:48.1。', true));
   check('通常会話の「1周目」は遮断しない',
     !context.hasTelemetryOwnedVehicleClaim('落ち着いて1周目を刻もう。'));
   [
@@ -46,10 +52,12 @@ check('日本語ラップ発話関数を抽出', !!lapFn);
 if(lapFn){
   const context={};
   vm.runInNewContext(lapFn[0], context);
-  check('1分台は無線で分を省略',
-    context.lapTimeSpeechJP('1:48.867') === '48秒867');
+  check('1分台も無線で分を保持',
+    context.lapTimeSpeechJP('1:48.867') === '1分48秒867');
   check('1:06.630の日付誤読を避ける',
-    context.lapTimeSpeechJP('1:06.630') === '6秒630');
+    context.lapTimeSpeechJP('1:06.630') === '1分6秒630');
+  check('小数1桁もミリ秒へ正規化',
+    context.lapTimeSpeechJP('1:48.1') === '1分48秒100');
   check('1:00.542は分を残す',
     context.lapTimeSpeechJP('1:00.542') === '1分0秒542');
   check('2分以上は分を残す',
@@ -62,7 +70,8 @@ if(speechFns){
   const context={};
   vm.runInNewContext(speechFns[0], context);
   const cases=[
-    ['ja-JP','ベスト 1:48.867','ベスト 48秒867'],
+    ['ja-JP','ベスト 1:48.867','ベスト 1分48秒867'],
+    ['ja-JP','ベスト 1:48.1','ベスト 1分48秒100'],
     ['ja-JP','ベスト 2:00.542','ベスト 2分0秒542'],
     ['en-GB','Best 1:48.867','Best one forty-eight point eight six seven'],
     ['de-DE','Bestzeit 1:48.867','Bestzeit eins achtundvierzig Komma acht sechs sieben'],
@@ -75,7 +84,7 @@ if(speechFns){
 }
 
 check('stream発話前にtruth gateを適用',
-  renderer.includes("selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)")
+  renderer.includes("selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, true)")
   && renderer.includes("diagnosticLog('TELEMETRY_TRUTH_GATE'"));
 check('bridgeがピット状態のSDK証拠を配信',
   bridge.includes("'on_pit_road': bool(onPit)")

@@ -162,7 +162,27 @@ async function testBaseline(port) {
       messages: [{ role: 'user', content: 'このレース何分？何周？' }],
     });
     const text = JSON.parse(r.body).content[0].text;
-    check('④b timed race rule comes from SessionInfo', /20分.*594秒/.test(text), text);
+    check('④b timed race rule comes from SessionInfo and formats the clock', /20分.*9分54秒/.test(text), text);
+  }
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: {
+        class_pos: 8, fuel: 14.5,
+        fuel_strategy: { required_fuel_l: 27.6, add_fuel_l: 13.1, pit_required: true },
+        strategy_plan: { action: 'box', reason: 'fuel_shortfall', set_fuel_l: 14 },
+        pit_exit_forecast: { available: true,
+          likely:{position:17}, best:{position:16}, worst:{position:18},
+          pit_cycle:{if_pack_stops:{likely:{position:4,pack_car_count:14}}},
+        },
+      },
+      messages: [{ role: 'user', content: 'この周でピットもいいと思う。アンダーカットにはどう思う？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④b2 proposal is a pit decision, not a bare command acknowledgement',
+      /今周Boxを強く推奨.*14Lセット.*ブレンド後P4/.test(text), text);
+    check('④b2 pit recommendation uses deterministic handler',
+      r.headers['x-pitwall-intent'] === 'pit_decision', r.headers['x-pitwall-intent']);
   }
   {
     const r = await post(port, {

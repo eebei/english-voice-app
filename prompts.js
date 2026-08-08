@@ -8,6 +8,16 @@ function formatTrackWetness(code, isJapanese) {
     : [null, 'dry', 'mostly dry', 'very lightly wet', 'lightly wet', 'moderately wet', 'very wet', 'extremely wet'];
   return Number.isInteger(code) && code >= 1 && code <= 7 ? labels[code] : null;
 }
+
+function formatDurationForPrompt(value, isJapanese) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const total = Math.round(n);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (isJapanese) return minutes > 0 ? `${minutes}分${seconds}秒` : `${seconds}秒`;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
 const CHARACTERS = {
   Emma: `You are Emma, a bubbly and energetic 25-year-old fitness and yoga instructor from Santa Monica, California. You teach morning yoga classes on the beach and afternoon HIIT sessions at your local gym. You absolutely love your job — helping people feel good about themselves is your whole thing.
 
@@ -836,7 +846,12 @@ function buildSystem(p) {
     if (live.pos != null)        { jp.push('総合 ' + live.pos + '番手'); en.push('Overall P' + live.pos); }
     if (live.fuel != null)       { jp.push('燃料 ' + live.fuel + 'L'); en.push('Fuel ' + live.fuel + ' L'); }
     if (live.lap != null)        { jp.push('周回 ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); }
-    if (live.session_time_remaining_s != null) { jp.push('レース残り時間 ' + live.session_time_remaining_s + '秒'); en.push('Race time remaining ' + live.session_time_remaining_s + 's'); }
+    if (live.session_time_remaining_s != null) {
+      const jpTime = formatDurationForPrompt(live.session_time_remaining_s, true);
+      const enTime = formatDurationForPrompt(live.session_time_remaining_s, false);
+      if (jpTime) jp.push('レース残り時間 ' + jpTime);
+      if (enTime) en.push('Race time remaining ' + enTime);
+    }
     if (live.race_plan && live.race_plan.kind === 'timed') {
       const duration = Number(live.race_plan.configured_duration_s);
       if (Number.isFinite(duration) && duration > 0) {

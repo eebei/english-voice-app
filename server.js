@@ -709,8 +709,8 @@ function buildPitExitForecastReply(forecast, lang) {
     const ahead = aheadCar && aheadGap ? `前${aheadCar} ${aheadGap}秒` : '前なし';
     const behind = behindCar && behindGap ? `後${behindCar} ${behindGap}秒` : '後なし';
     const cycleText = Number.isFinite(cyclePosition) && packCount > 0
-      ? `近傍${packCount}台が次の停止窓で入れば、サイクル後P${cyclePosition}。停止意図は未確認。`
-      : 'サイクル後順位は、前方の停止意図が未確認。';
+      ? `近傍${packCount}台が次の停止窓で入れば、ブレンド後P${cyclePosition}。停止意図は未確認。`
+      : 'ブレンド後順位は、前方の停止意図が未確認。';
     return `物理復帰P${likelyPos}、範囲P${bestPos}〜P${worstPos}。${cycleText}${ahead}、${behind}。${traffic === 'clear_air' ? 'クリアエア' : 'トラフィック内'}、${blendRisk ? '合流注意' : '合流リスク低い'}。`;
   }
   const ahead = aheadCar && aheadGap ? `${aheadCar} ${aheadGap}s ahead` : 'none ahead';
@@ -833,7 +833,9 @@ function buildRacePlanReply(liveData, lang) {
   const minutes = Number.isFinite(duration) ? Math.round(duration / 60) : null;
   if (plan.kind === 'timed' && minutes != null) {
     const remain = Number.isFinite(remaining)
-      ? (lang === 'ja' ? `残り${Math.max(0, Math.round(remaining))}秒。` : `${Math.max(0, Math.round(remaining))} seconds remaining. `)
+      ? (lang === 'ja'
+        ? `残り${engineerCard.formatDuration(Math.max(0, remaining), 'ja')}。`
+        : `${engineerCard.formatDuration(Math.max(0, remaining), 'en')} remaining. `)
       : '';
     const distance = Number.isInteger(crossings) && crossings >= 1
       ? (lang === 'ja' ? `チェッカーまで自車のS/F通過あと${crossings}回。` : `${crossings} driver S/F crossings to the finish.`)

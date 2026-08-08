@@ -30,6 +30,9 @@ ok(html.includes('confirmed_bop_tank_capacity_l'),
 ok(html.includes('physical_tank_capacity_l')
   && html.includes('session_fuel_limit_ratio'),
   'physical tank and effective session limit remain separated');
+ok(html.includes('effective_session_fuel_capacity_lを最優先')
+  && !html.includes('「53Lスタート。'),
+  'race-start fuel wording uses session authority and has no fixed 53L example');
 ok(html.includes('authoritative_laps_to_finish'),
   'LLM receives authoritative laps-to-finish field');
 ok(html.includes('残り周回の権威データ待ち'),
