@@ -1,12 +1,18 @@
-"""Grade a conditional pit-cycle forecast using observed rival pit events.
+"""Track a conditional pit-cycle forecast until its condition is observable.
 
-This is deliberately not a rival-intent predictor.  The forecast says
-"if this observed nearby pack stops"; this tracker records which of that
-pack actually entered pit road and the position after two player laps.
+The previous implementation graded after a fixed two player laps.  That was
+not a pit *cycle*: at Monza the target pack stopped later, so the tracker closed
+at physical P20 and missed the eventual P8 blend.  We now finish when every
+forecast target has actually visited pit road, or close explicitly at the end
+of the race / a generous safety timeout.  Partial conditions are never scored
+as though the original condition occurred.
 """
 
 
 class PitCycleTracker:
+    MAX_WINDOW_LAPS = 8
+    MAX_WINDOW_SECONDS = 900.0
+
     def __init__(self):
         self._event = None
 
@@ -26,7 +32,6 @@ class PitCycleTracker:
             'snapshot_id': forecast.get('snapshot_id'),
             'started_at_s': session_time,
             'entry_lap': player_lap,
-            'target_lap': (player_lap + 2 if isinstance(player_lap, (int, float)) else None),
             'physical_exit_position': None,
             'conditional_cycle_position': likely.get('position'),
             'pack_car_ids': ids,
@@ -35,8 +40,21 @@ class PitCycleTracker:
         return {'armed': True, 'pack_car_count': len(ids),
                 'conditional_cycle_position': likely.get('position')}
 
+    def status(self):
+        event = self._event
+        if not event:
+            return None
+        return {
+            'active': True,
+            'snapshot_id': event['snapshot_id'],
+            'physical_exit_position': event['physical_exit_position'],
+            'conditional_cycle_position': event['conditional_cycle_position'],
+            'observed_pack_car_count': len(event['pack_car_ids']),
+            'observed_pack_pit_count': len(event['observed_pit_car_ids']),
+        }
+
     def observe(self, *, session_time, player_lap, player_on_pit_road,
-                player_class_position, cars):
+                player_class_position, cars, session_finished=False):
         event = self._event
         if not event:
             return None
@@ -48,11 +66,19 @@ class PitCycleTracker:
             if (car.get('car_idx') in event['pack_car_ids']
                     and car.get('on_pit_road')):
                 event['observed_pit_car_ids'].add(car.get('car_idx'))
-        target = event['target_lap']
-        if not isinstance(target, (int, float)) or not isinstance(player_lap, (int, float)):
+
+        condition_met = event['pack_car_ids'] == event['observed_pit_car_ids']
+        lap_window = None
+        if isinstance(player_lap, (int, float)) and isinstance(event['entry_lap'], (int, float)):
+            lap_window = max(0, player_lap - event['entry_lap'])
+        time_window = None
+        if isinstance(session_time, (int, float)) and isinstance(event['started_at_s'], (int, float)):
+            time_window = max(0.0, session_time - event['started_at_s'])
+        timed_out = ((lap_window is not None and lap_window >= self.MAX_WINDOW_LAPS)
+                     or (time_window is not None and time_window >= self.MAX_WINDOW_SECONDS))
+        if not condition_met and not session_finished and not timed_out:
             return None
-        if player_lap < target:
-            return None
+
         actual = player_class_position
         predicted = event['conditional_cycle_position']
         result = {
@@ -62,10 +88,15 @@ class PitCycleTracker:
             'post_cycle_actual_position': actual,
             'observed_pack_car_count': len(event['pack_car_ids']),
             'observed_pack_pit_count': len(event['observed_pit_car_ids']),
-            'condition_met': event['pack_car_ids'] == event['observed_pit_car_ids'],
-            'window_laps': 2,
+            'condition_met': condition_met,
+            'window_laps': lap_window,
+            'window_seconds': time_window,
+            'closed_reason': ('condition_met' if condition_met else
+                              'race_finished' if session_finished else 'timeout'),
         }
-        if isinstance(actual, int) and isinstance(predicted, int):
+        # A conditional forecast is gradable only when its stated condition
+        # happened.  A partial pack stop is evidence, not a prediction error.
+        if condition_met and isinstance(actual, int) and isinstance(predicted, int):
             result['conditional_error_positions'] = actual - predicted
         self._event = None
         return result

@@ -46,7 +46,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 253 (fuel set and pit-cycle grading)"
+BUILD_VERSION = "Build 254 (runtime engineer cards and full pit-cycle tracking)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -2076,6 +2076,7 @@ def poll_iracing():
     pit_exit_forecast_live = None
     pit_exit_forecast_live_at = None
     pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
+    last_pit_cycle_outcome = None
     last_pit_service = None  # latest exact IN-limit-line -> OUT-limit-line sample
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
@@ -2348,6 +2349,8 @@ def poll_iracing():
                         # ★v3 Codex P0-4：pending summary もsig変更で破棄
                         _pending_summary = _sig_reset['_pending_summary']
                         _pending_non_race_summary = _sig_reset['_pending_non_race_summary']
+                        pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
+                        last_pit_cycle_outcome = None
                         _pending_checker_notice = _sig_reset['_pending_checker_notice']
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
@@ -2488,6 +2491,8 @@ def poll_iracing():
             _driver_activity_handoff_start = _reset['_driver_activity_handoff_start']
             broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
             _force_driver_activity_broadcast = False
+            pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
+            last_pit_cycle_outcome = None
             # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
             _pending_summary = _reset['_pending_summary']
             _pending_non_race_summary = _reset['_pending_non_race_summary']
@@ -3265,6 +3270,15 @@ def poll_iracing():
                 if _fuel_eval.get('should_warn') and not onPit:
                     _fuel_band = _fuel_eval['band']
                     _fuel_margin = _fuel_eval['margin_l']
+                    _warning_forecast = (
+                        pit_exit_forecast_live
+                        if isinstance(pit_exit_forecast_live, dict)
+                        and pit_exit_forecast_live.get('available') else {})
+                    _warning_likely = _warning_forecast.get('likely') or {}
+                    _warning_best = _warning_forecast.get('best') or {}
+                    _warning_worst = _warning_forecast.get('worst') or {}
+                    _warning_cycle = (((_warning_forecast.get('pit_cycle') or {})
+                                       .get('if_pack_stops') or {}).get('likely') or {})
                     _fuel_message = (
                         'Fuel margin is under half a liter. Save fuel now.'
                         if _fuel_band == fuel_strategy_mod.TIGHT
@@ -3274,10 +3288,16 @@ def poll_iracing():
                         'type': 'radio',
                         'trigger': 'fuel_strategy_warning',
                         'fuel_band': _fuel_band,
+                        'fuel': round(fuel, 1),
                         'margin_l': _fuel_margin,
                         'required_fuel_l': _fuel_eval['required_fuel_l'],
                         'add_fuel_l': fuel_strategy.get('add_fuel_l'),
                         'estimated_crossings_to_finish': _milestone_laps,
+                        'pit_physical_position': _warning_likely.get('position'),
+                        'pit_best_position': _warning_best.get('position'),
+                        'pit_worst_position': _warning_worst.get('position'),
+                        'pit_cycle_position': _warning_cycle.get('position'),
+                        'pit_cycle_pack_count': _warning_cycle.get('pack_car_count'),
                         'message': _fuel_message,
                     })
                 elif (_fuel_eval.get('transition') == 'critical_to_safe'
@@ -3708,6 +3728,7 @@ def poll_iracing():
                 pit_exit_forecast_shadow = _pit_entry_forecast
             _pit_cycle_armed = pit_cycle_tracker.begin(
                 pit_exit_forecast_shadow, pit_enter_time, lap)
+            last_pit_cycle_outcome = None
             if _pit_cycle_armed:
                 log('PIT CYCLE armed: ' + json.dumps(
                     _pit_cycle_armed, ensure_ascii=False, separators=(',', ':')))
@@ -4483,8 +4504,9 @@ def poll_iracing():
                 _pit_cycle_outcome = pit_cycle_tracker.observe(
                     session_time=_pit_now_session_time, player_lap=lap,
                     player_on_pit_road=onPit, player_class_position=class_pos,
-                    cars=_pit_now_cars)
+                    cars=_pit_now_cars, session_finished=(cur_ss >= 5))
                 if _pit_cycle_outcome:
+                    last_pit_cycle_outcome = _pit_cycle_outcome
                     broadcast({'type': 'pit_cycle_outcome',
                                'outcome': _pit_cycle_outcome})
                     log('PIT CYCLE outcome: ' + json.dumps(
@@ -4492,6 +4514,15 @@ def poll_iracing():
             else:
                 pit_exit_forecast_live = None
                 pit_exit_forecast_live_at = None
+            _fuel_strategy_live = (
+                dict(fuel_strategy) if isinstance(fuel_strategy, dict) else None)
+            if (_fuel_strategy_live is not None and fuel is not None
+                    and isinstance(_fuel_strategy_live.get('required_fuel_l'), (int, float))):
+                # Driver-facing fuel entry must follow the current tank level,
+                # not the tank level frozen at the previous S/F crossing.
+                _live_add = max(0.0, _fuel_strategy_live['required_fuel_l'] - fuel)
+                _fuel_strategy_live['add_fuel_l'] = round(_live_add, 3)
+                _fuel_strategy_live['set_fuel_l'] = int(math.ceil(_live_add))
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -4528,13 +4559,15 @@ def poll_iracing():
                 'on_pit_road': bool(onPit),
                 'player_track_surface': player_track_surface,
                 'pit_service_status': pit_service_status,
-                'fuel_strategy': fuel_strategy,
+                'fuel_strategy': _fuel_strategy_live,
                 'tires': tires,
                 'damage_s': damage_s,
                 'weather': weather,
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,
                 'pit_exit_forecast': _pit_now_forecast,
+                'pit_cycle_status': pit_cycle_tracker.status(),
+                'pit_cycle_outcome': last_pit_cycle_outcome,
                 'last_pit_service': last_pit_service,
                 'leaders': {
                     'overall': ({

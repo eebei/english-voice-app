@@ -17,7 +17,7 @@ else
 fi
 
 echo "── JavaScript: 構文"
-for f in prompts.js server.js; do
+for f in prompts.js server.js engineer-card.js; do
   if node --check "$f" 2>&1 | head -3; then echo "   ✅ $f"; else echo "   ❌ $f"; fail=1; fi
 done
 
@@ -85,6 +85,9 @@ if node tests-nsis-installer.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 
 echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
 if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
+
+echo "── 8/8実走失敗ログ再現・実行エンジニアカード（Build 254）"
+if node tests-engineer-card.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-engineer-card.js 2>&1|grep "❌"|head -10; fail=1; fi
 
 echo "── /api/chat HTTP統合テスト（stream/non-stream応答契約・P0-1再発防止）"
 if node tests-chat-http.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-chat-http.js 2>&1|grep "❌"|head -5; fail=1; fi

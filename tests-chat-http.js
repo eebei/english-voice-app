@@ -81,6 +81,7 @@ async function testBaseline(port) {
     });
     check('①stream: HTTP 200', r.status === 200, 'status=' + r.status);
     check('①stream: Content-Typeがtext/plain', /text\/plain/.test(r.headers['content-type'] || ''), r.headers['content-type']);
+    check('①stream: deterministic authority header', r.headers['x-pitwall-authority'] === 'deterministic', r.headers['x-pitwall-authority']);
     check('①stream: 本文がJSONに包まれていない（{"content"で始まらない）', !r.body.trim().startsWith('{'), r.body);
     check('①stream: 拒否文の中身を含む', /ピットロス|計算/.test(r.body), r.body);
   }
@@ -135,6 +136,20 @@ async function testBaseline(port) {
     const text = JSON.parse(r.body).content[0].text;
     check('④a timed provisional fuel plan is deterministic',
       /暫定.*7周.*25.6L.*5.5L不足/.test(text), text);
+  }
+  {
+    const r = await post(port, {
+      stream: true, character: 'LunaJP', mode: 'race',
+      liveData: { fuel: 14.5, fuel_strategy: {
+        estimated_crossings_to_finish: 8, required_fuel_l: 27.617,
+        margin_l: -10.642, pit_required: true, add_fuel_l: 10.642,
+      } },
+      messages: [{ role: 'user', content: '何リットル不足する？ゴールまで。' }],
+    });
+    check('④a2 HTTP engineer card: current/required/add/set',
+      /現在14\.5L.*必要総量27\.6L.*13\.1L追加.*14Lセット/.test(r.body), r.body);
+    check('④a2 HTTP engineer card: deterministic authority header',
+      r.headers['x-pitwall-authority'] === 'deterministic', r.headers['x-pitwall-authority']);
   }
   {
     const r = await post(port, {

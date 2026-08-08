@@ -1969,6 +1969,7 @@ async function callAPI(inputSource, memoryStatus=''){
       signal:ctrl.signal
     });
     if(!res.ok){ clearTimeout(fetchTimer); throw new Error('http '+res.status); }
+    const responseAuthority = res.headers.get('X-Pitwall-Authority') || 'llm';
     // ── ストリーミング受信：チャンクを溜め、文が完成するたびに順次TTS再生 ──
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -2005,7 +2006,7 @@ async function callAPI(inputSource, memoryStatus=''){
       const {done, value} = await reader.read();
       if(done) break;
       full += decoder.decode(value, {stream:true});
-      if(!truthBlocked && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)){
+      if(!truthBlocked && responseAuthority!=='deterministic' && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)){
         truthBlocked=true;
         truthFallback=telemetryTruthFallback(lastTelemetry, latestUserText, isJP);
         if(bubble) bubble.textContent=truthFallback;
@@ -2027,6 +2028,7 @@ async function callAPI(inputSource, memoryStatus=''){
     const display = truthBlocked
       ? truthFallback
       : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
+    convoLog('driver', `[RESPONSE AUTHORITY] ${responseAuthority}`);
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:display});
@@ -2922,9 +2924,14 @@ function oishiRadio(d, forSpeech=false){
         ? `燃料残り${d.fuel}リットル。今周ピット。`
         : `燃料残り${d.fuel}リットル。セーブ開始。`;
     case 'fuel_strategy_warning':
-      return (d.fuel_band === 'tight')
-        ? `燃料マージン0.5リットル未満。セーブ開始。`
-        : `燃料${Math.abs(Number(d.margin_l)||0).toFixed(1)}リットル不足。ピットが必要。`;
+      if(d.fuel_band === 'tight') return `燃料マージン0.5リットル未満。セーブ開始。`;
+      {
+        const physical=Number(d.pit_physical_position), cycle=Number(d.pit_cycle_position), pack=Number(d.pit_cycle_pack_count);
+        const forecast=(physical>0)
+          ? `今入ると物理P${Math.trunc(physical)}。${cycle>0&&pack>0?`${Math.trunc(pack)}台が止まればP${Math.trunc(cycle)}、意図未確認。`:''}`
+          : '';
+        return `現在${Number(d.fuel||0).toFixed(1)}リットル。必要${Number(d.required_fuel_l||0).toFixed(1)}。${Number(d.add_fuel_l||0).toFixed(1)}追加、${Math.ceil(Number(d.add_fuel_l)||0)}リットルセット。${forecast}`;
+      }
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -2938,7 +2945,7 @@ function oishiRadio(d, forSpeech=false){
     case 'pit_box_here':   return `ボックスここ。`;
     case 'pit_box_stop':   return ``;
     case 'fuel_strategy_safe':
-      return `燃料OK。約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。`;
+      return `燃料OK。約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。ペースを上げていい。`;
     // ★2026-07-24 post_contact_ok（Yuji設計）：crash_check の5秒後に走行継続確認できたら発火。
     //   Pattern B（走行継続）の第二声。Pattern A（停止）は bridge 側で自動抑止＝ここには来ない。
     case 'post_contact_ok': {
