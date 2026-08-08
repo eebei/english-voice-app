@@ -126,7 +126,7 @@ async function testBaseline(port) {
   // ── Race Plan / Fuel / Account は会話LLMでなく権威データから返す ──
   {
     const r = await post(port, {
-      stream: false, character: 'LunaJP',
+      stream: false, character: 'LunaJP', mode: 'race',
       liveData: { fuel: 20.0, fuel_strategy: {
         avg_fuel_per_lap: 3.65, provisional_laps_to_time_expiry: 7,
         required_fuel_l: 25.55, margin_l: -5.55,
@@ -135,7 +135,7 @@ async function testBaseline(port) {
     });
     const text = JSON.parse(r.body).content[0].text;
     check('④a timed provisional fuel plan is deterministic',
-      /暫定.*7周.*25.6L.*5.5L不足/.test(text), text);
+      /現在20\.0L.*ゴールまで25\.6L必要.*燃料は5\.6L不足.*給油設定は切り上げて6L/.test(text), text);
   }
   {
     const r = await post(port, {
@@ -147,7 +147,7 @@ async function testBaseline(port) {
       messages: [{ role: 'user', content: '何リットル不足する？ゴールまで。' }],
     });
     check('④a2 HTTP engineer card: current/required/add/set',
-      /現在14\.5L.*必要総量27\.6L.*13\.1L追加.*14Lセット/.test(r.body), r.body);
+      /現在14\.5L.*ゴールまで27\.6L必要.*燃料は13\.1L不足.*給油設定は切り上げて14L/.test(r.body), r.body);
     check('④a2 HTTP engineer card: deterministic authority header',
       r.headers['x-pitwall-authority'] === 'deterministic', r.headers['x-pitwall-authority']);
     check('④a2 HTTP engineer card: intent trace header',
@@ -155,7 +155,21 @@ async function testBaseline(port) {
   }
   {
     const r = await post(port, {
-      stream: false, character: 'LunaJP',
+      stream: true, character: 'LunaJP', mode: 'race',
+      liveData: { fuel: 12.83, fuel_strategy: {
+        estimated_crossings_to_finish: 4, required_fuel_l: 13.613,
+        margin_l: -0.783, pit_required: true,
+      } },
+      messages: [{ role: 'user', content: '2リッター 足りないってこと？' }],
+    });
+    check('④a3 リッター follow-up: 不足量と設定量を区別して最新値で回答',
+      /2L不足という意味ではない.*燃料は0\.8L不足.*給油設定は切り上げて1L/.test(r.body), r.body);
+    check('④a3 リッター follow-up: deterministic fuel handler',
+      r.headers['x-pitwall-intent'] === 'fuel_plan', r.headers['x-pitwall-intent']);
+  }
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race',
       liveData: { session_time_remaining_s: 594, race_plan: {
         kind: 'timed', configured_duration_s: 1200, session_state: 4,
       } },
@@ -180,13 +194,13 @@ async function testBaseline(port) {
     });
     const text = JSON.parse(r.body).content[0].text;
     check('④b2 proposal is a pit decision, not a bare command acknowledgement',
-      /今周Boxを強く推奨.*14Lセット.*ブレンド後P4/.test(text), text);
+      /この周でピットを強く推奨.*給油設定は14L.*ブレンド後P4/.test(text), text);
     check('④b2 pit recommendation uses deterministic handler',
       r.headers['x-pitwall-intent'] === 'pit_decision', r.headers['x-pitwall-intent']);
   }
   {
     const r = await post(port, {
-      stream: false, character: 'LunaJP',
+      stream: false, character: 'LunaJP', mode: 'race',
       messages: [{ role: 'user', content: '契約解除だ！' }],
     });
     const text = JSON.parse(r.body).content[0].text;
@@ -266,21 +280,21 @@ async function testBaseline(port) {
       /ライブデータ/.test(text) && !/入ってない/.test(text), text);
   }
 
-  // ── ⑨ STT「この週でbox」は履歴の数字を使わず今周BOXと返す ──
+  // ── ⑨ STT「この週でbox」は履歴の数字を使わずこの周のBOXと返す ──
   {
     const r = await post(port, {
-      stream: false, character: 'LunaJP',
+      stream: false, character: 'LunaJP', mode: 'race',
       liveData: { lap: 5 },
       messages: [{ role: 'user', content: 'この週でbox。' }],
     });
     const text = JSON.parse(r.body).content[0].text;
-    check('⑨今周BOX: 過去の周回数を参照せず固定返答', /今のラップの終わりでボックス/.test(text), text);
+    check('⑨この周BOX: 過去の周回数を参照せず固定返答', /この周の終わりでボックス/.test(text), text);
   }
 
   // ── ⑩ ピットロスは差分推定でなく実測IN->OUTだけを返す ──
   {
     const r = await post(port, {
-      stream: false, character: 'LunaJP',
+      stream: false, character: 'LunaJP', mode: 'race',
       liveData: { last_pit_service: { lane_total_s: 27.7, stall_s: 11.3, fuel_added_l: 8.8 } },
       messages: [{ role: 'user', content: 'ピットロス何秒？' }],
     });
@@ -382,6 +396,16 @@ async function testApiFailureRecovery(port) {
   try { parsed = JSON.parse(r1.body); } catch (e) {}
   check('API失敗: JSON形式でerrorフィールドを返す（ReferenceErrorでクラッシュしない）',
     !!(parsed && typeof parsed.error === 'string'), r1.body);
+
+  const debrief = await post(port, {
+    stream: false,
+    character: 'LunaJP', mode: 'debrief',
+    liveData: { fuel: 0.0, fuel_strategy: { required_fuel_l: 28.2, margin_l: -28.2 } },
+    messages: [{ role: 'user', content: '1回目の給油で2リッターぐらい余った。' }],
+  });
+  check('デブリーフ燃料申告はライブhandlerへ誤接続しない',
+    debrief.status !== 200
+    && !/現在0\.0L|28\.2L必要|29L/.test(debrief.body), debrief.body);
 
   // プロセスが生存していることを、同じサーバーインスタンスへの後続リクエストで確認する
   const r2 = await post(port, {

@@ -4,6 +4,7 @@
 const fs=require('fs');
 const html=fs.readFileSync('desktop/renderer.html','utf8');
 const bridge=fs.readFileSync('irsdk-bridge/bridge.py','utf8');
+const server=fs.readFileSync('server.js','utf8');
 let passed=0;
 function ok(condition,name){
   if(!condition){ console.error('FAIL:',name); process.exitCode=1; return; }
@@ -66,5 +67,8 @@ ok(html.includes('まず状態確認と安全な継続可否を尋ねる'),
 ok(html.includes('全キャラクター共通安全契約')
   && html.includes('Shared safety contract for every engineer'),
   'safety and observability contract applies to all engineers');
+ok(server.includes("const _engineerRoute = mode === 'race'")
+  && server.includes("mode === 'race' && isFuelQuestion(_lastText)"),
+  'live fuel handlers are disabled during debrief and cannot read garage 0.0L');
 
 if(!process.exitCode) console.log(`Fuel authority tests: ${passed}/${passed} passed`);

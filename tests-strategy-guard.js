@@ -59,7 +59,7 @@ normals.forEach(q => check('誤認しない: 「' + (q || '(空)') + '」',
   guard.classifyStrategyQuestion(q) === null));
 
 // ②b この周/次周のBOXは会話履歴の周回数を参照させない直接命令。
-check('直接命令: 「この週でbox」を今周BOXとして識別',
+check('直接命令: 「この週でbox」をこの周のBOXとして識別',
   (guard.classifyDirectRaceCommand('この週でbox') || {}).topic === guard.TOPIC.PIT_THIS_LAP);
 check('直接命令: 次周BOXを識別',
   (guard.classifyDirectRaceCommand('次の周でピット') || {}).topic === guard.TOPIC.PIT_NEXT_LAP);

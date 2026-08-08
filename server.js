@@ -736,7 +736,7 @@ function buildPitCalibrationReply(forecast, lang) {
 function buildDirectPitReply(command, liveData, lang) {
   const live = liveData && typeof liveData === 'object' ? liveData : {};
   if (command.topic === strategyGuard.TOPIC.PIT_THIS_LAP) {
-    return lang === 'ja' ? '了解。今のラップの終わりでボックス。'
+    return lang === 'ja' ? '了解。この周の終わりでボックス。'
       : 'Copy. Box at the end of this lap.';
   }
   if (command.topic === strategyGuard.TOPIC.PIT_NEXT_LAP) {
@@ -769,7 +769,7 @@ function buildDirectPitReply(command, liveData, lang) {
 }
 
 function isFuelQuestion(text) {
-  return /燃料|給油|足りる|何(?:リットル|L)|fuel|lit(?:er|re)|make it/i.test(String(text || ''));
+  return /燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it/i.test(String(text || ''));
 }
 
 function isAccountChangeRequest(text) {
@@ -933,23 +933,25 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         console.log('[account_guard] conversational account change blocked');
         return sendGuardReply(req, res, buildAccountChangeReply(_lang), 100);
       }
-      if (_directPitCommand) {
+      if (mode === 'race' && _directPitCommand) {
         const _directReply = buildDirectPitReply(_directPitCommand, req.body.liveData, _lang);
         if (_directReply) {
           console.log(`[INTENT_ROUTE] intent=${_directPitCommand.topic} confidence=1 handler=fired`);
           return sendGuardReply(req, res, _directReply, 100, 'deterministic', _directPitCommand.topic);
         }
       }
-      if (isRaceRuleQuestion(_lastText)) {
+      if (mode === 'race' && isRaceRuleQuestion(_lastText)) {
         console.log('[INTENT_ROUTE] intent=race_distance confidence=1 handler=fired');
         return sendGuardReply(req, res, buildRacePlanReply(req.body.liveData, _lang), 110,
           'deterministic', engineerCard.TOPIC.RACE_DISTANCE);
       }
       const _recentUserText = _msgs.slice(0, -1).reverse()
         .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
-      const _engineerRoute = engineerCard.route(_lastText, req.body.liveData, _lang, {
-        race: mode === 'race', recentText: _recentUserText,
-      });
+      const _engineerRoute = mode === 'race'
+        ? engineerCard.route(_lastText, req.body.liveData, _lang, {
+          race: true, recentText: _recentUserText,
+        })
+        : null;
       // Keep the established Phase-C path for the exact "pit now -> where"
       // contract: it carries calibration reasons, traffic and blend evidence.
       // Broader undercut/cycle language is handled by the new runtime card.
@@ -958,7 +960,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         console.log(`[INTENT_ROUTE] intent=${_intent} confidence=${_engineerRoute.card.confidence ?? 0} handler=${_engineerRoute.status}`);
         return sendGuardReply(req, res, _engineerRoute.reply, 180, 'deterministic', _intent);
       }
-      if (isFuelQuestion(_lastText)) {
+      if (mode === 'race' && isFuelQuestion(_lastText)) {
         console.log('[fuel_guard] authoritative fuel reply');
         return sendGuardReply(req, res, buildFuelAuthorityReply(req.body.liveData, _lang), 110);
       }

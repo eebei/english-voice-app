@@ -55,7 +55,7 @@ check('missing fuel is not converted to a fabricated 0.0L',
 card = cards.classify('何リットル不足する？計算なの？ゴールまで。');
 reply = cards.build(card, beforePit, 'ja');
 check('fuel plan gives current/required/add/set',
-  /現在14\.5L.*必要総量27\.6L.*13\.1L追加.*14Lセット/.test(reply), reply);
+  /現在14\.5L.*ゴールまで27\.6L必要.*燃料は13\.1L不足.*給油設定は切り上げて14L/.test(reply), reply);
 check('fuel plan never repeats invented 20L/26 laps', !/20L|26周/.test(reply), reply);
 
 card = cards.classify('13l90だけど大丈夫？');
@@ -65,7 +65,28 @@ card = cards.classify('アンダーカット 狙えるよ。どうする？');
 reply = cards.build(card, beforePit, 'ja');
 check('undercut opinion produces an owned box recommendation',
   card.topic === cards.TOPIC.PIT_DECISION
-  && /Boxを推奨.*燃料不足.*14Lセット.*ブレンド後P14/.test(reply), reply);
+  && /ピットを推奨.*燃料不足.*給油設定は14L.*ブレンド後P14/.test(reply), reply);
+
+card = cards.classify('2リッター 足りないってこと？');
+reply = cards.build(card, {
+  fuel: 12.83,
+  fuel_strategy: { estimated_crossings_to_finish: 4, required_fuel_l: 13.613,
+    margin_l: -0.783, pit_required: true },
+}, 'ja');
+check('spoken リッター shortage follow-up is deterministic and labels set amount',
+  card.topic === cards.TOPIC.FUEL_PLAN
+  && /2L不足という意味ではない.*燃料は0\.8L不足.*給油設定は切り上げて1L/.test(reply), reply);
+
+card = cards.classify('ギリギリ足りそうだったらゆっくり行くけどどうする？', {
+  race: true, recentText: 'ゴールまで燃料は足りる？',
+});
+reply = cards.build(card, {
+  fuel: 15.7,
+  fuel_strategy: { estimated_crossings_to_finish: 5, required_fuel_l: 16.8,
+    margin_l: -1.1, pit_required: true },
+}, 'ja');
+check('action follow-up leads with this-lap recommendation and separates quantities',
+  /この周でピットを推奨.*現在15\.7L.*16\.8L必要.*1\.1L不足.*給油設定は切り上げて2L/.test(reply), reply);
 
 card = cards.classify('彼らが ピットイン 始めて、俺 何番手 ぐらいで復帰できそう？');
 reply = cards.build(card, afterPit, 'ja');
@@ -194,7 +215,7 @@ reply = cards.build(cards.classify('どう、ペース上げて行った方が�
   fuel_strategy: { ...outLapLive.fuel_strategy, required_fuel_l: 24.5 },
 }, 'ja');
 check('a real post-stop fuel shortfall orders another stop instead of pace keep',
-  /給油不足が4\.5L.*次周再ピット/.test(reply) && !/ペースキープ/.test(reply), reply);
+  /給油不足が4\.5L.*次の周で再ピット/.test(reply) && !/ペースキープ/.test(reply), reply);
 reply = cards.build(cards.classify('ルナの予測通りじゃないか？この順位どう？'), outLapLive, 'ja');
 check('current P3 supersedes conditional P4 without saying unconfirmed',
   /現在順位P3.*ブレンド予測P4.*1つ上/.test(reply) && !/未確定/.test(reply), reply);

@@ -25,7 +25,7 @@ const TOPIC = Object.freeze({
   UNRESOLVED_OPERATIONAL: 'unresolved_operational',
 });
 
-const OPERATIONAL_RE = /燃料|給油|ピット|ボックス|順位|何番手|ギャップ|差|ペース|タイヤ|摩耗|ダメージ|修理|天候|気温|路面|雨|残り(?:周|時間)|レース時間|戦略|プラン|アンダー\s*カット|オーバー\s*カット|トラフィック|前の車|後ろの車|fuel|pit|box|position|gap|pace|tyre|tire|damage|repair|weather|rain|laps? left|race time|strategy|plan|traffic|undercut|overcut/i;
+const OPERATIONAL_RE = /燃料|給油|リットル|リッター|ピット|ボックス|順位|何番手|ギャップ|差|ペース|タイヤ|摩耗|ダメージ|修理|天候|気温|路面|雨|残り(?:周|時間)|レース時間|戦略|プラン|アンダー\s*カット|オーバー\s*カット|トラフィック|前の車|後ろの車|fuel|pit|box|position|gap|pace|tyre|tire|damage|repair|weather|rain|laps? left|race time|strategy|plan|traffic|undercut|overcut/i;
 
 function classify(text, options = {}) {
   const t = String(text || '').trim();
@@ -34,12 +34,19 @@ function classify(text, options = {}) {
   if (/ピット(?:レーン)?(?:ロス|タイム|時間)|IN.{0,8}OUT|制限ライン.{0,8}(?:秒|時間)|直近.{0,8}ピット.{0,8}(?:秒|時間)|pit loss|pit lane time|in.{0,8}out/i.test(t)) return { topic: TOPIC.PIT_LOSS, confidence: 0.99 };
   if (/ピット(?:作業|サービス)|給油量.*(?:さっき|直近)|停止時間|service time|pit service|fuel added/i.test(t)) return { topic: TOPIC.PIT_SERVICE, confidence: 0.98 };
 
-  const fuelWord = /燃料|燃費|消費|ガソリン|リットル|fuel|consumption|lit(?:er|re)/i.test(t);
+  const shortageClarification = t.match(/(\d+(?:\.\d+)?)\s*(?:リットル|リッター|[lL])\s*(?:足りない|たりない|不足)(?:ってこと|ということ)?/i);
+  if (shortageClarification) return {
+    topic: TOPIC.FUEL_PLAN,
+    confidence: 0.995,
+    shortageClarificationL: Number(shortageClarification[1]),
+  };
+
+  const fuelWord = /燃料|燃費|消費|ガソリン|リットル|リッター|fuel|consumption|lit(?:er|re)/i.test(t);
   if (fuelWord && /燃費|消費|一周|1周|周あたり|平均|per lap|consumption|burn/i.test(t)) return { topic: TOPIC.FUEL_USE, confidence: 0.99 };
   const fuelPlan = /給油|足り|必要|不足|余裕|完走|最後|ゴール|チェッカー|入れ|セット|何周.*(?:持|走)|make it|to (?:the )?finish|add fuel|fuel plan/i.test(t);
   if (fuelWord && fuelPlan) return { topic: TOPIC.FUEL_PLAN, confidence: 0.99 };
-  if (fuelWord && /搭載|残量|現在|いま|今|スタート|積ん|どれだけ|何(?:リットル|L)|on board|remaining|right now|how much/i.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.99 };
-  if (/給油|何(?:リットル|L).*(?:入れ|セット)|(?:入れ|セット).*何(?:リットル|L)/i.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.97 };
+  if (fuelWord && /搭載|残量|現在|いま|今|スタート|積ん|どれだけ|何(?:リットル|リッター|L)|on board|remaining|right now|how much/i.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.99 };
+  if (/給油|何(?:リットル|リッター|L).*(?:入れ|セット)|(?:入れ|セット).*何(?:リットル|リッター|L)/i.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.97 };
   if (/\d+(?:\.\d+)?\s*[lL].*(?:大丈夫|足り|必要)|(?:大丈夫|足り|必要).*\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.96 };
   if (/今.{0,8}\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.94 };
 
@@ -64,7 +71,12 @@ function classify(text, options = {}) {
   if (options.race === true && /^\s*\d+(?:\.\d+)?\s*[lL](?:級|ぐらい|くらい|だ|です)?[。.!！?？]?\s*$/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.85 };
   if (options.race === true && /計算|判断|どうする|大丈夫|予測|これ|それ|もう/.test(t)) {
     const prior = classify(String(options.recentText || ''), { race: false });
-    if (prior && ![TOPIC.CURRENT_POSITION, TOPIC.UNRESOLVED_OPERATIONAL].includes(prior.topic)) return { ...prior, confidence: Math.min(prior.confidence || 0.9, 0.9), inherited: true };
+    if (prior && ![TOPIC.CURRENT_POSITION, TOPIC.UNRESOLVED_OPERATIONAL].includes(prior.topic)) return {
+      ...prior,
+      confidence: Math.min(prior.confidence || 0.9, 0.9),
+      inherited: true,
+      actionRequested: /どうする|どっち|ゆっくり|セーブ|飛ば|ペース/i.test(t),
+    };
   }
   if (options.race === true && OPERATIONAL_RE.test(t)) return { topic: TOPIC.UNRESOLVED_OPERATIONAL, confidence: 0 };
   if (/^(?:了解|了解です|分かった|わかった|なるほど|OK|オーケー|ありがとう|ナイス)[。.!！?？]*$/i.test(t)) {
@@ -125,16 +137,25 @@ function buildFuelUse(live, lang) {
     : `${avg.toFixed(2)}L/lap from ${samples == null ? 'unknown' : Math.trunc(samples)} clean laps; about ${range == null ? 'unknown' : range.toFixed(1)} laps in the tank.`;
 }
 
-function buildFuelPlan(live, lang) {
+function buildFuelPlan(live, lang, card = {}) {
   const { fs, current, required, add, set } = fuelPlan(live || {});
   const exact = finite(fs.estimated_crossings_to_finish), provisional = finite(fs.provisional_laps_to_time_expiry);
   if (current != null && required != null && add != null) {
     const distance = Number.isInteger(exact)
       ? (ja(lang) ? `チェッカーまでS/Fあと${exact}回。` : `${exact} S/F crossings to the finish. `)
       : Number.isInteger(provisional) ? (ja(lang) ? `暫定あと${provisional}周分。` : `Provisional ${provisional}-lap plan. `) : '';
-    if (ja(lang)) return add > 0
-      ? `現在${current.toFixed(1)}L。${distance}必要総量${required.toFixed(1)}L。${add.toFixed(1)}L追加、${set}Lセット。`
-      : `現在${current.toFixed(1)}L。${distance}必要総量${required.toFixed(1)}L。給油不要。`;
+    if (ja(lang)) {
+      if (finite(card.shortageClarificationL) != null) return add > 0
+        ? `${finite(card.shortageClarificationL).toFixed(0)}L不足という意味ではない。最新値では現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。燃料は${add.toFixed(1)}L不足。給油設定は切り上げて${set}L。`
+        : `${finite(card.shortageClarificationL).toFixed(0)}L不足という意味ではない。最新値では燃料は足りる。現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。`;
+      if (add > 0) {
+        const action = card.actionRequested && fs.pit_required === true
+          ? 'この周でピットを推奨。'
+          : '追加給油が必要。';
+        return `${action}現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。燃料は${add.toFixed(1)}L不足。給油設定は切り上げて${set}L。`;
+      }
+      return `燃料は足りる。現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。${distance}`;
+    }
     return add > 0
       ? `Current ${current.toFixed(1)}L. ${distance}${required.toFixed(1)}L total required; add ${add.toFixed(1)}L, set ${set}L.`
       : `Current ${current.toFixed(1)}L. ${distance}${required.toFixed(1)}L total required; no fuel needed.`;
@@ -253,7 +274,7 @@ function buildPitDecision(live, lang) {
   if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。今の作業を完了する。' : 'Currently in the pit lane; complete this stop.';
   if (phase === 'out_lap') {
     if (p.action === 'box') return ja(lang)
-      ? `給油不足が${finite(shortage) == null ? '残っている' : finite(shortage).toFixed(1) + 'L残っている'}。ペースは上げず、次周再ピット。`
+      ? `給油不足が${finite(shortage) == null ? '残っている' : finite(shortage).toFixed(1) + 'L残っている'}。ペースは上げず、次の周で再ピット。`
       : `Fuel shortfall remains. Do not push; box again next lap.`;
     return ja(lang) ? 'ピット完了。アウトラップはタイヤを作ってペースキープ。' : 'Stop complete. Build the tyres and hold pace on the out-lap.';
   }
@@ -262,7 +283,7 @@ function buildPitDecision(live, lang) {
     const cycle = f.pit_cycle && f.pit_cycle.if_pack_stops && f.pit_cycle.if_pack_stops.likely;
     const cyclePos = position(cycle && cycle.position), current = position(live && live.class_pos);
     const strong = cyclePos && current && cyclePos < current;
-    if (ja(lang)) return `${strong ? '今周Boxを強く推奨' : 'Boxを推奨'}。燃料不足が根拠。${finite(p.set_fuel_l) == null ? '給油量は未確定' : Math.trunc(p.set_fuel_l) + 'Lセット'}。${cyclePos ? `条件成立ならブレンド後P${cyclePos}見込み。` : ''}`;
+    if (ja(lang)) return `${strong ? 'この周でピットを強く推奨' : 'ピットを推奨'}。燃料不足が根拠。${finite(p.set_fuel_l) == null ? '給油量は未確定' : '給油設定は' + Math.trunc(p.set_fuel_l) + 'L'}。${cyclePos ? `条件成立ならブレンド後P${cyclePos}見込み。` : ''}`;
     return `${strong ? 'Strong recommendation: box this lap' : 'Recommendation: box'}. Fuel shortfall is the reason. ${finite(p.set_fuel_l) == null ? 'Fuel amount unconfirmed' : `Set ${Math.trunc(p.set_fuel_l)}L`}.${cyclePos ? ` P${cyclePos} blended if the condition is met.` : ''}`;
   }
   if (p.action === 'push') return ja(lang) ? `判断はステイアウトしてプッシュ。燃料余裕${finite(p.margin_l) == null ? '確認済み' : finite(p.margin_l).toFixed(1) + 'L'}。` : `Decision: stay out and push; fuel margin ${finite(p.margin_l) == null ? 'confirmed' : finite(p.margin_l).toFixed(1) + 'L'}.`;
@@ -286,7 +307,7 @@ function buildPace(live, lang) {
   if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。作業完了を優先。' : 'Currently in the pit lane; complete the stop.';
   if (phase === 'out_lap') return ja(lang)
     ? (add != null && add > 0
-      ? `給油不足が${add.toFixed(1)}L残っている。ペースは上げず、次周再ピット。`
+      ? `給油不足が${add.toFixed(1)}L残っている。ペースは上げず、次の周で再ピット。`
       : `ピット完了。${margin != null && margin >= 0 ? `ゴール時約${margin.toFixed(1)}L余る見込み。` : ''}タイヤを作って、アウトラップはペースキープ。`)
     : (add != null && add > 0
       ? `Fuel shortfall ${add.toFixed(1)}L. Do not push; box again next lap.`
@@ -384,6 +405,7 @@ function build(card, live, lang = 'en') {
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
   };
   if (card.topic === TOPIC.ACKNOWLEDGEMENT) return ja(lang) ? '了解。' : 'Copy.';
+  if (card.topic === TOPIC.FUEL_PLAN) return buildFuelPlan(live || {}, lang, card);
   if (card.topic === TOPIC.POSITION_GAP) return buildPositionGap(live || {}, card.targetPosition, lang);
   if (card.topic === TOPIC.UNRESOLVED_OPERATIONAL) return buildUnresolved(lang);
   const handler = handlers[card.topic];

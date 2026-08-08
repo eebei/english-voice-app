@@ -46,7 +46,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 256 (pit phase, numeric truth gate and blend outcome hardening)"
+BUILD_VERSION = "Build 257 (audio-first fuel follow-up and debrief route hardening)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -4586,8 +4586,7 @@ def poll_iracing():
                                   .get('if_pack_stops') or {}).get('likely') or {})
                                .get('position'))
             _plan_signature = (
-                cur_snum, _plan_action, _plan_reason, _plan_set_fuel,
-                round(_plan_margin, 2) if isinstance(_plan_margin, (int, float)) else None)
+                cur_snum, _plan_action, _plan_reason, _plan_set_fuel)
             if _plan_signature != strategy_plan_signature:
                 strategy_plan_revision += 1
                 strategy_plan_signature = _plan_signature

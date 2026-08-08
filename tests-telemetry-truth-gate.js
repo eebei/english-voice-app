@@ -28,6 +28,8 @@ if(claimFn){
     context.hasTelemetryOwnedVehicleClaim(text)));
   check('戦略質問中の数値断定を遮断',
     context.hasTelemetryOwnedVehicleClaim('あと30L必要。', true));
+  check('リッター表記の数値断定も遮断',
+    context.hasTelemetryOwnedVehicleClaim('2リッター足りない。', true));
   check('自由会話が作った前方ギャップを遮断',
     context.hasTelemetryOwnedVehicleClaim('前0.6。詰まってきてる。', true));
   check('自由会話が作った順位を遮断',
@@ -45,6 +47,19 @@ if(claimFn){
     'Pit exit is not yet active.',
   ].forEach(text=>check('作戦・準備発話は許可: '+text,
     !context.hasTelemetryOwnedVehicleClaim(text)));
+}
+
+const truthFallbackFn = renderer.match(/function telemetryTruthFallback\(live, userText, isJP\)\{[\s\S]*?\n\}/);
+check('Truth Gateの再計算fallbackを抽出', !!truthFallbackFn);
+if(truthFallbackFn){
+  const context={fmtDuration:()=>'',lastWeekendAuthority:null,sel:'LunaJP'};
+  vm.runInNewContext(truthFallbackFn[0], context);
+  const reply=context.telemetryTruthFallback({
+    fuel:12.83,
+    fuel_strategy:{required_fuel_l:13.613,margin_l:-0.783,estimated_crossings_to_finish:4},
+  },'2リッター 足りないってこと？',true);
+  check('遮断後は最新値で不足量と給油設定を言い直す',
+    /2リットル不足という意味ではない.*現在12\.8リットル.*13\.6リットル必要.*0\.8リットル不足.*1リットル/.test(reply));
 }
 
 const lapFn = renderer.match(/function lapTimeSpeechJP\(value\)\{[\s\S]*?\n\}/);

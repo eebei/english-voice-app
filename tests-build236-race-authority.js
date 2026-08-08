@@ -42,10 +42,10 @@ if (normalize) {
 check('燃料実測前のピット周回捏造を禁止',
   renderer.includes('measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無いレース開始前は、ピット周回を絶対に提示するな。'));
 const bridge = fs.readFileSync('irsdk-bridge/bridge.py', 'utf8');
-check('残量5L警告も計算器が不足判定なら今周ピット',
+check('残量5L警告も計算器が不足判定ならこの周でピット',
   bridge.includes("'pit_required': _fuel_pit_required")
   && renderer.includes('d.pit_required')
-  && renderer.includes('今周ピット。'));
+  && renderer.includes('この周でピット。'));
 check('fallback順位は未確定としてfail-closed',
   !!fallback && !fallback[0].includes('const livePosition=Number(')
   && fallback[0].includes('finish_pos:null')

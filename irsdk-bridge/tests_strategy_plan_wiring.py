@@ -20,8 +20,9 @@ checks = {
         "fuel - _fuel_strategy_live['required_fuel_l']" in SOURCE,
     "post-stop pit requirement is recomputed":
         "_fuel_strategy_live['pit_required'] = _live_add > 0.05" in SOURCE,
-    "volatile forecast positions do not create plan revisions":
-        "round(_plan_margin, 2) if isinstance(_plan_margin, (int, float)) else None)" in SOURCE,
+    "fuel tenths and volatile forecast positions do not create plan revisions":
+        "cur_snum, _plan_action, _plan_reason, _plan_set_fuel)" in SOURCE
+        and "round(_plan_margin, 2)" not in SOURCE,
     "telemetry exposes lifecycle and pit phase":
         "'lifecycle_state': lifecycle_state" in SOURCE
         and "'pit_phase_state': _pit_phase_state" in SOURCE,
