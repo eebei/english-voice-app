@@ -98,9 +98,65 @@ check('short fuel follow-up inherits the nearest operational card',
 card = cards.classify('ルナの予測は何番手？');
 check('prediction shorthand is rejoin card', card && card.topic === cards.TOPIC.REJOIN);
 
+const build255Live = {
+  ...afterPit,
+  pos: 22, lap: 7, laps_total: null, session_time_remaining_s: 302,
+  race_plan: { kind: 'timed', configured_duration_s: 1200, racing_started: true },
+  finish_crossings_authority: 4,
+  strategy_plan: { revision: 3, action: 'push', reason: 'fuel_margin', margin_l: 4.7 },
+  last_pit_service: { lane_total_s: 42.8, stall_s: 18.1, fuel_added_l: 12.6 },
+  pit_loss_calibration: { lane_total_median_s: 43.2, lane_total_q1_s: 42.4,
+    lane_total_q3_s: 44.0, usable_sample_count: 6 },
+  tires: { lf:{w:[91,90,89],t:[80,82,84]}, rf:{w:[88,87,86],t:[83,85,87]},
+    lr:{w:[94,93,92],t:[77,79,81]}, rr:{w:[92,91,90],t:[79,81,83]} },
+  damage_s: 0,
+  weather: { track_temp_c: 41.2, air_temp_c: 28.4, humidity: 61, track_wetness_code: 1 },
+  leaders: { player_class: { class_pos: 1, gap_s: -33.4 } },
+};
+
+const intentCases = [
+  ['燃費は？', cards.TOPIC.FUEL_USE, /3\.45L\/周/],
+  ['残り何周？', cards.TOPIC.RACE_DISTANCE, /残り時間5:02.*S\/Fあと4回/],
+  ['ピットロス何秒？', cards.TOPIC.PIT_LOSS, /42\.8秒.*実測値/],
+  ['今ボックスするべき？', cards.TOPIC.PIT_DECISION, /ステイアウトしてプッシュ/],
+  ['直近のピットサービスは？', cards.TOPIC.PIT_SERVICE, /IN→OUT 42\.8秒.*給油12\.6L/],
+  ['今何位？', cards.TOPIC.CURRENT_POSITION, /クラスP20、総合P22/],
+  ['クラスリーダーまで？', cards.TOPIC.LEADER_GAP, /33\.4秒/],
+  ['タイヤの状態は？', cards.TOPIC.TYRE_STATUS, /左前 残89\.0%/],
+  ['ダメージは？', cards.TOPIC.DAMAGE_STATUS, /修理残り0\.0秒.*断定しない/],
+  ['天候は？', cards.TOPIC.WEATHER_STATUS, /路面41\.2℃.*ドライ/],
+  ['トラフィックは？', cards.TOPIC.TRAFFIC_STATUS, /前0\.3秒/],
+  ['戦略プランは？', cards.TOPIC.PLAN_STATUS, /プラン改訂3.*プッシュ/],
+];
+for (const [utterance, topic, expected] of intentCases) {
+  const routed = cards.route(utterance, build255Live, 'ja', { race:true });
+  check(`Build 255 handler ${topic}`, routed && routed.card.topic===topic && expected.test(routed.reply), routed&&routed.reply);
+}
+const unknownRoute = cards.route('ピットの魔法を使える？', build255Live, 'ja', { race:true });
+check('unhandled operational request fails closed before LLM',
+  unknownRoute && unknownRoute.card.topic===cards.TOPIC.UNRESOLVED_OPERATIONAL
+  && /専用handlerに未接続.*推測では答えない/.test(unknownRoute.reply));
+check('all Build 255 operational topics have deterministic builders',
+  Object.values(cards.TOPIC).length >= 18 && intentCases.every(([u])=>cards.route(u,build255Live,'ja',{race:true})?.reply));
+const logReplayCases = [
+  ['これでコントロールライン通過すれば燃料消費量わかるかな？', cards.TOPIC.FUEL_USE],
+  ['平均消費量がわかるでしょ？1ラップあたりの？', cards.TOPIC.FUEL_USE],
+  ['このラップの終わりまでに判断してくれないと困るよ。', cards.TOPIC.PIT_DECISION],
+  ['13Lだ。', cards.TOPIC.FUEL_PLAN],
+  ['前0.2じゃねえや19秒だよ。', cards.TOPIC.POSITION_GAP],
+  ['しかも残り2周だろうよ。ホワイトフラッグ出てねえし。', cards.TOPIC.RACE_DISTANCE],
+];
+for (const [utterance, topic] of logReplayCases) {
+  const replay=cards.route(utterance,build255Live,'ja',{race:true,recentText:'アンダーカット狙える。どうする？'});
+  check(`8/8 real-log replay routes ${topic}`,replay&&replay.card.topic===topic,replay&&replay.card.topic);
+}
+
 const renderer = fs.readFileSync(__dirname + '/desktop/renderer.html', 'utf8');
 check('renderer reads response authority header',
   renderer.includes("res.headers.get('X-Pitwall-Authority')"));
+check('renderer records deterministic intent trace without overlay mirroring',
+  renderer.includes("res.headers.get('X-Pitwall-Intent')")
+  && renderer.includes("diagnosticLog('INTENT_ROUTE'"));
 check('deterministic response bypasses generic LLM Truth Gate',
   renderer.includes("responseAuthority!=='deterministic' && selMode==='race'"));
 check('critical fuel radio proactively includes physical and conditional pit positions',

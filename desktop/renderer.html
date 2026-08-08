@@ -982,6 +982,7 @@ let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let sessionActive = false;
 let jamesAutoMicEnabled = false, jamesMuted = false;
 let irBridge = null, irBridgeReconnectTimer = null;
+let bridgePttCaptureArmedAt = 0; // only a real bridge PTT-down may authorise driver STT
 let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let iracingConnectionSeen = false, iracingConnectedAt = 0, lastTelemetryAt = 0, telemetryStaleNotified = false;
 const TELEMETRY_STALE_MS = 12000;
@@ -1629,19 +1630,29 @@ function addMsg(type, text){
   return div;   // ストリーミングで中身を更新できるよう要素を返す
 }
 // 会話をbridgeデバッグログに転送（AI返答含む全会話が後から追える＝スクショ不要）。
-// user/ai/driver のみ。bridge未接続なら黙ってスキップ。
+// user/ai のみ。bridge未接続なら黙ってスキップ。
 function convoLog(type, text){
   mirrorToOverlay(type, text);   // 完成した行だけをレースオーバーレイへも流す（同じファネル）
   try {
-    if ((type==='user'||type==='ai'||type==='driver') && text && irBridge && irBridge.readyState===1) {
-      const tag = type==='ai' ? (sel||'AI') : (type==='driver' ? 'DRIVER' : 'USER');
+    if ((type==='user'||type==='ai') && text && irBridge && irBridge.readyState===1) {
+      const tag = type==='ai' ? (sel||'AI') : 'USER';
       irBridge.send(JSON.stringify({cmd:'log_line', text:'['+tag+'] '+text}));
     }
   } catch(e){}
 }
+// Diagnostics are evidence for the debug log, never driver speech.  Sending
+// these through addMsg/convoLog previously mirrored blocked LLM text into the
+// overlay as if the driver had said it.
+function diagnosticLog(tag, text){
+  try{
+    if(text && irBridge && irBridge.readyState===1){
+      irBridge.send(JSON.stringify({cmd:'log_line',text:'['+String(tag||'DIAGNOSTIC')+'] '+text}));
+    }
+  }catch(e){}
+}
 
 // ── レースオーバーレイへ無線コールをミラー（会話のみ・テレメトリ数字は出さない）──
-// AI(エンジニア)=左/紫、ドライバー(driver/自分のuser発話)=右/琥珀。
+// AI(エンジニア)=左/紫、ドライバー(user発話)=右/琥珀。
 const OVL_ENG_NAME = { James:'James', Luna:'Luna', Hajime:'Omatsu', HajimeJP:'Omatsu', Kanbe:'Kanbe', Oishi:'Oishi', LunaJP:'Luna', Matthias:'Matthias', Camila:'Camila' };
 let _ovlLast = { key:'', t:0 };
 let _ovlLineSeq = 0;
@@ -1667,12 +1678,11 @@ async function translateLine(text, target){
 
 function mirrorToOverlay(type, text){
   if(!window.pitwall) return;
-  if(type!=='ai' && type!=='driver' && type!=='user') return;   // sys等は放送に載せない
+  if(type!=='ai' && type!=='user') return;   // diagnostics/sys are never speech
   let clean = (text||'').replace(/^\[PTT\]\s*/,'').replace(/\[JA:[\s\S]*\]$/,'').trim();
   if(!clean) return;
-  // PTT発話は sendMsg()の'user' と addMsg('driver')の2経路で来て二重表示になる。
-  // ドライバー側(user/driver)は同一テキストの連続を短時間で1回に潰す。
-  if(type==='user' || type==='driver'){
+  // ドライバー側userは同一テキストの連続を短時間で1回に潰す。
+  if(type==='user'){
     const key = 'drv|'+clean, now = Date.now();
     if(key===_ovlLast.key && now-_ovlLast.t < 3000) return;
     _ovlLast = { key, t:now };
@@ -1781,7 +1791,8 @@ async function sendMsg(inputSource){
       return;
     }
     usageCount(inputSource==='ptt'?'ptt':'typed');
-    recordEvidenceAnswer(text);
+    const evidenceResult=recordEvidenceAnswer(text);
+    if(evidenceResult==='not_answer') await callAPI(inputSource==='ptt'?'ptt':'typed');
     return;
   }
   if(isManualReviewCommand(text)){
@@ -1970,6 +1981,7 @@ async function callAPI(inputSource, memoryStatus=''){
     });
     if(!res.ok){ clearTimeout(fetchTimer); throw new Error('http '+res.status); }
     const responseAuthority = res.headers.get('X-Pitwall-Authority') || 'llm';
+    const responseIntent = res.headers.get('X-Pitwall-Intent') || '';
     // ── ストリーミング受信：チャンクを溜め、文が完成するたびに順次TTS再生 ──
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -2014,7 +2026,7 @@ async function callAPI(inputSource, memoryStatus=''){
           speak(truthFallback, true);
           truthFallbackSpoken=true;
         }
-        convoLog('driver', '[TELEMETRY_TRUTH_GATE] blocked LLM vehicle-state claim: '
+        diagnosticLog('TELEMETRY_TRUTH_GATE','blocked LLM vehicle-state claim: '
           + full.replace(/\s+/g,' ').trim());
       } else if(!truthBlocked && bubble) {
         bubble.textContent = full.replace(/\[JA:[\s\S]*\]$/,'').trim();
@@ -2028,7 +2040,7 @@ async function callAPI(inputSource, memoryStatus=''){
     const display = truthBlocked
       ? truthFallback
       : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
-    convoLog('driver', `[RESPONSE AUTHORITY] ${responseAuthority}`);
+    diagnosticLog('INTENT_ROUTE',`intent=${responseIntent||'conversation'} authority=${responseAuthority}`);
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:display});
@@ -2042,7 +2054,7 @@ async function callAPI(inputSource, memoryStatus=''){
     // 「完全な無言」として体感される（無言禁止の原則に反する）。声でも一言返す。
     addMsg('sys',t('sys_conn_error'));
     // ★接続エラーの実態をbridgeログにも残す（今まで見えず診断できなかった）。原因(名前/HTTP等)込みで。
-    convoLog('driver', '[CLIENT ERROR] /api/chat failed: '+(e && (e.name+': '+e.message) || String(e)));
+    diagnosticLog('CLIENT ERROR','/api/chat failed: '+(e && (e.name+': '+e.message) || String(e)));
     const isJP2 = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
     // 通信エラーは正直に伝える。「聞こえなかった」は嘘。期待させず「後日直す」と伝える方が誠実。
     const errMsg = (sel==='Kanbe') ? 'すまん、接続エラーじゃ。後日アップデートするけぇ。'
@@ -2791,7 +2803,10 @@ function connectBridge(){
       if(data.type==='mic_level'){ setMicMeter(data.level||0); return; }
       if(data.type==='mic_error'){ setHint((t('mic_err'))+(data.message||'')); micTesting=false; const b=document.getElementById('mic-test-btn'); if(b){ b.classList.remove('on'); b.textContent=t('mic_test_btn'); } setMicMeter(0); return; }
       // ── PTT（bridgeがハンドルのボタンを読んで送ってくる）──
-      if(data.type==='ptt'){ if(data.state==='down') pttStart(); else if(data.state==='up') pttStop(); }
+      if(data.type==='ptt'){
+        if(data.state==='down'){ bridgePttCaptureArmedAt=Date.now(); pttStart(); }
+        else if(data.state==='up') pttStop();
+      }
       if(data.type==='ptt_set'){ pttBinding={index:data.joy,button:data.button}; updatePTTLabel(); setHint(t('hint_ptt_set_a')+data.button+t('hint_ptt_set_b')); }
       // bridge側(実際にジョイスティックを監視してる本体)の設定が正=常に上書きする。
       // bridgeが「未設定」と言ってきたら、localStorageに古い表示が残っていても消して再点滅させる
@@ -2809,17 +2824,26 @@ function connectBridge(){
       if(data.type==='vol_config'){ if(data.binding){ volBinding=data.binding; updateVolLabel(); } }
       // ── PTT v2：bridge側STT結果受信（ネイティブマイク） ──
       if(data.type==='ptt_text'){
+        if(!bridgePttCaptureArmedAt || Date.now()-bridgePttCaptureArmedAt>120000){
+          diagnosticLog('PTT_SOURCE','rejected ptt_text without a recent physical PTT-down');
+          return;
+        }
+        bridgePttCaptureArmedAt=0;
         setHint('');
         const text=(data.text||'').trim();
         if(text){
           document.getElementById('chat-input').value=text;
           sendMsg('ptt');  // Claude→大石の返答フロー
-          addMsg('driver','[PTT] '+text);  // ドライバ発話を表示
         } else {
           setHint(t('hint_not_caught'));
         }
       }
       if(data.type==='ptt_audio'){
+        if(!bridgePttCaptureArmedAt || Date.now()-bridgePttCaptureArmedAt>120000){
+          diagnosticLog('PTT_SOURCE','rejected ptt_audio without a recent physical PTT-down');
+          return;
+        }
+        bridgePttCaptureArmedAt=0;
         transcribePttAudio(data);
         return;
       }
@@ -3580,16 +3604,16 @@ const EVIDENCE_COPY={
   en:{
     title:'📋 Session Evidence', optionalTitle:'📋 Practice / Qualifying evidence ready',
     classPos:'Class P',laps:'laps',best:'Best',average:'Average',fuel:'Fuel',incidents:'Incidents',
-    practice:['What felt best and most repeatable today?','What was the biggest issue: car, tyres, traffic, or your inputs?','If you change only one thing next run, what will it be?'],
-    qualify:['What worked best on the attack lap?','Where did you lose the most time?','If you change only one thing next qualifying, what will it be?'],
-    race:['What was your best decision or strongest part of the drive?','What caused the biggest time loss?','If you ran the same conditions again, what one thing would you change?'],
+    practice:['What felt best and most repeatable today?','Where did the measured pace change match, or not match, what you felt?','What specific input or setup change do you want to test next?'],
+    qualify:['What worked best on the attack lap?','Which corner or phase felt responsible for the measured time loss?','What specific change do you want to test in the next qualifying run?'],
+    race:['What was your best decision or strongest part of the drive?','Which specific phase caused the measured time loss, and what did you feel there?','Under the same conditions, which decisions would you keep and which would you revise?'],
     raceTop:['Which contributed most to this result: braking consistency, corner exits, tyre management, or traffic management?','Where did you have the clearest advantage over the cars around you?','Which decision from this race should we deliberately repeat next time?'],
-    raceMid:['Where did we lose the chance to move forward: pace, traffic, pit timing, or an incident?','Which phase cost the most time: the opening laps, the middle stint, or the final stint?','If we changed one decision, which one offered the best chance to gain positions?'],
-    raceLow:['Where did the result first begin to slip away: pace, traffic, an incident, pit timing, or the car?','What was the main cause of the lost time: your inputs, tyre behaviour, damage, or strategy?','Despite the result, what worked well enough that we should keep it for the next race?'],
+    raceMid:['At which lap or phase did you feel the result could have moved?','Where was the largest mismatch between the measured pace and what you felt?','Which decision should we keep, and which should we revise next time?'],
+    raceLow:['At which lap or phase did the result begin to move away?','Where was the measured time lost, and what did you feel caused it?','Which parts should we keep and which should we revise despite the result?'],
     productFeedback:'One last thing for product improvement: give me your honest view of my support today. Tell me what helped or what got in the way.',
     fuelQ:'Did fuel use and the pit decision match the plan? Tell me what differed.',
     save:'Confirm memory',restart:'Revise answers',discard:'Delete memory',cancel:'End review',start:'Review this session',
-    preview:'Auto-saved memory',ready:'I linked your answers to the measured session data and auto-saved them as driver-reported memory. Confirm them or revise the answers.',
+    preview:'Verified saved memory',ready:'I wrote the answers, read them back, and verified them as driver-reported memory linked to the measured session. Confirm or revise them.',
     saved:'✅ Memory confirmed for the next session.',autoSaved:'✅ Auto-saved as driver-reported memory for the next session.',
     discarded:'🗑️ This session memory was deleted.',failed:'⚠️ Session memory could not be saved.',
     missing:'⚠️ Not saved because driver, track, or car could not be confirmed.',
@@ -3598,16 +3622,16 @@ const EVIDENCE_COPY={
   ja:{
     title:'📋 セッション証拠', optionalTitle:'📋 練習・予選の振り返り準備完了',
     classPos:'クラス P',laps:'周',best:'ベスト',average:'平均',fuel:'燃費',incidents:'インシデント',
-    practice:['今日いちばん再現できた、良い感触はどこ？','最大の問題は車、タイヤ、交通、それとも自分の操作のどれ？','次の走行で一つだけ変えるなら何にする？'],
-    qualify:['アタックで一番うまく決まった部分はどこ？','一番タイムを失った原因は何だった？','次の予選で一つだけ変えるなら何にする？'],
-    race:['今日いちばん良かった判断や走りはどこ？','最大のタイムロスは何が原因だった？','同じ条件でもう一度走るなら、一つだけ何を変える？'],
+    practice:['今日いちばん再現できた、良い感触はどこ？','実測タイムの変化と体感が一致した区間、または一致しなかった区間を教えて。','次の走行で検証したい具体的な操作やセット変更はある？'],
+    qualify:['アタックで一番うまく決まった部分はどこ？','実測タイムを失ったと感じるコーナーや局面を教えて。','次の予選で検証したい具体的な変更はある？'],
+    race:['今日いちばん良かった判断や走りはどこ？','実測上のタイムロスと、あなたが感じた原因を具体的な局面で教えて。','同じ条件なら、維持する判断と修正する判断を教えて。'],
     raceTop:['この結果に一番効いたのは、ブレーキングの安定、コーナー出口、タイヤ管理、それともトラフィック処理のどれ？','周囲の車に対して、最も明確な強みがあったのはどこ？','次のレースでも意識して再現したい判断はどれ？'],
-    raceMid:['順位を上げる機会を失った主因は、ペース、トラフィック、ピット判断、それとも接触のどれ？','最もタイムを失ったのは、序盤、中盤のスティント、それとも終盤のどこ？','一つだけ判断を変えられるなら、最も順位につながりそうなのはどれ？'],
-    raceLow:['結果が崩れ始めたのは、ペース、トラフィック、接触、ピット判断、それとも車の問題のどこ？','タイムを失った主因は、自分の操作、タイヤの挙動、ダメージ、それとも戦略のどれ？','結果とは別に、次のレースでも残すべき良かった部分はどこ？'],
+    raceMid:['順位を動かせたと感じる具体的な周回や局面はどこ？','実測タイムと体感が最もずれた局面を教えて。','次回も維持する判断と、修正する判断をそれぞれ教えて。'],
+    raceLow:['結果が動き始めた具体的な周回や局面はどこ？','実測タイムを失った局面と、あなたが感じた原因を教えて。','結果とは別に、残すべき部分と修正すべき部分を教えて。'],
     productFeedback:'最後に、製品向上のため、今日の私のサポートへの素直な意見を聞かせて。役に立ったことでも、邪魔だったことでも構わないよ。',
     fuelQ:'燃料とピット判断は想定どおりだった？違った点があれば教えて。',
     save:'記憶を確認',restart:'回答を修正',discard:'記憶を削除',cancel:'振り返りを終了',start:'このセッションを振り返る',
-    preview:'自動保存済みの記憶',ready:'回答を実測データと結びつけ、ドライバー申告の記憶として自動保存したよ。内容を確認するか、回答を修正してね。',
+    preview:'保存確認済みの記憶',ready:'書き込み後の再読込まで確認し、回答を実測データ付きのドライバー申告記憶として保存したよ。内容を確認するか、回答を修正してね。',
     saved:'✅ 次回用の確認済み記憶にしました。',autoSaved:'✅ 次回用のドライバー申告記憶として自動保存しました。',
     discarded:'🗑️ このセッション記憶を削除しました。',failed:'⚠️ セッション記憶を保存できませんでした。',
     missing:'⚠️ ドライバー・コース・車両を確認できないため保存しませんでした。',
@@ -3654,6 +3678,17 @@ function evidenceCopy(){ return EVIDENCE_COPY[evidenceLanguage()]||EVIDENCE_COPY
 function isDebriefAnalysisQuestion(text){
   const s=String(text||'').trim();
   return /どう(?:だった|思う|見えた)|分析して|評価して|振り返って|感想(?:は|を)|what do you think|how (?:was|did)|analyse|analyze|evaluate/i.test(s);
+}
+function isEvidenceAnswerCandidate(text){
+  const s=String(text||'').trim();
+  if(s.length<2) return false;
+  // A question/objection to the engineer is not an answer to the guided review.
+  if(/[?？]\s*$/.test(s) || /質問に答|どういうこと|何を言|なぜ|なんで|どう思う|説明して|分析して|確認して/i.test(s)) return false;
+  const feedback=evidenceDebrief && evidenceDebrief.index===evidenceDebrief.feedbackIndex;
+  if(feedback) return true; // harsh product feedback is still valid evidence
+  // Commands to end/replace the engineer were previously stored as driving evidence.
+  if(/エンジニア.*(?:交換|変え|解雇)|契約解除|もう(?:いい|やめ)|振り返り.*(?:終了|やめ)|話になら|使えな|保存するな|記憶するな/i.test(s)) return false;
+  return true;
 }
 function evidenceLines(data){
   data=sanitizeSessionEvidence(data);
@@ -3764,12 +3799,13 @@ function recordEvidenceAnswer(text){
   const questionPending=speakQueue.some(q=>q && q.kind==='debrief_question');
   if(isSpeaking || questionPending || Date.now() < (evidenceDebrief.acceptAfter||0)){
     addMsg('sys',c.wait);
-    return;
+    return 'wait';
   }
+  if(!isEvidenceAnswerCandidate(text)) return 'not_answer';
   evidenceDebrief.answers[evidenceDebrief.index]=text;
   if(evidenceDebrief.index===evidenceDebrief.feedbackIndex) usageCount('feedback_answered');
   evidenceDebrief.index++;
-  if(evidenceDebrief.index<evidenceDebrief.questions.length){ askEvidenceQuestion(); return; }
+  if(evidenceDebrief.index<evidenceDebrief.questions.length){ askEvidenceQuestion(); return 'recorded'; }
   evidenceDebrief.active=false;
   usageCount('debrief_completed');
   if(sessionPurpose==='practice') usageCount('practice_review_completed');
@@ -3779,6 +3815,7 @@ function recordEvidenceAnswer(text){
   document.getElementById('debrief-guide-actions').style.display='flex';
   const msg=autoSaved?c.ready:c.failed;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg);
+  return autoSaved?'saved':'failed';
 }
 function restartEvidenceDebrief(){
   if(evidenceDebrief) beginEvidenceDebrief(evidenceDebrief.data,true,evidenceDebrief.recordId||'');
@@ -3829,7 +3866,7 @@ async function importHistoricalMemorySeeds(){
   if(!userName || !localStorage.getItem('pw_beta_code')) return;
   try{
     const headers=applyPitwallAccess({});
-    const response=await fetch('/api/memory/import-seeds',{headers});
+    const response=await fetch(API_BASE+'/api/memory/import-seeds',{headers});
     if(!response.ok) return;
     const payload=await response.json();
     const seeds=Array.isArray(payload&&payload.seeds)?payload.seeds:[];
@@ -3854,8 +3891,22 @@ async function importHistoricalMemorySeeds(){
     records.sort((a,b)=>Date.parse(a&&a.created_at||0)-Date.parse(b&&b.created_at||0));
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
+    const verified=loadEvidenceRecords();
+    if(!acknowledged.every(id=>verified.some(r=>String(r&&r.review_id||'').startsWith(`legacy:${id}:`)))){
+      diagnosticLog('MEMORY_IMPORT','local read-back mismatch; ACK withheld');
+      return;
+    }
     const ackHeaders=applyPitwallAccess({'Content-Type':'application/json'});
-    fetch('/api/memory/import-seeds/ack',{method:'POST',headers:ackHeaders,body:JSON.stringify({seedIds:acknowledged})}).catch(()=>{});
+    const ackResponse=await fetch(API_BASE+'/api/memory/import-seeds/ack',{
+      method:'POST',headers:ackHeaders,body:JSON.stringify({seedIds:acknowledged})
+    });
+    if(!ackResponse.ok) return;
+    const ackPayload=await ackResponse.json();
+    if(Number(ackPayload&&ackPayload.acknowledged)!==acknowledged.length){
+      diagnosticLog('MEMORY_IMPORT',`ACK mismatch expected=${acknowledged.length} actual=${Number(ackPayload&&ackPayload.acknowledged)||0}`);
+      return;
+    }
+    diagnosticLog('MEMORY_IMPORT',`received=${acknowledged.length} local_verified=${acknowledged.length} server_ack=${ackPayload.acknowledged}`);
     if(added){
       const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
       addMsg('sys',isJP
@@ -3889,12 +3940,15 @@ function buildEvidenceRecord(confidence='driver_reported'){
     evidence:{finish_pos:validFinishPosition(evidenceDebrief.data.finish_pos),total_laps:evidenceDebrief.data.total_laps||0,
       best_lap:evidenceDebrief.data.best_lap||null,avg_lap:evidenceDebrief.data.avg_lap||null,
       avg_fuel_per_lap:evidenceDebrief.data.avg_fuel_per_lap??null,incidents:evidenceDebrief.data.incidents??null},
-    qa:evidenceDebrief.questions.map((question,i)=>({question,answer:evidenceDebrief.answers[i]||''})),
+    qa:evidenceDebrief.questions.map((question,i)=>({question,answer:String(evidenceDebrief.answers[i]||'').trim()})),
     confidence
   };
 }
 function upsertEvidenceRecord(record){
   if(!record) return {saved:false,created:false};
+  if(!Array.isArray(record.qa)||!record.qa.length||record.qa.some(pair=>!String(pair&&pair.question||'').trim()||!String(pair&&pair.answer||'').trim())){
+    return {saved:false,created:false,verified:false,reason:'empty_qa'};
+  }
   try{
     const records=loadEvidenceRecords();
     const index=records.findIndex(r=>r.review_id&&r.review_id===record.review_id);
@@ -3904,14 +3958,24 @@ function upsertEvidenceRecord(record){
     records.sort((a,b)=>Date.parse(a&&a.created_at||0)-Date.parse(b&&b.created_at||0));
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
-    return {saved:true,created};
-  }catch(e){ return {saved:false,created:false}; }
+    const readBack=loadEvidenceRecords().find(r=>r&&r.review_id===record.review_id);
+    const expected=JSON.stringify({...record,created_at:created?record.created_at:(readBack&&readBack.created_at)});
+    const actual=JSON.stringify(readBack||null);
+    if(!readBack || actual!==expected) return {saved:false,created:false,verified:false,reason:'readback_mismatch'};
+    const receipt={review_id:record.review_id,verified_at:new Date().toISOString(),qa_count:record.qa.length};
+    localStorage.setItem('pw_memory_last_receipt_v2',JSON.stringify(receipt));
+    const receiptBack=JSON.parse(localStorage.getItem('pw_memory_last_receipt_v2')||'null');
+    const verified=receiptBack&&receiptBack.review_id===record.review_id&&receiptBack.qa_count===record.qa.length;
+    if(!verified) return {saved:false,created:false,verified:false,reason:'receipt_mismatch'};
+    diagnosticLog('MEMORY_COMMIT',`review_id=${record.review_id} qa=${record.qa.length} readback=verified`);
+    return {saved:true,created,verified:true,receipt};
+  }catch(e){ return {saved:false,created:false,verified:false,reason:String(e&&e.message||e)}; }
 }
 function autoSaveEvidenceMemory(){
   if(!evidenceDebrief) return false;
   const record=buildEvidenceRecord('driver_reported');
   const result=upsertEvidenceRecord(record);
-  if(!result.saved) return false;
+  if(!result.saved||!result.verified) return false;
   evidenceDebrief.recordId=record.review_id;
   evidenceDebrief.autoSaved=true;
   if(result.created&&sessionPurpose==='practice') usageCount('practice_review_saved');
@@ -3925,7 +3989,7 @@ function confirmEvidenceMemory(){
   if(!record){ addMsg('sys',c.missing); return; }
   record={...record,confirmed_at:new Date().toISOString()};
   const result=upsertEvidenceRecord(record);
-  if(!result.saved){ addMsg('sys',c.failed); return; }
+  if(!result.saved||!result.verified){ addMsg('sys',c.failed); return; }
   evidenceDebrief.recordId=record.review_id;
   const objective=saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
   addMsg('sys',objective&&evidenceLanguage()==='ja'
@@ -3940,6 +4004,8 @@ function discardEvidenceMemory(){
   try{
     const records=loadEvidenceRecords().filter(r=>!r.review_id||r.review_id!==recordId);
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
+    if(loadEvidenceRecords().some(r=>r&&r.review_id===recordId)) throw new Error('delete_readback_mismatch');
+    diagnosticLog('MEMORY_DELETE',`review_id=${recordId} readback=verified`);
     addMsg('sys',c.discarded);
   }catch(e){ addMsg('sys',c.failed); return; }
   dismissEvidenceDebrief('discarded');
@@ -4044,6 +4110,14 @@ function buildContractNote(isJ){
 // ── Session memory (localStorage) ──
 function loadProfile(){ try{ return JSON.parse(localStorage.getItem('pw_profile_'+sel)||'null'); }catch{return null;} }
 function saveProfile(p){ try{ localStorage.setItem('pw_profile_'+sel, JSON.stringify(p)); }catch{} }
+function saveProfileVerified(p){
+  try{
+    const key='pw_profile_'+sel;
+    localStorage.setItem(key,JSON.stringify(p));
+    const readBack=JSON.parse(localStorage.getItem(key)||'null');
+    return !!readBack && JSON.stringify(readBack)===JSON.stringify(p);
+  }catch(e){ return false; }
+}
 function buildProfileNote(profile){
   if(!profile||!profile.sessions) return '';
   const isJP=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
@@ -4224,7 +4298,12 @@ async function saveMemory(options={}){
     const dated=`[${new Date().toISOString().slice(0,10)}] ${note}`;
     if(notes[notes.length-1]!==dated) notes.push(dated);
     while(notes.length>8) notes.shift();
-    saveProfile({...current,notes});
+    const nextProfile={...current,notes};
+    if(!saveProfileVerified(nextProfile)){
+      diagnosticLog('MEMORY_COMMIT','profile read-back failed');
+      return false;
+    }
+    diagnosticLog('MEMORY_COMMIT',`profile=${sel} notes=${notes.length} readback=verified`);
     memorySavedThisSession=true;
     lastMemorySignature=signature;
     return true;
@@ -4477,6 +4556,7 @@ function buildSessionEvidenceNote(){
       return rt===track && rc===car;
     }).slice(-3);
     if(!relevant.length) return '';
+    diagnosticLog('MEMORY_CONTEXT',`driver=${userName} track=${lastTrack} car=${lastCarModel||lastCarClass} injected=${relevant.length}`);
     const lang=evidenceLanguage();
     const promptCopy={
       en:{heading:'Evidence from matching sessions',confirmed:'Driver-confirmed',reported:'Driver-reported (auto-saved)',
@@ -4758,7 +4838,6 @@ async function transcribePttAudio(data){
     if(text){
       document.getElementById('chat-input').value=text;
       sendMsg('ptt');
-      addMsg('driver','[PTT] '+text);
     }else{
       setHint(t('hint_not_caught'));
     }

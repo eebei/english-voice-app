@@ -86,8 +86,11 @@ if node tests-nsis-installer.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── 戦略質問ガード（Phase A1・静的＋実コード）"
 if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-guard.js 2>&1|grep "❌"|head -5; fail=1; fi
 
-echo "── 8/8実走失敗ログ再現・実行エンジニアカード（Build 254）"
+echo "── 8/8実走失敗ログ再現・Intent実行エンジニア（Build 255）"
 if node tests-engineer-card.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-engineer-card.js 2>&1|grep "❌"|head -10; fail=1; fi
+
+echo "── Memory V2 ローカル再読込・履歴投入ACK契約（Build 255）"
+if node tests-evidence-debrief.js >/dev/null 2>&1 && node tests-memory-import.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js 2>&1|grep "❌"|head -10; node tests-memory-import.js; fail=1; fi
 
 echo "── /api/chat HTTP統合テスト（stream/non-stream応答契約・P0-1再発防止）"
 if node tests-chat-http.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-chat-http.js 2>&1|grep "❌"|head -5; fail=1; fi
@@ -148,6 +151,9 @@ if python3 irsdk-bridge/tests_pit_loss_calibrator.py >/dev/null 2>&1 && python3 
 
 echo "── Phase C ピット復帰順位・blend shadow forecast（2026-07-30）"
 if python3 irsdk-bridge/tests_pit_exit_forecaster.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_pit_cycle_tracker.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_pit_exit_forecaster.py; python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py; python3 irsdk-bridge/tests_pit_cycle_tracker.py; fail=1; fi
+
+echo "── Strategy Plan所有・Pit Loss配線（Build 255）"
+if python3 irsdk-bridge/tests_strategy_plan_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_strategy_plan_wiring.py; fail=1; fi
 
 echo "── Build 232 実走ハードニング（TTS・話法・ピット・燃料・更新）"
 if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build232-hardening.js; fail=1; fi

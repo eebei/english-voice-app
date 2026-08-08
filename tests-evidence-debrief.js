@@ -63,7 +63,26 @@ check('質問途中でも終了できRace復帰時はガイドを解除',
   renderer.includes('id="debrief-guide-cancel"')
   && renderer.includes("if(newMode==='race' && evidenceDebrief) dismissEvidenceDebrief();"));
 check('guided PTT/typed回答も利用量を計測',
-  renderer.includes("usageCount(inputSource==='ptt'?'ptt':'typed');\n    recordEvidenceAnswer(text);"));
+  renderer.includes("usageCount(inputSource==='ptt'?'ptt':'typed');\n    const evidenceResult=recordEvidenceAnswer(text);"));
+check('保存成功表示は書込み後の再読込とreceipt一致が必須',
+  renderer.includes("reason:'readback_mismatch'")
+  && renderer.includes("pw_memory_last_receipt_v2")
+  && renderer.includes('if(!result.saved||!result.verified) return false;'));
+check('抗議やエンジニア交換は走行申告として保存しない',
+  renderer.includes('function isEvidenceAnswerCandidate(text)')
+  && renderer.includes('エンジニア.*(?:交換|変え|解雇)')
+  && renderer.includes("evidenceResult==='not_answer'"));
+check('過去申告は絶対API URLで取得しローカル確認後にACKを待つ',
+  renderer.includes("fetch(API_BASE+'/api/memory/import-seeds'")
+  && renderer.includes("await fetch(API_BASE+'/api/memory/import-seeds/ack'")
+  && renderer.includes('local read-back mismatch; ACK withheld'));
+check('診断文はOverlayのドライバー発話経路へ入らない',
+  renderer.includes('function diagnosticLog(tag, text)')
+  && renderer.includes("if(type!=='ai' && type!=='user') return")
+  && !renderer.includes("convoLog('driver'"));
+check('PTT文字・音声は直近の物理PTT-downなしでは拒否',
+  renderer.includes('rejected ptt_text without a recent physical PTT-down')
+  && renderer.includes('rejected ptt_audio without a recent physical PTT-down'));
 check('rapid PTTは次質問の回答枠へ進めない',
   renderer.includes('evidenceDebrief.acceptAfter=Date.now()+1200;')
   && renderer.includes("kind:'debrief_question'")
@@ -122,7 +141,7 @@ if(memoryStart>=0&&memoryEnd>memoryStart){
     loadEvidenceRecords:()=>JSON.parse(store.get('pw_session_evidence')||'[]'),
     usageCount:k=>usage.push(k),saveStrategyObjectiveFromDebrief:()=>null,
     evidenceCopy:()=>({missing:'missing',failed:'failed',saved:'saved',discarded:'discarded'}),
-    evidenceLanguage:()=> 'en',addMsg:()=>{},dismissEvidenceDebrief:()=>{}
+    evidenceLanguage:()=> 'en',addMsg:()=>{},dismissEvidenceDebrief:()=>{},diagnosticLog:()=>{}
   };
   vm.runInNewContext(renderer.slice(memoryStart,memoryEnd),memoryContext);
   const first=memoryContext.autoSaveEvidenceMemory();

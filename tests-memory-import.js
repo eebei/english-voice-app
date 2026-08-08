@@ -28,7 +28,10 @@ assert.match(renderer, /confidence:'historical_driver_reported'/);
 assert.match(renderer, /kind==='driver_preference'/);
 assert.match(renderer, /if\(r\.kind==='driver_preference'\) return true/);
 assert.match(renderer, /localStorage\.setItem\('pw_session_evidence',JSON\.stringify\(records\)\);/);
-assert.match(renderer, /fetch\('\/api\/memory\/import-seeds\/ack'/);
+assert.match(renderer, /fetch\(API_BASE\+'\/api\/memory\/import-seeds'/);
+assert.match(renderer, /await fetch\(API_BASE\+'\/api\/memory\/import-seeds\/ack'/);
+assert.match(renderer, /local read-back mismatch; ACK withheld/);
+assert.match(renderer, /Number\(ackPayload&&ackPayload\.acknowledged\)!==acknowledged\.length/);
 assert.match(renderer, /void importHistoricalMemorySeeds\(\);/);
 
-console.log('tests-memory-import: 16/16 passed');
+console.log('tests-memory-import: 19/19 passed');

@@ -104,7 +104,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ||
   'https://www.omoraypitwall.com,https://omoraypitwall.com,http://localhost:3000')
   .split(',').map(s => s.trim());
 app.use(cors({
-  exposedHeaders: ['X-Pitwall-Authority'],
+  exposedHeaders: ['X-Pitwall-Authority', 'X-Pitwall-Intent'],
   origin(origin, cb) {
     // same-origin / curl / mobile webview have no Origin header → allow
     // 'null' = Electronデスクトップアプリ(file://)が送るオリジン。デスクトップ版を許可。
@@ -663,12 +663,13 @@ const ttsLimiter = rateLimit({
 //   読み、そのまま吹き出し・TTSへ渡す。ガードがここを無視して常にJSONを返すと、
 //   stream経路では拒否文の代わりに生JSON文字列が喋られてしまう。
 //   非stream経路は既存のAnthropic互換JSON形（{content:[{type:'text',text}]}）を維持する。
-function sendGuardReply(req, res, text, structuredLimit = null, authority = 'deterministic') {
+function sendGuardReply(req, res, text, structuredLimit = null, authority = 'deterministic', intent = null) {
   const charLimit = Number.isFinite(structuredLimit)
     ? structuredLimit
     : resolveReplyCharLimit(req.body || {}, req.body && req.body.mode);
   const limitedText = limitReplyText(text, charLimit);
   res.setHeader('X-Pitwall-Authority', authority);
+  if (intent) res.setHeader('X-Pitwall-Intent', String(intent));
   if (req.body.stream) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.end(limitedText);
@@ -824,9 +825,11 @@ function isRaceRuleQuestion(text) {
 function buildRacePlanReply(liveData, lang) {
   const plan = liveData && liveData.race_plan && typeof liveData.race_plan === 'object'
     ? liveData.race_plan : {};
-  const duration = Number(plan.configured_duration_s);
-  const remaining = Number(liveData && liveData.session_time_remaining_s);
-  const crossings = Number(liveData && liveData.finish_crossings_authority);
+  const numberOrNull = value => value === null || value === undefined || value === ''
+    ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
+  const duration = numberOrNull(plan.configured_duration_s);
+  const remaining = numberOrNull(liveData && liveData.session_time_remaining_s);
+  const crossings = numberOrNull(liveData && liveData.finish_crossings_authority);
   const minutes = Number.isFinite(duration) ? Math.round(duration / 60) : null;
   if (plan.kind === 'timed' && minutes != null) {
     const remain = Number.isFinite(remaining)
@@ -838,6 +841,16 @@ function buildRacePlanReply(liveData, lang) {
     return lang === 'ja'
       ? `${minutes}分のタイムレース。${remain}${distance}`
       : `${minutes}-minute timed race. ${remain}${distance}`;
+  }
+  if (plan.kind === 'laps') {
+    const total = numberOrNull(liveData && liveData.laps_total);
+    const current = numberOrNull(liveData && liveData.lap);
+    if (Number.isInteger(total) && total > 0 && Number.isInteger(current) && current >= 0) {
+      const left = Math.max(0, total - current);
+      return lang === 'ja'
+        ? `全${total}周。現在${current}周目、残り約${left}周。`
+        : `${total} laps total. Lap ${current} now, about ${left} remaining.`;
+    }
   }
   return lang === 'ja'
     ? 'このレースの時間・周回ルールはまだ確定できない。'
@@ -918,22 +931,30 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         console.log('[account_guard] conversational account change blocked');
         return sendGuardReply(req, res, buildAccountChangeReply(_lang), 100);
       }
+      if (_directPitCommand) {
+        const _directReply = buildDirectPitReply(_directPitCommand, req.body.liveData, _lang);
+        if (_directReply) {
+          console.log(`[INTENT_ROUTE] intent=${_directPitCommand.topic} confidence=1 handler=fired`);
+          return sendGuardReply(req, res, _directReply, 100, 'deterministic', _directPitCommand.topic);
+        }
+      }
       if (isRaceRuleQuestion(_lastText)) {
-        console.log('[race_plan_guard] authoritative race-plan reply');
-        return sendGuardReply(req, res, buildRacePlanReply(req.body.liveData, _lang), 110);
+        console.log('[INTENT_ROUTE] intent=race_distance confidence=1 handler=fired');
+        return sendGuardReply(req, res, buildRacePlanReply(req.body.liveData, _lang), 110,
+          'deterministic', engineerCard.TOPIC.RACE_DISTANCE);
       }
       const _recentUserText = _msgs.slice(0, -1).reverse()
         .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
-      const _engineerCard = engineerCard.classify(_lastText, {
+      const _engineerRoute = engineerCard.route(_lastText, req.body.liveData, _lang, {
         race: mode === 'race', recentText: _recentUserText,
       });
       // Keep the established Phase-C path for the exact "pit now -> where"
       // contract: it carries calibration reasons, traffic and blend evidence.
       // Broader undercut/cycle language is handled by the new runtime card.
-      if (_engineerCard && !(_engineerCard.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
-        const _reply = engineerCard.build(_engineerCard, req.body.liveData, _lang);
-        console.log(`[engineer_card] topic=${_engineerCard.topic} -> authoritative reply`);
-        return sendGuardReply(req, res, _reply, 180);
+      if (_engineerRoute && !(_engineerRoute.card.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
+        const _intent = _engineerRoute.card.topic;
+        console.log(`[INTENT_ROUTE] intent=${_intent} confidence=${_engineerRoute.card.confidence ?? 0} handler=${_engineerRoute.status}`);
+        return sendGuardReply(req, res, _engineerRoute.reply, 180, 'deterministic', _intent);
       }
       if (isFuelQuestion(_lastText)) {
         console.log('[fuel_guard] authoritative fuel reply');

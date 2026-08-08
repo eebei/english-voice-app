@@ -76,7 +76,7 @@ if(speechFns){
 
 check('stream発話前にtruth gateを適用',
   renderer.includes("selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, isStrategyQuestion)")
-  && renderer.includes("convoLog('driver', '[TELEMETRY_TRUTH_GATE]"));
+  && renderer.includes("diagnosticLog('TELEMETRY_TRUTH_GATE'"));
 check('bridgeがピット状態のSDK証拠を配信',
   bridge.includes("'on_pit_road': bool(onPit)")
   && bridge.includes("'player_track_surface': player_track_surface")

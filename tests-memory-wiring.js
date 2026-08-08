@@ -53,7 +53,7 @@ check('デブリーフ自動蒸留はセッション中1回＋終了時',
 check('セッション終了時にも強制保存',
   /saveMemory\(\{force:true, reason:'session_end'\}\)/.test(renderer));
 check('保存成功後のみスナップショットを確定',
-  /saveProfile\(\{\.\.\.current,notes\}\);[\s\S]*?memorySavedThisSession=true;[\s\S]*?lastMemorySignature=signature;/.test(renderer));
+  /if\(!saveProfileVerified\(nextProfile\)\)[\s\S]*?return false;[\s\S]*?memorySavedThisSession=true;[\s\S]*?lastMemorySignature=signature;/.test(renderer));
 check('記憶API停止時は15秒で保存失敗を確定',
   /setTimeout\(\(\)=>ctrl\.abort\(\),15000\)/.test(renderer)
   && /signal:ctrl\.signal/.test(renderer));

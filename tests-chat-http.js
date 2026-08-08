@@ -150,6 +150,8 @@ async function testBaseline(port) {
       /現在14\.5L.*必要総量27\.6L.*13\.1L追加.*14Lセット/.test(r.body), r.body);
     check('④a2 HTTP engineer card: deterministic authority header',
       r.headers['x-pitwall-authority'] === 'deterministic', r.headers['x-pitwall-authority']);
+    check('④a2 HTTP engineer card: intent trace header',
+      r.headers['x-pitwall-intent'] === 'fuel_plan', r.headers['x-pitwall-intent']);
   }
   {
     const r = await post(port, {
@@ -282,6 +284,26 @@ async function testBaseline(port) {
     });
     const text = JSON.parse(r.body).content[0].text;
     check('⑪能動課題: ショートハンドを復帰予測として返す', /P3.*P2〜P4/.test(text), text);
+  }
+
+  // ── ⑫ Build 255 intent route: operational questions never need the LLM ──
+  {
+    const r = await post(port, {
+      stream: true, character: 'LunaJP', mode: 'race',
+      liveData: { weather: { track_temp_c: 41.2, air_temp_c: 28.4,
+        humidity: 61, track_wetness_code: 1 } },
+      messages: [{ role: 'user', content: '天候と路面は？' }],
+    });
+    check('⑫weather handler: SDK値だけで回答', /路面41\.2℃.*気温28\.4℃.*ドライ/.test(r.body), r.body);
+    check('⑫weather handler: intent header', r.headers['x-pitwall-intent'] === 'weather_status', r.headers['x-pitwall-intent']);
+  }
+  {
+    const r = await post(port, {
+      stream: true, character: 'LunaJP', mode: 'race',
+      liveData: {}, messages: [{ role: 'user', content: 'ピットの魔法を使える？' }],
+    });
+    check('⑫unknown operational: LLMへ流さずfail-closed', /専用handlerに未接続.*推測では答えない/.test(r.body), r.body);
+    check('⑫unknown operational: unavailable intent header', r.headers['x-pitwall-intent'] === 'unresolved_operational', r.headers['x-pitwall-intent']);
   }
 }
 

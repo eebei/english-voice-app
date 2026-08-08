@@ -46,7 +46,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 254 (runtime engineer cards and full pit-cycle tracking)"
+BUILD_VERSION = "Build 255 (intent substrate, verified memory and owned strategy plan)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -2078,6 +2078,9 @@ def poll_iracing():
     pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
     last_pit_cycle_outcome = None
     last_pit_service = None  # latest exact IN-limit-line -> OUT-limit-line sample
+    strategy_plan = None     # owned plan: changes only when its truth signature changes
+    strategy_plan_signature = None
+    strategy_plan_revision = 0
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -2493,6 +2496,9 @@ def poll_iracing():
             _force_driver_activity_broadcast = False
             pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
             last_pit_cycle_outcome = None
+            strategy_plan = None
+            strategy_plan_signature = None
+            strategy_plan_revision = 0
             # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
             _pending_summary = _reset['_pending_summary']
             _pending_non_race_summary = _reset['_pending_non_race_summary']
@@ -4451,12 +4457,12 @@ def poll_iracing():
             # score, this projects from the player's current track position so
             # 「今入ったら？」 can be answered before committing to pit road.
             _pit_now_forecast = None
+            _pit_now_flags = reader.read_int('SessionFlags') or 0
+            _pit_now_caution = 'caution' if (_pit_now_flags & 0xC000) else 'green'
+            _pit_now_calibration = pit_loss_calibrator.get_summary(
+                session_track, session_car_model, _pit_now_caution)
             if is_race_session and not onPit and onTrack:
                 _pit_now_session_time = reader.read_double('SessionTime')
-                _pit_now_flags = reader.read_int('SessionFlags') or 0
-                _pit_now_caution = 'caution' if (_pit_now_flags & 0xC000) else 'green'
-                _pit_now_calibration = pit_loss_calibrator.get_summary(
-                    session_track, session_car_model, _pit_now_caution)
                 _pit_now_last_laps = reader.read_float_array('CarIdxLastLapTime', 64)
                 _pit_now_cls_positions = reader.read_int_array('CarIdxClassPosition', 64)
                 _pit_now_cars = []
@@ -4523,6 +4529,48 @@ def poll_iracing():
                 _live_add = max(0.0, _fuel_strategy_live['required_fuel_l'] - fuel)
                 _fuel_strategy_live['add_fuel_l'] = round(_live_add, 3)
                 _fuel_strategy_live['set_fuel_l'] = int(math.ceil(_live_add))
+            # Owned strategy plan.  It persists between requests and receives a
+            # new revision only when an authoritative input changes.
+            _plan_action = 'hold'
+            _plan_reason = 'insufficient_data'
+            _plan_set_fuel = None
+            _plan_margin = None
+            if isinstance(_fuel_strategy_live, dict):
+                _plan_set_fuel = _fuel_strategy_live.get('set_fuel_l')
+                _plan_margin = _fuel_strategy_live.get('margin_l')
+                if (_fuel_strategy_live.get('pit_required') is True
+                        or (isinstance(_fuel_strategy_live.get('add_fuel_l'), (int, float))
+                            and _fuel_strategy_live.get('add_fuel_l') > 0)):
+                    _plan_action, _plan_reason = 'box', 'fuel_shortfall'
+                elif isinstance(_plan_margin, (int, float)) and _plan_margin >= 0:
+                    _plan_action, _plan_reason = 'push', 'fuel_margin'
+            _plan_physical = None
+            _plan_cycle = None
+            if isinstance(_pit_now_forecast, dict) and _pit_now_forecast.get('available'):
+                _plan_physical = ((_pit_now_forecast.get('likely') or {}).get('position'))
+                _plan_cycle = ((((_pit_now_forecast.get('pit_cycle') or {})
+                                  .get('if_pack_stops') or {}).get('likely') or {})
+                               .get('position'))
+            _plan_signature = (
+                cur_snum, _plan_action, _plan_reason, _plan_set_fuel,
+                round(_plan_margin, 2) if isinstance(_plan_margin, (int, float)) else None,
+                _plan_physical, _plan_cycle)
+            if _plan_signature != strategy_plan_signature:
+                strategy_plan_revision += 1
+                strategy_plan_signature = _plan_signature
+                strategy_plan = {
+                    'session_num': cur_snum,
+                    'revision': strategy_plan_revision,
+                    'action': _plan_action,
+                    'reason': _plan_reason,
+                    'set_fuel_l': _plan_set_fuel,
+                    'margin_l': _plan_margin,
+                    'physical_exit_position': _plan_physical,
+                    'conditional_cycle_position': _plan_cycle,
+                    'updated_at_session_s': reader.read_double('SessionTime'),
+                }
+                log('STRATEGY PLAN update: ' + json.dumps(
+                    strategy_plan, ensure_ascii=False, separators=(',', ':')))
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -4560,12 +4608,14 @@ def poll_iracing():
                 'player_track_surface': player_track_surface,
                 'pit_service_status': pit_service_status,
                 'fuel_strategy': _fuel_strategy_live,
+                'strategy_plan': strategy_plan,
                 'tires': tires,
                 'damage_s': damage_s,
                 'weather': weather,
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,
                 'pit_exit_forecast': _pit_now_forecast,
+                'pit_loss_calibration': _pit_now_calibration,
                 'pit_cycle_status': pit_cycle_tracker.status(),
                 'pit_cycle_outcome': last_pit_cycle_outcome,
                 'last_pit_service': last_pit_service,
