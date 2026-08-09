@@ -64,9 +64,16 @@ function classify(text, options = {}) {
     return { topic: TOPIC.POSITION_GAP, targetPosition: m ? Number(m[1]) : null, confidence: 0.97 };
   }
   if (/今.*(?:何位|何番手)|現在.*(?:順位|ポジション)|順位は|current position|what position/i.test(t)) return { topic: TOPIC.CURRENT_POSITION, confidence: 0.98 };
-  if (/タイヤ|摩耗|温度|左前|右前|左後|右後|tyre|tire|wear/i.test(t)) return { topic: TOPIC.TYRE_STATUS, confidence: 0.97 };
+  // Weather must win before the generic tyre vocabulary.  Previously
+  // "路面温度" matched the bare "温度" tyre rule and returned tyre wear.
+  if (/天気|天候|気温|路面(?:温度|状況)|路温|トラック温度|雨|濡れ|湿度|weather|track temp|air temp|rain|wet/i.test(t)) return { topic: TOPIC.WEATHER_STATUS, confidence: 0.99 };
+  if (/タイヤ|摩耗|左前|右前|左後|右後|tyre|tire|wear/i.test(t)) {
+    const tyreQuery = /(?:タイヤ|tyre|tire).{0,8}(?:温度|temp)|(?:温度|temp).{0,8}(?:タイヤ|tyre|tire)/i.test(t)
+      ? 'temperature'
+      : /摩耗|残量|残り|wear/i.test(t) ? 'wear' : 'status';
+    return { topic: TOPIC.TYRE_STATUS, tyreQuery, confidence: 0.98 };
+  }
   if (/ダメージ|損傷|修理|壊れ|damage|repair/i.test(t)) return { topic: TOPIC.DAMAGE_STATUS, confidence: 0.98 };
-  if (/天気|天候|気温|路面温度|雨|濡れ|湿度|weather|track temp|air temp|rain|wet/i.test(t)) return { topic: TOPIC.WEATHER_STATUS, confidence: 0.98 };
 
   if (options.race === true && /^\s*\d+(?:\.\d+)?\s*[lL](?:級|ぐらい|くらい|だ|です)?[。.!！?？]?\s*$/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.85 };
   if (options.race === true && /計算|判断|どうする|大丈夫|予測|これ|それ|もう/.test(t)) {
@@ -122,6 +129,17 @@ function fuelPlan(live) {
   return { fs, current, required, add, set: add != null ? Math.ceil(add) : null };
 }
 
+function hasAuthoritativeFinishTarget(live) {
+  const fs = live && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
+  const sessionType = String(live && (live.session_type || live.sessionType) || '').toLowerCase();
+  const manualTarget = fs.authoritative_target_kind === 'driver_stint'
+    && Number.isInteger(finite(fs.authoritative_target_laps));
+  const raceTarget = /race/.test(sessionType)
+    && (Number.isInteger(finite(fs.estimated_crossings_to_finish))
+      || Number.isInteger(finite(fs.provisional_laps_to_time_expiry)));
+  return manualTarget || raceTarget;
+}
+
 function buildCurrentFuel(live, lang) {
   const current = finite(live && live.fuel);
   if (current == null) return ja(lang) ? '現在燃料は取得できない。' : 'Current fuel is unavailable.';
@@ -139,6 +157,12 @@ function buildFuelUse(live, lang) {
 
 function buildFuelPlan(live, lang, card = {}) {
   const { fs, current, required, add, set } = fuelPlan(live || {});
+  if (!hasAuthoritativeFinishTarget(live)) {
+    const avg = finite(fs.avg_fuel_per_lap);
+    return ja(lang)
+      ? `${current != null ? `現在${current.toFixed(1)}L。` : ''}${avg != null ? `平均${avg.toFixed(2)}L/周。` : ''}完走目標が確定していないため、必要燃料・給油量・ピット周は出さない。`
+      : `${current != null ? `Current ${current.toFixed(1)}L. ` : ''}${avg != null ? `Average ${avg.toFixed(2)}L/lap. ` : ''}The finish target is not authoritative, so I will not give required fuel, an add amount, or a pit-lap call.`;
+  }
   const exact = finite(fs.estimated_crossings_to_finish), provisional = finite(fs.provisional_laps_to_time_expiry);
   if (current != null && required != null && add != null) {
     const distance = Number.isInteger(exact)
@@ -248,6 +272,9 @@ function buildPitService(live, lang) {
 }
 
 function derivedAction(live) {
+  if (!hasAuthoritativeFinishTarget(live)) {
+    return { action: 'hold', reason: 'finish_target_unavailable', set_fuel_l: null };
+  }
   const { fs, add, set } = fuelPlan(live || {});
   const phase = pitPhase(live);
   if (phase === 'finished') return { action: 'hold', reason: 'race_finished', set_fuel_l: 0 };
@@ -351,17 +378,30 @@ function buildLeaderGap(live, lang) {
   return ja(lang) ? `クラスリーダーまで${Math.abs(gap).toFixed(1)}秒。` : `${Math.abs(gap).toFixed(1)}s to the class leader.`;
 }
 
-function buildTyreStatus(live, lang) {
+function buildTyreStatus(live, lang, card = {}) {
   const tires = live && live.tires || {}, names = { lf:'左前', rf:'右前', lr:'左後', rr:'右後' };
+  const measurement = live && live.tire_measurement || {};
+  const query = card.tyreQuery || 'status';
+  if (measurement.available !== true) {
+    if (query === 'temperature') return ja(lang)
+      ? '走行中のタイヤ温度はエンジニア側では取得できない。車両ダッシュの表示を教えて。路面温度なら取得できる。'
+      : 'Live tyre temperature is unavailable to the engineer. Read it from the car dashboard; track temperature is available separately.';
+    if (query === 'wear') return ja(lang)
+      ? '走行中のタイヤ摩耗は取得できない。ピット帰還後の計測値で確認する。'
+      : 'Live tyre wear is unavailable. I can confirm the measured value after the car returns to the pit.';
+    return ja(lang)
+      ? '走行中のタイヤ温度・摩耗は取得できない。温度は車両ダッシュ、摩耗はピット帰還後に確認する。'
+      : 'Live tyre temperature and wear are unavailable. Read temperature from the car dashboard and confirm wear after returning to the pit.';
+  }
   const rows = Object.keys(names).map(k => {
     const tire = tires[k] || {}, wear = Array.isArray(tire.w) ? tire.w.map(finite).filter(v => v != null) : [];
     const temp = Array.isArray(tire.t) ? tire.t.map(finite).filter(v => v != null) : [];
     return { k, wear: wear.length ? Math.min(...wear) : null, temp: temp.length ? temp.reduce((a,b)=>a+b,0)/temp.length : null };
   });
   if (!rows.some(r => r.wear != null || r.temp != null)) return ja(lang) ? '走行中に信頼できるタイヤ摩耗・温度は取得できない。' : 'Reliable tyre wear and temperature are unavailable while running.';
-  const parts = rows.filter(r=>r.wear != null || r.temp != null).map(r => ja(lang)
-    ? `${names[r.k]} 残${r.wear == null ? '不明' : r.wear.toFixed(1) + '%'}${r.temp == null ? '' : ` ${r.temp.toFixed(1)}℃`}`
-    : `${r.k.toUpperCase()} ${r.wear == null ? 'wear unknown' : r.wear.toFixed(1) + '% remaining'}${r.temp == null ? '' : ` ${r.temp.toFixed(1)}C`}`);
+  const parts = rows.filter(r => query === 'temperature' ? r.temp != null : query === 'wear' ? r.wear != null : (r.wear != null || r.temp != null)).map(r => ja(lang)
+    ? `${names[r.k]}${query === 'temperature' ? ` ${r.temp.toFixed(1)}℃` : query === 'wear' ? ` 残${r.wear.toFixed(1)}%` : ` 残${r.wear == null ? '不明' : r.wear.toFixed(1) + '%'}${r.temp == null ? '' : ` ${r.temp.toFixed(1)}℃`}`}`
+    : `${r.k.toUpperCase()}${query === 'temperature' ? ` ${r.temp.toFixed(1)}C` : query === 'wear' ? ` ${r.wear.toFixed(1)}% remaining` : ` ${r.wear == null ? 'wear unknown' : r.wear.toFixed(1) + '% remaining'}${r.temp == null ? '' : ` ${r.temp.toFixed(1)}C`}`}`);
   return parts.join(ja(lang) ? '、' : ', ') + (ja(lang) ? '。' : '.');
 }
 
@@ -409,7 +449,7 @@ function build(card, live, lang = 'en') {
   if (card.topic === TOPIC.POSITION_GAP) return buildPositionGap(live || {}, card.targetPosition, lang);
   if (card.topic === TOPIC.UNRESOLVED_OPERATIONAL) return buildUnresolved(lang);
   const handler = handlers[card.topic];
-  return handler ? handler(live || {}, lang) : null;
+  return handler ? handler(live || {}, lang, card) : null;
 }
 
 function route(text, live, lang = 'en', options = {}) {
@@ -419,4 +459,4 @@ function route(text, live, lang = 'en', options = {}) {
   return { card, reply, status: card.topic === TOPIC.UNRESOLVED_OPERATIONAL ? 'unavailable' : 'fired' };
 }
 
-module.exports = { TOPIC, classify, build, route, fuelPlan, formatDuration, pitPhase, OPERATIONAL_RE };
+module.exports = { TOPIC, classify, build, route, fuelPlan, hasAuthoritativeFinishTarget, formatDuration, pitPhase, OPERATIONAL_RE };

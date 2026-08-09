@@ -782,6 +782,13 @@ function buildFuelAuthorityReply(liveData, lang) {
   const live = liveData && typeof liveData === 'object' ? liveData : {};
   const fs = live.fuel_strategy && typeof live.fuel_strategy === 'object'
     ? live.fuel_strategy : {};
+  if (!engineerCard.hasAuthoritativeFinishTarget(live)) {
+    const current = Number(live.fuel);
+    const average = Number(fs.avg_fuel_per_lap);
+    return lang === 'ja'
+      ? `${Number.isFinite(current) ? `現在${current.toFixed(1)}L。` : ''}${Number.isFinite(average) ? `平均${average.toFixed(2)}L/周。` : ''}完走目標が確定していないため、必要燃料・給油量・ピット周は出さない。`
+      : `${Number.isFinite(current) ? `Current ${current.toFixed(1)}L. ` : ''}${Number.isFinite(average) ? `Average ${average.toFixed(2)}L/lap. ` : ''}The finish target is not authoritative, so I will not give required fuel, an add amount, or a pit-lap call.`;
+  }
   const required = Number(fs.required_fuel_l);
   const margin = Number(fs.margin_l);
   const exact = Number(fs.estimated_crossings_to_finish);
@@ -947,8 +954,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       }
       const _recentUserText = _msgs.slice(0, -1).reverse()
         .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
+      const _engineerLive = {
+        ...(req.body.liveData && typeof req.body.liveData === 'object' ? req.body.liveData : {}),
+        session_type: req.body.sessionType
+          || (req.body.liveData && req.body.liveData.session_type),
+      };
       const _engineerRoute = mode === 'race'
-        ? engineerCard.route(_lastText, req.body.liveData, _lang, {
+        ? engineerCard.route(_lastText, _engineerLive, _lang, {
           race: true, recentText: _recentUserText,
         })
         : null;
@@ -962,7 +974,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       }
       if (mode === 'race' && isFuelQuestion(_lastText)) {
         console.log('[fuel_guard] authoritative fuel reply');
-        return sendGuardReply(req, res, buildFuelAuthorityReply(req.body.liveData, _lang), 110);
+        return sendGuardReply(req, res, buildFuelAuthorityReply(_engineerLive, _lang), 110);
       }
     } catch (e) {
       console.log('[strategy_guard] classify skipped: ' + e.message);   // 分類前の失敗のみ通常経路へ

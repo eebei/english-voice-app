@@ -9,6 +9,7 @@ function check(name, cond, detail = '') {
 }
 
 const beforePit = {
+  session_type: 'Race',
   class_pos: 8,
   fuel: 14.5,
   gap_ahead: 0.3,
@@ -69,6 +70,7 @@ check('undercut opinion produces an owned box recommendation',
 
 card = cards.classify('2リッター 足りないってこと？');
 reply = cards.build(card, {
+  session_type: 'Race',
   fuel: 12.83,
   fuel_strategy: { estimated_crossings_to_finish: 4, required_fuel_l: 13.613,
     margin_l: -0.783, pit_required: true },
@@ -81,6 +83,7 @@ card = cards.classify('ギリギリ足りそうだったらゆっくり行くけ
   race: true, recentText: 'ゴールまで燃料は足りる？',
 });
 reply = cards.build(card, {
+  session_type: 'Race',
   fuel: 15.7,
   fuel_strategy: { estimated_crossings_to_finish: 5, required_fuel_l: 16.8,
     margin_l: -1.1, pit_required: true },
@@ -125,10 +128,12 @@ const build255Live = {
   pos: 22, lap: 7, laps_total: null, session_time_remaining_s: 302,
   race_plan: { kind: 'timed', configured_duration_s: 1200, racing_started: true },
   finish_crossings_authority: 4,
+  session_type: 'Race',
   strategy_plan: { revision: 3, action: 'push', reason: 'fuel_margin', margin_l: 4.7 },
   last_pit_service: { lane_total_s: 42.8, stall_s: 18.1, fuel_added_l: 12.6 },
   pit_loss_calibration: { lane_total_median_s: 43.2, lane_total_q1_s: 42.4,
     lane_total_q3_s: 44.0, usable_sample_count: 6 },
+  tire_measurement: { available: true, source: 'pit_return', session_time_s: 500 },
   tires: { lf:{w:[91,90,89],t:[80,82,84]}, rf:{w:[88,87,86],t:[83,85,87]},
     lr:{w:[94,93,92],t:[77,79,81]}, rr:{w:[92,91,90],t:[79,81,83]} },
   damage_s: 0,
@@ -154,6 +159,38 @@ for (const [utterance, topic, expected] of intentCases) {
   const routed = cards.route(utterance, build255Live, 'ja', { race:true });
   check(`Build 255 handler ${topic}`, routed && routed.card.topic===topic && expected.test(routed.reply), routed&&routed.reply);
 }
+
+const practiceFuel = {
+  session_type: 'Practice', fuel: 31.7,
+  fuel_strategy: { avg_fuel_per_lap: 13.289, estimated_crossings_to_finish: 17,
+    required_fuel_l: 225.9, add_fuel_l: 194.2, pit_required: true },
+  strategy_plan: { action: 'box', reason: 'fuel_shortfall', set_fuel_l: 195 },
+};
+reply = cards.route('ゴールまで燃料足りる？', practiceFuel, 'ja', { race:true }).reply;
+check('Practice without an authoritative finish target suppresses required/add/pit calls',
+  /完走目標が確定していない.*必要燃料・給油量・ピット周は出さない/.test(reply)
+  && !/225\.9|195L|ピットを推奨/.test(reply), reply);
+reply = cards.route('今ボックスするべき？', practiceFuel, 'ja', { race:true }).reply;
+check('stale Practice strategy_plan cannot order a stop',
+  /ホールド.*ボックス指示は出さない/.test(reply) && !/195L/.test(reply), reply);
+
+let routed = cards.route('路面温度は？', {
+  weather:{track_temp_c:33.9,air_temp_c:19.9,humidity:94,track_wetness_code:1}
+}, 'ja', {race:true});
+check('路面温度 routes to weather before tyre status',
+  routed.card.topic === cards.TOPIC.WEATHER_STATUS && /路面33\.9℃.*気温19\.9℃/.test(routed.reply), routed.reply);
+routed = cards.route('ルナ、タイヤ温度。', {
+  tire_measurement:{available:false}, weather:{track_temp_c:33.9},
+  tires:{lf:{w:[100,100,100],t:[34.6,34.6,34.6]}}
+}, 'ja', {race:true});
+check('running tyre-temperature query never returns stale 100% wear',
+  routed.card.tyreQuery === 'temperature' && /車両ダッシュ/.test(routed.reply)
+  && !/100\.0%|34\.6℃/.test(routed.reply), routed.reply);
+routed = cards.route('タイヤ摩耗は？', {
+  tire_measurement:{available:false}, tires:{lf:{w:[100,100,100]}}
+}, 'ja', {race:true});
+check('running tyre-wear query waits for pit return',
+  routed.card.tyreQuery === 'wear' && /ピット帰還後/.test(routed.reply) && !/100\.0%/.test(routed.reply), routed.reply);
 const unknownRoute = cards.route('ピットの魔法を使える？', build255Live, 'ja', { race:true });
 check('unhandled operational request fails closed before LLM',
   unknownRoute && unknownRoute.card.topic===cards.TOPIC.UNRESOLVED_OPERATIONAL

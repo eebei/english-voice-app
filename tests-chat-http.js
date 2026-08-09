@@ -126,7 +126,7 @@ async function testBaseline(port) {
   // ── Race Plan / Fuel / Account は会話LLMでなく権威データから返す ──
   {
     const r = await post(port, {
-      stream: false, character: 'LunaJP', mode: 'race',
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
       liveData: { fuel: 20.0, fuel_strategy: {
         avg_fuel_per_lap: 3.65, provisional_laps_to_time_expiry: 7,
         required_fuel_l: 25.55, margin_l: -5.55,
@@ -139,7 +139,7 @@ async function testBaseline(port) {
   }
   {
     const r = await post(port, {
-      stream: true, character: 'LunaJP', mode: 'race',
+      stream: true, character: 'LunaJP', mode: 'race', sessionType: 'Race',
       liveData: { fuel: 14.5, fuel_strategy: {
         estimated_crossings_to_finish: 8, required_fuel_l: 27.617,
         margin_l: -10.642, pit_required: true, add_fuel_l: 10.642,
@@ -155,7 +155,7 @@ async function testBaseline(port) {
   }
   {
     const r = await post(port, {
-      stream: true, character: 'LunaJP', mode: 'race',
+      stream: true, character: 'LunaJP', mode: 'race', sessionType: 'Race',
       liveData: { fuel: 12.83, fuel_strategy: {
         estimated_crossings_to_finish: 4, required_fuel_l: 13.613,
         margin_l: -0.783, pit_required: true,
@@ -183,7 +183,7 @@ async function testBaseline(port) {
       stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
       liveData: {
         class_pos: 8, fuel: 14.5,
-        fuel_strategy: { required_fuel_l: 27.6, add_fuel_l: 13.1, pit_required: true },
+        fuel_strategy: { estimated_crossings_to_finish: 8, required_fuel_l: 27.6, add_fuel_l: 13.1, pit_required: true },
         strategy_plan: { action: 'box', reason: 'fuel_shortfall', set_fuel_l: 14 },
         pit_exit_forecast: { available: true,
           likely:{position:17}, best:{position:16}, worst:{position:18},

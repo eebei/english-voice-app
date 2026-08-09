@@ -46,7 +46,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 257 (audio-first fuel follow-up and debrief route hardening)"
+BUILD_VERSION = "Build 258 (Practice fuel authority and tyre/weather truth hardening)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1968,7 +1968,8 @@ def classify_race_clock(is_race_session, lap, laps_total, time_remaining):
     UnboundLocalError before any lap could complete.
     """
     laps_total_ok = (
-        isinstance(lap, (int, float))
+        bool(is_race_session)
+        and isinstance(lap, (int, float))
         and isinstance(laps_total, (int, float))
         and 0 < laps_total < 3000
         and laps_total > lap + 1)
@@ -2906,6 +2907,15 @@ def poll_iracing():
 
         # ── タイヤ詳細（4輪×内中外温度＋摩耗）と損傷代理(修理所要秒) ──
         # 項目7：「右フロント垂れてる」「損傷は？」に実データで答えるため。聞かれた時だけ使う。
+        _tire_measurement_available = bool(
+            driver_state == 'garage'
+            or (player_track_surface == 1
+                and isinstance(_speech_speed, (int, float))
+                and _speech_speed < 1.0))
+        _tire_measurement_session_time = (
+            reader.read_double('SessionTime')
+            if _tire_measurement_available else None)
+
         def _tire(corner):
             # 温度[内,中,外]と摩耗残%[内,中,外]。%は0-1で来るので100倍。
             t = [reader.read_float(corner+'tempCL'), reader.read_float(corner+'tempCM'), reader.read_float(corner+'tempCR')]
@@ -2915,8 +2925,8 @@ def poll_iracing():
             #   3点が完全一致＝デフォルト＝「未取得」とみなし温度はNoneにする（39.4の捏造報告を根絶）。
             if t[0] is not None and t[0] == t[1] == t[2]:
                 t = [None, None, None]
-            t = [round(x,1) if x is not None else None for x in t]
-            w = [round(x*100,1) if x is not None else None for x in w]
+            t = [round(x,1) if x is not None and _tire_measurement_available else None for x in t]
+            w = [round(x*100,1) if x is not None and _tire_measurement_available else None for x in w]
             return {'t': t, 'w': w}
         tires = {'lf': _tire('LF'), 'rf': _tire('RF'), 'lr': _tire('LR'), 'rr': _tire('RR')}
         repair_mand = reader.read_float('PitRepairLeft')      # 義務修理の残り秒（>0=要修理の損傷あり）
@@ -4631,6 +4641,7 @@ def poll_iracing():
                     'session_state': cur_ss,
                     'racing_started': cur_ss == 4,
                 },
+                'session_type': info.get('current_session_type'),
                 'finish_crossings_authority': (
                     _milestone_laps if _milestone_laps is not None else None),
                 'finish_crossings_status': (
@@ -4649,6 +4660,13 @@ def poll_iracing():
                 'fuel_strategy': _fuel_strategy_live,
                 'strategy_plan': strategy_plan,
                 'tires': tires,
+                'tire_measurement': {
+                    'available': _tire_measurement_available,
+                    'source': 'pit_return' if _tire_measurement_available else 'unavailable_while_running',
+                    'session_time_s': round(_tire_measurement_session_time, 1)
+                    if isinstance(_tire_measurement_session_time, (int, float))
+                    else None,
+                },
                 'damage_s': damage_s,
                 'weather': weather,
                 'standings_gaps': standings_gaps,

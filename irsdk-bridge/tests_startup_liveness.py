@@ -33,6 +33,10 @@ def main():
     total_ok, timed, remaining = bridge.classify_race_clock(False, 0, 32767, 1800.0)
     check("Practice first poll is safe", (total_ok, timed, remaining) == (False, False, None))
 
+    total_ok, timed, remaining = bridge.classify_race_clock(False, 0, 17, 7200.0)
+    check("finite Practice lap target is not a finish authority",
+          (total_ok, timed, remaining) == (False, False, None))
+
     total_ok, timed, remaining = bridge.classify_race_clock(True, 1, 20, 1800.0)
     check("lap-count race first poll", (total_ok, timed, remaining) == (True, False, 19))
 
