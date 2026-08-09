@@ -987,6 +987,47 @@ let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let iracingConnectionSeen = false, iracingConnectedAt = 0, lastTelemetryAt = 0, telemetryStaleNotified = false;
 const TELEMETRY_STALE_MS = 12000;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null, lastSessionNum = null;
+// A deferred race answer is a promise, not a dead end.  It is armed only by
+// the deterministic operational fallback and completes once at the next S/F
+// snapshot (or expires).  The driver never has to ask the same question again.
+let pendingOperationalFollowUp = null;
+function armOperationalFollowUp(intent){
+  const lap=Number(lastTelemetry&&lastTelemetry.lap);
+  if(!Number.isFinite(lap) || !iracingLive || selMode!=='race') return;
+  pendingOperationalFollowUp={intent:intent||'unresolved_operational', armedLap:Math.trunc(lap),
+    expiresAt:Date.now()+180000, running:false};
+  diagnosticLog('OPERATIONAL_FOLLOWUP','armed intent='+intent+' lap='+Math.trunc(lap));
+}
+async function deliverOperationalFollowUp(){
+  const job=pendingOperationalFollowUp;
+  if(!job || job.running || !lastTelemetry || selMode!=='race') return;
+  job.running=true;
+  try{
+    const authToken=localStorage.getItem('pw_auth_token');
+    const headers={'Content-Type':'application/json'};
+    const body={messages:[{role:'user',content:'戦略プランは？'}],character:sel,mode:selMode,level:'C2',userName,
+      telemetry:iracingLive?'live':(bridgeConnected?'bridge':'off'),liveData:lastTelemetry,sessionType:lastSessionType,
+      sessionAuthority:lastSessionAuthority,driverState,driverActivity,carClass:lastCarClass,max_tokens:80,usageSessionId};
+    applyPitwallAccess(headers,body);
+    const res=await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});
+    if(!res.ok) throw new Error('http '+res.status);
+    const data=await res.json();
+    const reply=normalizeLunaSpeech((data.content&&data.content[0]&&data.content[0].text||'').trim());
+    if(!reply) return;
+    addMsg('ai',reply); pushMsg({role:'assistant',content:reply});
+    speak(reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'operational_followup',dedupeKey:'operational_followup'});
+    diagnosticLog('OPERATIONAL_FOLLOWUP','delivered intent='+job.intent);
+  }catch(e){
+    diagnosticLog('OPERATIONAL_FOLLOWUP','failed '+(e&&e.message||e));
+  }finally{ pendingOperationalFollowUp=null; }
+}
+function maybeRunOperationalFollowUp(data){
+  const job=pendingOperationalFollowUp;
+  if(!job) return;
+  if(Date.now()>job.expiresAt || !iracingLive || selMode!=='race'){ pendingOperationalFollowUp=null; return; }
+  const lap=Number(data&&data.lap);
+  if(Number.isFinite(lap) && Math.trunc(lap)>job.armedLap) deliverOperationalFollowUp();
+}
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
 let lastWeekendAuthority = null;  // entry list / qualifying format and result authority
@@ -1920,11 +1961,11 @@ function telemetryTruthFallback(live, userText, isJP){
   if(isJP){
     if(live && live.on_pit_road===true) return 'ピットレーン内。';
     if(pitIntent) return sel==='LunaJP' ? 'うん、ボックス準備。' : 'ボックス準備。';
-    return sel==='LunaJP' ? 'その車両状態はまだ成立してないよ。' : 'その車両状態はまだ成立していない。';
+    return '今は確認できる数値だけで答える。次のS/Fで燃料、残り、前後GAPを更新する。';
   }
   if(live && live.on_pit_road===true) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
-  return 'That vehicle state is not active.';
+  return 'I will use only confirmed values and update fuel, remaining distance and gaps at the next S/F crossing.';
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -2058,6 +2099,10 @@ async function callAPI(inputSource, memoryStatus=''){
       ? truthFallback
       : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
     diagnosticLog('INTENT_ROUTE',`intent=${responseIntent||'conversation'} authority=${responseAuthority}`);
+    if(responseAuthority==='deterministic' && responseIntent==='unresolved_operational'){
+      armOperationalFollowUp(responseIntent);
+    }
+    if(truthBlocked) armOperationalFollowUp('telemetry_truth_gate');
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:display});
@@ -2784,6 +2829,7 @@ function connectBridge(){
         lastTelemetry=data;
         updatePracticeRun(data);
         announceActiveStrategyObjective(data);
+        maybeRunOperationalFollowUp(data);
       }
       if(data.type==='telemetry_error'){
         markTelemetryStale(data.code||'bridge_error');

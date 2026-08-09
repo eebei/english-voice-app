@@ -184,7 +184,7 @@ routed = cards.route('ルナ、タイヤ温度。', {
   tires:{lf:{w:[100,100,100],t:[34.6,34.6,34.6]}}
 }, 'ja', {race:true});
 check('running tyre-temperature query never returns stale 100% wear',
-  routed.card.tyreQuery === 'temperature' && /車両ダッシュ/.test(routed.reply)
+  routed.card.tyreQuery === 'temperature' && /車種によってダッシュ表示/.test(routed.reply)
   && !/100\.0%|34\.6℃/.test(routed.reply), routed.reply);
 routed = cards.route('タイヤ摩耗は？', {
   tire_measurement:{available:false}, tires:{lf:{w:[100,100,100]}}
@@ -192,9 +192,19 @@ routed = cards.route('タイヤ摩耗は？', {
 check('running tyre-wear query waits for pit return',
   routed.card.tyreQuery === 'wear' && /ピット帰還後/.test(routed.reply) && !/100\.0%/.test(routed.reply), routed.reply);
 const unknownRoute = cards.route('ピットの魔法を使える？', build255Live, 'ja', { race:true });
-check('unhandled operational request fails closed before LLM',
+check('unhandled operational request creates a deterministic follow-up promise',
   unknownRoute && unknownRoute.card.topic===cards.TOPIC.UNRESOLVED_OPERATIONAL
-  && /専用handlerに未接続.*推測では答えない/.test(unknownRoute.reply));
+  && unknownRoute.status==='deferred' && /次のS\/F通過で燃料、残り、前後GAPを更新/.test(unknownRoute.reply));
+card = cards.classify('燃料 0になってるけど。', {race:true});
+reply = cards.build(card, {...build255Live, fuel:0}, 'ja');
+check('fuel-zero wording routes to measured current-fuel handler',
+  card.topic===cards.TOPIC.CURRENT_FUEL && reply==='現在0.0L。', reply);
+card = cards.classify('レースのフォーマットは知ってますか？', {race:true});
+reply = cards.build(card, build255Live, 'ja');
+check('session-format question has a deterministic SessionInfo answer',
+  card.topic===cards.TOPIC.SESSION_FORMAT && /Race、時間制。残り5分2秒。/.test(reply), reply);
+card = cards.classify('ディスラップボックス。', {race:true});
+check('STT this-lap-box variation routes to pit decision', card.topic===cards.TOPIC.PIT_DECISION, card&&card.topic);
 check('all Build 255 operational topics have deterministic builders',
   Object.values(cards.TOPIC).length >= 18 && intentCases.every(([u])=>cards.route(u,build255Live,'ja',{race:true})?.reply));
 const logReplayCases = [
@@ -218,6 +228,10 @@ check('renderer records deterministic intent trace without overlay mirroring',
   && renderer.includes("diagnosticLog('INTENT_ROUTE'"));
 check('deterministic response bypasses generic LLM Truth Gate',
   renderer.includes("responseAuthority!=='deterministic' && selMode==='race'"));
+check('deferred operational answer arms an automatic next-S/F update',
+  renderer.includes("armOperationalFollowUp(responseIntent)")
+  && renderer.includes('maybeRunOperationalFollowUp(data)')
+  && renderer.includes("content:'戦略プランは？'"));
 check('critical fuel radio proactively includes physical and conditional pit positions',
   /今入ると物理P/.test(renderer) && /台が止まればP/.test(renderer));
 check('safe post-stop fuel transition authorises a pace increase',

@@ -336,7 +336,7 @@ async function testBaseline(port) {
       stream: true, character: 'LunaJP', mode: 'race',
       liveData: {}, messages: [{ role: 'user', content: 'ピットの魔法を使える？' }],
     });
-    check('⑫unknown operational: LLMへ流さずfail-closed', /専用handlerに未接続.*推測では答えない/.test(r.body), r.body);
+    check('⑫unknown operational: LLMへ流さず次S/F更新を約束', /次のS\/F通過で燃料、残り、前後GAPを更新/.test(r.body), r.body);
     check('⑫unknown operational: unavailable intent header', r.headers['x-pitwall-intent'] === 'unresolved_operational', r.headers['x-pitwall-intent']);
   }
 }

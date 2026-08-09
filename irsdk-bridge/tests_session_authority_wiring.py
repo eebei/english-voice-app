@@ -195,9 +195,9 @@ def test_mutation_detection():
     check('M1 detected',
           'lastSessionType=data.data.event_type' in mutations[
               'M1 EventType restored in renderer'])
-    check('M2 detected by four-path count',
+    check('M2 detected by six-path count',
           mutations['M2 structured API payload removed'].count(
-              'sessionAuthority:lastSessionAuthority') < 5)
+              'sessionAuthority:lastSessionAuthority') < 6)
     check('M3 detected by parser contract',
           "stripped.startswith('CarScreenName:')" not in mutations[
               'M3 model parser removed'])

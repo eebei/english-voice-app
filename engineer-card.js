@@ -21,6 +21,7 @@ const TOPIC = Object.freeze({
   WEATHER_STATUS: 'weather_status',
   TRAFFIC_STATUS: 'traffic_status',
   PLAN_STATUS: 'plan_status',
+  SESSION_FORMAT: 'session_format',
   ACKNOWLEDGEMENT: 'acknowledgement',
   UNRESOLVED_OPERATIONAL: 'unresolved_operational',
 });
@@ -45,13 +46,14 @@ function classify(text, options = {}) {
   if (fuelWord && /燃費|消費|一周|1周|周あたり|平均|per lap|consumption|burn/i.test(t)) return { topic: TOPIC.FUEL_USE, confidence: 0.99 };
   const fuelPlan = /給油|足り|必要|不足|余裕|完走|最後|ゴール|チェッカー|入れ|セット|何周.*(?:持|走)|make it|to (?:the )?finish|add fuel|fuel plan/i.test(t);
   if (fuelWord && fuelPlan) return { topic: TOPIC.FUEL_PLAN, confidence: 0.99 };
-  if (fuelWord && /搭載|残量|現在|いま|今|スタート|積ん|どれだけ|何(?:リットル|リッター|L)|on board|remaining|right now|how much/i.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.99 };
+  if (fuelWord && /搭載|残量|現在|いま|今|スタート|積ん|どれだけ|何(?:リットル|リッター|L)|0(?:\.?0*)?(?:\s*[lL])?|ゼロ|on board|remaining|right now|how much/i.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.99 };
   if (/給油|何(?:リットル|リッター|L).*(?:入れ|セット)|(?:入れ|セット).*何(?:リットル|リッター|L)/i.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.97 };
   if (/\d+(?:\.\d+)?\s*[lL].*(?:大丈夫|足り|必要)|(?:大丈夫|足り|必要).*\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.96 };
   if (/今.{0,8}\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.94 };
 
+  if (/レース(?:の)?(?:フォーマット|形式|距離|時間)|予選(?:あり|なし)|何分(?:レース)?|session format|race format|qualifying/i.test(t)) return { topic: TOPIC.SESSION_FORMAT, confidence: 0.99 };
   if (/残り.{0,8}(?:何周|周回|時間)|あと.{0,8}(?:何周|何分)|レース.{0,8}(?:何周|何分|時間)|チェッカー|ホワイトフラッグ|race distance|laps? left|time remaining|white flag/i.test(t)) return { topic: TOPIC.RACE_DISTANCE, confidence: 0.98 };
-  if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|この(?:ラップ|周).*(?:入|ピット|判断)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
+  if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
   if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙)|(?:どう思う|どうする).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.98 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略(?:は|どう|確認)|作戦(?:は|どう|確認)|プラン(?:は|どう|確認)|次の判断|strategy status|what(?:'s| is) the plan|plan status/i.test(t)) return { topic: TOPIC.PLAN_STATUS, confidence: 0.96 };
@@ -384,8 +386,8 @@ function buildTyreStatus(live, lang, card = {}) {
   const query = card.tyreQuery || 'status';
   if (measurement.available !== true) {
     if (query === 'temperature') return ja(lang)
-      ? '走行中のタイヤ温度はエンジニア側では取得できない。車両ダッシュの表示を教えて。路面温度なら取得できる。'
-      : 'Live tyre temperature is unavailable to the engineer. Read it from the car dashboard; track temperature is available separately.';
+      ? '走行中のタイヤ温度はエンジニア側では取得できない。車種によってダッシュ表示があれば値を教えて。表示がなければ挙動と路面温度で判断する。'
+      : 'Live tyre temperature is unavailable to the engineer. If this car shows it on the dash, read me the value; otherwise we work from handling and track temperature.';
     if (query === 'wear') return ja(lang)
       ? '走行中のタイヤ摩耗は取得できない。ピット帰還後の計測値で確認する。'
       : 'Live tyre wear is unavailable. I can confirm the measured value after the car returns to the pit.';
@@ -429,7 +431,20 @@ function buildTrafficStatus(live, lang) {
 }
 
 function buildUnresolved(lang) {
-  return ja(lang) ? 'そのレース運用質問は専用handlerに未接続。推測では答えない。' : 'That race-operation question has no dedicated handler yet; I will not guess.';
+  return ja(lang) ? '今は確定のコールを出さない。次のS/F通過で燃料、残り、前後GAPを更新する。' : 'No confirmed call yet. I will update fuel, remaining distance and gaps at the next S/F crossing.';
+}
+
+function buildSessionFormat(live, lang) {
+  const plan = live && live.race_plan || {};
+  const type = String(live && live.session_type || '').trim();
+  const remaining = finite(live && live.session_time_remaining_s);
+  const totalLaps = finite(live && live.laps_total);
+  if (plan.kind === 'timed') return ja(lang)
+    ? `${type || 'レース'}、時間制。${remaining != null ? `残り${formatDuration(remaining, lang)}。` : '残り時間は未取得。'}`
+    : `${type || 'Race'}, timed.${remaining != null ? ` ${formatDuration(remaining, lang)} remaining.` : ' Remaining time unavailable.'}`;
+  if (plan.kind === 'laps' && totalLaps != null) return ja(lang)
+    ? `${type || 'レース'}、${Math.trunc(totalLaps)}周制。` : `${type || 'Race'}, ${Math.trunc(totalLaps)} laps.`;
+  return ja(lang) ? `${type || '現在のセッション'}の形式は、確定データを受信中。次の更新で伝える。` : `Session format data is still being confirmed; I will update on the next snapshot.`;
 }
 
 function build(card, live, lang = 'en') {
@@ -443,6 +458,7 @@ function build(card, live, lang = 'en') {
     [TOPIC.LEADER_GAP]: buildLeaderGap, [TOPIC.TYRE_STATUS]: buildTyreStatus,
     [TOPIC.DAMAGE_STATUS]: buildDamageStatus, [TOPIC.WEATHER_STATUS]: buildWeatherStatus,
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
+    [TOPIC.SESSION_FORMAT]: buildSessionFormat,
   };
   if (card.topic === TOPIC.ACKNOWLEDGEMENT) return ja(lang) ? '了解。' : 'Copy.';
   if (card.topic === TOPIC.FUEL_PLAN) return buildFuelPlan(live || {}, lang, card);
@@ -456,7 +472,7 @@ function route(text, live, lang = 'en', options = {}) {
   const card = classify(text, options);
   if (!card) return null;
   const reply = build(card, live || {}, lang);
-  return { card, reply, status: card.topic === TOPIC.UNRESOLVED_OPERATIONAL ? 'unavailable' : 'fired' };
+  return { card, reply, status: card.topic === TOPIC.UNRESOLVED_OPERATIONAL ? 'deferred' : 'fired' };
 }
 
 module.exports = { TOPIC, classify, build, route, fuelPlan, hasAuthoritativeFinishTarget, formatDuration, pitPhase, OPERATIONAL_RE };
