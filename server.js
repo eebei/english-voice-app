@@ -825,8 +825,14 @@ function buildAccountChangeReply(lang) {
     : 'I cannot change subscription status here. I can point you to the cancellation process.';
 }
 
+function isSessionFormatQuestion(text) {
+  return /(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|何分\s*(?:制|製)(?:の)?(?:レース)?|session format|race format/i.test(String(text || ''));
+}
+
 function isRaceRuleQuestion(text) {
-  return /(?:レース|race).{0,12}(?:何分|時間|何周|laps?)|(?:何分|何周|laps?).{0,12}(?:レース|race)|残り.{0,8}(?:何周|\d+\s*周)|(?:何周|laps?).{0,8}(?:残り|left|remaining)/i.test(String(text || ''));
+  const raw = String(text || '');
+  if (isSessionFormatQuestion(raw)) return false;
+  return /(?:レース|race).{0,12}(?:何分|時間|何周|laps?)|(?:何分|何周|laps?).{0,12}(?:レース|race)|残り.{0,8}(?:何周|\d+\s*周)|(?:何周|laps?).{0,8}(?:残り|left|remaining)/i.test(raw);
 }
 
 function buildRacePlanReply(liveData, lang) {

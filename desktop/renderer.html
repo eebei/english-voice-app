@@ -1031,6 +1031,24 @@ function maybeRunOperationalFollowUp(data){
 let lastCarClass = '', lastCarModel = '', lastTrack = '';
 let lastSessionAuthority = null;  // iRacing SessionInfo由来。記憶・会話より常に優先
 let lastWeekendAuthority = null;  // entry list / qualifying format and result authority
+function sessionDurationSeconds(raw){
+  const s=String(raw||'').trim();
+  let m=s.match(/^(\d+(?:\.\d+)?)\s*(?:min|minutes?)$/i);
+  if(m) return Number(m[1])*60;
+  m=s.match(/^(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)$/);
+  if(!m) return null;
+  const hours=Number(m[1]||0), minutes=Number(m[2]), seconds=Number(m[3]);
+  return minutes<60&&seconds<60 ? hours*3600+minutes*60+seconds : null;
+}
+function applySessionFormatAuthority(snapshot){
+  const detail=lastWeekendAuthority&&lastWeekendAuthority.session_details
+    &&lastWeekendAuthority.session_details[String(lastSessionNum)];
+  const duration=sessionDurationSeconds(detail&&detail.session_time);
+  if(!snapshot||!duration||!lastSessionType||!/race/i.test(lastSessionType)) return snapshot;
+  snapshot.session_type=lastSessionType;
+  snapshot.race_plan={...(snapshot.race_plan||{}),kind:'timed',configured_duration_s:duration};
+  return snapshot;
+}
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, lastMemorySignature = '', memorySaveInFlight = null, memorySaveReceipt = '';
 let sessionBestLapStr = '';
@@ -2826,10 +2844,10 @@ function connectBridge(){
         const _wasFresh=iracingLive;
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
-        lastTelemetry=data;
+        lastTelemetry=applySessionFormatAuthority(data);
         updatePracticeRun(data);
-        announceActiveStrategyObjective(data);
-        maybeRunOperationalFollowUp(data);
+        announceActiveStrategyObjective(lastTelemetry);
+        maybeRunOperationalFollowUp(lastTelemetry);
       }
       if(data.type==='telemetry_error'){
         markTelemetryStale(data.code||'bridge_error');

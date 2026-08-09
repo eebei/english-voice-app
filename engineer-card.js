@@ -51,12 +51,12 @@ function classify(text, options = {}) {
   if (/\d+(?:\.\d+)?\s*[lL].*(?:大丈夫|足り|必要)|(?:大丈夫|足り|必要).*\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.96 };
   if (/今.{0,8}\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.94 };
 
-  if (/レース(?:の)?(?:フォーマット|形式|距離|時間)|予選(?:あり|なし)|何分(?:レース)?|session format|race format|qualifying/i.test(t)) return { topic: TOPIC.SESSION_FORMAT, confidence: 0.99 };
+  if (/(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|レース.{0,10}(?:距離|時間)|何分\s*(?:制|製)(?:の)?(?:レース)?|予選(?:あり|なし)|session format|race format|qualifying/i.test(t)) return { topic: TOPIC.SESSION_FORMAT, confidence: 0.99 };
   if (/残り.{0,8}(?:何周|周回|時間)|あと.{0,8}(?:何周|何分)|レース.{0,8}(?:何周|何分|時間)|チェッカー|ホワイトフラッグ|race distance|laps? left|time remaining|white flag/i.test(t)) return { topic: TOPIC.RACE_DISTANCE, confidence: 0.98 };
   if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
   if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙)|(?:どう思う|どうする).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.98 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
-  if (/戦略(?:は|どう|確認)|作戦(?:は|どう|確認)|プラン(?:は|どう|確認)|次の判断|strategy status|what(?:'s| is) the plan|plan status/i.test(t)) return { topic: TOPIC.PLAN_STATUS, confidence: 0.96 };
+  if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|次の判断|strategy status|what(?:'s| is) the plan|plan status/i.test(t)) return { topic: TOPIC.PLAN_STATUS, confidence: 0.96 };
   if (/トラフィック|集団|クリアエア|前方.*(?:集団|車群)|traffic|pack|clear air/i.test(t)) return { topic: TOPIC.TRAFFIC_STATUS, confidence: 0.96 };
   if (/ペース|タイム.*上げ|上げて|プッシュ|攻め|飛ば|push|pace|speed up/i.test(t)) return { topic: TOPIC.PACE, confidence: 0.97 };
 
@@ -324,7 +324,16 @@ function buildPlanStatus(live, lang) {
   const prefix = rev != null ? (ja(lang) ? `プラン改訂${Math.trunc(rev)}。` : `Plan revision ${Math.trunc(rev)}. `) : '';
   if (p.action === 'box') return prefix + (ja(lang) ? `燃料不足でボックス。給油${finite(p.set_fuel_l) == null ? '未確定' : Math.trunc(p.set_fuel_l) + 'L'}。` : `Box for fuel; set ${finite(p.set_fuel_l) == null ? 'unconfirmed' : Math.trunc(p.set_fuel_l) + 'L'}.`);
   if (p.action === 'push') return prefix + (ja(lang) ? 'ステイアウトしてプッシュ。燃料余裕あり。' : 'Stay out and push; fuel margin is positive.');
-  return prefix + (ja(lang) ? '現在はホールド。次の確定データでだけプランを更新する。' : 'Hold for now; the plan changes only on confirmed data.');
+  const current = position(live && live.class_pos), remaining = finite(live && live.session_time_remaining_s);
+  const fs = live && live.fuel_strategy || {};
+  const samples = finite(fs.clean_laps_sampled), avg = finite(fs.avg_fuel_per_lap);
+  if (ja(lang)) {
+    const facts = `${current != null ? `現在P${current}。` : ''}${remaining != null ? `残り${formatDuration(remaining, lang)}。` : ''}`;
+    if (avg != null && samples != null && samples < 3) return prefix + `${facts}燃費はクリーン${Math.trunc(samples)}周の実測。あと${Math.max(0, 3 - Math.trunc(samples))}周で燃料判断を更新する。今はピット判断を固定しない。`;
+    if (avg == null) return prefix + `${facts}燃費のクリーン実測がまだない。3周そろうまでピット判断は固定しない。`;
+    return prefix + `${facts}燃料の完走根拠がまだ不足。今はピット判断を固定しない。`;
+  }
+  return prefix + 'Fuel-finish evidence is not ready; I will not lock a pit call yet.';
 }
 
 function buildPace(live, lang) {

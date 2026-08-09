@@ -203,6 +203,16 @@ card = cards.classify('レースのフォーマットは知ってますか？', 
 reply = cards.build(card, build255Live, 'ja');
 check('session-format question has a deterministic SessionInfo answer',
   card.topic===cards.TOPIC.SESSION_FORMAT && /Race、時間制。残り5分2秒。/.test(reply), reply);
+for (const utterance of ['ルナ 今日のレース フォーマットは？', 'レースフォーマーと どうなった？', '何分 製のレースなの？それ？']) {
+  card = cards.classify(utterance, {race:true});
+  reply = cards.build(card, build255Live, 'ja');
+  check('8/9 real format wording is deterministic: '+utterance,
+    card.topic===cards.TOPIC.SESSION_FORMAT && /Race、時間制。残り5分2秒。/.test(reply), reply);
+}
+card = cards.classify('今 16位だけど、なんか 戦略 ある？', {race:true});
+reply = cards.build(card, {...build255Live, class_pos:16, fuel_strategy:{avg_fuel_per_lap:3.63,clean_laps_sampled:1}}, 'ja');
+check('8/9 real strategy wording gives facts and a fuel-evidence condition',
+  card.topic===cards.TOPIC.PLAN_STATUS && /現在P16。残り5分2秒。燃費はクリーン1周.*あと2周/.test(reply), reply);
 card = cards.classify('ディスラップボックス。', {race:true});
 check('STT this-lap-box variation routes to pit decision', card.topic===cards.TOPIC.PIT_DECISION, card&&card.topic);
 check('all Build 255 operational topics have deterministic builders',
@@ -232,6 +242,10 @@ check('deferred operational answer arms an automatic next-S/F update',
   renderer.includes("armOperationalFollowUp(responseIntent)")
   && renderer.includes('maybeRunOperationalFollowUp(data)')
   && renderer.includes("content:'戦略プランは？'"));
+check('renderer promotes SessionInfo duration into Race live telemetry',
+  renderer.includes('function applySessionFormatAuthority(snapshot)')
+  && renderer.includes('configured_duration_s:duration')
+  && renderer.includes('lastTelemetry=applySessionFormatAuthority(data)'));
 check('critical fuel radio proactively includes physical and conditional pit positions',
   /今入ると物理P/.test(renderer) && /台が止まればP/.test(renderer));
 check('safe post-stop fuel transition authorises a pace increase',
