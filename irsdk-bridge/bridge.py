@@ -46,7 +46,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 259 (race-call follow-up and operational truth routing)"
+BUILD_VERSION = "Build 260 (formation session-format authority)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1983,6 +1983,25 @@ def classify_race_clock(is_race_session, lap, laps_total, time_remaining):
     return laps_total_ok, is_time_race, legacy_laps_remaining
 
 
+def derive_race_plan(is_race_session, active_session_detail, laps_total, time_remaining):
+    """Return the session format without waiting for a live green-flag clock.
+
+    SessionInfo's SessionTime is authoritative as soon as SessionNum changes.
+    During formation iRacing can temporarily withhold SessionTimeRemain; that
+    must not turn a known timed race into an unknown format.  Fuel/finish
+    authority remains separately gated by classify_race_clock.
+    """
+    detail = active_session_detail if isinstance(active_session_detail, dict) else {}
+    duration_s = session_time_to_seconds(detail.get('session_time'))
+    laps_total_ok, live_timed, _ = classify_race_clock(
+        is_race_session, 0, laps_total, time_remaining)
+    if bool(is_race_session) and (duration_s is not None or live_timed):
+        return {'kind': 'timed', 'configured_duration_s': duration_s}
+    if laps_total_ok:
+        return {'kind': 'laps', 'configured_duration_s': None}
+    return {'kind': 'unknown', 'configured_duration_s': duration_s}
+
+
 _str_type_logged = False   # SDK型診断を1回だけ出すためのフラグ（2026-07-20）
 reader = IRacingReader()
 session_info_sent = False
@@ -2533,8 +2552,9 @@ def poll_iracing():
         _laps_total_ok, _is_time_race, _legacy_laps_remaining = classify_race_clock(
             is_race_session, lap, lapsTot, timeRemain)
         _active_session_detail = session_details_map.get(cur_snum, {})
-        _configured_duration_s = session_time_to_seconds(
-            _active_session_detail.get('session_time'))
+        _race_plan = derive_race_plan(
+            is_race_session, _active_session_detail, lapsTot, timeRemain)
+        _configured_duration_s = _race_plan['configured_duration_s']
         if not _is_time_race:
             _timed_final_eval = {'reason': 'not_time_race'}
             _milestone_laps = _legacy_laps_remaining
@@ -4636,12 +4656,15 @@ def poll_iracing():
                         and 0 <= timeRemain < 100000)
                     else None),
                 'race_plan': {
-                    'kind': 'timed' if _is_time_race else ('laps' if _laps_total_ok else 'unknown'),
+                    'kind': _race_plan['kind'],
                     'configured_duration_s': _configured_duration_s,
                     'session_state': cur_ss,
                     'racing_started': cur_ss == 4,
                 },
-                'session_type': info.get('current_session_type'),
+                # SessionNum changes before the next SessionInfo refresh.  Use
+                # the already parsed Sessions map so formation is Race now,
+                # not the preceding Practice session for up to ten seconds.
+                'session_type': cur_sess_type or info.get('current_session_type'),
                 'finish_crossings_authority': (
                     _milestone_laps if _milestone_laps is not None else None),
                 'finish_crossings_status': (

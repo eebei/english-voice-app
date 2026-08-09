@@ -43,6 +43,10 @@ def main():
     total_ok, timed, remaining = bridge.classify_race_clock(True, 1, 32767, 3599.0)
     check("timed race first poll", (total_ok, timed, remaining) == (False, True, None))
 
+    formation_plan = bridge.derive_race_plan(True, {'session_time': '20 min'}, 32767, -1.0)
+    check("known timed format survives formation without live remaining clock",
+          formation_plan == {'kind': 'timed', 'configured_duration_s': 1200.0})
+
     initialized = assigned_names_before_first_loop()
     required = {"_is_time_race", "_legacy_laps_remaining", "_timed_final_eval", "_milestone_laps"}
     check("all snapshot variables initialized before polling", required <= initialized)
