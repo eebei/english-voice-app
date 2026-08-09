@@ -8,6 +8,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 import bridge
 
 checks = {
+    "Plan A/B module imported": "import strategy_options as strategy_options_mod" in SOURCE,
+    "Plan A/B is session scoped": "strategy_options = None" in SOURCE,
+    "initial options use one snapshot": "strategy_options_mod.build_initial_plans(" in SOURCE,
+    "initial options have proactive radio": "'trigger': 'initial_strategy_plans'" in SOURCE,
+    "Plan A target has an automatic decision event": "'trigger': 'strategy_plan_decision'" in SOURCE,
+    "Plan A/B compares this-lap and next-lap physical rejoin":
+        "strategy_options_mod.decide_at_plan_a(" in SOURCE
+        and "pit_next_lap_forecast=_pit_next_forecast" in SOURCE,
+    "conditional pit-cycle is excluded by comparator unit":
+        "pit_cycle_position_used" in Path(__file__).with_name("strategy_options.py").read_text(encoding="utf-8"),
+    "Plan B has a mandatory next-lap box trigger":
+        "'trigger': 'strategy_plan_box_call'" in SOURCE,
+    "Plan A/B decision is traced by decision id":
+        "'decision_id': _option_decision.get('decision_id')" in SOURCE,
+    "options are exposed to telemetry": "'strategy_options': strategy_options" in SOURCE,
+    "pit exit scores announced options": "strategy_options_mod.score_execution(" in SOURCE,
+    "option outcome is traceable": "STRATEGY OPTIONS outcome:" in SOURCE,
     "plan state is session scoped": "strategy_plan_signature = None" in SOURCE,
     "plan revision changes on signature": "if _plan_signature != strategy_plan_signature:" in SOURCE,
     "plan records action and reason": "'action': _plan_action" in SOURCE and "'reason': _plan_reason" in SOURCE,

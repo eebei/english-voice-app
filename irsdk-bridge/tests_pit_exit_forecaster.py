@@ -1,4 +1,5 @@
-from pit_exit_forecaster import forecast_at_pit_entry, forecast_pit_now, score_actual
+from pit_exit_forecaster import (forecast_at_pit_entry, forecast_pit_now,
+                                 forecast_pit_after_laps, score_actual)
 
 passed = 0
 
@@ -97,7 +98,7 @@ pit_now_snapshot = dict(snapshot, player_lap_dist_pct=.50,
 pit_now = forecast_pit_now(snapshot=pit_now_snapshot, calibration=calibration)
 check("pit-now forecast available", pit_now["available"])
 check("pit-now is driver facing", pit_now["driver_facing"]
-      and not pit_now["shadow_mode"] and pit_now["model_version"] == 3)
+      and not pit_now["shadow_mode"] and pit_now["model_version"] == 4)
 check("pit-now includes time to entry", pit_now["time_to_entry_s"] == 48.0)
 check("pit-now exposes all six evidence families",
       all(k in pit_now for k in ("best", "likely", "worst"))
@@ -113,6 +114,20 @@ check("pit-now labels physical and conditional cycle worlds separately",
 check("cycle scenario cannot worsen physical exit",
       pit_now["pit_cycle"]["if_pack_stops"]["likely"]["position"]
       <= pit_now["likely"]["position"])
+
+pit_next = forecast_pit_after_laps(
+    snapshot=pit_now_snapshot, calibration=calibration, delay_laps=1)
+check("pit-next-lap forecast available", pit_next["available"])
+check("pit-next-lap uses the same source snapshot",
+      pit_next["snapshot_id"] == pit_now["snapshot_id"])
+check("pit-next-lap advances entry by one measured player lap",
+      pit_next["time_to_entry_s"] == pit_now["time_to_entry_s"] + 100.0)
+check("pit-next-lap is explicitly labelled",
+      pit_next["option"] == "pit_after_1_laps" and pit_next["delay_laps"] == 1)
+check("invalid future delay fails closed",
+      forecast_pit_after_laps(snapshot=pit_now_snapshot,
+                              calibration=calibration, delay_laps=-1)
+      ["unavailable_reason"] == "invalid_delay_laps")
 
 learned = dict(calibration, forecast_learning={
     "outcome_count": 3, "required_outcome_count": 3, "bias_ready": True,

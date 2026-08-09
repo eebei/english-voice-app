@@ -5,6 +5,7 @@
 
 const TOPIC = Object.freeze({
   CURRENT_FUEL: 'current_fuel',
+  FUEL_EMERGENCY: 'fuel_emergency',
   FUEL_PLAN: 'fuel_plan',
   FUEL_USE: 'fuel_use',
   RACE_DISTANCE: 'race_distance',
@@ -43,6 +44,9 @@ function classify(text, options = {}) {
   };
 
   const fuelWord = /燃料|燃費|消費|ガソリン|リットル|リッター|fuel|consumption|lit(?:er|re)/i.test(t);
+  // Fuel starvation is a safety-critical immediate condition.  It must not
+  // fall into the generic "wait for the next S/F" follow-up path.
+  if (/(?:ガス欠|燃料.{0,10}(?:ゼロ|0(?:\.0+)?\s*(?:[lL]|リットル|リッター)?|持たない)|ピット.{0,10}持たない|out of fuel|won'?t make it to (?:the )?pit)/i.test(t)) return { topic: TOPIC.FUEL_EMERGENCY, confidence: 0.995 };
   if (fuelWord && /燃費|消費|一周|1周|周あたり|平均|per lap|consumption|burn/i.test(t)) return { topic: TOPIC.FUEL_USE, confidence: 0.99 };
   const fuelPlan = /給油|足り|必要|不足|余裕|完走|最後|ゴール|チェッカー|入れ|セット|何周.*(?:持|走)|make it|to (?:the )?finish|add fuel|fuel plan/i.test(t);
   if (fuelWord && fuelPlan) return { topic: TOPIC.FUEL_PLAN, confidence: 0.99 };
@@ -56,7 +60,10 @@ function classify(text, options = {}) {
   if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
   if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙)|(?:どう思う|どうする).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.98 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
-  if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|次の判断|strategy status|what(?:'s| is) the plan|plan status/i.test(t)) return { topic: TOPIC.PLAN_STATUS, confidence: 0.96 };
+  if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABＡＢ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[ab]/i.test(t)) {
+    const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':null;
+    return { topic: TOPIC.PLAN_STATUS, planChoice: choice, confidence: 0.96 };
+  }
   if (/トラフィック|集団|クリアエア|前方.*(?:集団|車群)|traffic|pack|clear air/i.test(t)) return { topic: TOPIC.TRAFFIC_STATUS, confidence: 0.96 };
   if (/ペース|タイム.*上げ|上げて|プッシュ|攻め|飛ば|push|pace|speed up/i.test(t)) return { topic: TOPIC.PACE, confidence: 0.97 };
 
@@ -146,6 +153,19 @@ function buildCurrentFuel(live, lang) {
   const current = finite(live && live.fuel);
   if (current == null) return ja(lang) ? '現在燃料は取得できない。' : 'Current fuel is unavailable.';
   return ja(lang) ? `現在${current.toFixed(1)}L。` : `Current fuel ${current.toFixed(1)}L.`;
+}
+
+function buildFuelEmergency(live, lang) {
+  const current = finite(live && live.fuel);
+  if (current == null) return ja(lang)
+    ? '燃料危機は受信したが、現在燃料を確認できない。ピット到達可否は断定しない。'
+    : 'Fuel emergency received, but current fuel is unavailable. I will not claim whether the pit is reachable.';
+  if (current <= 0.5) return ja(lang)
+    ? `燃料${current.toFixed(1)}L。ガス欠域で、ピット到達は保証できない。次のS/F待ちはしない。安全を優先して。`
+    : `Fuel ${current.toFixed(1)}L. This is a fuel-starvation range; pit arrival is not guaranteed. I will not wait for the next S/F. Prioritise safety.`;
+  return ja(lang)
+    ? `燃料${current.toFixed(1)}L。ピット到達は保証できない。今は燃費セーブと安全を優先。`
+    : `Fuel ${current.toFixed(1)}L. Pit arrival is not guaranteed. Save fuel now and prioritise safety.`;
 }
 
 function buildFuelUse(live, lang) {
@@ -319,9 +339,18 @@ function buildPitDecision(live, lang) {
   return ja(lang) ? '判断はホールド。確定データが足りないのでボックス指示は出さない。' : 'Decision: hold. Data is insufficient, so I will not call a stop.';
 }
 
-function buildPlanStatus(live, lang) {
+function buildPlanStatus(live, lang, card = {}) {
   const p = derivedAction(live), rev = finite(p.revision);
   const prefix = rev != null ? (ja(lang) ? `プラン改訂${Math.trunc(rev)}。` : `Plan revision ${Math.trunc(rev)}. `) : '';
+  const options=live&&live.strategy_options;
+  if(card.planChoice&&options&&options.available){
+    const plan=options['plan_'+card.planChoice.toLowerCase()]||{};
+    if(!plan.available) return ja(lang)?`プラン${card.planChoice}は現在成立していない。`:`Plan ${card.planChoice} is not currently viable.`;
+    const when=Number(plan.target_in_laps)===0?(ja(lang)?'この周':'this lap'):(ja(lang)?`あと${Math.trunc(plan.target_in_laps)}周走って`:`in ${Math.trunc(plan.target_in_laps)} laps`);
+    return ja(lang)
+      ? `プラン${card.planChoice}は${when}ピット、給油設定${Math.trunc(plan.set_fuel_l)}L。${card.planChoice==='B'?'燃料予測と復帰トラフィックを再確認して切り替える。':'現在の基準案。'}`
+      : `Plan ${card.planChoice}: pit ${when}, set ${Math.trunc(plan.set_fuel_l)}L. ${card.planChoice==='B'?'Switch only after checking fuel projection and rejoin traffic.':'This is the current baseline.'}`;
+  }
   if (p.action === 'box') return prefix + (ja(lang) ? `燃料不足でボックス。給油${finite(p.set_fuel_l) == null ? '未確定' : Math.trunc(p.set_fuel_l) + 'L'}。` : `Box for fuel; set ${finite(p.set_fuel_l) == null ? 'unconfirmed' : Math.trunc(p.set_fuel_l) + 'L'}.`);
   if (p.action === 'push') return prefix + (ja(lang) ? 'ステイアウトしてプッシュ。燃料余裕あり。' : 'Stay out and push; fuel margin is positive.');
   const current = position(live && live.class_pos), remaining = finite(live && live.session_time_remaining_s);
@@ -447,10 +476,11 @@ function buildSessionFormat(live, lang) {
   const plan = live && live.race_plan || {};
   const type = String(live && live.session_type || '').trim();
   const remaining = finite(live && live.session_time_remaining_s);
+  const configuredDuration = finite(plan.configured_duration_s);
   const totalLaps = finite(live && live.laps_total);
   if (plan.kind === 'timed') return ja(lang)
-    ? `${type || 'レース'}、時間制。${remaining != null ? `残り${formatDuration(remaining, lang)}。` : '残り時間は未取得。'}`
-    : `${type || 'Race'}, timed.${remaining != null ? ` ${formatDuration(remaining, lang)} remaining.` : ' Remaining time unavailable.'}`;
+    ? `${type || 'レース'}、${configuredDuration != null ? `${Math.round(configuredDuration / 60)}分の` : ''}時間制。${remaining != null ? `残り${formatDuration(remaining, lang)}。` : '残り時間は未取得。'}`
+    : `${type || 'Race'}, ${configuredDuration != null ? `${Math.round(configuredDuration / 60)}-minute ` : ''}timed.${remaining != null ? ` ${formatDuration(remaining, lang)} remaining.` : ' Remaining time unavailable.'}`;
   if (plan.kind === 'laps' && totalLaps != null) return ja(lang)
     ? `${type || 'レース'}、${Math.trunc(totalLaps)}周制。` : `${type || 'Race'}, ${Math.trunc(totalLaps)} laps.`;
   return ja(lang) ? `${type || '現在のセッション'}の形式は、確定データを受信中。次の更新で伝える。` : `Session format data is still being confirmed; I will update on the next snapshot.`;
@@ -459,7 +489,7 @@ function buildSessionFormat(live, lang) {
 function build(card, live, lang = 'en') {
   if (!card) return null;
   const handlers = {
-    [TOPIC.CURRENT_FUEL]: buildCurrentFuel, [TOPIC.FUEL_PLAN]: buildFuelPlan,
+    [TOPIC.CURRENT_FUEL]: buildCurrentFuel, [TOPIC.FUEL_EMERGENCY]: buildFuelEmergency, [TOPIC.FUEL_PLAN]: buildFuelPlan,
     [TOPIC.FUEL_USE]: buildFuelUse, [TOPIC.RACE_DISTANCE]: buildRaceDistance,
     [TOPIC.REJOIN]: buildRejoin, [TOPIC.PIT_LOSS]: buildPitLoss,
     [TOPIC.PIT_DECISION]: buildPitDecision, [TOPIC.PIT_SERVICE]: buildPitService,

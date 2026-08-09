@@ -1035,6 +1035,10 @@ function sessionDurationSeconds(raw){
   const s=String(raw||'').trim();
   let m=s.match(/^(\d+(?:\.\d+)?)\s*(?:min|minutes?)$/i);
   if(m) return Number(m[1])*60;
+  // SessionInfo commonly supplies a duration as "1200 sec".  This is the
+  // authoritative 20-minute contract, especially before the green clock.
+  m=s.match(/^(\d+(?:\.\d+)?)\s*(?:sec|seconds?)$/i);
+  if(m) return Number(m[1]);
   m=s.match(/^(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)$/);
   if(!m) return null;
   const hours=Number(m[1]||0), minutes=Number(m[2]), seconds=Number(m[3]);
@@ -1051,6 +1055,8 @@ function applySessionFormatAuthority(snapshot){
 }
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, lastMemorySignature = '', memorySaveInFlight = null, memorySaveReceipt = '';
+let fuelLearningSignature = '';
+let activeRaceFacts = { sessionKey:'', fuelReflex:null, strategyOptions:null };
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
@@ -1062,12 +1068,14 @@ let lastFuelCapacityContext = null;
 let namedRival = null; // {carIdx,name,carNumber}; reset at SessionNum boundary
 let strategyObjectiveAnnouncedKey = '';
 
-function resetSessionScopedReviewState(){
+function resetSessionScopedReviewState(nextSessionNum=null){
   if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
   autoDebriefStarted=false;
   autoDebriefData=null;
   lastSessionSummary=null;
   namedRival=null;
+  fuelLearningSignature='';
+  activeRaceFacts={sessionKey:String(nextSessionNum??lastSessionNum??''),fuelReflex:null,strategyOptions:null};
   if(evidenceDebrief && evidenceDebrief.active) dismissEvidenceDebrief();
   resetPracticeRunState();
 }
@@ -1996,7 +2004,8 @@ async function callAPI(inputSource, memoryStatus=''){
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
   const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildFuelAuthorityNote(_isJP_pre)
     + buildWeekendAuthorityNote(_isJP_pre) + buildSessionEvidenceNote()
-    + buildContractNote(_isJP_pre) + buildMemoryStatusNote(_isJP_pre, memoryStatus);
+    + buildContractNote(_isJP_pre) + buildActiveRaceFactsNote(_isJP_pre)
+    + buildMemoryStatusNote(_isJP_pre, memoryStatus);
   const raceHistory = buildRaceHistoryContext();
   try{
     const isJP = _isJP_pre;
@@ -2816,7 +2825,7 @@ function connectBridge(){
           const a=data.data.current_session_authority||null;
           const nextSessionNum=(a&&Number.isInteger(Number(a.session_num)))?Number(a.session_num):null;
           if(nextSessionNum!==null && lastSessionNum!==null && nextSessionNum!==lastSessionNum){
-            resetSessionScopedReviewState();
+            resetSessionScopedReviewState(nextSessionNum);
           }
           if(nextSessionNum!==null) lastSessionNum=nextSessionNum;
           lastSessionAuthority=a;
@@ -2845,6 +2854,7 @@ function connectBridge(){
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=applySessionFormatAuthority(data);
+        rememberLiveFuelEvidence(lastTelemetry);
         updatePracticeRun(data);
         announceActiveStrategyObjective(lastTelemetry);
         maybeRunOperationalFollowUp(lastTelemetry);
@@ -2873,7 +2883,9 @@ function connectBridge(){
         else if(sessionPurpose==='practice') handlePracticeSessionSummary(data);
         else offerSessionReview(data);
       }
-      if(data.type==='pit_timing'){ savePitTiming(data); recordStrategyForecastOutcome(data); }
+      if(data.type==='pit_timing'){
+        savePitTiming(data); recordStrategyForecastOutcome(data); recordStrategyOptionOutcome(data);
+      }
       if(data.type==='pace_check') checkPaceJudgment(data);
       if(data.type==='judge_call') judgeAndSpeak(data);   // ★2026-07-19 LLM判断コール（catchup/defend）
       // ── マイク選択＋レベルメーター（bridge側デバイスの受け皿）──
@@ -3034,6 +3046,22 @@ function oishiRadio(d, forSpeech=false){
           : '';
         return `この周でピットを推奨。現在${Number(d.fuel||0).toFixed(1)}リットル、ゴールまで${Number(d.required_fuel_l||0).toFixed(1)}リットル必要。燃料は${Number(d.add_fuel_l||0).toFixed(1)}リットル不足。給油設定は切り上げて${Math.ceil(Number(d.add_fuel_l)||0)}リットル。${forecast}`;
       }
+    case 'initial_strategy_plans': {
+      const options=d.strategy_options||{}, a=options.plan_a||{}, b=options.plan_b||{};
+      if(!a.available||!b.available) return null;
+      const timing=n=>Number(n)===0?'この周':`あと${Math.trunc(Number(n))}周走って`;
+      return `初期戦略。プランAは${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。プランBは1周延長してピット、給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。Bへの切替は燃料予測と復帰トラフィックを再確認して出す。`;
+    }
+    case 'strategy_plan_decision': {
+      const selected=d.selected_plan==='B'?'B':'A';
+      const plan=(d.strategy_options&&d.strategy_options[`plan_${selected.toLowerCase()}`])||{};
+      if(selected==='B') return `プランBへ切り替える。もう1周走って、次の周でピット。給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+      return `プランAで行く。この周でピット、給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+    }
+    case 'strategy_plan_box_call': {
+      const b=(d.strategy_options&&d.strategy_options.plan_b)||{};
+      return `プランB、予定どおりこの周でピット。給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。`;
+    }
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
     case 'final_lap':      return `ファイナルラップ。P${pos}。`;
@@ -3206,6 +3234,23 @@ function injectRadio(data){
   else if(sel==='Matthias') text=matthiasRadio(data)||data.message||'';
   else                   text=data.message||'';   // James/Luna/Hajime
   if(!text) return;
+  // A bridge fuel call is a fact Luna herself has just said.  Keep it as
+  // explicit working state even when older chat turns are trimmed.
+  if(data.trigger==='fuel_warning'||data.trigger==='fuel_strategy_warning'){
+    activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),fuelReflex:{
+      fuel:Number(data.fuel),
+      pitRequired:data.pit_required===true||data.trigger==='fuel_strategy_warning'&&data.fuel_band!=='tight',
+      at:Date.now()
+    }};
+  }
+  if(data.trigger==='initial_strategy_plans'&&data.strategy_options){
+    activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),
+      strategyOptions:data.strategy_options};
+  }
+  if((data.trigger==='strategy_plan_decision'||data.trigger==='strategy_plan_box_call')&&data.strategy_options){
+    activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),
+      strategyOptions:data.strategy_options};
+  }
   if(['personal_best','first_lap','session_best'].includes(data.trigger) && data.time){
     const candidate=Number(data.time_seconds);
     if(!sessionBestLapSeconds || (candidate>0 && candidate<sessionBestLapSeconds)){
@@ -3221,6 +3266,26 @@ function injectRadio(data){
   speak(spokenText||text, {prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
                kind:data.trigger||'radio',
                dedupeKey:(data.trigger||'') + (data.class_name||'') + (data.car_number||'')});
+}
+
+function buildActiveRaceFactsNote(isJP){
+  const fact=activeRaceFacts&&activeRaceFacts.fuelReflex;
+  if(activeRaceFacts.sessionKey!==String(lastSessionNum??'')) return '';
+  const notes=[];
+  if(fact){
+    const age=Date.now()-Number(fact.at||0);
+    if(age>=0&&age<15*60*1000&&Number.isFinite(fact.fuel)) notes.push(isJP
+      ? `【このレースでLunaが既に出した反射コール】燃料残り${fact.fuel.toFixed(1)}L。${fact.pitRequired?'この周ピット判断。':'セーブ開始。'} 現在テレメトリで更新して答えよ。`
+      : `[ACTIVE RACE CALL] Luna already called fuel ${fact.fuel.toFixed(1)} L: ${fact.pitRequired?'box this lap.':'save mode.'} Update it from current telemetry.`);
+  }
+  const options=activeRaceFacts.strategyOptions;
+  if(options&&options.available){
+    const a=options.plan_a||{}, b=options.plan_b||{};
+    notes.push(isJP
+      ? `【発話済み初期戦略】Plan A: ${a.target_in_laps}周後pit、給油設定${a.set_fuel_l}L。Plan B: ${b.target_in_laps}周後pit、給油設定${b.set_fuel_l}L。選択中は${options.selected_plan||'A'}。切替を勝手に確定せず、最新の燃料と復帰比較で更新せよ。`
+      : `[ANNOUNCED INITIAL STRATEGY] Plan A: pit in ${a.target_in_laps} laps, set ${a.set_fuel_l} L. Plan B: pit in ${b.target_in_laps} laps, set ${b.set_fuel_l} L. Selected ${options.selected_plan||'A'}. Update only from current fuel and rejoin evidence.`);
+  }
+  return notes.length?'\n'+notes.join('\n'):'';
 }
 // ── ペースチェック（AI文脈判断・2026/7/5設計）──
 // bridgeが「2周連続でセッションベストより1秒以上遅い」という生データを送ってくる。
@@ -4283,6 +4348,21 @@ function recordStrategyForecastOutcome(data){
     lastOutcomeAt:new Date().toISOString(),lastActualPosition:score.actual_class_position,
     lastLikelyPosition:score.likely_position}});
 }
+function recordStrategyOptionOutcome(data){
+  try{
+    const score=data&&data.strategy_option_score;
+    if(!score||score.available!==true||!score.snapshot_id) return;
+    const key='pw_strategy_option_outcomes';
+    const history=JSON.parse(localStorage.getItem(key)||'[]');
+    if(!history.some(x=>x&&x.snapshot_id===score.snapshot_id)){
+      history.push({...score,track:data.track||lastTrack||'',car:data.car_model||lastCarModel||'',
+        recorded_at:new Date().toISOString()});
+      while(history.length>30) history.shift();
+      localStorage.setItem(key,JSON.stringify(history));
+    }
+    diagnosticLog('STRATEGY_OPTIONS_OUTCOME',`snapshot=${score.snapshot_id} executed=${score.executed_plan} lap_error=${score.entry_lap_error} fuel_error=${score.fuel_add_error_l}`);
+  }catch{}
+}
 function announceActiveStrategyObjective(data){
   const profile=hydrateLegacyStrategyObjective()||loadProfile()||{};
   const objective=profile.strategyObjective;
@@ -4433,6 +4513,47 @@ function saveSessionSummary(data){
   // Free-form race conversation is also part of the engineer's working memory.
   // Save it at the session boundary when it has not already been checkpointed.
   saveMemory({reason:'session_summary'});
+}
+
+// Do not wait for a completed race to learn measured fuel.  A clean-lap
+// sample is useful even if the driver retires, disconnects, or is testing a
+// short Monza race.  This is evidence only: no guessed consumption is saved.
+function rememberLiveFuelEvidence(data){
+  try{
+    const fs=data&&data.fuel_strategy;
+    const samples=Number(fs&&fs.clean_laps_sampled), average=Number(fs&&fs.avg_fuel_per_lap);
+    const track=lastTrack||'', car=lastCarModel||lastCarClass||'';
+    if(!track||!car||!Number.isInteger(samples)||samples<1||!Number.isFinite(average)||average<=0) return;
+    const key=`${String(lastSessionNum??'')}|${track}|${car}|${samples}|${average.toFixed(3)}`;
+    if(key===fuelLearningSignature) return;
+    fuelLearningSignature=key;
+    const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    const memoryKey=car+'|'+track;
+    const prev=findCarTrackMemory(mem,track,lastCarModel||'',lastCarClass||'')||{sessions:0};
+    const priorSamples=Number(prev.fuelSampleCount)||0;
+    const priorTotal=Number(prev.fuelSampleTotal)||((Number(prev.avgFuel)||0)*priorSamples);
+    // Each bridge average represents all clean samples in this session.  Add
+    // it once per new sample-count, never once per 3-second snapshot.
+    const seenKey='pw_fuel_learning_seen';
+    const seen=JSON.parse(localStorage.getItem(seenKey)||'{}');
+    const sessionKey=`${String(usageSessionId||lastSessionNum||'')}|${track}|${car}`;
+    const prior=seen[sessionKey]&&typeof seen[sessionKey]==='object'?seen[sessionKey]:{};
+    const already=Number(prior.samples)||0;
+    const priorAverage=Number(prior.average)||0;
+    const added=Math.max(0,samples-already);
+    if(!added) return;
+    const estimatedNewTotal=average*samples;
+    const estimatedOldTotal=priorAverage*already;
+    const addTotal=estimatedNewTotal-estimatedOldTotal;
+    const total=priorTotal+addTotal, count=priorSamples+added;
+    mem[memoryKey]={...prev,car,track,avgFuel:Math.round((total/count)*1000)/1000,
+      fuelSampleTotal:total,fuelSampleCount:count,lastDate:new Date().toISOString().slice(0,10),
+      sessions:Math.max(1,Number(prev.sessions)||0)};
+    seen[sessionKey]={samples,average};
+    localStorage.setItem('pw_ctmem',JSON.stringify(mem));
+    localStorage.setItem(seenKey,JSON.stringify(seen));
+    diagnosticLog('FUEL_MEMORY',`${memoryKey} samples=${count} avg=${(total/count).toFixed(3)} verified=live_clean_laps`);
+  }catch{}
 }
 // ピットレーン所要時間を実測値として記憶（コース×車種）。耐久ピットウィンドウ予測の土台。
 function savePitTiming(data){

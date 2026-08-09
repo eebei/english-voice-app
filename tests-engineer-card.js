@@ -53,6 +53,11 @@ check('initial fuel asks for current tank, not clean-lap strategy',
 check('missing fuel is not converted to a fabricated 0.0L',
   cards.build(card, { fuel: null }, 'ja') === '現在燃料は取得できない。');
 
+card = cards.classify('ピットまで持たないと思うよ。');
+reply = cards.build(card, { fuel: 0.0, fuel_strategy: {} }, 'ja');
+check('fuel starvation bypasses next-S/F deferral',
+  card.topic === cards.TOPIC.FUEL_EMERGENCY && /燃料0\.0L.*ピット到達は保証できない.*次のS\/F待ちはしない/.test(reply), reply);
+
 card = cards.classify('何リットル不足する？計算なの？ゴールまで。');
 reply = cards.build(card, beforePit, 'ja');
 check('fuel plan gives current/required/add/set',
@@ -130,6 +135,9 @@ const build255Live = {
   finish_crossings_authority: 4,
   session_type: 'Race',
   strategy_plan: { revision: 3, action: 'push', reason: 'fuel_margin', margin_l: 4.7 },
+  strategy_options: { available:true, selected_plan:'A',
+    plan_a:{available:true,target_in_laps:2,target_lap:9,set_fuel_l:11,add_fuel_l:10.5},
+    plan_b:{available:true,target_in_laps:3,target_lap:10,set_fuel_l:11,add_fuel_l:10.5} },
   last_pit_service: { lane_total_s: 42.8, stall_s: 18.1, fuel_added_l: 12.6 },
   pit_loss_calibration: { lane_total_median_s: 43.2, lane_total_q1_s: 42.4,
     lane_total_q3_s: 44.0, usable_sample_count: 6 },
@@ -140,6 +148,13 @@ const build255Live = {
   weather: { track_temp_c: 41.2, air_temp_c: 28.4, humidity: 61, track_wetness_code: 1 },
   leaders: { player_class: { class_pos: 1, gap_s: -33.4 } },
 };
+
+let planRoute=cards.route('プランAは？',build255Live,'ja',{race:true});
+check('Plan A can be recalled from deterministic working state',
+  planRoute&&planRoute.card.planChoice==='A'&&/あと2周走ってピット、給油設定11L.*基準案/.test(planRoute.reply),planRoute&&planRoute.reply);
+planRoute=cards.route('プランBは？',build255Live,'ja',{race:true});
+check('Plan B includes a deterministic switch condition',
+  planRoute&&planRoute.card.planChoice==='B'&&/あと3周走ってピット、給油設定11L.*復帰トラフィック/.test(planRoute.reply),planRoute&&planRoute.reply);
 
 const intentCases = [
   ['燃費は？', cards.TOPIC.FUEL_USE, /3\.45L\/周/],
@@ -197,17 +212,17 @@ check('unhandled operational request creates a deterministic follow-up promise',
   && unknownRoute.status==='deferred' && /次のS\/F通過で燃料、残り、前後GAPを更新/.test(unknownRoute.reply));
 card = cards.classify('燃料 0になってるけど。', {race:true});
 reply = cards.build(card, {...build255Live, fuel:0}, 'ja');
-check('fuel-zero wording routes to measured current-fuel handler',
-  card.topic===cards.TOPIC.CURRENT_FUEL && reply==='現在0.0L。', reply);
+check('fuel-zero wording routes to an immediate measured emergency handler',
+  card.topic===cards.TOPIC.FUEL_EMERGENCY && /燃料0\.0L.*次のS\/F待ちはしない/.test(reply), reply);
 card = cards.classify('レースのフォーマットは知ってますか？', {race:true});
 reply = cards.build(card, build255Live, 'ja');
 check('session-format question has a deterministic SessionInfo answer',
-  card.topic===cards.TOPIC.SESSION_FORMAT && /Race、時間制。残り5分2秒。/.test(reply), reply);
+  card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分の時間制。残り5分2秒。/.test(reply), reply);
 for (const utterance of ['ルナ 今日のレース フォーマットは？', 'レースフォーマーと どうなった？', '何分 製のレースなの？それ？']) {
   card = cards.classify(utterance, {race:true});
   reply = cards.build(card, build255Live, 'ja');
   check('8/9 real format wording is deterministic: '+utterance,
-    card.topic===cards.TOPIC.SESSION_FORMAT && /Race、時間制。残り5分2秒。/.test(reply), reply);
+    card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分の時間制。残り5分2秒。/.test(reply), reply);
 }
 card = cards.classify('今 16位だけど、なんか 戦略 ある？', {race:true});
 reply = cards.build(card, {...build255Live, class_pos:16, fuel_strategy:{avg_fuel_per_lap:3.63,clean_laps_sampled:1}}, 'ja');
@@ -248,6 +263,27 @@ check('renderer promotes SessionInfo duration into Race live telemetry',
   && renderer.includes('lastTelemetry=applySessionFormatAuthority(data)'));
 check('critical fuel radio proactively includes physical and conditional pit positions',
   /今入ると物理P/.test(renderer) && /台が止まればP/.test(renderer));
+check('both fuel reflex paths become Luna working state',
+  renderer.includes("data.trigger==='fuel_warning'||data.trigger==='fuel_strategy_warning'")
+  && renderer.includes('buildActiveRaceFactsNote(_isJP_pre)'));
+check('initial Plan A/B radio becomes Luna working state',
+  renderer.includes("case 'initial_strategy_plans'")
+  && renderer.includes("data.trigger==='initial_strategy_plans'")
+  && renderer.includes('strategyOptions:data.strategy_options'));
+check('Plan A target has a proactive measured A/B decision path',
+  renderer.includes("case 'strategy_plan_decision'")
+  && renderer.includes("data.trigger==='strategy_plan_decision'")
+  && /プランBへ切り替える/.test(renderer));
+check('selected Plan B has a separate next-lap box call',
+  renderer.includes("case 'strategy_plan_box_call'")
+  && renderer.includes("プランB、予定どおりこの周でピット"));
+check('executed Plan A/B outcome is persisted and traceable',
+  renderer.includes('recordStrategyOptionOutcome(data)')
+  && renderer.includes("'pw_strategy_option_outcomes'")
+  && renderer.includes("diagnosticLog('STRATEGY_OPTIONS_OUTCOME'"));
+check('session transition resets working state under the incoming SessionNum',
+  renderer.includes('resetSessionScopedReviewState(nextSessionNum)')
+  && renderer.includes('sessionKey:String(nextSessionNum??lastSessionNum'));
 check('safe post-stop fuel transition authorises a pace increase',
   /燃料OK[^\n]+ペースを上げていい/.test(renderer));
 

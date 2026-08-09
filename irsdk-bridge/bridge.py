@@ -40,13 +40,14 @@ import class_map
 import driver_activity as driver_activity_mod
 import final_lap
 import fuel_strategy as fuel_strategy_mod
+import strategy_options as strategy_options_mod
 import session_authority as session_authority_mod
 import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 261 (real-format wording and strategy truth routing)"
+BUILD_VERSION = "Build 262 (historical fuel evidence and Plan A/B rejoin decisions)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -506,6 +507,9 @@ PRIORITY = {
     'checker_out_notice': 2,
     # 燃料不足は数値根拠のP0。band dedupで連呼を防ぐ。
     'fuel_warning': 0, 'fuel_strategy_warning': 0, 'fuel_strategy_safe': 3,
+    'initial_strategy_plans': 3,
+    'strategy_plan_decision': 2,
+    'strategy_plan_box_call': 1,
     # P3 戦略
     'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
@@ -1935,7 +1939,9 @@ def fmt_radio(seconds):
 def session_time_to_seconds(value):
     """Parse explicit SessionInfo duration strings without guessing.
 
-    iRacing SessionInfo has appeared as both ``20 min`` and ``20:00.000``.
+    iRacing SessionInfo has appeared as ``20 min``, ``1200 sec`` and
+    ``20:00.000``.  All three are explicit session contracts, not an
+    inference from a live clock.
     The latter is a duration, not a wall-clock inference, so accepting it is
     safe.  Bare numbers and lap-count strings remain invalid on purpose.
     """
@@ -1944,6 +1950,10 @@ def session_time_to_seconds(value):
     match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*(?:min|minute|minutes)\s*', value, re.I)
     if match:
         seconds = float(match.group(1)) * 60.0
+        return round(seconds, 3) if 0 < seconds < 100000 else None
+    match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*(?:sec|second|seconds)\s*', value, re.I)
+    if match:
+        seconds = float(match.group(1))
         return round(seconds, 3) if 0 < seconds < 100000 else None
     # Explicit MM:SS(.mmm) or HH:MM:SS(.mmm), as supplied by SessionInfo.
     clock = re.fullmatch(
@@ -2098,6 +2108,7 @@ def poll_iracing():
     session_num_in_class = 0
     session_effective_fuel_capacity_l = None
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
+    pit_enter_lap = None    # Plan A/Bの目標周回と実行周回を照合
     pit_enter_pos = None    # 進入時のクラス順位（復帰順位の比較用）
     pit_exit_lap = None     # 退出時のLap。次のS/F通過までout_lapを保持する
     pit_enter_pct = None
@@ -2115,6 +2126,10 @@ def poll_iracing():
     strategy_plan = None     # owned plan: changes only when its truth signature changes
     strategy_plan_signature = None
     strategy_plan_revision = 0
+    strategy_options = None  # fuel成立時に一度だけ固定するPlan A/B
+    strategy_options_dispatch = None
+    strategy_options_decision_sent = False
+    strategy_options_box_call_sent = False
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -2535,6 +2550,11 @@ def poll_iracing():
             strategy_plan = None
             strategy_plan_signature = None
             strategy_plan_revision = 0
+            strategy_options = None
+            strategy_options_dispatch = None
+            strategy_options_decision_sent = False
+            strategy_options_box_call_sent = False
+            pit_enter_lap = None
             # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
             _pending_summary = _reset['_pending_summary']
             _pending_non_race_summary = _reset['_pending_non_race_summary']
@@ -3703,6 +3723,7 @@ def poll_iracing():
         if onPit and prev['onPit'] is False:
             # 状態更新は無条件（低速の正規進入でも必ず走らせる）
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
+            pit_enter_lap = int(lap) if isinstance(lap, (int, float)) else None
             pit_enter_pos = class_pos
             pit_exit_lap = None
             pit_enter_pct = reader.read_float('LapDistPct')
@@ -3882,6 +3903,10 @@ def poll_iracing():
                 }
                 _pit_exit_score = pit_exit_forecaster_mod.score_actual(
                     pit_exit_forecast_shadow, class_pos)
+                _strategy_option_score = strategy_options_mod.score_execution(
+                    strategy_options,
+                    actual_entry_lap=pit_enter_lap,
+                    actual_fuel_added_l=_fuel_added)
                 _pit_learning_summary = pit_loss_calibrator.record_forecast_outcome(
                     session_track, session_car_model, _caution, _pit_exit_score)
                 if isinstance(_pit_learning_summary, dict):
@@ -3892,7 +3917,10 @@ def poll_iracing():
                            'pos_in': pit_enter_pos, 'pos_out': class_pos,
                            'sample': _pit_sample, 'calibration': _pit_loss_summary,
                            'pit_exit_forecast_shadow': pit_exit_forecast_shadow,
-                           'pit_exit_forecast_score': _pit_exit_score})
+                           'pit_exit_forecast_score': _pit_exit_score,
+                           'strategy_option_score': _strategy_option_score})
+                log('STRATEGY OPTIONS outcome: ' + json.dumps(
+                    _strategy_option_score, ensure_ascii=False, separators=(',', ':')))
                 log("PIT EXIT SHADOW actual: " + json.dumps({
                     'snapshot_id': (
                         pit_exit_forecast_shadow.get('snapshot_id')
@@ -4505,6 +4533,8 @@ def poll_iracing():
             # score, this projects from the player's current track position so
             # 「今入ったら？」 can be answered before committing to pit road.
             _pit_now_forecast = None
+            _pit_next_forecast = None
+            _pit_option_snapshot = None
             _pit_now_flags = reader.read_int('SessionFlags') or 0
             _pit_now_caution = 'caution' if (_pit_now_flags & 0xC000) else 'green'
             _pit_now_calibration = pit_loss_calibrator.get_summary(
@@ -4538,8 +4568,7 @@ def poll_iracing():
                             if car_on_pitroad_all and _pci < len(car_on_pitroad_all)
                             else False),
                     })
-                _pit_now_forecast = pit_exit_forecaster_mod.forecast_pit_now(
-                    snapshot={
+                _pit_option_snapshot = {
                         'snapshot_id': 'live:%s:%s' % (
                             cur_snum,
                             round(_pit_now_session_time, 3)
@@ -4551,8 +4580,14 @@ def poll_iracing():
                         'player_last_lap_time': lapTime or personal_best,
                         'player_class_id': player_class_id,
                         'cars': _pit_now_cars,
-                    },
+                    }
+                _pit_now_forecast = pit_exit_forecaster_mod.forecast_pit_now(
+                    snapshot=_pit_option_snapshot,
                     calibration=_pit_now_calibration)
+                _pit_next_forecast = pit_exit_forecaster_mod.forecast_pit_after_laps(
+                    snapshot=_pit_option_snapshot,
+                    calibration=_pit_now_calibration,
+                    delay_laps=1)
                 pit_exit_forecast_live = _pit_now_forecast
                 pit_exit_forecast_live_at = _pit_now_session_time
                 _pit_cycle_outcome = pit_cycle_tracker.observe(
@@ -4580,6 +4615,132 @@ def poll_iracing():
                 _fuel_strategy_live['margin_l'] = round(
                     fuel - _fuel_strategy_live['required_fuel_l'], 3)
                 _fuel_strategy_live['pit_required'] = _live_add > 0.05
+            # Phase D first vertical slice: once clean fuel and finish distance
+            # are authoritative, latch Plan A and Plan B from one snapshot.
+            # Do not continuously move their target laps with live telemetry.
+            if (strategy_options is None and is_race_session and onTrack and not onPit
+                    and isinstance(_fuel_strategy_live, dict)):
+                _option_crossings = _fuel_strategy_live.get(
+                    'estimated_crossings_to_finish')
+                if not isinstance(_option_crossings, int):
+                    _option_crossings = _fuel_strategy_live.get(
+                        'provisional_laps_to_time_expiry')
+                _option_session_time = reader.read_double('SessionTime')
+                _candidate_options = strategy_options_mod.build_initial_plans(
+                    snapshot_id='initial:%s:%s' % (
+                        cur_snum,
+                        round(_option_session_time, 3)
+                        if isinstance(_option_session_time, (int, float)) else 'na'),
+                    current_lap=int(lap) if isinstance(lap, (int, float)) else -1,
+                    fuel_level_l=fuel,
+                    avg_fuel_per_lap_l=_fuel_strategy_live.get('avg_fuel_per_lap'),
+                    clean_laps_sampled=_fuel_strategy_live.get('clean_laps_sampled'),
+                    crossings_to_finish=_option_crossings,
+                    reserve_l=_fuel_strategy_live.get('reserve_l', 0.5),
+                    effective_capacity_l=session_effective_fuel_capacity_l)
+                if (_candidate_options.get('available')
+                        and ((_candidate_options.get('plan_b') or {}).get('available'))):
+                    strategy_options = _candidate_options
+                    log('STRATEGY OPTIONS ready: ' + json.dumps(
+                        strategy_options, ensure_ascii=False, separators=(',', ':')))
+                    _option_a = strategy_options.get('plan_a') or {}
+                    _option_b = strategy_options.get('plan_b') or {}
+                    strategy_options_dispatch = broadcast({
+                        'type': 'radio',
+                        'trigger': 'initial_strategy_plans',
+                        'strategy_options': strategy_options,
+                        'message': (
+                            'Initial strategy. Plan A: pit in %s laps, set %s liters. '
+                            'Plan B: extend one lap, then pit and set %s liters. '
+                            'I will switch only after fuel and rejoin checks.'
+                            % (_option_a.get('target_in_laps'),
+                               _option_a.get('set_fuel_l'),
+                               _option_b.get('set_fuel_l'))),
+                    })
+                    log('STRATEGY OPTIONS dispatch: snapshot_id=%s result=%s'
+                        % (strategy_options.get('snapshot_id'),
+                           strategy_options_dispatch))
+            # The Plan A target is a real decision boundary.  Compare physical
+            # rejoin for this lap versus one lap later from one live snapshot.
+            # Conditional rival pit-cycle position is never used to select B.
+            if (isinstance(strategy_options, dict)
+                    and strategy_options.get('available')
+                    and not strategy_options_decision_sent
+                    and is_race_session and onTrack and not onPit):
+                _decision_a = strategy_options.get('plan_a') or {}
+                _decision_target = _decision_a.get('target_lap')
+                if (isinstance(_decision_target, int)
+                        and isinstance(lap, (int, float))
+                        and int(lap) >= _decision_target):
+                    _option_decision = strategy_options_mod.decide_at_plan_a(
+                        strategy_options,
+                        current_lap=int(lap),
+                        current_fuel_l=fuel,
+                        avg_fuel_per_lap_l=_fuel_strategy_live.get(
+                            'avg_fuel_per_lap') if isinstance(
+                                _fuel_strategy_live, dict) else None,
+                        pit_now_forecast=_pit_now_forecast,
+                        pit_next_lap_forecast=_pit_next_forecast)
+                    _selected_option = _option_decision.get('selected_plan') or 'A'
+                    strategy_options['selected_plan'] = _selected_option
+                    strategy_options['decision_reason'] = _option_decision.get('reason')
+                    strategy_options['decision_evidence'] = _option_decision
+                    _selected_plan = strategy_options.get(
+                        'plan_' + _selected_option.lower()) or _decision_a
+                    _decision_dispatch = broadcast({
+                        'type': 'radio',
+                        'trigger': 'strategy_plan_decision',
+                        'selected_plan': _selected_option,
+                        'reason': strategy_options['decision_reason'],
+                        'decision_id': _option_decision.get('decision_id'),
+                        'strategy_options': strategy_options,
+                        'message': (('Plan B selected. Stay out one lap, then pit '
+                                     'and set %s liters.'
+                                     % _selected_plan.get('set_fuel_l'))
+                                    if _selected_option == 'B' else
+                                    ('Plan A selected. Pit this lap and set %s liters.'
+                                     % _selected_plan.get('set_fuel_l'))),
+                    })
+                    if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
+                        strategy_options_decision_sent = True
+                    log('STRATEGY OPTIONS decision: snapshot_id=%s selected=%s '
+                        'reason=%s decision_id=%s dispatch=%s evidence=%s'
+                        % (strategy_options.get('snapshot_id'),
+                           _selected_option,
+                           strategy_options.get('decision_reason'),
+                           _option_decision.get('decision_id'),
+                           _decision_dispatch,
+                           json.dumps(_option_decision, ensure_ascii=False,
+                                      separators=(',', ':'))))
+            # A selected Plan B creates a second, mandatory trigger at its
+            # target lap.  The extend call can therefore never become a dead
+            # promise with no later box instruction.
+            if (isinstance(strategy_options, dict)
+                    and strategy_options_decision_sent
+                    and strategy_options.get('selected_plan') == 'B'
+                    and not strategy_options_box_call_sent
+                    and is_race_session and onTrack and not onPit):
+                _box_plan = strategy_options.get('plan_b') or {}
+                _box_target = _box_plan.get('target_lap')
+                if (isinstance(_box_target, int)
+                        and isinstance(lap, (int, float))
+                        and int(lap) >= _box_target):
+                    _box_evidence = strategy_options.get('decision_evidence') or {}
+                    _box_dispatch = broadcast({
+                        'type': 'radio',
+                        'trigger': 'strategy_plan_box_call',
+                        'selected_plan': 'B',
+                        'decision_id': _box_evidence.get('decision_id'),
+                        'strategy_options': strategy_options,
+                        'message': ('Plan B box call. Pit this lap and set %s liters.'
+                                    % _box_plan.get('set_fuel_l')),
+                    })
+                    if _box_dispatch is True or _box_dispatch == 'DISPATCHED':
+                        strategy_options_box_call_sent = True
+                    log('STRATEGY OPTIONS box call: decision_id=%s target_lap=%s '
+                        'actual_lap=%s dispatch=%s'
+                        % (_box_evidence.get('decision_id'), _box_target,
+                           int(lap), _box_dispatch))
             _pit_phase_state = derive_pit_phase(
                 lifecycle_state, onPit, lap, pit_exit_lap)
             if (_pit_phase_state == 'racing' and isinstance(lap, (int, float))
@@ -4682,6 +4843,7 @@ def poll_iracing():
                 'pit_service_status': pit_service_status,
                 'fuel_strategy': _fuel_strategy_live,
                 'strategy_plan': strategy_plan,
+                'strategy_options': strategy_options,
                 'tires': tires,
                 'tire_measurement': {
                     'available': _tire_measurement_available,

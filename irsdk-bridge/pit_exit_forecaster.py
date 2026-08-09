@@ -6,7 +6,7 @@ with the same evidence families and then scored against the actual exit.
 """
 
 MODEL_VERSION = 1
-DRIVER_MODEL_VERSION = 3
+DRIVER_MODEL_VERSION = 4
 MIN_LAP_TIME_S = 20.0
 MAX_LAP_TIME_S = 600.0
 BLEND_WINDOW_S = 3.0
@@ -282,13 +282,16 @@ def forecast_at_pit_entry(*, snapshot, calibration):
     }
 
 
-def forecast_pit_now(*, snapshot, calibration):
-    """Forecast a stop requested while the player is still on track.
+def forecast_pit_after_laps(*, snapshot, calibration, delay_laps=0):
+    """Forecast a stop after zero or more completed laps from one snapshot.
 
-    Other cars advance for the player's remaining time to pit entry plus the
-    measured pit-lane time.  This is the driver-facing Phase C calculation;
-    ``forecast_at_pit_entry`` remains the zero-horizon scoring reference.
+    Other cars advance using their own last-lap times.  The player's entry
+    time advances using the measured player lap.  This is a deterministic
+    constant-pace projection; rival pit intent is never inferred.
     """
+    if (not isinstance(delay_laps, int) or isinstance(delay_laps, bool)
+            or not 0 <= delay_laps <= 10):
+        return _unavailable("invalid_delay_laps")
     if not isinstance(snapshot, dict):
         return _unavailable("snapshot_missing")
     player_lap = _num(snapshot.get("player_lap"))
@@ -307,7 +310,7 @@ def forecast_pit_now(*, snapshot, calibration):
     progress_delta = _forward_progress(entry_pct, exit_pct)
     if progress_delta is None:
         return _unavailable("pit_coordinates_invalid")
-    entry_lap = player_lap if player_pct <= entry_pct else player_lap + 1.0
+    entry_lap = (player_lap if player_pct <= entry_pct else player_lap + 1.0) + delay_laps
     entry_progress = entry_lap + entry_pct
     time_to_entry_s = (entry_progress - (player_lap + player_pct)) * player_lap_time
     player_exit_progress = entry_progress + progress_delta
@@ -333,8 +336,11 @@ def forecast_pit_now(*, snapshot, calibration):
     result.update({
         "shadow_mode": False,
         "driver_facing": True,
-        "model_candidate": "C_pit_now_projection",
+        "model_candidate": ("C_pit_now_projection" if delay_laps == 0
+                            else "D_future_lap_projection"),
         "model_version": DRIVER_MODEL_VERSION,
+        "option": "pit_now" if delay_laps == 0 else "pit_after_%d_laps" % delay_laps,
+        "delay_laps": delay_laps,
         "time_to_entry_s": round(time_to_entry_s, 3),
         "forecast_learning": learning,
         "best": scenarios["best"],
@@ -351,6 +357,12 @@ def forecast_pit_now(*, snapshot, calibration):
         },
     })
     return result
+
+
+def forecast_pit_now(*, snapshot, calibration):
+    """Forecast a stop requested while the player is still on track."""
+    return forecast_pit_after_laps(
+        snapshot=snapshot, calibration=calibration, delay_laps=0)
 
 
 def score_actual(forecast, actual_class_position):

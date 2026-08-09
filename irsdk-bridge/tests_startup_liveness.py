@@ -46,6 +46,9 @@ def main():
     formation_plan = bridge.derive_race_plan(True, {'session_time': '20 min'}, 32767, -1.0)
     check("known timed format survives formation without live remaining clock",
           formation_plan == {'kind': 'timed', 'configured_duration_s': 1200.0})
+    seconds_plan = bridge.derive_race_plan(True, {'session_time': '1200 sec'}, 32767, -1.0)
+    check("SessionInfo seconds format survives formation without live remaining clock",
+          seconds_plan == {'kind': 'timed', 'configured_duration_s': 1200.0})
 
     initialized = assigned_names_before_first_loop()
     required = {"_is_time_race", "_legacy_laps_remaining", "_timed_final_eval", "_milestone_laps"}

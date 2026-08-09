@@ -17,8 +17,9 @@ check('RaceのFINISHEDだけsummary欠落時も自動デブリーフへ到達',
   renderer.includes("driverActivity==='FINISHED' && String(lastSessionType||'').toLowerCase().includes('race')")
   && renderer.includes('scheduleAutoDebrief(buildFallbackSessionSummary())'));
 check('SessionNum変更でセッション単位のデブリーフ状態を再武装',
-  renderer.includes('function resetSessionScopedReviewState()')
+  renderer.includes('function resetSessionScopedReviewState(nextSessionNum=null)')
   && renderer.includes('nextSessionNum!==lastSessionNum')
+  && renderer.includes('resetSessionScopedReviewState(nextSessionNum)')
   && renderer.includes('autoDebriefStarted=false;'));
 check('最終順位はconfirmedだけを表示しlive順位で補完しない',
   renderer.includes('clean.finish_pos_confirmed=clean.finish_pos_confirmed===true;')
