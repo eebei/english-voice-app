@@ -135,7 +135,7 @@ async function testBaseline(port) {
     });
     const text = JSON.parse(r.body).content[0].text;
     check('④a timed provisional fuel plan is deterministic',
-      /現在20\.0L.*ゴールまで25\.6L必要.*燃料は5\.6L不足.*給油設定は切り上げて6L/.test(text), text);
+      /現在20\.0L.*ゴールまで25\.6L必要.*燃料は5\.6L不足.*給油設定6L/.test(text), text);
   }
   {
     const r = await post(port, {
@@ -147,7 +147,7 @@ async function testBaseline(port) {
       messages: [{ role: 'user', content: '何リットル不足する？ゴールまで。' }],
     });
     check('④a2 HTTP engineer card: current/required/add/set',
-      /現在14\.5L.*ゴールまで27\.6L必要.*燃料は13\.1L不足.*給油設定は切り上げて14L/.test(r.body), r.body);
+      /現在14\.5L.*ゴールまで27\.6L必要.*燃料は13\.1L不足.*給油設定14L/.test(r.body), r.body);
     check('④a2 HTTP engineer card: deterministic authority header',
       r.headers['x-pitwall-authority'] === 'deterministic', r.headers['x-pitwall-authority']);
     check('④a2 HTTP engineer card: intent trace header',
@@ -163,7 +163,7 @@ async function testBaseline(port) {
       messages: [{ role: 'user', content: '2リッター 足りないってこと？' }],
     });
     check('④a3 リッター follow-up: 不足量と設定量を区別して最新値で回答',
-      /2L不足という意味ではない.*燃料は0\.8L不足.*給油設定は切り上げて1L/.test(r.body), r.body);
+      /2L不足という意味ではない.*燃料は0\.8L不足.*給油設定1L/.test(r.body), r.body);
     check('④a3 リッター follow-up: deterministic fuel handler',
       r.headers['x-pitwall-intent'] === 'fuel_plan', r.headers['x-pitwall-intent']);
   }
@@ -182,21 +182,27 @@ async function testBaseline(port) {
     const r = await post(port, {
       stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
       liveData: {
-        class_pos: 8, fuel: 14.5,
+        session_type:'Race',class_pos: 8, fuel: 14.5,gap_ahead:0.8,
+        battle_context:{player_pace_advantage_s:0.7},
+        strategy_playbook:{available:true,selected_plan:'A',plans:{
+          A:{available:true,first_pit_lap:5,pit_laps:[5,10]},
+          B:{available:true,first_pit_lap:4,pit_laps:[4,9]},
+          C:{available:true,first_pit_lap:6,pit_laps:[6,11],required_fuel_saving_pct:6.4},
+        }},
         fuel_strategy: { estimated_crossings_to_finish: 8, required_fuel_l: 27.6, add_fuel_l: 13.1, pit_required: true },
         strategy_plan: { action: 'box', reason: 'fuel_shortfall', set_fuel_l: 14 },
         pit_exit_forecast: { available: true,
-          likely:{position:17}, best:{position:16}, worst:{position:18},
+          likely:{position:17,traffic_state:'clear_air'}, best:{position:16}, worst:{position:18},
           pit_cycle:{if_pack_stops:{likely:{position:4,pack_car_count:14}}},
         },
       },
       messages: [{ role: 'user', content: 'この周でピットもいいと思う。アンダーカットにはどう思う？' }],
     });
     const text = JSON.parse(r.body).content[0].text;
-    check('④b2 proposal is a pit decision, not a bare command acknowledgement',
-      /この周でピットを強く推奨.*給油設定は14L.*ブレンド後P4/.test(text), text);
-    check('④b2 pit recommendation uses deterministic handler',
-      r.headers['x-pitwall-intent'] === 'pit_decision', r.headers['x-pitwall-intent']);
+    check('④b2 proposal uses verified undercut evidence, not fuel-only reasoning',
+      /Plan B、アンダーカットを推奨.*こちらが0\.7秒速く詰まっている.*燃料不足ではなくトラフィック回避.*物理復帰P17/.test(text), text);
+    check('④b2 strategy switch uses deterministic handler',
+      r.headers['x-pitwall-intent'] === 'strategy_switch', r.headers['x-pitwall-intent']);
   }
   {
     const r = await post(port, {

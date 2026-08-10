@@ -670,6 +670,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
   </div>
 </div>
 
+<script src="strategy-playbook.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -991,11 +992,11 @@ let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionTyp
 // the deterministic operational fallback and completes once at the next S/F
 // snapshot (or expires).  The driver never has to ask the same question again.
 let pendingOperationalFollowUp = null;
-function armOperationalFollowUp(intent){
+function armOperationalFollowUp(intent, originalText=''){
   const lap=Number(lastTelemetry&&lastTelemetry.lap);
   if(!Number.isFinite(lap) || !iracingLive || selMode!=='race') return;
   pendingOperationalFollowUp={intent:intent||'unresolved_operational', armedLap:Math.trunc(lap),
-    expiresAt:Date.now()+180000, running:false};
+    originalText:String(originalText||'').trim(),expiresAt:Date.now()+180000,running:false};
   diagnosticLog('OPERATIONAL_FOLLOWUP','armed intent='+intent+' lap='+Math.trunc(lap));
 }
 async function deliverOperationalFollowUp(){
@@ -1005,7 +1006,9 @@ async function deliverOperationalFollowUp(){
   try{
     const authToken=localStorage.getItem('pw_auth_token');
     const headers={'Content-Type':'application/json'};
-    const body={messages:[{role:'user',content:'戦略プランは？'}],character:sel,mode:selMode,level:'C2',userName,
+    const followUpText=job.originalText||(
+      job.intent==='telemetry_truth_gate'?'さっきの質問を、更新された確定値で答えて。':'次のS/Fで更新すると約束した質問に答えて。');
+    const body={messages:[{role:'user',content:followUpText}],character:sel,mode:selMode,level:'C2',userName,
       telemetry:iracingLive?'live':(bridgeConnected?'bridge':'off'),liveData:lastTelemetry,sessionType:lastSessionType,
       sessionAuthority:lastSessionAuthority,driverState,driverActivity,carClass:lastCarClass,max_tokens:80,usageSessionId};
     applyPitwallAccess(headers,body);
@@ -1056,7 +1059,11 @@ function applySessionFormatAuthority(snapshot){
 let lastIrating = null, lastSr = null;   // ドライバーのカルテ用（iRating/SR推移を全キャラで共有）
 let memorySavedThisSession = false, lastMemorySignature = '', memorySaveInFlight = null, memorySaveReceipt = '';
 let fuelLearningSignature = '';
-let activeRaceFacts = { sessionKey:'', fuelReflex:null, strategyOptions:null };
+let activeRaceFacts = { sessionKey:'', fuelReflex:null, strategyOptions:null, strategyPlaybook:null };
+let activeStrategyPlaybook = null;
+let strategyPlaybookBriefedKey = '';
+let strategyPlaybookLiveUpdateKey = '';
+let strategyPlaybookDecisionKeys = new Set();
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
@@ -1075,7 +1082,9 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   lastSessionSummary=null;
   namedRival=null;
   fuelLearningSignature='';
-  activeRaceFacts={sessionKey:String(nextSessionNum??lastSessionNum??''),fuelReflex:null,strategyOptions:null};
+  activeRaceFacts={sessionKey:String(nextSessionNum??lastSessionNum??''),fuelReflex:null,
+    strategyOptions:null,strategyPlaybook:null};
+  strategyPlaybookDecisionKeys=new Set();
   if(evidenceDebrief && evidenceDebrief.active) dismissEvidenceDebrief();
   resetPracticeRunState();
 }
@@ -2127,9 +2136,9 @@ async function callAPI(inputSource, memoryStatus=''){
       : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
     diagnosticLog('INTENT_ROUTE',`intent=${responseIntent||'conversation'} authority=${responseAuthority}`);
     if(responseAuthority==='deterministic' && responseIntent==='unresolved_operational'){
-      armOperationalFollowUp(responseIntent);
+      armOperationalFollowUp(responseIntent,latestUserText);
     }
-    if(truthBlocked) armOperationalFollowUp('telemetry_truth_gate');
+    if(truthBlocked) armOperationalFollowUp('telemetry_truth_gate',latestUserText);
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:display});
@@ -2845,6 +2854,7 @@ function connectBridge(){
           };
           applySessionFuelAuthority(data.data);
           hydrateLegacyStrategyObjective();
+          refreshStrategyPlaybook({announce:true});
         }
         injectBriefing(data.data);
       }
@@ -2854,7 +2864,11 @@ function connectBridge(){
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=applySessionFormatAuthority(data);
+        if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         rememberLiveFuelEvidence(lastTelemetry);
+        updateStrategyPlaybookFromLive(lastTelemetry);
+        if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
+        evaluateLiveStrategySwitch(lastTelemetry);
         updatePracticeRun(data);
         announceActiveStrategyObjective(lastTelemetry);
         maybeRunOperationalFollowUp(lastTelemetry);
@@ -3044,23 +3058,25 @@ function oishiRadio(d, forSpeech=false){
         const forecast=(physical>0)
           ? `今入ると物理P${Math.trunc(physical)}。${cycle>0&&pack>0?`${Math.trunc(pack)}台が止まればP${Math.trunc(cycle)}、意図未確認。`:''}`
           : '';
-        return `この周でピットを推奨。現在${Number(d.fuel||0).toFixed(1)}リットル、ゴールまで${Number(d.required_fuel_l||0).toFixed(1)}リットル必要。燃料は${Number(d.add_fuel_l||0).toFixed(1)}リットル不足。給油設定は切り上げて${Math.ceil(Number(d.add_fuel_l)||0)}リットル。${forecast}`;
+        const oneStopShort=Number(d.one_stop_shortfall_l)||0;
+        const setting=Number.isFinite(Number(d.set_fuel_l))?Math.trunc(Number(d.set_fuel_l)):Math.ceil(Number(d.add_fuel_l)||0);
+        return `この周でピットを推奨。現在${Number(d.fuel||0).toFixed(1)}リットル、ゴールまで${Number(d.required_fuel_l||0).toFixed(1)}リットル必要。燃料は${Number(d.add_fuel_l||0).toFixed(1)}リットル不足。${oneStopShort>0.05?`設定上限${setting}リットルでも一度では${oneStopShort.toFixed(1)}リットル不足。`:`給油設定${setting}リットル。`}${forecast}`;
       }
     case 'initial_strategy_plans': {
       const options=d.strategy_options||{}, a=options.plan_a||{}, b=options.plan_b||{};
       if(!a.available||!b.available) return null;
       const timing=n=>Number(n)===0?'この周':`あと${Math.trunc(Number(n))}周走って`;
-      return `初期戦略。プランAは${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。プランBは1周延長してピット、給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。Bへの切替は燃料予測と復帰トラフィックを再確認して出す。`;
+      return `燃料タイミング比較。基準案は${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。1周延長案は次周ピット、給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。延長は燃料予測と復帰トラフィックを再確認して出す。`;
     }
     case 'strategy_plan_decision': {
       const selected=d.selected_plan==='B'?'B':'A';
       const plan=(d.strategy_options&&d.strategy_options[`plan_${selected.toLowerCase()}`])||{};
-      if(selected==='B') return `プランBへ切り替える。もう1周走って、次の周でピット。給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
-      return `プランAで行く。この周でピット、給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+      if(selected==='B') return `燃料タイミングは1周延長。もう1周走って、次の周でピット。給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+      return `燃料タイミングは基準案。この周でピット、給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
     }
     case 'strategy_plan_box_call': {
       const b=(d.strategy_options&&d.strategy_options.plan_b)||{};
-      return `プランB、予定どおりこの周でピット。給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。`;
+      return `1周延長案、予定どおりこの周でピット。給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。`;
     }
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
@@ -3282,8 +3298,15 @@ function buildActiveRaceFactsNote(isJP){
   if(options&&options.available){
     const a=options.plan_a||{}, b=options.plan_b||{};
     notes.push(isJP
-      ? `【発話済み初期戦略】Plan A: ${a.target_in_laps}周後pit、給油設定${a.set_fuel_l}L。Plan B: ${b.target_in_laps}周後pit、給油設定${b.set_fuel_l}L。選択中は${options.selected_plan||'A'}。切替を勝手に確定せず、最新の燃料と復帰比較で更新せよ。`
-      : `[ANNOUNCED INITIAL STRATEGY] Plan A: pit in ${a.target_in_laps} laps, set ${a.set_fuel_l} L. Plan B: pit in ${b.target_in_laps} laps, set ${b.set_fuel_l} L. Selected ${options.selected_plan||'A'}. Update only from current fuel and rejoin evidence.`);
+      ? `【発話済み燃料タイミング比較】基準案: ${a.target_in_laps}周後pit、給油設定${a.set_fuel_l}L。1周延長案: ${b.target_in_laps}周後pit、給油設定${b.set_fuel_l}L。選択中は${options.selected_plan==='B'?'延長':'基準'}。最新の燃料と復帰比較で更新せよ。`
+      : `[ANNOUNCED FUEL TIMING COMPARISON] Baseline: pit in ${a.target_in_laps} laps, set ${a.set_fuel_l} L. One-lap extension: pit in ${b.target_in_laps} laps, set ${b.set_fuel_l} L. Update only from current fuel and rejoin evidence.`);
+  }
+  const playbook=activeRaceFacts.strategyPlaybook;
+  if(playbook&&playbook.available){
+    const a=playbook.plans?.A||{}, b=playbook.plans?.B||{}, c=playbook.plans?.C||{};
+    notes.push(isJP
+      ? `【合意済み戦略プレイブック】Plan A=ベースライン（pit ${Array.isArray(a.pit_laps)&&a.pit_laps.length?a.pit_laps.join('・'):'なし'}周）。Plan B=アンダーカット（最初${b.first_pit_lap||'不明'}周）。Plan C=オーバーカット（最初${c.first_pit_lap||'不明'}周、必要燃費改善${Number(c.required_fuel_saving_pct||0).toFixed(1)}%）。現在選択=${playbook.selected_plan||'A'}。当日実測と前車ペース、物理復帰予測でのみ切り替えよ。`
+      : `[AGREED STRATEGY PLAYBOOK] Plan A is the baseline. Plan B is the undercut. Plan C is the overcut. Current selection: ${playbook.selected_plan||'A'}. Switch only from live fuel, rival pace, and physical rejoin evidence.`);
   }
   return notes.length?'\n'+notes.join('\n'):'';
 }
@@ -3453,6 +3476,10 @@ function injectBriefing(data){
   // 戦略モードでiRacing接続時＝ここが「適切なタイミング」。データ羅列でなく、Lunaが自分から
   // 能動的にブリーフィングを切り出す（コース/車種を踏まえ「レース？テスト？」を今聞く）。
   // アプリ起動直後の挨拶はiRacing接続前で流れてしまうので、接続時のこの一声が本命。
+  if(selMode==='strategy' && activeStrategyPlaybook?.available){
+    briefingKicked=true;
+    return;
+  }
   if(selMode==='strategy' && !briefingKicked){
     briefingKicked = true;
     scheduleAutoBriefing();
@@ -4500,10 +4527,16 @@ function saveSessionSummary(data){
       const bestLap=parseFloat(data.best_lap)||null;
       // ベストは「速い方（小さい方）」を残す。燃料は直近値で更新。
       const newBest=(bestLap&&(!prev.bestLap||bestLap<prev.bestLap))?bestLap:(prev.bestLap||null);
+      const avgLap=Number(data.avg_lap);
+      const priorLapSamples=Number(prev.avgLapSampleCount)||0;
       mem[key]={
-        car, track,
+        ...prev, car, track,
         bestLap:newBest,
         avgFuel:(data.avg_fuel_per_lap!=null?data.avg_fuel_per_lap:(prev.avgFuel!=null?prev.avgFuel:null)),
+        avgLap:(Number.isFinite(avgLap)&&avgLap>20
+          ? Math.round((((Number(prev.avgLap)||0)*priorLapSamples+avgLap)/(priorLapSamples+1))*1000)/1000
+          : (prev.avgLap||null)),
+        avgLapSampleCount:(Number.isFinite(avgLap)&&avgLap>20?priorLapSamples+1:priorLapSamples),
         lastDate:new Date().toISOString().slice(0,10),
         sessions:(prev.sessions||0)+1
       };
@@ -4636,6 +4669,148 @@ function loadConfirmedFuelCapacity(){
     const value=Number(all[fuelCapacityKey()]?.capacity_l);
     return Number.isFinite(value)&&value>0?value:null;
   }catch{return null;}
+}
+
+function isJapaneseEngineer(){
+  return sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP';
+}
+function normalizedEvidenceKey(value){
+  return String(value||'').trim().toLowerCase();
+}
+function medianFinite(values){
+  const rows=(values||[]).map(Number).filter(v=>Number.isFinite(v)&&v>20&&v<900).sort((a,b)=>a-b);
+  if(!rows.length) return null;
+  const mid=Math.floor(rows.length/2);
+  return rows.length%2?rows[mid]:(rows[mid-1]+rows[mid])/2;
+}
+function matchingHistoricalAverageLap(){
+  const track=normalizedEvidenceKey(lastTrack), car=normalizedEvidenceKey(lastCarModel||lastCarClass);
+  if(!track||!car) return null;
+  const samples=[];
+  try{
+    const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    const rec=findCarTrackMemory(mem,lastTrack,lastCarModel||'',lastCarClass||'');
+    if(Number(rec?.avgLap)>20) samples.push(Number(rec.avgLap));
+  }catch{}
+  try{
+    const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
+    history.forEach(row=>{
+      const rowTrack=normalizedEvidenceKey(row.track);
+      const rowCar=normalizedEvidenceKey(row.car||row.carClass);
+      if(rowTrack===track&&rowCar===car&&Number(row.avgLap)>20) samples.push(Number(row.avgLap));
+    });
+  }catch{}
+  try{
+    loadEvidenceRecords().forEach(row=>{
+      if(row.driver&&userName&&row.driver!==userName) return;
+      const rowTrack=normalizedEvidenceKey(row.scope?.track);
+      const rowCar=normalizedEvidenceKey(row.scope?.car||row.scope?.car_class);
+      if(rowTrack===track&&rowCar===car&&Number(row.evidence?.avg_lap)>20){
+        samples.push(Number(row.evidence.avg_lap));
+      }
+    });
+  }catch{}
+  return medianFinite(samples);
+}
+function raceDetailForPlaybook(){
+  const details=lastWeekendAuthority?.session_details||{};
+  const current=details[String(lastSessionNum)];
+  if(current&&/race/i.test(String(current.session_type||''))) return current;
+  return Object.values(details).find(row=>/race/i.test(String(row?.session_type||'')))||null;
+}
+function refreshStrategyPlaybook(options={}){
+  const engine=window.PitwallStrategyPlaybook;
+  if(!engine) return null;
+  const raceDetail=raceDetailForPlaybook();
+  let memory=null;
+  try{
+    const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
+    memory=findCarTrackMemory(mem,lastTrack,lastCarModel||'',lastCarClass||'');
+  }catch{}
+  const q=lastWeekendAuthority?.qualifying_result||{};
+  const storedAverageLap=matchingHistoricalAverageLap();
+  const liveAverageLap=Number(lastTelemetry?.driver_pace_sample_count)>=3
+    ? Number(lastTelemetry?.driver_pace_median_s):null;
+  const playbook=engine.buildPlaybook({
+    track:lastTrack||'', car:lastCarModel||lastCarClass||'', raceDetail,
+    historicalFuelPerLapL:Number(memory?.avgFuel),
+    historicalFuelSamples:Number(memory?.fuelSampleCount)||0,
+    historicalAverageLapS:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
+    effectiveCapacityL:loadConfirmedFuelCapacity(),
+    pitLaneS:Number(memory?.pitLaneSec),
+    qualifyingPosition:q.status==='valid'?Number(q.class_position||q.overall_position):null,
+    classEntryCount:Number(lastWeekendAuthority?.player_class_entry_count)||null,
+  });
+  activeStrategyPlaybook=playbook;
+  activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),strategyPlaybook:playbook};
+  diagnosticLog('STRATEGY_PLAYBOOK',JSON.stringify({available:playbook.available,reason:playbook.reason,
+    source:playbook.source,format:playbook.format,plans:playbook.plans,evidence:playbook.evidence}));
+  if(options.announce===true) announceStrategyPlaybook(playbook);
+  return playbook;
+}
+function announceStrategyPlaybook(playbook){
+  if(!playbook?.available) return;
+  const session=String(lastSessionType||'');
+  if(!/practice|race/i.test(session)) return;
+  const key=[lastTrack,lastCarModel||lastCarClass,session,lastSessionNum,
+    playbook.source,playbook.evidence?.qualifying_position,playbook.format?.estimated_race_laps].join('|');
+  if(strategyPlaybookBriefedKey===key) return;
+  strategyPlaybookBriefedKey=key;
+  const isJP=isJapaneseEngineer();
+  const prefix=isJP
+    ? (/practice/i.test(session)?'練習から協議する事前戦略。':'レース戦略を確認。')
+    : (/practice/i.test(session)?'Pre-race strategy for practice review. ':'Race strategy confirmed. ');
+  const msg=prefix+window.PitwallStrategyPlaybook.briefing(playbook,isJP?'ja':'en');
+  addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
+  speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_briefing',dedupeKey:key});
+}
+function updateStrategyPlaybookFromLive(live){
+  if(!window.PitwallStrategyPlaybook) return;
+  const becameAvailable=!activeStrategyPlaybook?.available;
+  if(becameAvailable) refreshStrategyPlaybook({announce:false});
+  if(!activeStrategyPlaybook?.available) return;
+  const updated=window.PitwallStrategyPlaybook.updateWithLive(activeStrategyPlaybook,live||{});
+  if(updated===activeStrategyPlaybook) return;
+  activeStrategyPlaybook=updated;
+  activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),strategyPlaybook:updated};
+  const key=[lastSessionNum,updated.evidence?.live_fuel_samples,updated.evidence?.live_fuel_l_per_lap].join('|');
+  if(strategyPlaybookLiveUpdateKey===key) return;
+  strategyPlaybookLiveUpdateKey=key;
+  if(becameAvailable){
+    announceStrategyPlaybook(updated);
+    diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
+    return;
+  }
+  const isJP=isJapaneseEngineer();
+  const msg=isJP
+    ? `当日クリーン${updated.evidence.live_fuel_samples}周、燃費${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)}L/周でPlan A・B・Cを更新した。`
+    : `Plans A, B, and C updated from ${updated.evidence.live_fuel_samples} clean laps at ${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)} litres per lap.`;
+  addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
+  speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_live_update',dedupeKey:key});
+  diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
+}
+function evaluateLiveStrategySwitch(live){
+  const engine=window.PitwallStrategyPlaybook;
+  if(!engine||!activeStrategyPlaybook?.available) return;
+  const decision=engine.evaluateSwitch(activeStrategyPlaybook,live||{});
+  if(!decision||strategyPlaybookDecisionKeys.has(decision.decision_id)) return;
+  strategyPlaybookDecisionKeys.add(decision.decision_id);
+  activeStrategyPlaybook={...activeStrategyPlaybook,selected_plan:decision.selected_plan,
+    last_live_decision:decision};
+  activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),
+    strategyPlaybook:activeStrategyPlaybook};
+  if(live) live.strategy_playbook=activeStrategyPlaybook;
+  const e=decision.evidence||{}, isJP=isJapaneseEngineer();
+  let msg;
+  if(decision.selected_plan==='B') msg=isJP
+    ? `Plan B、アンダーカット候補。前は${Number(e.gap_ahead_s).toFixed(1)}秒、こちらが${Number(e.player_pace_advantage_s).toFixed(1)}秒速い。今入る物理復帰P${e.physical_rejoin_position}。`
+    : `Plan B, undercut candidate. The gap is ${Number(e.gap_ahead_s).toFixed(1)} seconds and we are ${Number(e.player_pace_advantage_s).toFixed(1)} seconds faster. Physical rejoin P${e.physical_rejoin_position}.`;
+  else msg=isJP
+    ? `Plan C、オーバーカット候補。前とのペース差は${Math.abs(Number(e.player_pace_advantage_s)).toFixed(1)}秒。燃料は次周まで成立、今P${e.pit_now_position}予測に対して次周P${e.pit_next_lap_position}予測。`
+    : `Plan C, overcut candidate. Pace difference is ${Math.abs(Number(e.player_pace_advantage_s)).toFixed(1)} seconds. Fuel supports one more lap; rejoin forecast changes from P${e.pit_now_position} now to P${e.pit_next_lap_position} next lap.`;
+  addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
+  speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'strategy_playbook_switch',dedupeKey:decision.decision_id});
+  diagnosticLog('STRATEGY_PLAYBOOK_DECISION',JSON.stringify(decision));
 }
 function captureConfirmedFuelCapacity(text){
   // SessionInfoの実効上限が取れている場合、会話/STT値で権威データを上書きしない。

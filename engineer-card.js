@@ -12,6 +12,7 @@ const TOPIC = Object.freeze({
   REJOIN: 'rejoin',
   PIT_LOSS: 'pit_loss',
   PIT_DECISION: 'pit_decision',
+  STRATEGY_SWITCH: 'strategy_switch',
   PIT_SERVICE: 'pit_service',
   PACE: 'pace',
   POSITION_GAP: 'position_gap',
@@ -55,13 +56,17 @@ function classify(text, options = {}) {
   if (/\d+(?:\.\d+)?\s*[lL].*(?:大丈夫|足り|必要)|(?:大丈夫|足り|必要).*\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.96 };
   if (/今.{0,8}\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.94 };
 
-  if (/(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|レース.{0,10}(?:距離|時間)|何分\s*(?:制|製)(?:の)?(?:レース)?|予選(?:あり|なし)|session format|race format|qualifying/i.test(t)) return { topic: TOPIC.SESSION_FORMAT, confidence: 0.99 };
-  if (/残り.{0,8}(?:何周|周回|時間)|あと.{0,8}(?:何周|何分)|レース.{0,8}(?:何周|何分|時間)|チェッカー|ホワイトフラッグ|race distance|laps? left|time remaining|white flag/i.test(t)) return { topic: TOPIC.RACE_DISTANCE, confidence: 0.98 };
+  if (/(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|レース.{0,10}(?:距離|時間)|何分\s*(?:制|製)(?:の)?(?:レース)?|予選(?:あり|なし)|このセッション.{0,8}(?:何|なん|どれ)|セッション.{0,8}(?:何|なん|どれ|練習|予選|決勝)|練習.{0,8}予選.{0,8}(?:決勝|レース)|session format|race format|qualifying/i.test(t)) return { topic: TOPIC.SESSION_FORMAT, confidence: 0.99 };
+  if (/残り.{0,8}(?:何[周週]|周回|時間)|あと.{0,8}(?:何[周週]|何分)|レース.{0,8}(?:何[周週]|何分|時間)|チェッカー|ホワイトフラッグ|race distance|laps? left|time remaining|white flag/i.test(t)) return { topic: TOPIC.RACE_DISTANCE, confidence: 0.98 };
+  if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙|判断|いけ)|(?:どう思う|どうする|判断).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return {
+    topic: TOPIC.STRATEGY_SWITCH,
+    requestedPlan: /オーバー\s*カット|overcut/i.test(t) ? 'C' : 'B',
+    confidence: 0.99,
+  };
   if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
-  if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙)|(?:どう思う|どうする).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.98 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
-  if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABＡＢ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[ab]/i.test(t)) {
-    const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':null;
+  if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABCＡＢＣ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[abc]/i.test(t)) {
+    const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
     return { topic: TOPIC.PLAN_STATUS, planChoice: choice, confidence: 0.96 };
   }
   if (/トラフィック|集団|クリアエア|前方.*(?:集団|車群)|traffic|pack|clear air/i.test(t)) return { topic: TOPIC.TRAFFIC_STATUS, confidence: 0.96 };
@@ -134,8 +139,13 @@ function fuelPlan(live) {
   const fs = live && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
   const current = finite(live && live.fuel);
   const required = finite(fs.required_fuel_l);
-  const add = current != null && required != null ? Math.max(0, required - current) : finite(fs.add_fuel_l);
-  return { fs, current, required, add, set: add != null ? Math.ceil(add) : null };
+  const authoritativeAdd = finite(fs.evaluated_fuel_l) != null || fs.awaiting_post_pit_s_f === true
+    ? finite(fs.add_fuel_l) : null;
+  const add = authoritativeAdd != null ? authoritativeAdd
+    : current != null && required != null ? Math.max(0, required - current) : null;
+  const set = finite(fs.set_fuel_l) != null ? Math.trunc(finite(fs.set_fuel_l))
+    : add != null ? Math.ceil(add) : null;
+  return { fs, current, required, add, set };
 }
 
 function hasAuthoritativeFinishTarget(live) {
@@ -186,24 +196,31 @@ function buildFuelPlan(live, lang, card = {}) {
       : `${current != null ? `Current ${current.toFixed(1)}L. ` : ''}${avg != null ? `Average ${avg.toFixed(2)}L/lap. ` : ''}The finish target is not authoritative, so I will not give required fuel, an add amount, or a pit-lap call.`;
   }
   const exact = finite(fs.estimated_crossings_to_finish), provisional = finite(fs.provisional_laps_to_time_expiry);
+  const oneStopShort=finite(fs.one_stop_shortfall_l);
+  const settingJP=oneStopShort!=null&&oneStopShort>0.05
+    ? `設定上限${set}Lでも一度では${oneStopShort.toFixed(1)}L不足。追加のセーブか別ピットが必要。`
+    : `給油設定${set}L。`;
+  const settingEN=oneStopShort!=null&&oneStopShort>0.05
+    ? `The ${set}L setting limit still leaves ${oneStopShort.toFixed(1)}L short in one stop; additional saving or another stop is required.`
+    : `Set ${set}L.`;
   if (current != null && required != null && add != null) {
     const distance = Number.isInteger(exact)
       ? (ja(lang) ? `チェッカーまでS/Fあと${exact}回。` : `${exact} S/F crossings to the finish. `)
       : Number.isInteger(provisional) ? (ja(lang) ? `暫定あと${provisional}周分。` : `Provisional ${provisional}-lap plan. `) : '';
     if (ja(lang)) {
       if (finite(card.shortageClarificationL) != null) return add > 0
-        ? `${finite(card.shortageClarificationL).toFixed(0)}L不足という意味ではない。最新値では現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。燃料は${add.toFixed(1)}L不足。給油設定は切り上げて${set}L。`
+        ? `${finite(card.shortageClarificationL).toFixed(0)}L不足という意味ではない。最新値では現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。燃料は${add.toFixed(1)}L不足。${settingJP}`
         : `${finite(card.shortageClarificationL).toFixed(0)}L不足という意味ではない。最新値では燃料は足りる。現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。`;
       if (add > 0) {
         const action = card.actionRequested && fs.pit_required === true
           ? 'この周でピットを推奨。'
           : '追加給油が必要。';
-        return `${action}現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。燃料は${add.toFixed(1)}L不足。給油設定は切り上げて${set}L。`;
+        return `${action}現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。燃料は${add.toFixed(1)}L不足。${settingJP}`;
       }
       return `燃料は足りる。現在${current.toFixed(1)}L、ゴールまで${required.toFixed(1)}L必要。${distance}`;
     }
     return add > 0
-      ? `Current ${current.toFixed(1)}L. ${distance}${required.toFixed(1)}L total required; add ${add.toFixed(1)}L, set ${set}L.`
+      ? `Current ${current.toFixed(1)}L. ${distance}${required.toFixed(1)}L total required; ${add.toFixed(1)}L short. ${settingEN}`
       : `Current ${current.toFixed(1)}L. ${distance}${required.toFixed(1)}L total required; no fuel needed.`;
   }
   const avg = finite(fs.avg_fuel_per_lap);
@@ -254,14 +271,9 @@ function buildRejoin(live, lang) {
   if (status && status.active) {
     const current = position(live.class_pos), stopped = Number(status.observed_pack_pit_count) || 0;
     const total = Number(status.observed_pack_car_count) || 0, predicted = position(status.conditional_cycle_position);
-    if (current && predicted && current <= predicted) {
-      const better = predicted - current;
-      return ja(lang)
-        ? `現在順位P${current}。事前の条件付きブレンド予測P${predicted}${better > 0 ? `より${better}つ上` : '通り'}。対象集団停止${stopped}/${total}台。`
-        : `Current position P${current}. ${better > 0 ? `${better} position${better === 1 ? '' : 's'} better than` : 'Matching'} the conditional P${predicted} blend forecast; ${stopped}/${total} target cars have stopped.`;
-    }
-    return ja(lang) ? `現在順位P${current || '不明'}。対象集団停止${stopped}/${total}台。条件付きブレンド予測P${predicted || '不明'}。`
-      : `Current position P${current || 'unknown'}. ${stopped}/${total} target cars have stopped; conditional blended forecast P${predicted || 'unknown'}.`;
+    return ja(lang)
+      ? `現在順位P${current || '不明'}。対象集団停止${stopped}/${total}台で条件はまだ未成立。事前のP${predicted || '不明'}は条件付き予測なので、現順位との一致判定はまだしない。`
+      : `Current position P${current || 'unknown'}. The condition is not met: ${stopped}/${total} target cars have stopped. P${predicted || 'unknown'} remains conditional, so I will not grade it against the current position yet.`;
   }
   const f = live && live.pit_exit_forecast;
   const likely = position(f && f.likely && f.likely.position), best = position(f && f.best && f.best.position), worst = position(f && f.worst && f.worst.position);
@@ -270,6 +282,42 @@ function buildRejoin(live, lang) {
   const cyclePos = position(cycle && cycle.position), pack = finite(cycle && cycle.pack_car_count);
   if (ja(lang)) return `今入る物理復帰P${likely}、範囲P${best}〜P${worst}。${cyclePos && pack ? `近傍${Math.trunc(pack)}台が停止すればブレンド後P${cyclePos}。停止意図は未確認。` : '他車の停止意図は未確認。'}`;
   return `Physical exit P${likely}, range P${best}-P${worst}. ${cyclePos && pack ? `If the ${Math.trunc(pack)}-car pack stops, cycle P${cyclePos}; intent unconfirmed.` : 'Rival pit intent is unconfirmed.'}`;
+}
+
+function buildStrategySwitch(live, lang, card = {}) {
+  const requested=card.requestedPlan==='C'?'C':'B';
+  const playbook=live&&live.strategy_playbook;
+  if(!playbook||!playbook.available) return ja(lang)
+    ? 'ベース戦略がまだ成立していない。アンダーカット／オーバーカットを推測では選ばない。'
+    : 'The baseline playbook is not established, so I will not guess an undercut or overcut.';
+  const plan=playbook.plans&&playbook.plans[requested];
+  if(!plan||plan.available===false) return ja(lang)
+    ? `Plan ${requested}は同じ給油回数では成立しない。`
+    : `Plan ${requested} is not viable with the same stop count.`;
+  const battle=live.battle_context||{};
+  const gap=finite(live.gap_ahead??battle.gap_ahead_s);
+  const pace=finite(battle.player_pace_advantage_s);
+  const now=live.pit_exit_forecast||{}, next=live.pit_next_lap_forecast||{};
+  const nowPos=position(now.likely&&now.likely.position), nextPos=position(next.likely&&next.likely.position);
+  if(requested==='B'){
+    if(gap!=null&&pace!=null&&gap<=1.5&&pace>=0.4&&nowPos!=null
+      &&String(now.likely?.traffic_state||'')!=='blend_risk') return ja(lang)
+      ? `Plan B、アンダーカットを推奨。前は${gap.toFixed(1)}秒、こちらが${pace.toFixed(1)}秒速く詰まっている。根拠は燃料不足ではなくトラフィック回避。今入る物理復帰P${nowPos}。`
+      : `Recommend Plan B, the undercut. The gap is ${gap.toFixed(1)}s and we are ${pace.toFixed(1)}s faster. The reason is traffic avoidance, not a fuel shortfall. Physical rejoin P${nowPos}.`;
+    return ja(lang)
+      ? `Plan Bの条件を確認中。${gap!=null?`前は${gap.toFixed(1)}秒。`:''}${pace!=null?`相対ペースは${pace>=0?'こちらが'+pace.toFixed(1)+'秒速い':'こちらが'+Math.abs(pace).toFixed(1)+'秒遅い'}。`:'3周の相対ペース待ち。'}物理復帰がクリアになればアンダーカットを出す。`
+      : `Plan B conditions are still being checked. ${gap!=null?`Gap ${gap.toFixed(1)}s. `:''}${pace!=null?`Our pace delta is ${pace.toFixed(1)}s. `:'Waiting for a three-lap relative pace sample. '}I will call the undercut only with a clear physical rejoin.`;
+  }
+  const fs=live.fuel_strategy||{}, avg=finite(fs.avg_fuel_per_lap), fuel=finite(live.fuel);
+  const lap=finite(live.lap), target=finite(plan.first_pit_lap);
+  const laps=lap!=null&&target!=null?Math.max(1,target-lap):null;
+  const fuelSafe=avg!=null&&fuel!=null&&laps!=null&&fuel-avg*laps>=0.5;
+  if(gap!=null&&pace!=null&&Math.abs(pace)<=0.3&&fuelSafe&&nowPos!=null&&nextPos!=null&&nextPos<=nowPos) return ja(lang)
+    ? `Plan C、オーバーカットを推奨。ペース差は${Math.abs(pace).toFixed(1)}秒で小さい。次周まで燃料成立、復帰予測は今P${nowPos}に対して次周P${nextPos}。`
+    : `Recommend Plan C, the overcut. Pace difference is only ${Math.abs(pace).toFixed(1)}s. Fuel supports the next lap, and rejoin improves from P${nowPos} now to P${nextPos} next lap.`;
+  return ja(lang)
+    ? `Plan Cの条件を確認中。ペース差、次周までの燃料、今と次周の物理復帰をそろえてからオーバーカットを出す。`
+    : 'Plan C conditions are still being checked. I need the pace delta, fuel to the next lap, and physical rejoin now versus next lap before calling the overcut.';
 }
 
 function buildPitLoss(live, lang) {
@@ -340,16 +388,33 @@ function buildPitDecision(live, lang) {
 }
 
 function buildPlanStatus(live, lang, card = {}) {
-  const p = derivedAction(live), rev = finite(p.revision);
-  const prefix = rev != null ? (ja(lang) ? `プラン改訂${Math.trunc(rev)}。` : `Plan revision ${Math.trunc(rev)}. `) : '';
+  const p = derivedAction(live), prefix = '';
+  const playbook=live&&live.strategy_playbook;
+  if(playbook&&playbook.available){
+    const chosen=card.planChoice||playbook.selected_plan||'A';
+    const plan=playbook.plans&&playbook.plans[chosen];
+    if(card.planChoice&&plan){
+      const label={A:'ベースライン',B:'アンダーカット',C:'オーバーカット'}[chosen];
+      const stops=Array.isArray(plan.pit_laps)&&plan.pit_laps.length?plan.pit_laps.join('・'):'なし';
+      const condition=chosen==='B'?'前で詰まり、こちらの相対ペースが速く、物理復帰がクリアなら切り替える。'
+        :chosen==='C'?`ペース差が小さく、次周の復帰が悪化せず、燃費${Number(plan.required_fuel_saving_pct||0).toFixed(1)}%改善が成立すれば切り替える。`
+          :'現在の基準案。';
+      return ja(lang)?`Plan ${chosen}は${label}。ピット予定${stops}周。${condition}`
+        :`Plan ${chosen} is the ${chosen==='A'?'baseline':chosen==='B'?'undercut':'overcut'}. Planned stops: laps ${stops}.`;
+    }
+    const a=playbook.plans.A||{}, b=playbook.plans.B||{}, c=playbook.plans.C||{};
+    return ja(lang)
+      ? `現在はPlan ${playbook.selected_plan||'A'}。Plan Aはベースライン${(a.pit_laps||[]).join('・')}周、Plan Bはアンダーカット${b.first_pit_lap||'不明'}周、Plan Cはオーバーカット${c.first_pit_lap||'不明'}周。`
+      : `Current selection is Plan ${playbook.selected_plan||'A'}. Plan A is the baseline, Plan B the undercut, and Plan C the overcut.`;
+  }
   const options=live&&live.strategy_options;
   if(card.planChoice&&options&&options.available){
     const plan=options['plan_'+card.planChoice.toLowerCase()]||{};
     if(!plan.available) return ja(lang)?`プラン${card.planChoice}は現在成立していない。`:`Plan ${card.planChoice} is not currently viable.`;
     const when=Number(plan.target_in_laps)===0?(ja(lang)?'この周':'this lap'):(ja(lang)?`あと${Math.trunc(plan.target_in_laps)}周走って`:`in ${Math.trunc(plan.target_in_laps)} laps`);
     return ja(lang)
-      ? `プラン${card.planChoice}は${when}ピット、給油設定${Math.trunc(plan.set_fuel_l)}L。${card.planChoice==='B'?'燃料予測と復帰トラフィックを再確認して切り替える。':'現在の基準案。'}`
-      : `Plan ${card.planChoice}: pit ${when}, set ${Math.trunc(plan.set_fuel_l)}L. ${card.planChoice==='B'?'Switch only after checking fuel projection and rejoin traffic.':'This is the current baseline.'}`;
+      ? `${card.planChoice==='B'?'1周延長案':'燃料タイミング基準案'}は${when}ピット、給油設定${Math.trunc(plan.set_fuel_l)}L。${card.planChoice==='B'?'燃料予測と復帰トラフィックを再確認して切り替える。':'現在の燃料基準案。'}`
+      : `${card.planChoice==='B'?'One-lap fuel extension':'Fuel timing baseline'}: pit ${when}, set ${Math.trunc(plan.set_fuel_l)}L.`;
   }
   if (p.action === 'box') return prefix + (ja(lang) ? `燃料不足でボックス。給油${finite(p.set_fuel_l) == null ? '未確定' : Math.trunc(p.set_fuel_l) + 'L'}。` : `Box for fuel; set ${finite(p.set_fuel_l) == null ? 'unconfirmed' : Math.trunc(p.set_fuel_l) + 'L'}.`);
   if (p.action === 'push') return prefix + (ja(lang) ? 'ステイアウトしてプッシュ。燃料余裕あり。' : 'Stay out and push; fuel margin is positive.');
@@ -380,7 +445,7 @@ function buildPace(live, lang) {
       ? `Fuel shortfall ${add.toFixed(1)}L. Do not push; box again next lap.`
       : `Stop complete. ${margin != null && margin >= 0 ? `Projected finish margin ${margin.toFixed(1)}L. ` : ''}Build the tyres and hold pace.`);
   if (fs.pit_required === true || (add != null && add > 0)) return ja(lang) ? `今はペースアップよりピット優先。現在${current != null ? current.toFixed(1) : '不明'}L、必要総量${required != null ? required.toFixed(1) : '未確定'}L。` : `Prioritise the stop, not a pace increase. Current ${current != null ? current.toFixed(1) : 'unknown'}L; ${required != null ? required.toFixed(1) + 'L required' : 'requirement unconfirmed'}.`;
-  if (margin != null && margin >= 0) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースを上げていい。ライバル比較は確定データがないので秒数は言わない。` : `${margin.toFixed(1)}L fuel margin. You can push; I do not have a verified rival pace delta to quote.`;
+  if (margin != null && margin >= 0) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースを上げていい。` : `${margin.toFixed(1)}L fuel margin. You can push.`;
   return ja(lang) ? 'ペースアップ可否を決める燃料余裕がまだ確定していない。' : 'Fuel margin is not confirmed, so I cannot clear a push yet.';
 }
 
@@ -492,7 +557,8 @@ function build(card, live, lang = 'en') {
     [TOPIC.CURRENT_FUEL]: buildCurrentFuel, [TOPIC.FUEL_EMERGENCY]: buildFuelEmergency, [TOPIC.FUEL_PLAN]: buildFuelPlan,
     [TOPIC.FUEL_USE]: buildFuelUse, [TOPIC.RACE_DISTANCE]: buildRaceDistance,
     [TOPIC.REJOIN]: buildRejoin, [TOPIC.PIT_LOSS]: buildPitLoss,
-    [TOPIC.PIT_DECISION]: buildPitDecision, [TOPIC.PIT_SERVICE]: buildPitService,
+    [TOPIC.PIT_DECISION]: buildPitDecision, [TOPIC.STRATEGY_SWITCH]: buildStrategySwitch,
+    [TOPIC.PIT_SERVICE]: buildPitService,
     [TOPIC.PACE]: buildPace, [TOPIC.CURRENT_POSITION]: buildCurrentPosition,
     [TOPIC.LEADER_GAP]: buildLeaderGap, [TOPIC.TYRE_STATUS]: buildTyreStatus,
     [TOPIC.DAMAGE_STATUS]: buildDamageStatus, [TOPIC.WEATHER_STATUS]: buildWeatherStatus,

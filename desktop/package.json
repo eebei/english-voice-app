@@ -24,6 +24,7 @@
       "main.js",
       "preload.js",
       "renderer.html",
+      "strategy-playbook.js",
       "overlay.html",
       "build-info.json",
       "*.png"

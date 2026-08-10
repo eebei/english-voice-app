@@ -61,7 +61,7 @@ check('fuel starvation bypasses next-S/F deferral',
 card = cards.classify('何リットル不足する？計算なの？ゴールまで。');
 reply = cards.build(card, beforePit, 'ja');
 check('fuel plan gives current/required/add/set',
-  /現在14\.5L.*ゴールまで27\.6L必要.*燃料は13\.1L不足.*給油設定は切り上げて14L/.test(reply), reply);
+  /現在14\.5L.*ゴールまで27\.6L必要.*燃料は13\.1L不足.*給油設定14L/.test(reply), reply);
 check('fuel plan never repeats invented 20L/26 laps', !/20L|26周/.test(reply), reply);
 
 card = cards.classify('13l90だけど大丈夫？');
@@ -69,9 +69,21 @@ check('bare litre follow-up is still a fuel-plan card', card.topic === cards.TOP
 
 card = cards.classify('アンダーカット 狙えるよ。どうする？');
 reply = cards.build(card, beforePit, 'ja');
-check('undercut opinion produces an owned box recommendation',
-  card.topic === cards.TOPIC.PIT_DECISION
-  && /ピットを推奨.*燃料不足.*給油設定は14L.*ブレンド後P14/.test(reply), reply);
+check('undercut opinion refuses to turn a fuel-only call into strategy',
+  card.topic === cards.TOPIC.STRATEGY_SWITCH
+  && /ベース戦略がまだ成立していない.*推測では選ばない/.test(reply), reply);
+reply = cards.build(card, {
+  ...beforePit, gap_ahead:0.8,
+  battle_context:{player_pace_advantage_s:0.7},
+  strategy_playbook:{available:true,selected_plan:'A',plans:{
+    A:{available:true,first_pit_lap:5,pit_laps:[5,10]},
+    B:{available:true,first_pit_lap:4,pit_laps:[4,9]},
+    C:{available:true,first_pit_lap:6,pit_laps:[6,11],required_fuel_saving_pct:6.4},
+  }},
+  pit_exit_forecast:{available:true,likely:{position:8,traffic_state:'clear_air'}},
+}, 'ja');
+check('verified traffic and pace make undercut root cause explicit',
+  /Plan B、アンダーカットを推奨.*こちらが0\.7秒速く詰まっている.*燃料不足ではなくトラフィック回避.*物理復帰P8/.test(reply), reply);
 
 card = cards.classify('2リッター 足りないってこと？');
 reply = cards.build(card, {
@@ -82,7 +94,7 @@ reply = cards.build(card, {
 }, 'ja');
 check('spoken リッター shortage follow-up is deterministic and labels set amount',
   card.topic === cards.TOPIC.FUEL_PLAN
-  && /2L不足という意味ではない.*燃料は0\.8L不足.*給油設定は切り上げて1L/.test(reply), reply);
+  && /2L不足という意味ではない.*燃料は0\.8L不足.*給油設定1L/.test(reply), reply);
 
 card = cards.classify('ギリギリ足りそうだったらゆっくり行くけどどうする？', {
   race: true, recentText: 'ゴールまで燃料は足りる？',
@@ -94,12 +106,12 @@ reply = cards.build(card, {
     margin_l: -1.1, pit_required: true },
 }, 'ja');
 check('action follow-up leads with this-lap recommendation and separates quantities',
-  /この周でピットを推奨.*現在15\.7L.*16\.8L必要.*1\.1L不足.*給油設定は切り上げて2L/.test(reply), reply);
+  /この周でピットを推奨.*現在15\.7L.*16\.8L必要.*1\.1L不足.*給油設定2L/.test(reply), reply);
 
 card = cards.classify('彼らが ピットイン 始めて、俺 何番手 ぐらいで復帰できそう？');
 reply = cards.build(card, afterPit, 'ja');
 check('active blend reports current position and observed stops',
-  /現在順位P20.*0\/10台.*ブレンド予測P14/.test(reply), reply);
+  /現在順位P20.*0\/10台で条件はまだ未成立.*P14は条件付き予測.*一致判定はまだしない/.test(reply), reply);
 check('active cycle does not invent P5/P4', !/P5|P4/.test(reply), reply);
 
 reply = cards.build(card, {
@@ -168,7 +180,7 @@ const intentCases = [
   ['ダメージは？', cards.TOPIC.DAMAGE_STATUS, /修理残り0\.0秒.*断定しない/],
   ['天候は？', cards.TOPIC.WEATHER_STATUS, /路面41\.2℃.*ドライ/],
   ['トラフィックは？', cards.TOPIC.TRAFFIC_STATUS, /直前車まで0\.3秒/],
-  ['戦略プランは？', cards.TOPIC.PLAN_STATUS, /プラン改訂3.*プッシュ/],
+  ['戦略プランは？', cards.TOPIC.PLAN_STATUS, /ステイアウトしてプッシュ.*燃料余裕/],
 ];
 for (const [utterance, topic, expected] of intentCases) {
   const routed = cards.route(utterance, build255Live, 'ja', { race:true });
@@ -224,6 +236,33 @@ for (const utterance of ['ルナ 今日のレース フォーマットは？', '
   check('8/9 real format wording is deterministic: '+utterance,
     card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分の時間制。残り5分2秒。/.test(reply), reply);
 }
+for (const utterance of ['このセッションなんだっけ？', 'セッションどれ？', '練習、予選、決勝はどういう流れ？']) {
+  card=cards.classify(utterance,{race:true});
+  check('session identity wording is deterministic: '+utterance,
+    card&&card.topic===cards.TOPIC.SESSION_FORMAT,card&&card.topic);
+}
+card=cards.classify('あと何週？',{race:true});
+check('STT 周→週 variation remains race distance',card&&card.topic===cards.TOPIC.RACE_DISTANCE,card&&card.topic);
+
+reply=cards.route('ゴールまで燃料は？',{
+  ...build255Live,fuel:4.9,
+  fuel_strategy:{avg_fuel_per_lap:3.613,clean_laps_sampled:3,
+    estimated_crossings_to_finish:7,required_fuel_l:25.289,evaluated_fuel_l:4.9,
+    add_fuel_l:20.389,set_fuel_l:20,effective_capacity_l:20.14,one_stop_shortfall_l:0.389,
+    pit_required:true},
+},'ja',{race:true}).reply;
+check('20.14L effective tank never becomes an impossible 21L setting',
+  /燃料は20\.4L不足.*設定上限20Lでも一度では0\.4L不足/.test(reply)&&!/設定21L/.test(reply),reply);
+
+reply=cards.route('戦略プランは？',{
+  ...build255Live,
+  strategy_playbook:{available:true,selected_plan:'A',plans:{
+    A:{available:true,pit_laps:[5,10]},B:{available:true,first_pit_lap:4,pit_laps:[4,9]},
+    C:{available:true,first_pit_lap:6,pit_laps:[6,11],required_fuel_saving_pct:6.4},
+  }},
+},'ja',{race:true}).reply;
+check('driver-facing Plan A/B/C meanings are stable',
+  /Plan Aはベースライン5・10周.*Plan Bはアンダーカット4周.*Plan Cはオーバーカット6周/.test(reply),reply);
 card = cards.classify('今 16位だけど、なんか 戦略 ある？', {race:true});
 reply = cards.build(card, {...build255Live, class_pos:16, fuel_strategy:{avg_fuel_per_lap:3.63,clean_laps_sampled:1}}, 'ja');
 check('8/9 real strategy wording gives facts and a fuel-evidence condition',
@@ -254,9 +293,9 @@ check('renderer records deterministic intent trace without overlay mirroring',
 check('deterministic response bypasses generic LLM Truth Gate',
   renderer.includes("responseAuthority!=='deterministic' && selMode==='race'"));
 check('deferred operational answer arms an automatic next-S/F update',
-  renderer.includes("armOperationalFollowUp(responseIntent)")
+  renderer.includes("armOperationalFollowUp(responseIntent,latestUserText)")
   && renderer.includes('maybeRunOperationalFollowUp(data)')
-  && renderer.includes("content:'戦略プランは？'"));
+  && renderer.includes('originalText:String(originalText'));
 check('renderer promotes SessionInfo duration into Race live telemetry',
   renderer.includes('function applySessionFormatAuthority(snapshot)')
   && renderer.includes('configured_duration_s:duration')
@@ -273,10 +312,10 @@ check('initial Plan A/B radio becomes Luna working state',
 check('Plan A target has a proactive measured A/B decision path',
   renderer.includes("case 'strategy_plan_decision'")
   && renderer.includes("data.trigger==='strategy_plan_decision'")
-  && /プランBへ切り替える/.test(renderer));
+  && /燃料タイミングは1周延長/.test(renderer));
 check('selected Plan B has a separate next-lap box call',
   renderer.includes("case 'strategy_plan_box_call'")
-  && renderer.includes("プランB、予定どおりこの周でピット"));
+  && renderer.includes("1周延長案、予定どおりこの周でピット"));
 check('executed Plan A/B outcome is persisted and traceable',
   renderer.includes('recordStrategyOptionOutcome(data)')
   && renderer.includes("'pw_strategy_option_outcomes'")
@@ -318,8 +357,8 @@ reply = cards.build(cards.classify('どう、ペース上げて行った方が�
 check('a real post-stop fuel shortfall orders another stop instead of pace keep',
   /給油不足が4\.5L.*次の周で再ピット/.test(reply) && !/ペースキープ/.test(reply), reply);
 reply = cards.build(cards.classify('ルナの予測通りじゃないか？この順位どう？'), outLapLive, 'ja');
-check('current P3 supersedes conditional P4 without saying unconfirmed',
-  /現在順位P3.*ブレンド予測P4.*1つ上/.test(reply) && !/未確定/.test(reply), reply);
+check('current P3 does not grade conditional P4 before the stop condition is met',
+  /現在順位P3.*4\/14台で条件はまだ未成立.*P4は条件付き予測.*一致判定はまだしない/.test(reply), reply);
 reply = cards.build(cards.classify('ブレンド予測はどうだった？'), {
   class_pos: 3,
   pit_cycle_outcome: {

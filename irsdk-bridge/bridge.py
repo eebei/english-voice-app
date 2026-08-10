@@ -47,7 +47,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 262 (historical fuel evidence and Plan A/B rejoin decisions)"
+BUILD_VERSION = "Build 263 (race-format Plan A/B/C strategy playbook and live switching)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -3280,6 +3280,8 @@ def poll_iracing():
                     'avg_fuel_per_lap': round(avg_fuel_lap, 2),
                     'laps_of_fuel_left': laps_of_fuel_left,   # 現燃料であと何周走れるか（レース長不要）
                     'clean_laps_sampled': len(fuel_per_lap_hist),  # 何周分の実測から出したか（信頼度の目安）
+                    'evaluated_fuel_l': round(fuel, 3),
+                    'evaluated_lap': int(lap) if isinstance(lap, (int, float)) else None,
                 }
                 # ── ② to-finish authorityはFinal Lap Unitと完全共有 ──
                 # 時間制でモデルが不成立なら _milestone_laps=None のまま。
@@ -3351,11 +3353,23 @@ def poll_iracing():
                     _warning_worst = _warning_forecast.get('worst') or {}
                     _warning_cycle = (((_warning_forecast.get('pit_cycle') or {})
                                        .get('if_pack_stops') or {}).get('likely') or {})
+                    _warning_requested_add = fuel_strategy.get('add_fuel_l', 0.0)
+                    _warning_max_set = (int(math.floor(session_effective_fuel_capacity_l))
+                                        if isinstance(session_effective_fuel_capacity_l, (int, float))
+                                        and session_effective_fuel_capacity_l > 0 else None)
+                    _warning_set = (min(int(math.ceil(_warning_requested_add)), _warning_max_set)
+                                    if _warning_max_set is not None
+                                    else int(math.ceil(_warning_requested_add)))
+                    _warning_one_stop_short = max(0.0, _warning_requested_add - _warning_set)
                     _fuel_message = (
                         'Fuel margin is under half a liter. Save fuel now.'
-                        if _fuel_band == fuel_strategy_mod.TIGHT
-                        else 'Fuel short %.1f liters. Set %.1f liters; pit this lap.'
-                        % (abs(_fuel_margin), fuel_strategy.get('add_fuel_l', 0.0)))
+                        if _fuel_band == fuel_strategy_mod.TIGHT else
+                        ('Fuel short %.1f liters. Maximum setting %d liters; '
+                         'one stop is short by %.1f liters.'
+                         % (abs(_fuel_margin), _warning_set, _warning_one_stop_short)
+                         if _warning_one_stop_short > 0.05 else
+                         'Fuel short %.1f liters. Set %d liters; pit this lap.'
+                         % (abs(_fuel_margin), _warning_set)))
                     _fuel_dispatch_result = broadcast({
                         'type': 'radio',
                         'trigger': 'fuel_strategy_warning',
@@ -3364,6 +3378,9 @@ def poll_iracing():
                         'margin_l': _fuel_margin,
                         'required_fuel_l': _fuel_eval['required_fuel_l'],
                         'add_fuel_l': fuel_strategy.get('add_fuel_l'),
+                        'set_fuel_l': _warning_set,
+                        'effective_capacity_l': session_effective_fuel_capacity_l,
+                        'one_stop_shortfall_l': round(_warning_one_stop_short, 3),
                         'estimated_crossings_to_finish': _milestone_laps,
                         'pit_physical_position': _warning_likely.get('position'),
                         'pit_best_position': _warning_best.get('position'),
@@ -4045,6 +4062,7 @@ def poll_iracing():
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
         nearest_ahead_gap = None    # 毎ループ更新（前後の最近接ギャップ）
         nearest_behind_gap = None
+        _same_class_main = set()
         if (player_car_idx >= 0 and onTrack and not onPit and not in_formation
                 and not is_qualifying_session):
             car_f2_times   = reader.read_float_array('CarIdxF2Time', 64)
@@ -4534,6 +4552,7 @@ def poll_iracing():
             # 「今入ったら？」 can be answered before committing to pit road.
             _pit_now_forecast = None
             _pit_next_forecast = None
+            _battle_context = None
             _pit_option_snapshot = None
             _pit_now_flags = reader.read_int('SessionFlags') or 0
             _pit_now_caution = 'caution' if (_pit_now_flags & 0xC000) else 'green'
@@ -4588,6 +4607,37 @@ def poll_iracing():
                     snapshot=_pit_option_snapshot,
                     calibration=_pit_now_calibration,
                     delay_laps=1)
+                if (class_pos is not None and class_pos > 1
+                        and _pit_now_cls_positions and _pit_now_last_laps
+                        and len(lap_time_hist) >= 3):
+                    _ahead_idx = next((idx for idx in _same_class_main
+                                       if idx < len(_pit_now_cls_positions)
+                                       and _pit_now_cls_positions[idx] == class_pos - 1), None)
+                    if (_ahead_idx is not None and _ahead_idx < len(_pit_now_last_laps)):
+                        _ahead_last = _pit_now_last_laps[_ahead_idx]
+                        _player_samples = sorted(v for v in lap_time_hist[-5:]
+                                                 if isinstance(v, (int, float))
+                                                 and 20 < v < 900)
+                        if (_player_samples and isinstance(_ahead_last, (int, float))
+                                and 20 < _ahead_last < 900):
+                            _mid = len(_player_samples) // 2
+                            _player_median = (_player_samples[_mid]
+                                              if len(_player_samples) % 2 else
+                                              (_player_samples[_mid - 1]
+                                               + _player_samples[_mid]) / 2.0)
+                            _battle_context = {
+                                'ahead_car_idx': _ahead_idx,
+                                'ahead_car_number': car_number_map.get(_ahead_idx),
+                                'ahead_class_position': class_pos - 1,
+                                'gap_ahead_s': round(nearest_ahead_gap, 2)
+                                if nearest_ahead_gap is not None else None,
+                                'player_median_lap_s': round(_player_median, 3),
+                                'ahead_last_lap_s': round(_ahead_last, 3),
+                                # Positive means our clean median is faster.
+                                'player_pace_advantage_s': round(
+                                    _ahead_last - _player_median, 3),
+                                'player_clean_pace_samples': len(_player_samples),
+                            }
                 pit_exit_forecast_live = _pit_now_forecast
                 pit_exit_forecast_live_at = _pit_now_session_time
                 _pit_cycle_outcome = pit_cycle_tracker.observe(
@@ -4605,16 +4655,52 @@ def poll_iracing():
                 pit_exit_forecast_live_at = None
             _fuel_strategy_live = (
                 dict(fuel_strategy) if isinstance(fuel_strategy, dict) else None)
+            _driver_pace_samples = sorted(
+                v for v in lap_time_hist[-5:]
+                if isinstance(v, (int, float)) and 20 < v < 900)
+            _driver_pace_median = None
+            if _driver_pace_samples:
+                _pace_mid = len(_driver_pace_samples) // 2
+                _driver_pace_median = (
+                    _driver_pace_samples[_pace_mid]
+                    if len(_driver_pace_samples) % 2 else
+                    (_driver_pace_samples[_pace_mid - 1]
+                     + _driver_pace_samples[_pace_mid]) / 2.0)
             if (_fuel_strategy_live is not None and fuel is not None
                     and isinstance(_fuel_strategy_live.get('required_fuel_l'), (int, float))):
-                # Driver-facing fuel entry must follow the current tank level,
-                # not the tank level frozen at the previous S/F crossing.
-                _live_add = max(0.0, _fuel_strategy_live['required_fuel_l'] - fuel)
-                _fuel_strategy_live['add_fuel_l'] = round(_live_add, 3)
-                _fuel_strategy_live['set_fuel_l'] = int(math.ceil(_live_add))
-                _fuel_strategy_live['margin_l'] = round(
-                    fuel - _fuel_strategy_live['required_fuel_l'], 3)
-                _fuel_strategy_live['pit_required'] = _live_add > 0.05
+                # required_fuel_l was solved at the S/F crossing.  Fuel burned
+                # later in the same lap reduces both current fuel and the
+                # remaining requirement; recomputing required-current here
+                # double-counted that burn and created false repeat-pit calls.
+                # A detected refuel invalidates the old crossing entirely until
+                # the next S/F snapshot proves the new margin.
+                _evaluated_fuel = _fuel_strategy_live.get('evaluated_fuel_l')
+                if (isinstance(_evaluated_fuel, (int, float))
+                        and fuel > _evaluated_fuel + 0.2):
+                    _fuel_strategy_live.update({
+                        'awaiting_post_pit_s_f': True,
+                        'required_fuel_l': None,
+                        'fuel_needed': None,
+                        'margin_l': None,
+                        'add_fuel_l': None,
+                        'set_fuel_l': None,
+                        'pit_required': False,
+                        'fuel_band': 'awaiting_post_pit_s_f',
+                    })
+                else:
+                    _requested_add = max(0.0, float(
+                        _fuel_strategy_live.get('add_fuel_l') or 0.0))
+                    _max_setting = (int(math.floor(session_effective_fuel_capacity_l))
+                                    if isinstance(session_effective_fuel_capacity_l, (int, float))
+                                    and session_effective_fuel_capacity_l > 0 else None)
+                    _set_fuel = int(math.ceil(_requested_add))
+                    if _max_setting is not None:
+                        _set_fuel = min(_set_fuel, _max_setting)
+                    _fuel_strategy_live['requested_add_fuel_l'] = round(_requested_add, 3)
+                    _fuel_strategy_live['set_fuel_l'] = _set_fuel
+                    _fuel_strategy_live['effective_capacity_l'] = session_effective_fuel_capacity_l
+                    _fuel_strategy_live['one_stop_shortfall_l'] = round(
+                        max(0.0, _requested_add - _set_fuel), 3)
             # Phase D first vertical slice: once clean fuel and finish distance
             # are authoritative, latch Plan A and Plan B from one snapshot.
             # Do not continuously move their target laps with live telemetry.
@@ -4650,9 +4736,9 @@ def poll_iracing():
                         'trigger': 'initial_strategy_plans',
                         'strategy_options': strategy_options,
                         'message': (
-                            'Initial strategy. Plan A: pit in %s laps, set %s liters. '
-                            'Plan B: extend one lap, then pit and set %s liters. '
-                            'I will switch only after fuel and rejoin checks.'
+                            'Fuel timing comparison. Baseline: pit in %s laps, set %s liters. '
+                            'One-lap extension: pit next lap and set %s liters. '
+                            'I will extend only after fuel and rejoin checks.'
                             % (_option_a.get('target_in_laps'),
                                _option_a.get('set_fuel_l'),
                                _option_b.get('set_fuel_l'))),
@@ -4694,11 +4780,11 @@ def poll_iracing():
                         'reason': strategy_options['decision_reason'],
                         'decision_id': _option_decision.get('decision_id'),
                         'strategy_options': strategy_options,
-                        'message': (('Plan B selected. Stay out one lap, then pit '
+                        'message': (('Fuel timing extended one lap. Stay out, then pit '
                                      'and set %s liters.'
                                      % _selected_plan.get('set_fuel_l'))
                                     if _selected_option == 'B' else
-                                    ('Plan A selected. Pit this lap and set %s liters.'
+                                    ('Baseline fuel timing selected. Pit this lap and set %s liters.'
                                      % _selected_plan.get('set_fuel_l'))),
                     })
                     if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
@@ -4732,7 +4818,7 @@ def poll_iracing():
                         'selected_plan': 'B',
                         'decision_id': _box_evidence.get('decision_id'),
                         'strategy_options': strategy_options,
-                        'message': ('Plan B box call. Pit this lap and set %s liters.'
+                        'message': ('One-lap fuel extension complete. Pit this lap and set %s liters.'
                                     % _box_plan.get('set_fuel_l')),
                     })
                     if _box_dispatch is True or _box_dispatch == 'DISPATCHED':
@@ -4826,6 +4912,10 @@ def poll_iracing():
                 # the already parsed Sessions map so formation is Race now,
                 # not the preceding Practice session for up to ten seconds.
                 'session_type': cur_sess_type or info.get('current_session_type'),
+                'session_num': cur_snum,
+                'driver_pace_median_s': round(_driver_pace_median, 3)
+                if _driver_pace_median is not None else None,
+                'driver_pace_sample_count': len(_driver_pace_samples),
                 'finish_crossings_authority': (
                     _milestone_laps if _milestone_laps is not None else None),
                 'finish_crossings_status': (
@@ -4856,7 +4946,9 @@ def poll_iracing():
                 'weather': weather,
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,
+                'battle_context': _battle_context,
                 'pit_exit_forecast': _pit_now_forecast,
+                'pit_next_lap_forecast': _pit_next_forecast,
                 'pit_loss_calibration': _pit_now_calibration,
                 'pit_cycle_status': pit_cycle_tracker.status(),
                 'pit_cycle_outcome': last_pit_cycle_outcome,

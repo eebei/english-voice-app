@@ -33,10 +33,22 @@ checks = {
     "telemetry exposes owned plan": "'strategy_plan': strategy_plan" in SOURCE,
     "telemetry exposes calibration": "'pit_loss_calibration': _pit_now_calibration" in SOURCE,
     "plan update is traceable": "STRATEGY PLAN update:" in SOURCE,
-    "post-stop fuel margin is recomputed from current fuel":
-        "fuel - _fuel_strategy_live['required_fuel_l']" in SOURCE,
-    "post-stop pit requirement is recomputed":
-        "_fuel_strategy_live['pit_required'] = _live_add > 0.05" in SOURCE,
+    "same-lap fuel burn is not double-counted after S/F":
+        "recomputing required-current here" in SOURCE
+        and "fuel - _fuel_strategy_live['required_fuel_l']" not in SOURCE,
+    "post-stop fuel waits for next S/F authority":
+        "'awaiting_post_pit_s_f': True" in SOURCE
+        and "'fuel_band': 'awaiting_post_pit_s_f'" in SOURCE,
+    "fuel setting is capped by effective tank capacity":
+        "_set_fuel = min(_set_fuel, _max_setting)" in SOURCE
+        and "'one_stop_shortfall_l'" in SOURCE,
+    "live switch inputs are exposed":
+        "'battle_context': _battle_context" in SOURCE
+        and "'pit_next_lap_forecast': _pit_next_forecast" in SOURCE
+        and "'session_num': cur_snum" in SOURCE,
+    "new drivers expose three-lap pace for first live playbook":
+        "'driver_pace_median_s':" in SOURCE
+        and "'driver_pace_sample_count':" in SOURCE,
     "fuel tenths and volatile forecast positions do not create plan revisions":
         "cur_snum, _plan_action, _plan_reason, _plan_set_fuel)" in SOURCE
         and "round(_plan_margin, 2)" not in SOURCE,
