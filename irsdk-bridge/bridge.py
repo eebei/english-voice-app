@@ -47,7 +47,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 263 (race-format Plan A/B/C strategy playbook and live switching)"
+BUILD_VERSION = "Build 264 (Memory Action Layer, concise fuel calls, plan-aware splash)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -3361,12 +3361,40 @@ def poll_iracing():
                                     if _warning_max_set is not None
                                     else int(math.ceil(_warning_requested_add)))
                     _warning_one_stop_short = max(0.0, _warning_requested_add - _warning_set)
+                    _warning_flags = reader.read_int('SessionFlags') or 0
+                    _warning_caution = ('caution'
+                                        if (_warning_flags & 0xC000) else 'green')
+                    _warning_calibration = pit_loss_calibrator.get_summary(
+                        session_track, session_car_model, _warning_caution)
+                    _warning_pit_loss = (
+                        _warning_calibration.get('observed_loss_median_s')
+                        if isinstance(_warning_calibration, dict) else None)
+                    _warning_post_stop = (
+                        fuel_strategy_mod.project_post_stop_fuel_to_finish(
+                            leader_time_to_checkered_s=_timed_final_eval.get(
+                                'leader_time_to_checkered_s'),
+                            driver_time_to_next_sf_s=_timed_final_eval.get(
+                                'driver_time_to_next_sf_s'),
+                            driver_avg_lap_s=_driver_avg_lap,
+                            pit_loss_s=_warning_pit_loss,
+                            avg_fuel_per_lap_l=avg_fuel_lap,
+                            effective_capacity_l=session_effective_fuel_capacity_l,
+                            reserve_l=_fuel_eval.get('reserve_l', 0.5))
+                        if _is_time_race and isinstance(_timed_final_eval, dict)
+                        else {'available': False, 'reason': 'not_timed_race'})
                     _fuel_message = (
                         'Fuel margin is under half a liter. Save fuel now.'
                         if _fuel_band == fuel_strategy_mod.TIGHT else
-                        ('Fuel short %.1f liters. Maximum setting %d liters; '
-                         'one stop is short by %.1f liters.'
-                         % (abs(_fuel_margin), _warning_set, _warning_one_stop_short)
+                        ('Box this lap. Set %d liters. Splash shortfall %.1f liters.'
+                         % (_warning_set, abs(_warning_post_stop.get('margin_l')))
+                         if (_warning_post_stop.get('available')
+                             and _warning_post_stop.get('splash_required')) else
+                         'Box this lap. Set %d liters. No extra splash projected.'
+                         % _warning_set
+                         if _warning_post_stop.get('available') else
+                         ('Fuel short %.1f liters. Maximum setting %d liters; '
+                          'one stop is short by %.1f liters.'
+                          % (abs(_fuel_margin), _warning_set, _warning_one_stop_short))
                          if _warning_one_stop_short > 0.05 else
                          'Fuel short %.1f liters. Set %d liters; pit this lap.'
                          % (abs(_fuel_margin), _warning_set)))
@@ -3381,6 +3409,7 @@ def poll_iracing():
                         'set_fuel_l': _warning_set,
                         'effective_capacity_l': session_effective_fuel_capacity_l,
                         'one_stop_shortfall_l': round(_warning_one_stop_short, 3),
+                        'post_stop_fuel_projection': _warning_post_stop,
                         'estimated_crossings_to_finish': _milestone_laps,
                         'pit_physical_position': _warning_likely.get('position'),
                         'pit_best_position': _warning_best.get('position'),
@@ -4666,6 +4695,27 @@ def poll_iracing():
                     if len(_driver_pace_samples) % 2 else
                     (_driver_pace_samples[_pace_mid - 1]
                      + _driver_pace_samples[_pace_mid]) / 2.0)
+            _driver_avg_lap = (
+                sum(lap_time_hist) / len(lap_time_hist)
+                if lap_time_hist else None)
+            _post_stop_fuel_projection = {'available': False,
+                                          'reason': 'inputs_unavailable'}
+            if (_is_time_race and isinstance(_timed_final_eval, dict)
+                    and isinstance(_fuel_strategy_live, dict)
+                    and isinstance(_pit_now_calibration, dict)):
+                _post_stop_fuel_projection = (
+                    fuel_strategy_mod.project_post_stop_fuel_to_finish(
+                        leader_time_to_checkered_s=_timed_final_eval.get(
+                            'leader_time_to_checkered_s'),
+                        driver_time_to_next_sf_s=_timed_final_eval.get(
+                            'driver_time_to_next_sf_s'),
+                        driver_avg_lap_s=_driver_avg_lap,
+                        pit_loss_s=_pit_now_calibration.get(
+                            'observed_loss_median_s'),
+                        avg_fuel_per_lap_l=_fuel_strategy_live.get(
+                            'avg_fuel_per_lap'),
+                        effective_capacity_l=session_effective_fuel_capacity_l,
+                        reserve_l=_fuel_strategy_live.get('reserve_l', 0.5)))
             if (_fuel_strategy_live is not None and fuel is not None
                     and isinstance(_fuel_strategy_live.get('required_fuel_l'), (int, float))):
                 # required_fuel_l was solved at the S/F crossing.  Fuel burned
@@ -4923,6 +4973,22 @@ def poll_iracing():
                     else str(_timed_final_eval.get('reason') or 'unavailable')
                     if _is_time_race else
                     ('valid' if _legacy_laps_remaining is not None else 'unavailable')),
+                # Plan-aware fuel questions (for example "another splash?")
+                # need the checker clock itself, not only a no-stop crossing
+                # count.  The desktop combines this with measured pit loss to
+                # project how many complete laps remain after the stop.
+                'timed_finish_forecast': ({
+                    'confidence': _timed_final_eval.get('confidence'),
+                    'reason': _timed_final_eval.get('reason'),
+                    'leader_time_to_checkered_s': _timed_final_eval.get(
+                        'leader_time_to_checkered_s'),
+                    'driver_time_to_next_sf_s': _timed_final_eval.get(
+                        'driver_time_to_next_sf_s'),
+                    'driver_avg_lap_s': round(_driver_avg_lap, 3)
+                    if isinstance(_driver_avg_lap, (int, float)) else None,
+                } if _is_time_race and isinstance(_timed_final_eval, dict)
+                    else None),
+                'post_stop_fuel_projection': _post_stop_fuel_projection,
                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,

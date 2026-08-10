@@ -17,7 +17,7 @@ else
 fi
 
 echo "── JavaScript: 構文"
-for f in prompts.js server.js engineer-card.js desktop/strategy-playbook.js; do
+for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js; do
   if node --check "$f" 2>&1 | head -3; then echo "   ✅ $f"; else echo "   ❌ $f"; fail=1; fi
 done
 
@@ -91,6 +91,9 @@ if node tests-engineer-card.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 
 echo "── レース形式→Plan A/B/C事前戦略・ライブ切替（次期Build）"
 if node tests-strategy-playbook.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-playbook.js 2>&1|tail -15; fail=1; fi
+
+echo "── Memory Action Layer 履歴統合→自発戦略→3周更新（次期Build）"
+if node tests-memory-action-layer.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-action-layer.js 2>&1|tail -20; fail=1; fi
 
 echo "── Memory V2 ローカル再読込・履歴投入ACK契約（Build 255）"
 if node tests-evidence-debrief.js >/dev/null 2>&1 && node tests-memory-import.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js 2>&1|grep "❌"|head -10; node tests-memory-import.js; fail=1; fi

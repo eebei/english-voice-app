@@ -65,7 +65,9 @@ check('数値を含む本人申告ルールを蒸留可能',
   prompts.includes('安全マージン0.8L')
   && prompts.includes('driver-stated operating rule'));
 check('次回プロンプトへ過去メモを注入',
-  /profile\.notes\.slice\(-5\)\.join/.test(renderer)
+  /const actionableNotes=\(profile\.notes\|\|\[\]\)\.filter/.test(renderer)
+  && /memoryLayer\.isStaleUnavailableNote/.test(renderer)
+  && /actionableNotes\.join/.test(renderer)
   && /buildProfileNote\(profile\)/.test(renderer));
 
 console.log(`\nPersistent Memory Wiring: ${pass}/${pass + fail}`);

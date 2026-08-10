@@ -670,6 +670,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
   </div>
 </div>
 
+<script src="memory-action-layer.js"></script>
 <script src="strategy-playbook.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
@@ -1063,6 +1064,7 @@ let activeRaceFacts = { sessionKey:'', fuelReflex:null, strategyOptions:null, st
 let activeStrategyPlaybook = null;
 let strategyPlaybookBriefedKey = '';
 let strategyPlaybookLiveUpdateKey = '';
+let strategyPlaybookRefreshKey = '';
 let strategyPlaybookDecisionKeys = new Set();
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
@@ -1084,6 +1086,10 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   fuelLearningSignature='';
   activeRaceFacts={sessionKey:String(nextSessionNum??lastSessionNum??''),fuelReflex:null,
     strategyOptions:null,strategyPlaybook:null};
+  activeStrategyPlaybook=null;
+  strategyPlaybookBriefedKey='';
+  strategyPlaybookLiveUpdateKey='';
+  strategyPlaybookRefreshKey='';
   strategyPlaybookDecisionKeys=new Set();
   if(evidenceDebrief && evidenceDebrief.active) dismissEvidenceDebrief();
   resetPracticeRunState();
@@ -3054,13 +3060,18 @@ function oishiRadio(d, forSpeech=false){
     case 'fuel_strategy_warning':
       if(d.fuel_band === 'tight') return `燃料マージン0.5リットル未満。セーブ開始。`;
       {
-        const physical=Number(d.pit_physical_position), cycle=Number(d.pit_cycle_position), pack=Number(d.pit_cycle_pack_count);
-        const forecast=(physical>0)
-          ? `今入ると物理P${Math.trunc(physical)}。${cycle>0&&pack>0?`${Math.trunc(pack)}台が止まればP${Math.trunc(cycle)}、意図未確認。`:''}`
-          : '';
+        const projected=d.post_stop_fuel_projection||{};
         const oneStopShort=Number(d.one_stop_shortfall_l)||0;
         const setting=Number.isFinite(Number(d.set_fuel_l))?Math.trunc(Number(d.set_fuel_l)):Math.ceil(Number(d.add_fuel_l)||0);
-        return `この周でピットを推奨。現在${Number(d.fuel||0).toFixed(1)}リットル、ゴールまで${Number(d.required_fuel_l||0).toFixed(1)}リットル必要。燃料は${Number(d.add_fuel_l||0).toFixed(1)}リットル不足。${oneStopShort>0.05?`設定上限${setting}リットルでも一度では${oneStopShort.toFixed(1)}リットル不足。`:`給油設定${setting}リットル。`}${forecast}`;
+        if(projected.available===true){
+          const margin=Number(projected.margin_l);
+          return projected.splash_required===true
+            ? `この周ボックス。${setting}リットル。終盤スプラッシュ約${Math.ceil(Math.abs(margin))}リットル。`
+            : `この周ボックス。${setting}リットル。`;
+        }
+        return oneStopShort>0.05
+          ? `この周ボックス。${setting}リットル。残り${oneStopShort.toFixed(1)}リットルはセーブかスプラッシュ。`
+          : `この周ボックス。${setting}リットル。`;
       }
     case 'initial_strategy_plans': {
       const options=d.strategy_options||{}, a=options.plan_a||{}, b=options.plan_b||{};
@@ -3964,6 +3975,37 @@ function askEvidenceQuestion(){
   speak(q,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'debrief_question',
     dedupeKey:`debrief_question_${evidenceDebrief.index}`});
 }
+function parseExplicitLapTime(text){
+  const raw=String(text||'');
+  let match=raw.match(/\b(\d{1,2}):(\d{2})[.:](\d{1,3})\b/);
+  if(match){
+    const fraction=Number(match[3].padEnd(3,'0').slice(0,3))/1000;
+    const seconds=Number(match[1])*60+Number(match[2])+fraction;
+    return seconds>20&&seconds<900?Math.round(seconds*1000)/1000:null;
+  }
+  match=raw.match(/(\d{1,2})\s*分\s*(\d{1,2}(?:[.,]\d+)?)\s*秒/);
+  if(match){
+    const seconds=Number(match[1])*60+Number(match[2].replace(',','.'));
+    return seconds>20&&seconds<900?Math.round(seconds*1000)/1000:null;
+  }
+  return null;
+}
+function applyEvidenceCorrection(text){
+  if(!evidenceDebrief||!evidenceDebrief.data) return false;
+  const raw=String(text||'');
+  if(!/(?:ベスト|ラップタイム|最速|タイム.*(?:違|修正)|best\s*lap|correct.*time)/i.test(raw)) return false;
+  const seconds=parseExplicitLapTime(raw);
+  if(!seconds) return false;
+  evidenceDebrief.data={...evidenceDebrief.data,best_lap:seconds};
+  const evidence=document.getElementById('debrief-guide-evidence');
+  if(evidence) evidence.textContent=evidenceLines(evidenceDebrief.data).join(' · ');
+  diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'structured_evidence_correction',field:'best_lap',value:seconds}));
+  const msg=isJapaneseEngineer()
+    ? `ベストラップを${fmtLap(seconds)}へ修正した。質問はそのまま続ける。`
+    : `Best lap corrected to ${fmtLap(seconds)}. I will keep the current debrief question open.`;
+  addMsg('sys',msg);
+  return true;
+}
 function recordEvidenceAnswer(text){
   const c=evidenceCopy();
   const questionPending=speakQueue.some(q=>q && q.kind==='debrief_question');
@@ -3971,6 +4013,7 @@ function recordEvidenceAnswer(text){
     addMsg('sys',c.wait);
     return 'wait';
   }
+  if(applyEvidenceCorrection(text)) return 'correction';
   if(!isEvidenceAnswerCandidate(text)) return 'not_answer';
   evidenceDebrief.answers[evidenceDebrief.index]=text;
   if(evidenceDebrief.index===evidenceDebrief.feedbackIndex) usageCount('feedback_answered');
@@ -4295,9 +4338,12 @@ function buildProfileNote(profile){
   if(profile.sessions) lines.push(isJP?`セッション数：${profile.sessions}`:`Sessions with this engineer: ${profile.sessions}`);
   if(profile.lastDate) lines.push(isJP?`最終セッション：${profile.lastDate}`:`Last session: ${profile.lastDate}`);
   // ★2026-07-19 記憶2階：積み上げた"人物理解"を毎回注入（生ログでなく蒸留メモ＝濃いので5件まで遡る）
-  if(profile.notes&&profile.notes.length) lines.push(isJP
-    ?`このドライバーについて分かっていること（過去セッションの観察）：\n${profile.notes.slice(-5).join('\n')}`
-    :`What you know about this driver (observations from past sessions):\n${profile.notes.slice(-5).join('\n')}`);
+  const memoryLayer=window.PitwallMemoryActionLayer;
+  const actionableNotes=(profile.notes||[]).filter(note=>
+    !(memoryLayer&&memoryLayer.isStaleUnavailableNote(note))).slice(-5);
+  if(actionableNotes.length) lines.push(isJP
+    ?`このドライバーについて分かっていること（過去セッションの観察）：\n${actionableNotes.join('\n')}`
+    :`What you know about this driver (observations from past sessions):\n${actionableNotes.join('\n')}`);
   const objective=profile.strategyObjective;
   if(objective&&objective.status==='active'&&objective.kind==='pit_total_race_outcome'){
     const learned=Number(objective.outcomeCount)||0;
@@ -4324,11 +4370,14 @@ function legacyPitHistoryExists(){
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
     const track=String(lastTrack||'').trim().toLowerCase();
     const model=String(lastCarModel||lastCarClass||'').trim().toLowerCase();
+    const layer=window.PitwallMemoryActionLayer;
     return Object.values(mem).some(rec=>{
       if(!rec||!Number.isFinite(Number(rec.pitLaneSec))) return false;
       const recTrack=String(rec.track||'').trim().toLowerCase();
       const recCar=String(rec.car||'').trim().toLowerCase();
-      return (!track||recTrack===track) && (!model||recCar===model);
+      return layer
+        ? layer.matches(lastTrack,lastCarModel||lastCarClass,rec.track,rec.car)
+        : (!track||recTrack===track) && (!model||recCar===model);
     });
   }catch{return false;}
 }
@@ -4500,6 +4549,8 @@ async function saveMemory(options={}){
   }
 }
 function findCarTrackMemory(mem,track,carModel,carClass){
+  const layer=window.PitwallMemoryActionLayer;
+  if(layer) return layer.resolve(mem,track,carModel,carClass);
   if(!mem||!track) return null;
   if(carModel&&mem[carModel+'|'+track]) return mem[carModel+'|'+track];
   if(carClass&&mem[carClass+'|'+track]) return mem[carClass+'|'+track];
@@ -4521,9 +4572,7 @@ function saveSessionSummary(data){
       const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
       // New records use the exact model. A legacy class-key record remains
       // usable as the seed and is naturally migrated into the model key.
-      const prev=findCarTrackMemory(
-        mem,track,data.car_model||lastCarModel||'',data.car_class||lastCarClass||''
-      )||{sessions:0};
+      const prev=mem[key]||{sessions:0};
       const bestLap=parseFloat(data.best_lap)||null;
       // ベストは「速い方（小さい方）」を残す。燃料は直近値で更新。
       const newBest=(bestLap&&(!prev.bestLap||bestLap<prev.bestLap))?bestLap:(prev.bestLap||null);
@@ -4562,7 +4611,7 @@ function rememberLiveFuelEvidence(data){
     fuelLearningSignature=key;
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
     const memoryKey=car+'|'+track;
-    const prev=findCarTrackMemory(mem,track,lastCarModel||'',lastCarClass||'')||{sessions:0};
+    const prev=mem[memoryKey]||{sessions:0};
     const priorSamples=Number(prev.fuelSampleCount)||0;
     const priorTotal=Number(prev.fuelSampleTotal)||((Number(prev.avgFuel)||0)*priorSamples);
     // Each bridge average represents all clean samples in this session.  Add
@@ -4595,9 +4644,7 @@ function savePitTiming(data){
     const sec=parseFloat(data.pit_lane_sec); if(!track||!(sec>0)) return;
     const key=(car||'car')+'|'+track;
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
-    const rec=findCarTrackMemory(
-      mem,track,data.car_model||lastCarModel||'',data.car_class||lastCarClass||''
-    )||{sessions:0};
+    const rec=mem[key]||{sessions:0};
     // 直近の実測値を保存（複数回入ればならして安定。ここでは直近優先＋回数を持つ）
     rec.car=car; rec.track=track;
     rec.pitLaneSec = (rec.pitLaneSec!=null) ? Math.round(((rec.pitLaneSec+sec)/2)*10)/10 : sec; // 過去との平均
@@ -4686,6 +4733,10 @@ function medianFinite(values){
 function matchingHistoricalAverageLap(){
   const track=normalizedEvidenceKey(lastTrack), car=normalizedEvidenceKey(lastCarModel||lastCarClass);
   if(!track||!car) return null;
+  const layer=window.PitwallMemoryActionLayer;
+  const same=(rowTrack,rowCar)=>layer
+    ? layer.matches(lastTrack,lastCarModel||lastCarClass,rowTrack,rowCar)
+    : normalizedEvidenceKey(rowTrack)===track&&normalizedEvidenceKey(rowCar)===car;
   const samples=[];
   try{
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
@@ -4697,7 +4748,7 @@ function matchingHistoricalAverageLap(){
     history.forEach(row=>{
       const rowTrack=normalizedEvidenceKey(row.track);
       const rowCar=normalizedEvidenceKey(row.car||row.carClass);
-      if(rowTrack===track&&rowCar===car&&Number(row.avgLap)>20) samples.push(Number(row.avgLap));
+      if(same(row.track,row.car||row.carClass)&&Number(row.avgLap)>20) samples.push(Number(row.avgLap));
     });
   }catch{}
   try{
@@ -4705,7 +4756,7 @@ function matchingHistoricalAverageLap(){
       if(row.driver&&userName&&row.driver!==userName) return;
       const rowTrack=normalizedEvidenceKey(row.scope?.track);
       const rowCar=normalizedEvidenceKey(row.scope?.car||row.scope?.car_class);
-      if(rowTrack===track&&rowCar===car&&Number(row.evidence?.avg_lap)>20){
+      if(same(row.scope?.track,row.scope?.car||row.scope?.car_class)&&Number(row.evidence?.avg_lap)>20){
         samples.push(Number(row.evidence.avg_lap));
       }
     });
@@ -4731,6 +4782,21 @@ function refreshStrategyPlaybook(options={}){
   const storedAverageLap=matchingHistoricalAverageLap();
   const liveAverageLap=Number(lastTelemetry?.driver_pace_sample_count)>=3
     ? Number(lastTelemetry?.driver_pace_median_s):null;
+  const liveFuel=lastTelemetry?.fuel_strategy||{};
+  const refreshKey=JSON.stringify([
+    String(lastSessionNum??''),String(lastSessionType||''),lastTrack,lastCarModel||lastCarClass,
+    raceDetail?.session_laps??null,raceDetail?.session_time??null,
+    memory?.avgFuel??null,memory?.fuelSampleCount??0,memory?.avgLap??null,
+    memory?.pitLaneSec??null,(memory?.matchedKeys||[]).join(','),
+    Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
+    loadConfirmedFuelCapacity(),q.status,q.class_position||q.overall_position||null,
+    Number(liveFuel.clean_laps_sampled)||0,Number(liveFuel.avg_fuel_per_lap)||null,
+  ]);
+  if(options.force!==true&&strategyPlaybookRefreshKey===refreshKey&&activeStrategyPlaybook){
+    if(options.announce===true) announceStrategyPlaybook(activeStrategyPlaybook);
+    return activeStrategyPlaybook;
+  }
+  strategyPlaybookRefreshKey=refreshKey;
   const playbook=engine.buildPlaybook({
     track:lastTrack||'', car:lastCarModel||lastCarClass||'', raceDetail,
     historicalFuelPerLapL:Number(memory?.avgFuel),
@@ -4740,9 +4806,17 @@ function refreshStrategyPlaybook(options={}){
     pitLaneS:Number(memory?.pitLaneSec),
     qualifyingPosition:q.status==='valid'?Number(q.class_position||q.overall_position):null,
     classEntryCount:Number(lastWeekendAuthority?.player_class_entry_count)||null,
+    memoryEvidence:{source:memory?.source||'none',recordCount:Number(memory?.memoryRecordCount)||0,
+      sessionCount:Number(memory?.sessions)||0,matchedKeys:memory?.matchedKeys||[],
+      canonicalTrack:memory?.canonicalTrack||'',canonicalCar:memory?.canonicalCar||''},
   });
   activeStrategyPlaybook=playbook;
   activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),strategyPlaybook:playbook};
+  diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'history_resolved',session_num:lastSessionNum,
+    track:lastTrack,car:lastCarModel||lastCarClass,record_count:Number(memory?.memoryRecordCount)||0,
+    session_count:Number(memory?.sessions)||0,fuel_samples:Number(memory?.fuelSampleCount)||0,
+    avg_fuel_l_per_lap:memory?.avgFuel??null,avg_lap_s:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
+    matched_keys:memory?.matchedKeys||[],playbook_available:playbook.available,reason:playbook.reason}));
   diagnosticLog('STRATEGY_PLAYBOOK',JSON.stringify({available:playbook.available,reason:playbook.reason,
     source:playbook.source,format:playbook.format,plans:playbook.plans,evidence:playbook.evidence}));
   if(options.announce===true) announceStrategyPlaybook(playbook);
@@ -4763,6 +4837,9 @@ function announceStrategyPlaybook(playbook){
   const msg=prefix+window.PitwallStrategyPlaybook.briefing(playbook,isJP?'ja':'en');
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
   speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_briefing',dedupeKey:key});
+  diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'proactive_strategy_briefing',session_num:lastSessionNum,
+    source:playbook.source,memory_record_count:playbook.evidence?.memory_record_count||0,
+    historical_sessions:playbook.evidence?.historical_session_count||0,selected_plan:playbook.selected_plan}));
 }
 function updateStrategyPlaybookFromLive(live){
   if(!window.PitwallStrategyPlaybook) return;
@@ -4779,6 +4856,9 @@ function updateStrategyPlaybookFromLive(live){
   if(becameAvailable){
     announceStrategyPlaybook(updated);
     diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
+    diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'three_lap_live_revision',session_num:lastSessionNum,
+      clean_laps:updated.evidence.live_fuel_samples,avg_fuel_l_per_lap:updated.evidence.live_fuel_l_per_lap,
+      selected_plan:updated.selected_plan}));
     return;
   }
   const isJP=isJapaneseEngineer();
@@ -4788,6 +4868,9 @@ function updateStrategyPlaybookFromLive(live){
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
   speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_live_update',dedupeKey:key});
   diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
+  diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'three_lap_live_revision',session_num:lastSessionNum,
+    clean_laps:updated.evidence.live_fuel_samples,avg_fuel_l_per_lap:updated.evidence.live_fuel_l_per_lap,
+    selected_plan:updated.selected_plan}));
 }
 function evaluateLiveStrategySwitch(live){
   const engine=window.PitwallStrategyPlaybook;
@@ -4918,6 +5001,7 @@ function buildSessionEvidenceNote(){
     if(!userName || !track || !car) return '';
     const maxAgeMs=90*24*60*60*1000;
     const now=Date.now();
+    const layer=window.PitwallMemoryActionLayer;
     const relevant=records.filter(r=>{
       if(r.driver!==userName) return false;
       const created=Date.parse(r.created_at||'');
@@ -4928,7 +5012,9 @@ function buildSessionEvidenceNote(){
       if(r.kind==='driver_preference') return true;
       const rt=String(r.scope?.track||'').toLowerCase();
       const rc=String(r.scope?.car||r.scope?.car_class||'').toLowerCase();
-      return rt===track && rc===car;
+      return layer
+        ? layer.matches(lastTrack,lastCarModel||lastCarClass,r.scope?.track,r.scope?.car||r.scope?.car_class)
+        : rt===track && rc===car;
     }).slice(-3);
     if(!relevant.length) return '';
     diagnosticLog('MEMORY_CONTEXT',`driver=${userName} track=${lastTrack} car=${lastCarModel||lastCarClass} injected=${relevant.length}`);

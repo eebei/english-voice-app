@@ -122,7 +122,7 @@ check('未確認記憶も作業仮説として次回へ配線',
 check('ドライバー・コース・車両が未確定ならmemory参照をfail-closed',
   renderer.includes("if(!userName || !track || !car) return '';")
   && renderer.includes('if(r.driver!==userName) return false;')
-  && renderer.includes('return rt===track && rc===car;'));
+  && renderer.includes('layer.matches(lastTrack,lastCarModel||lastCarClass'));
 check('記憶は90日で失効し現在の結論として扱わない',
   renderer.includes('const maxAgeMs=90*24*60*60*1000;')
   && renderer.includes('現在も正しいという結論ではない')

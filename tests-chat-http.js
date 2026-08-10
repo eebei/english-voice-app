@@ -169,6 +169,26 @@ async function testBaseline(port) {
   }
   {
     const r = await post(port, {
+      stream: true, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: {
+        fuel: 4.4,
+        timed_finish_forecast: { confidence: 'model_valid',
+          leader_time_to_checkered_s: 866, driver_time_to_next_sf_s: 107,
+          driver_avg_lap_s: 108.24 },
+        pit_loss_calibration: { observed_loss_median_s: 27.7 },
+        fuel_strategy: { avg_fuel_per_lap: 3.678,
+          estimated_crossings_to_finish: 9, required_fuel_l: 33.1,
+          effective_capacity_l: 23.32, reserve_l: 0.5, pit_required: true },
+      },
+      messages: [{ role: 'user', content: 'チェッカー前にもう1回スプラッシュあるか？' }],
+    });
+    check('④a4 splash: 予定ピットロス後の燃料で直接回答',
+      /スプラッシュ不要.*約0\.8L余る/.test(r.body) && !/S\/F|9回/.test(r.body), r.body);
+    check('④a4 splash: deterministic fuel handler',
+      r.headers['x-pitwall-intent'] === 'fuel_plan', r.headers['x-pitwall-intent']);
+  }
+  {
+    const r = await post(port, {
       stream: false, character: 'LunaJP', mode: 'race',
       liveData: { session_time_remaining_s: 594, race_plan: {
         kind: 'timed', configured_duration_s: 1200, session_state: 4,

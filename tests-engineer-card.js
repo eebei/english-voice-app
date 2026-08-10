@@ -254,6 +254,20 @@ reply=cards.route('ゴールまで燃料は？',{
 check('20.14L effective tank never becomes an impossible 21L setting',
   /燃料は20\.4L不足.*設定上限20Lでも一度では0\.4L不足/.test(reply)&&!/設定21L/.test(reply),reply);
 
+card=cards.classify('これチェッカー前にもう1回スプラッシュあるか？',{race:true});
+reply=cards.build(card,{
+  session_type:'Race',fuel:4.4,
+  timed_finish_forecast:{confidence:'model_valid',leader_time_to_checkered_s:866,
+    driver_time_to_next_sf_s:107,driver_avg_lap_s:108.24},
+  pit_loss_calibration:{observed_loss_median_s:27.7},
+  fuel_strategy:{avg_fuel_per_lap:3.678,estimated_crossings_to_finish:9,
+    required_fuel_l:33.1,add_fuel_l:28.7,one_stop_shortfall_l:5.4,
+    effective_capacity_l:23.32,reserve_l:0.5,pit_required:true},
+},'ja');
+check('splash question uses post-stop checker clock instead of stale 9-crossing reply',
+  card.topic===cards.TOPIC.FUEL_PLAN&&card.splashQuestion===true
+  &&/スプラッシュ不要.*約0\.8L余る/.test(reply)&&!/S\/F|9回/.test(reply),reply);
+
 reply=cards.route('戦略プランは？',{
   ...build255Live,
   strategy_playbook:{available:true,selected_plan:'A',plans:{
@@ -300,8 +314,9 @@ check('renderer promotes SessionInfo duration into Race live telemetry',
   renderer.includes('function applySessionFormatAuthority(snapshot)')
   && renderer.includes('configured_duration_s:duration')
   && renderer.includes('lastTelemetry=applySessionFormatAuthority(data)'));
-check('critical fuel radio proactively includes physical and conditional pit positions',
-  /今入ると物理P/.test(renderer) && /台が止まればP/.test(renderer));
+check('critical fuel radio is a short driver action, not a telemetry dump',
+  /この周ボックス。\$\{setting\}リットル/.test(renderer)
+  && !/return `この周でピットを推奨。現在/.test(renderer));
 check('both fuel reflex paths become Luna working state',
   renderer.includes("data.trigger==='fuel_warning'||data.trigger==='fuel_strategy_warning'")
   && renderer.includes('buildActiveRaceFactsNote(_isJP_pre)'));

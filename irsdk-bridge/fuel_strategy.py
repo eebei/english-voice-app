@@ -176,6 +176,48 @@ def estimate_timed_fuel_provisional(
     }
 
 
+def project_post_stop_fuel_to_finish(
+        leader_time_to_checkered_s, driver_time_to_next_sf_s,
+        driver_avg_lap_s, pit_loss_s, avg_fuel_per_lap_l,
+        effective_capacity_l, reserve_l=RESERVE_L):
+    """Project fuel after an imminent stop in a timed race.
+
+    The next S/F is the pit-entry crossing, before service.  The full tank
+    therefore covers only complete crossings after the measured pit loss.
+    This is the correct contract for "will we need another splash?"; the
+    ordinary no-stop crossing count is deliberately not reused.
+    """
+    values = (
+        leader_time_to_checkered_s, driver_time_to_next_sf_s,
+        driver_avg_lap_s, pit_loss_s, avg_fuel_per_lap_l,
+        effective_capacity_l, reserve_l)
+    if not all(_finite(v) for v in values):
+        return {'available': False, 'reason': 'invalid_input'}
+    if (leader_time_to_checkered_s < 0 or driver_time_to_next_sf_s < 0
+            or not MIN_LAP_TIME_S <= driver_avg_lap_s <= MAX_LAP_TIME_S
+            or pit_loss_s < 0
+            or not 0 < avg_fuel_per_lap_l <= MAX_FUEL_PER_LAP_L
+            or not 0 < effective_capacity_l <= MAX_FUEL_L
+            or reserve_l < 0):
+        return {'available': False, 'reason': 'input_out_of_range'}
+    usable_clock = (
+        leader_time_to_checkered_s
+        - driver_time_to_next_sf_s
+        - pit_loss_s)
+    crossings = max(0, int(math.floor(
+        usable_clock / driver_avg_lap_s + 1e-9)))
+    required = crossings * avg_fuel_per_lap_l + reserve_l
+    margin = effective_capacity_l - required
+    return {
+        'available': True,
+        'reason': 'planned_stop_clock',
+        'post_stop_crossings': crossings,
+        'required_fuel_l': round(required, 3),
+        'margin_l': round(margin, 3),
+        'splash_required': margin < 0,
+    }
+
+
 def commit_band_after_dispatch(previous_band, evaluation, dispatch_result):
     """Advance dedup state without losing an undelivered warning.
 

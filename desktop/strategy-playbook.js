@@ -69,6 +69,8 @@
     const averageLap = finite(input.historicalAverageLapS);
     const capacity = finite(input.effectiveCapacityL);
     const pitLane = finite(input.pitLaneS);
+    const memoryEvidence = input.memoryEvidence && typeof input.memoryEvidence === 'object'
+      ? input.memoryEvidence : {};
     if (format.kind === 'unknown') return unavailable('race_format_unavailable', { format });
     if (!(burn > 0)) return unavailable('historical_fuel_unavailable', { format });
     if (!(capacity > burn + RESERVE_L)) return unavailable('effective_capacity_unavailable', { format, burn });
@@ -153,6 +155,13 @@
         pit_lane_s: pitLane,
         qualifying_position: qualifier,
         class_entry_count: classEntries,
+        memory_source: memoryEvidence.source || 'none',
+        memory_record_count: Math.max(0, Math.trunc(finite(memoryEvidence.recordCount) || 0)),
+        historical_session_count: Math.max(0, Math.trunc(finite(memoryEvidence.sessionCount) || 0)),
+        memory_matched_keys: Array.isArray(memoryEvidence.matchedKeys)
+          ? memoryEvidence.matchedKeys.slice(0, 12) : [],
+        canonical_track: memoryEvidence.canonicalTrack || '',
+        canonical_car: memoryEvidence.canonicalCar || '',
       },
       safe_stint_laps: safeStintLaps,
       plans: { A: planA, B: planB, C: planC },
@@ -178,6 +187,14 @@
       pitLaneS: playbook.evidence.pit_lane_s,
       qualifyingPosition: playbook.evidence.qualifying_position,
       classEntryCount: playbook.evidence.class_entry_count,
+      memoryEvidence: {
+        source: playbook.evidence.memory_source,
+        recordCount: playbook.evidence.memory_record_count,
+        sessionCount: playbook.evidence.historical_session_count,
+        matchedKeys: playbook.evidence.memory_matched_keys,
+        canonicalTrack: playbook.evidence.canonical_track,
+        canonicalCar: playbook.evidence.canonical_car,
+      },
     });
     if (!rebuilt.available) return playbook;
     rebuilt.source = 'live_clean_laps';
@@ -257,9 +274,10 @@
           : ' Qualifying position is not confirmed yet; keep the baseline provisional.')
         + (live ? '' : ' I will update after three clean laps.');
     }
+    const rememberedSessions = Math.max(0, Math.trunc(finite(playbook.evidence && playbook.evidence.historical_session_count) || 0));
     return `${live
       ? `当日実測${playbook.evidence.live_fuel_l_per_lap.toFixed(2)}L/周で更新した案。`
-      : `過去実測${playbook.evidence.historical_fuel_l_per_lap.toFixed(2)}L/周を基準にした暫定案。`}`
+      : `${rememberedSessions ? `保存履歴${rememberedSessions}セッション、` : ''}過去実測${playbook.evidence.historical_fuel_l_per_lap.toFixed(2)}L/周を基準にした暫定案。`}`
       + `スタート燃料は実効上限${playbook.evidence.starting_fuel_assumption_l.toFixed(1)}L前提。`
       + `ベースラインは${formatLapList(a)}周目にピット。`
       + `アンダーカットは${b.available ? `${b.first_pit_lap}周目` : '同じ給油回数では不成立'}。`

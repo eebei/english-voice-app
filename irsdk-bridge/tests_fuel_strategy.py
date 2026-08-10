@@ -195,6 +195,32 @@ def test_timed_provisional():
           not short['available'] and short['reason'] == 'insufficient_clean_laps', short)
 
 
+def test_planned_stop_splash_projection():
+    print('\n══ planned-stop splash projection ══')
+    r = fs.project_post_stop_fuel_to_finish(
+        leader_time_to_checkered_s=866.0,
+        driver_time_to_next_sf_s=107.0,
+        driver_avg_lap_s=108.24,
+        pit_loss_s=27.7,
+        avg_fuel_per_lap_l=3.678,
+        effective_capacity_l=23.32,
+        reserve_l=0.5)
+    check('8/10 Monza stop leaves six complete crossings, not stale nine',
+          r['available'] and r['post_stop_crossings'] == 6, r)
+    check('8/10 Monza full tank needs no extra splash',
+          not r['splash_required'] and r['margin_l'] == 0.752, r)
+    short = fs.project_post_stop_fuel_to_finish(
+        leader_time_to_checkered_s=866.0,
+        driver_time_to_next_sf_s=107.0,
+        driver_avg_lap_s=108.24,
+        pit_loss_s=27.7,
+        avg_fuel_per_lap_l=3.9,
+        effective_capacity_l=23.0,
+        reserve_l=0.5)
+    check('real post-stop shortfall requests a splash',
+          short['splash_required'] and short['margin_l'] < 0, short)
+
+
 def test_mutations():
     print('\n══ deterministic mutation evidence ══')
     source = open(
@@ -260,6 +286,7 @@ def run_all():
     test_lifecycle()
     test_invalid_inputs()
     test_timed_provisional()
+    test_planned_stop_splash_projection()
     test_mutations()
     print('\n[fuel_strategy] 合格 %d / 不合格 %d'
           % (passed, failed))

@@ -45,6 +45,13 @@ function classify(text, options = {}) {
   };
 
   const fuelWord = /燃料|燃費|消費|ガソリン|リットル|リッター|fuel|consumption|lit(?:er|re)/i.test(t);
+  // A splash question is not a generic checker-distance question.  It asks
+  // whether the planned stop leaves another fuel stop before the finish.
+  if (/スプラッシュ|splash/i.test(t)) return {
+    topic: TOPIC.FUEL_PLAN,
+    splashQuestion: true,
+    confidence: 0.995,
+  };
   // Fuel starvation is a safety-critical immediate condition.  It must not
   // fall into the generic "wait for the next S/F" follow-up path.
   if (/(?:ガス欠|燃料.{0,10}(?:ゼロ|0(?:\.0+)?\s*(?:[lL]|リットル|リッター)?|持たない)|ピット.{0,10}持たない|out of fuel|won'?t make it to (?:the )?pit)/i.test(t)) return { topic: TOPIC.FUEL_EMERGENCY, confidence: 0.995 };
@@ -194,6 +201,47 @@ function buildFuelPlan(live, lang, card = {}) {
     return ja(lang)
       ? `${current != null ? `現在${current.toFixed(1)}L。` : ''}${avg != null ? `平均${avg.toFixed(2)}L/周。` : ''}完走目標が確定していないため、必要燃料・給油量・ピット周は出さない。`
       : `${current != null ? `Current ${current.toFixed(1)}L. ` : ''}${avg != null ? `Average ${avg.toFixed(2)}L/lap. ` : ''}The finish target is not authoritative, so I will not give required fuel, an add amount, or a pit-lap call.`;
+  }
+  if (card.splashQuestion) {
+    const bridgeProjection = live && live.post_stop_fuel_projection || {};
+    const bridgeMargin = finite(bridgeProjection.margin_l);
+    if (bridgeProjection.available === true && bridgeMargin != null) {
+      if (ja(lang)) return bridgeProjection.splash_required === true
+        ? `スプラッシュが必要。満タンでも約${Math.abs(bridgeMargin).toFixed(1)}L不足。`
+        : `スプラッシュ不要。このピットで満タンなら、ゴール時約${bridgeMargin.toFixed(1)}L余る見込み。`;
+      return bridgeProjection.splash_required === true
+        ? `Splash required. A full tank still projects ${Math.abs(bridgeMargin).toFixed(1)}L short.`
+        : `No splash. A full tank at this stop projects about ${bridgeMargin.toFixed(1)}L at the finish.`;
+    }
+    const timed = live && live.timed_finish_forecast || {};
+    const calibration = live && live.pit_loss_calibration || {};
+    const leaderChecker = finite(timed.leader_time_to_checkered_s);
+    const driverNextSf = finite(timed.driver_time_to_next_sf_s);
+    const driverLap = finite(timed.driver_avg_lap_s);
+    const pitLoss = finite(calibration.observed_loss_median_s);
+    const burn = finite(fs.avg_fuel_per_lap);
+    const capacity = finite(fs.effective_capacity_l);
+    const reserve = finite(fs.reserve_l) == null ? 0.5 : finite(fs.reserve_l);
+    if (timed.confidence === 'model_valid' && leaderChecker != null
+        && driverNextSf != null && driverLap != null && driverLap > 0
+        && pitLoss != null && pitLoss >= 0 && burn != null && capacity != null) {
+      // The next S/F is the pit-entry crossing.  Fuel added at the stop only
+      // has to cover the complete crossings after service.  Pit loss moves
+      // the driver later relative to the overall leader's checker clock.
+      const postStopCrossings = Math.max(0, Math.floor(
+        (leaderChecker - driverNextSf - pitLoss) / driverLap + 1e-9));
+      const postStopRequired = postStopCrossings * burn + reserve;
+      const margin = capacity - postStopRequired;
+      if (ja(lang)) return margin >= 0
+        ? `スプラッシュ不要。このピットで満タンなら、ゴール時約${margin.toFixed(1)}L余る見込み。`
+        : `スプラッシュが必要。満タンでも約${Math.abs(margin).toFixed(1)}L不足。`;
+      return margin >= 0
+        ? `No splash. A full tank at this stop projects about ${margin.toFixed(1)}L at the finish.`
+        : `Splash required. A full tank still projects ${Math.abs(margin).toFixed(1)}L short.`;
+    }
+    return ja(lang)
+      ? 'スプラッシュの要否は、このピット後の周回予測がまだ成立していない。'
+      : 'The post-stop lap projection is not ready, so splash need is not confirmed.';
   }
   const exact = finite(fs.estimated_crossings_to_finish), provisional = finite(fs.provisional_laps_to_time_expiry);
   const oneStopShort=finite(fs.one_stop_shortfall_l);
