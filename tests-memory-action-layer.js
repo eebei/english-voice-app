@@ -35,6 +35,33 @@ check('lap evidence from the old short-name key is recovered', Math.abs(resolved
 check('different GT3 model cannot contaminate memory', !resolved.matchedKeys.some(key => key.includes('Corvette')));
 check('Nürburgring layouts remain distinct',
   memoryLayer.normalizeTrack('Nürburgring Combined Short') !== memoryLayer.normalizeTrack('Nürburgring Nordschleife'));
+
+// ★Build 265 fix D：Monza layouts must stay separate.  A "monza gpsecondchicane"
+//   record (skip-first-chicane layout) is a DIFFERENT track from Monza Full GT
+//   and its evidence must not be pooled into monza:full.
+check('monza gpsecondchicane must not normalize to monza:full',
+  memoryLayer.normalizeTrack('monza gpsecondchicane') !== memoryLayer.normalizeTrack('monza full'),
+  `${memoryLayer.normalizeTrack('monza gpsecondchicane')} vs ${memoryLayer.normalizeTrack('monza full')}`);
+check('monza gpsecondchicane keeps its own canonical key',
+  memoryLayer.normalizeTrack('monza gpsecondchicane') === 'monza:gpsecondchicane',
+  memoryLayer.normalizeTrack('monza gpsecondchicane'));
+check('monza gp (bare) still resolves to monza:full',
+  memoryLayer.normalizeTrack('monza gp') === 'monza:full');
+check('autodromo nazionale monza still resolves to monza:full',
+  memoryLayer.normalizeTrack('Autodromo Nazionale Monza') === 'monza:full');
+// A regression pool that includes the second-chicane record must not
+// contaminate a Monza Full lookup for the same car.
+const contaminated = {
+  ...stored,
+  'Mercedes-AMG GT3 2020|monza gpsecondchicane': {
+    car: 'Mercedes-AMG GT3 2020', track: 'monza gpsecondchicane', sessions: 4,
+    avgFuel: 4.8, fuelSampleCount: 5,
+  },
+};
+const monzaFullOnly = memoryLayer.resolve(contaminated, 'Autodromo Nazionale Monza', 'Mercedes-AMG GT3 2020', 'GT3');
+check('Monza Full lookup ignores the second-chicane record',
+  !monzaFullOnly.matchedKeys.some(k => k.includes('gpsecondchicane')),
+  JSON.stringify(monzaFullOnly.matchedKeys));
 check('stale unavailable profile statements are rejected',
   memoryLayer.isStaleUnavailableNote('現在の前後GAPは取得できない。') === true);
 check('real driver preference remains actionable',

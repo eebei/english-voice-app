@@ -41,13 +41,14 @@ import driver_activity as driver_activity_mod
 import final_lap
 import fuel_strategy as fuel_strategy_mod
 import strategy_options as strategy_options_mod
+import plan_fuel_authority as plan_fuel_authority_mod
 import session_authority as session_authority_mod
 import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 264 (Memory Action Layer, concise fuel calls, plan-aware splash)"
+BUILD_VERSION = "Build 265 (authoritative fuel plan, clean-lap radio controls)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -701,6 +702,12 @@ def _session_scoped_reset_values():
         '_pending_summary': None,
         '_pending_non_race_summary': None,
         '_pending_checker_notice': None,
+        # ★Build 265 Codex 差戻し 3：クリーン周判定はセッションを跨がない。
+        '_lap_start_incidents': None,
+        '_lap_had_pit_road': False,
+        '_lap_had_pit_road_prev': False,
+        '_lap_had_off_track': False,
+        '_clean_lap_candidate_count': 0,
     }
 
 
@@ -2174,6 +2181,15 @@ def poll_iracing():
     prev_damage_s = 0.0        # 前回計測のdamage_s（義務+任意修理秒）。増えたら1回だけダメージ報告
     prev_incidents = None
     incident_times = []
+    # ★Build 265 Codex 差戻し 3：クリーン周判定を bridge 側で行い、broadcast/telemetry
+    #   に証拠を乗せる。renderer の Lap Readout ポリシー (`Every clean lap` /
+    #   `Every 2 laps`) はこの証拠だけで判定するため、テレメトリの他フィールドから
+    #   推測しない。
+    _lap_start_incidents = None    # 現在の周のスタート時 incidents 数（None=未初期化）
+    _lap_had_pit_road = False      # この周中に OnPitRoad=True だった (pit-in)
+    _lap_had_pit_road_prev = False # 前回の周が pit road を通っていた (pit-out lap)
+    _lap_had_off_track = False     # この周中に PlayerTrackSurface が off-track だった
+    _clean_lap_candidate_count = 0 # セッション内で発行した「クリーン周」候補累計
     prev_driver_state = None
     leader_lap_time_hist = []       # 1位の直近ラップタイム履歴（タイムサーティン耐久の終了予測用）
     leader_last_laptime_seen = None # 同じラップタイム値を重複して履歴に積まないための直前値
@@ -2405,6 +2421,12 @@ def poll_iracing():
                         pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
                         last_pit_cycle_outcome = None
                         _pending_checker_notice = _sig_reset['_pending_checker_notice']
+                        # ★Build 265 Codex 差戻し 3：クリーン周状態を sig 変更で捨てる。
+                        _lap_start_incidents = _sig_reset['_lap_start_incidents']
+                        _lap_had_pit_road = _sig_reset['_lap_had_pit_road']
+                        _lap_had_pit_road_prev = _sig_reset['_lap_had_pit_road_prev']
+                        _lap_had_off_track = _sig_reset['_lap_had_off_track']
+                        _clean_lap_candidate_count = _sig_reset['_clean_lap_candidate_count']
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
                         last_session_num = _authority_session_num
@@ -2456,6 +2478,14 @@ def poll_iracing():
         player_track_surface = reader.read_int('PlayerTrackSurface')
         pit_service_status = reader.read_int('PlayerCarPitSvStatus')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
+        # ★Build 265 Codex 差戻し 3：クリーン周状態を毎フレーム更新。
+        #   iRacing PlayerTrackSurface: 0=off_world, 1=in_pit_stall, 2=approaching_pit,
+        #   3=on_track（それ以外＝off track / 芝 / グラベル）。
+        if onPit:
+            _lap_had_pit_road = True
+        if (isinstance(player_track_surface, int)
+                and player_track_surface not in (-1, 1, 2, 3)):
+            _lap_had_off_track = True
         if onPit:
             pit_this_lap = True   # この周でピットを通った→燃料学習から除外（アウト/インラップ）
         cur_ss      = reader.read_int('SessionState') or 0
@@ -2559,6 +2589,12 @@ def poll_iracing():
             _pending_summary = _reset['_pending_summary']
             _pending_non_race_summary = _reset['_pending_non_race_summary']
             _pending_checker_notice = _reset['_pending_checker_notice']
+            # ★Build 265 Codex 差戻し 3：クリーン周状態も SessionNum 変更で捨てる。
+            _lap_start_incidents = _reset['_lap_start_incidents']
+            _lap_had_pit_road = _reset['_lap_had_pit_road']
+            _lap_had_pit_road_prev = _reset['_lap_had_pit_road_prev']
+            _lap_had_off_track = _reset['_lap_had_off_track']
+            _clean_lap_candidate_count = _reset['_clean_lap_candidate_count']
             if _transition_summary is not None:
                 _pending_non_race_summary = _transition_summary
                 log("Non-race summary pending at SessionNum transition: %d laps"
@@ -3341,7 +3377,61 @@ def poll_iracing():
                         })
 
                 _fuel_dispatch_result = None
+                # ★Build 265 fix A (Codex 差戻し 2 反映・same-frame plan snapshot):
+                #   Plan 生成を燃料 P0 判定の手前まで前倒し、同じフレームの同じ入力から
+                #   同一 snapshot を組む。従来 strategy_options は本ブロックの後ろで
+                #   組まれていたので、燃料が最初に critical になったフレームで
+                #   plan がまだ None → authority が「no_plan」で safe-side に倒れ
+                #   P0 が発射されていた (＝Monza 35 lap 5 誤発話の原因)。
+                #   ここで組んだ候補は authority 判定にだけ使い、outer scope の
+                #   strategy_options 初期化・dispatch は既存フロー (line ~4785) に任せる。
+                _plan_options_for_authority = strategy_options
+                if (_plan_options_for_authority is None
+                        and is_race_session and onTrack and not onPit):
+                    _authority_crossings = fuel_strategy.get(
+                        'estimated_crossings_to_finish')
+                    if not isinstance(_authority_crossings, int):
+                        _authority_crossings = fuel_strategy.get(
+                            'provisional_laps_to_time_expiry')
+                    _authority_session_time = reader.read_double('SessionTime')
+                    _authority_candidate = strategy_options_mod.build_initial_plans(
+                        snapshot_id='authority:%s:%s' % (
+                            cur_snum,
+                            round(_authority_session_time, 3)
+                            if isinstance(_authority_session_time, (int, float))
+                            else 'na'),
+                        current_lap=int(lap) if isinstance(lap, (int, float)) else -1,
+                        fuel_level_l=fuel,
+                        avg_fuel_per_lap_l=fuel_strategy.get('avg_fuel_per_lap'),
+                        clean_laps_sampled=fuel_strategy.get('clean_laps_sampled'),
+                        crossings_to_finish=_authority_crossings,
+                        reserve_l=fuel_strategy.get('reserve_l', 0.5),
+                        effective_capacity_l=session_effective_fuel_capacity_l)
+                    if _authority_candidate.get('available'):
+                        _plan_options_for_authority = _authority_candidate
+                # ★Build 265 fix A（Codex 差戻し反映・bridge-authoritative contract）:
+                #   plan-aware ゲートを director/broadcast より手前に置く。
+                #   suppression 時は broadcast() を呼ばない = director 通過も
+                #   予算計上も無し = 全キャラクター (JP/EN/DE/BR) に対して確実に抑止。
+                #   fuel_warning_band の dedupe は commit されない (band 状態は前回のまま) ため、
+                #   次のframeで再評価される (plan が変わった瞬間に再ゲート)。
+                _plan_authority_verdict = None
                 if _fuel_eval.get('should_warn') and not onPit:
+                    _plan_authority_verdict = plan_fuel_authority_mod.evaluate(
+                        _fuel_eval, _plan_options_for_authority,
+                        current_lap=int(lap) if isinstance(lap, (int, float)) else None,
+                        fuel_level_l=fuel,
+                        avg_fuel_per_lap_l=avg_fuel_lap,
+                        effective_capacity_l=session_effective_fuel_capacity_l,
+                        safety_override=False)
+                    log('PLAN FUEL AUTHORITY: '
+                        + json.dumps(_plan_authority_verdict, ensure_ascii=False,
+                                     separators=(',', ':')))
+                _plan_authority_permits = (
+                    _plan_authority_verdict is None
+                    or _plan_authority_verdict.get('allow_p0_pit_now') is True)
+                if (_fuel_eval.get('should_warn') and not onPit
+                        and _plan_authority_permits):
                     _fuel_band = _fuel_eval['band']
                     _fuel_margin = _fuel_eval['margin_l']
                     _warning_forecast = (
@@ -3439,6 +3529,11 @@ def poll_iracing():
                     fuel_warning_band
                     in (fuel_strategy_mod.TIGHT,
                         fuel_strategy_mod.CRITICAL))
+                _fuel_dispatch_display = _fuel_dispatch_result
+                if (_fuel_dispatch_display is None
+                        and _plan_authority_verdict is not None
+                        and not _plan_authority_verdict.get('allow_p0_pit_now')):
+                    _fuel_dispatch_display = 'SUPPRESSED_BY_PLAN_AUTHORITY'
                 log("FUEL BAND DIAG lap=%s fuel=%.2f avg=%.3f crossings=%s "
                     "required=%s marginL=%s band=%s prev=%s transition=%s "
                     "warn=%s dispatch=%s reason=%s clean=%s"
@@ -3450,7 +3545,7 @@ def poll_iracing():
                         _fuel_eval.get('previous_band'),
                         _fuel_eval.get('transition'),
                         _fuel_eval.get('should_warn'),
-                        _fuel_dispatch_result,
+                        _fuel_dispatch_display,
                         _fuel_eval.get('reason'),
                         len(fuel_per_lap_hist)))
 
@@ -3459,6 +3554,32 @@ def poll_iracing():
             if t:
                 is_session_best = (session_best is None or lapTime < session_best)
                 is_personal_best = (personal_best is None or lapTime < personal_best)
+
+                # ★Build 265 Codex 差戻し 3：クリーン周判定（有効性証拠）を計算。
+                #   有効なクリーン周 = incident 0 かつ pit road 未通過 かつ off-track 未検出。
+                #   `Every clean lap` / `Every 2 laps` はこの証拠だけで判定される。
+                if _lap_start_incidents is None:
+                    _incidents_this_lap = 0
+                elif isinstance(incidents, int):
+                    _incidents_this_lap = max(0, incidents - _lap_start_incidents)
+                else:
+                    _incidents_this_lap = 0
+                _lap_valid_clean = bool(
+                    _incidents_this_lap == 0
+                    and not _lap_had_pit_road
+                    and not _lap_had_pit_road_prev  # out lap
+                    and not _lap_had_off_track)
+                if _lap_valid_clean:
+                    _clean_lap_candidate_count += 1
+                _clean_lap_evidence = {
+                    'lap_number': int(lap) if isinstance(lap, (int, float)) else None,
+                    'lap_valid_clean': _lap_valid_clean,
+                    'incidents_this_lap': _incidents_this_lap,
+                    'pit_in_this_lap': bool(_lap_had_pit_road),
+                    'pit_out_this_lap': bool(_lap_had_pit_road_prev),
+                    'off_track_this_lap': bool(_lap_had_off_track),
+                    'clean_lap_candidate_count': _clean_lap_candidate_count,
+                }
 
                 if is_personal_best:
                     if personal_best is not None:
@@ -3472,22 +3593,36 @@ def poll_iracing():
                         broadcast({'type': 'radio', 'trigger': 'personal_best',
                             'time': t, 'time_seconds': round(lapTime, 3),
                             'diff': round(diff, 2),
-                            'message': _bl[int(time.time()) % len(_bl)] + t + '.'})
+                            'message': _bl[int(time.time()) % len(_bl)] + t + '.',
+                            **_clean_lap_evidence})
                     else:
                         broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
                             'time_seconds': round(lapTime, 3),
-                            'message': t + '. Baseline lap.'})
+                            'message': t + '. Baseline lap.',
+                            **_clean_lap_evidence})
                     personal_best = lapTime
                     session_best = lapTime
 
                 elif is_session_best:
                     broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t,
                         'time_seconds': round(lapTime, 3),
-                        'message': 'Session best. ' + t + '.'})
+                        'message': 'Session best. ' + t + '.',
+                        **_clean_lap_evidence})
                     session_best = lapTime
 
                 else:
                     diff = lapTime - session_best
+                    # ★Build 265 Codex 差戻し 4：クリーン周ごとに決定論的 `lap_time` radio
+                    #   候補を1度だけ発行する。renderer の Lap Readout policy
+                    #   (`Every clean lap` / `Every 2 laps`) はこの radio を数える。
+                    #   dirty 周 (incident / pit_in / pit_out / off_track) では発行しない
+                    #   ため、clean_lap_candidate_count はここでも一致する。
+                    if _lap_valid_clean:
+                        broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t,
+                            'time_seconds': round(lapTime, 3),
+                            'diff': round(diff, 2),
+                            'message': t + '.',
+                            **_clean_lap_evidence})
                     # ── ペース推移の生データ蓄積（AI文脈判断用・直近8周）──
                     lap_delta_hist.append(round(diff, 2))
                     if len(lap_delta_hist) > 8:
@@ -3537,6 +3672,12 @@ def poll_iracing():
                                     'lost': round(diff - _typ, 1), 'time': t})
 
                 last_lap_time = lapTime
+                # ★Build 265 Codex 差戻し 3：クリーン周状態を次の周のためにロールオーバー。
+                _lap_had_pit_road_prev = _lap_had_pit_road
+                _lap_had_pit_road = False
+                _lap_had_off_track = False
+                if isinstance(incidents, int):
+                    _lap_start_incidents = incidents
                 # ── セッションサマリー用にラップデータを積算 ──
                 lap_record = {
                     'lap': lap,
@@ -4935,6 +5076,20 @@ def poll_iracing():
                 # revision.  Refresh it without manufacturing revision churn.
                 strategy_plan['physical_exit_position'] = _plan_physical
                 strategy_plan['conditional_cycle_position'] = _plan_cycle
+            # ★Build 265 Codex 差戻し 3-4：クリーン周判定に使う証拠を telemetry payload に。
+            #   renderer の `Every clean lap` / `Every 2 laps` はこの証拠から判断する
+            #   (radio 経由の broadcast にも同じ evidence を乗せている・二方向）。
+            #   `lap_valid_clean` は「現在進行中の周がまだクリーンで残っているか」の
+            #   live prediction。radio の `lap_valid_clean` は完了周の確定判定。
+            _telemetry_incidents_this_lap = (
+                max(0, incidents - _lap_start_incidents)
+                if isinstance(incidents, int) and isinstance(_lap_start_incidents, int)
+                else 0)
+            _telemetry_lap_valid_clean = bool(
+                _telemetry_incidents_this_lap == 0
+                and not _lap_had_pit_road
+                and not _lap_had_pit_road_prev
+                and not _lap_had_off_track)
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -4944,6 +5099,12 @@ def poll_iracing():
                 'last': round(lapTime, 3) if (lapTime and lapTime > 0) else None,
                 'lap': lap,
                 'laps_total': lapsTot if (lapsTot and lapsTot > 0) else None,
+                'lap_valid_clean': _telemetry_lap_valid_clean,
+                'incidents_this_lap': _telemetry_incidents_this_lap,
+                'pit_in_this_lap': bool(_lap_had_pit_road),
+                'pit_out_this_lap': bool(_lap_had_pit_road_prev),
+                'off_track_this_lap': bool(_lap_had_off_track),
+                'clean_lap_candidate_count': _clean_lap_candidate_count,
                 # Never expose SessionLapsRemain for timed races: AI sessions
                 # have supplied sentinel/stale values that became fabricated
                 # 18/19-lap answers.  The clock model is the sole authority.

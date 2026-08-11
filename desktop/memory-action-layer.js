@@ -16,12 +16,28 @@
       .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   }
 
+  // ★Build 265 fix D：明示ホワイトリストのみが `monza:full` へ集約される。
+  //   `monza gpsecondchicane` のような別レイアウトは自らのキーを維持する
+  //   (＝過去戦略記憶に混入して誤ったプランを生まないため)。
+  const MONZA_FULL_ALIASES = new Set([
+    'monza',
+    'monza full',
+    'monza gp',
+    'monza grand prix',
+    'autodromo nazionale monza',
+    'autodromo nazionale monza gp',
+    'autodromo nazionale monza grand prix',
+    'autodromo nazionale monza full',
+  ]);
   function normalizeTrack(value) {
     const text = plain(value);
     if (!text) return '';
     if (/\bmonza\b/.test(text)) {
-      if (/without (?:first )?chicane|no chicane|oval/.test(text)) return `monza:${text}`;
-      return 'monza:full';
+      if (MONZA_FULL_ALIASES.has(text)) return 'monza:full';
+      // 追加サフィックス(gpsecondchicane / nochicane / oval / junior など)を残す。
+      // 過去に "monza:<full-form>" として保存されたキーとの互換性のため、`monza:` プレフィックスを付ける。
+      const suffix = text.replace(/^(?:autodromo\s+nazionale\s+)?monza\s*/, '').trim();
+      return suffix ? `monza:${suffix}` : 'monza:full';
     }
     if (/nurburgring|nuerburgring/.test(text)) {
       if (/combined short|gesamtstrecke.*short/.test(text)) return 'nurburgring:combined-short';

@@ -245,7 +245,7 @@ def test_sig_reset_path_resets_llm_budget():
     # 瞬間に前セッションの予算満杯を持ち越す。
     src = _bridge_source()
     # sig経路のunpackブロック（"last_session_sig = sig" の後にある一連の代入）
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,5000}?_gate_state\['pending'\]\s*=\s*None", src)
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", src)
     check('sig経路のunpackブロックが見つかる', m is not None)
     if m:
         block = m.group(0)
@@ -263,7 +263,7 @@ def test_removing_sig_unpack_would_break_wiring_test():
     mutation = src.replace(line, "", 1)
     check('変異が実際にソースを変更した', mutation != src)
     # 変異後のsigブロックにjudge_llm_call_timesのunpackが無いことを、上のテストと同じロジックで検証
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,5000}?_gate_state\['pending'\]\s*=\s*None", mutation)
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", mutation)
     block = m.group(0) if m else ""
     check('変異後はsig経路にjudge_llm_call_timesのunpackが無い(配線テストが本番のバグを検出できる証明)',
           "judge_llm_call_times = _sig_reset['judge_llm_call_times']" not in block)
@@ -487,7 +487,7 @@ def test_post_contact_ok_unpacked_in_both_reset_paths():
     print('\n══ 本番配線：sig経路とSessionNum経路の両方で post_contact_watch_start が unpackされる ══')
     src = _bridge_source()
     # sig経路
-    m_sig = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,4000}?_gate_state\['pending'\]\s*=\s*None", src)
+    m_sig = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", src)
     check('sig経路のunpackブロックが見つかる', m_sig is not None)
     if m_sig:
         block = m_sig.group(0)
@@ -515,7 +515,7 @@ def test_removing_post_contact_reset_would_break_test():
     check('変異対象(sig経路)がソースに存在する', target_sig in src)
     mut = src.replace(target_sig, '', 1)
     check('変異が実際にソースを変更した', mut != src)
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,4000}?_gate_state\['pending'\]\s*=\s*None", mut)
+    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", mut)
     block = m.group(0) if m else ''
     check('変異後は sig経路に post_contact_watch_start のunpackが無い(検出可)',
           "post_contact_watch_start = _sig_reset['post_contact_watch_start']" not in block)

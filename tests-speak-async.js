@@ -48,6 +48,11 @@ const sandbox = {
   MAX_RADIO_QUEUE: 2,
   speakWindowOk: true, speakGateActive: false,
   IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_countdown']),
+  // Build 265 fix E: defer displaced deferable items on interrupt (bounded).
+  currentSpeakItem: null,
+  SPEAK_DEFER_KINDS: new Set(['personal_best','session_best','first_lap']),
+  SPEAK_DEFER_MAX: 1,
+  diagnosticLog: () => {},
   SPEAK_PRIO: { P0_SAFETY: 0, P1_HAZARD: 1, P2_PROCEDURE: 2, P3_STRATEGY: 3, P4_INFO: 4, P5_CHAT: 5 },
   CHARS: { LunaJP: { gVoice: 'ja-JP-x', gLang: 'ja-JP', gRate: 1, gPitch: 0, voiceLang: 'ja-JP', pitch: 1, rate: 1, voiceNames: [] } },
   API_BASE: 'http://x',

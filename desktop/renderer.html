@@ -508,6 +508,19 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
            style="font-size:13px;color:#9D4EDD;text-decoration:none">🎤 <span data-i18n="mic_trouble_link">マイクが認識されない時はこちら（トラブルシューティング）</span></a>
       </div>
 
+      <!-- ★Build 265 Codex 差戻し 3：Lap Readout の最終 4 択 = Off / Best only /
+           Every 2 laps / Every clean lap。 -->
+      <div class="field-label" data-i18n="setup_lap_readout_title" style="margin-top:18px">ラップタイム読み上げ</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+        <select class="mic-select" id="lap-readout-select" onchange="onLapReadoutChanged()">
+          <option value="off" data-i18n="lap_readout_off">Off</option>
+          <option value="best_only" data-i18n="lap_readout_best_only">Best only</option>
+          <option value="every_2_laps" data-i18n="lap_readout_every_2_laps">Every 2 laps</option>
+          <option value="every_clean_lap" data-i18n="lap_readout_every_clean_lap">Every clean lap</option>
+        </select>
+      </div>
+      <div class="setup-hint" data-i18n="setup_lap_readout_hint">Off はベスト更新も含めラップ読み上げを完全に止める。Best only はベスト更新のみ発話。Every clean lap はインシデントなし・ピット外・オフトラックなしの周だけ発話（ベスト更新は常に通す）。Every 2 laps はそのクリーン周のうち 2 周ごとに 1 度発話（ベスト更新は常に通す）。</div>
+
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
       <button class="start-btn" id="btn-return-session" onclick="returnToSession()" style="display:none;margin-top:12px">会話へ戻る →</button>
     </div>
@@ -672,6 +685,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 
 <script src="memory-action-layer.js"></script>
 <script src="strategy-playbook.js"></script>
+<script src="fuel-plan-guard.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -989,20 +1003,74 @@ let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let iracingConnectionSeen = false, iracingConnectedAt = 0, lastTelemetryAt = 0, telemetryStaleNotified = false;
 const TELEMETRY_STALE_MS = 12000;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null, lastSessionNum = null;
+// ★Build 265 lifecycle flags — cleared on session-num reset.  Consumed by fix B
+//   (strategy speech suppression) and fix C (follow-up refusal after checker).
+let finalLapNoticeSeen = false;   // trigger=final_lap_notice arrived from bridge
+let checkerOutNoticeSeen = false; // trigger=checker_out_notice arrived from bridge
+function isSessionEndingLifecycle(){
+  return finalLapNoticeSeen || checkerOutNoticeSeen
+    || driverActivity==='FINISHED' || selMode==='debrief';
+}
 // A deferred race answer is a promise, not a dead end.  It is armed only by
 // the deterministic operational fallback and completes once at the next S/F
 // snapshot (or expires).  The driver never has to ask the same question again.
 let pendingOperationalFollowUp = null;
+function operationalFollowUpKey(intent, lap){
+  return String(intent||'unresolved_operational')+'|'+String(lastSessionNum??'')+'|'+String(lap);
+}
 function armOperationalFollowUp(intent, originalText=''){
   const lap=Number(lastTelemetry&&lastTelemetry.lap);
   if(!Number.isFinite(lap) || !iracingLive || selMode!=='race') return;
+  // ★Build 265 fix C-4：Final Lap/Checker/PLAYER_FINISHED/Debriefでは配信も予約もしない。
+  if(isSessionEndingLifecycle()){
+    diagnosticLog('OPERATIONAL_FOLLOWUP','suppressed reason=session_ending intent='+intent);
+    return;
+  }
+  const key=operationalFollowUpKey(intent, Math.trunc(lap));
+  // ★Build 265 fix C-2：intent+session+lapが同じ再質問では並列に増殖させない。
+  //   既存jobを上書きせず既存を維持し、silent suppressionをtraceに残す。
+  if(pendingOperationalFollowUp && pendingOperationalFollowUp.key===key){
+    diagnosticLog('OPERATIONAL_FOLLOWUP','suppressed reason=duplicate_intent key='+key);
+    return;
+  }
   pendingOperationalFollowUp={intent:intent||'unresolved_operational', armedLap:Math.trunc(lap),
-    originalText:String(originalText||'').trim(),expiresAt:Date.now()+180000,running:false};
-  diagnosticLog('OPERATIONAL_FOLLOWUP','armed intent='+intent+' lap='+Math.trunc(lap));
+    key, originalText:String(originalText||'').trim(),
+    expiresAt:Date.now()+180000,running:false};
+  diagnosticLog('OPERATIONAL_FOLLOWUP','armed intent='+intent+' lap='+Math.trunc(lap)+' key='+key);
+}
+// ★Build 265 fix A helper：現行の telemetry と activeStrategyPlaybook を橋渡しし、
+//   共有の fuel-plan-guard に決断を委ねる。
+function evaluateFuelPlanGuard(data){
+  const engine = window.PitwallFuelPlanGuard;
+  if(!engine) return { allow_p0_pit_now: true, override_reason: 'guard_module_missing' };
+  const lap = Number(lastTelemetry && lastTelemetry.lap);
+  const fuel = Number((lastTelemetry && lastTelemetry.fuel) ?? data.fuel);
+  const burn = Number((lastTelemetry && lastTelemetry.fuel_strategy && lastTelemetry.fuel_strategy.avg_fuel_per_lap)
+    ?? (data && data.avg_fuel_per_lap));
+  const cap = Number(data && data.effective_capacity_l);
+  const remainingCrossingsAfterStop = (lastTelemetry && lastTelemetry.strategy_options
+    && Number.isFinite(Number(lastTelemetry.strategy_options.plan_a?.remaining_crossings_after_stop)))
+      ? Number(lastTelemetry.strategy_options.plan_a.remaining_crossings_after_stop)
+      : undefined;
+  return engine.evaluatePlanFuelDecision({
+    fuelBand: data && data.fuel_band,
+    currentFuelL: fuel, avgFuelPerLapL: burn, currentLap: lap,
+    playbook: activeStrategyPlaybook, effectiveCapacityL: cap,
+    remainingCrossingsAfterStop,
+    safetyOverride: false,
+  });
 }
 async function deliverOperationalFollowUp(){
   const job=pendingOperationalFollowUp;
   if(!job || job.running || !lastTelemetry || selMode!=='race') return;
+  // ★Build 265 fix C-4 (Codex 差戻し反映): 配信も session-ending lifecycle で refuse する。
+  //   arm した後で final_lap / checker / PLAYER_FINISHED / debrief に遷移した場合
+  //   配信を止め、明示的な期限切れ trace を残す (invisible-loss 禁止)。
+  if(isSessionEndingLifecycle()){
+    diagnosticLog('OPERATIONAL_FOLLOWUP','expired reason=session_ending key='+job.key);
+    pendingOperationalFollowUp=null;
+    return;
+  }
   job.running=true;
   try{
     const authToken=localStorage.getItem('pw_auth_token');
@@ -1028,7 +1096,17 @@ async function deliverOperationalFollowUp(){
 function maybeRunOperationalFollowUp(data){
   const job=pendingOperationalFollowUp;
   if(!job) return;
-  if(Date.now()>job.expiresAt || !iracingLive || selMode!=='race'){ pendingOperationalFollowUp=null; return; }
+  if(Date.now()>job.expiresAt || !iracingLive || selMode!=='race'){
+    diagnosticLog('OPERATIONAL_FOLLOWUP','expired reason=timeout_or_offline key='+job.key);
+    pendingOperationalFollowUp=null; return;
+  }
+  // ★Build 265 fix C-4：session-ending lifecycle でも配信をゲート。
+  //   deliverOperationalFollowUp が同じ判定を持つが、こちらでも早期に切ることで
+  //   fetch を投げる前に確実に止める。
+  if(isSessionEndingLifecycle()){
+    diagnosticLog('OPERATIONAL_FOLLOWUP','expired reason=session_ending key='+job.key);
+    pendingOperationalFollowUp=null; return;
+  }
   const lap=Number(data&&data.lap);
   if(Number.isFinite(lap) && Math.trunc(lap)>job.armedLap) deliverOperationalFollowUp();
 }
@@ -1091,6 +1169,12 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   strategyPlaybookLiveUpdateKey='';
   strategyPlaybookRefreshKey='';
   strategyPlaybookDecisionKeys=new Set();
+  // ★Build 265：lifecycle latches must not carry over to a new session.
+  finalLapNoticeSeen=false;
+  checkerOutNoticeSeen=false;
+  pendingOperationalFollowUp=null;
+  // ★Build 265 Codex 差戻し 3：Every 2 laps のクリーン周カウンタもセッションを跨がない。
+  try{ resetLapReadoutCounter(); }catch(_){}
   if(evidenceDebrief && evidenceDebrief.active) dismissEvidenceDebrief();
   resetPracticeRunState();
 }
@@ -1522,6 +1606,7 @@ function showScreen(id){
   document.getElementById(id).classList.add('active');
   if(id==='screen-setup'){
     try{ updatePTTLabel(); updateVolLabel(); }catch(e){}
+    try{ hydrateLapReadoutSelect(); }catch(e){}
     const back=document.getElementById('btn-return-session');
     if(back) back.style.display=sessionActive?'block':'none';
   }
@@ -2324,6 +2409,11 @@ let speakFetchCtrl = null;    // 進行中のTTS取得（割り込み時にabort
 let draining = false;         // キュー処理中フラグ
 let speakWatchdog = null;     // 発話が完了イベントを返さず固まるのを防ぐ見張り番
 const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる（鮮度優先）
+// ★Build 265 fix E：割り込みで消えかけた P2 の personal_best / ラップ読み上げを
+//   バウンドされた一度きりの後送りへ回すため、現在再生中の item を保持する。
+let currentSpeakItem = null;
+const SPEAK_DEFER_KINDS = new Set(['personal_best','session_best','first_lap']);
+const SPEAK_DEFER_MAX = 1;
 
 // text を発話キューに積む。priority=true（ドライバーへの会話返答）は古いラジオを捨てて先頭へ。
 // ══════════════════════════════════════════════════════════════════════
@@ -2378,6 +2468,23 @@ function speak(text, opts){
   // 割り込みは一方向：**上位だけが再生中の下位を止められる**。会話はP0/P1を止めない。
   if(prio <= SPEAK_PRIO.P1_HAZARD && isSpeaking && currentSpeakPrio > prio){
     console.log('speak: interrupt P'+currentSpeakPrio+' for P'+prio+' ('+item.kind+')');
+    // ★Build 265 fix E：安全コールで消える PB / セッションベスト / first_lap を後送り。
+    //   1 回だけ再キューする（無限往復禁止）。それでも P0 の即時発話は保証される
+    //   （interrupted item は再キューされてもソートで P2 のまま＝安全より下）。
+    //   ★Codex 差戻し反映：cap 超過で discard する場合も必ず trace を残す
+    //   （invisible-loss 禁止）。
+    const displaced = currentSpeakItem;
+    if(displaced && SPEAK_DEFER_KINDS.has(displaced.kind)){
+      if((displaced._deferCount||0) < SPEAK_DEFER_MAX){
+        const deferred = {...displaced, ts:Date.now(),
+          dedupeKey:'deferred_'+(displaced.kind||'radio')+'_'+displaced.ts,
+          _deferCount:(displaced._deferCount||0)+1};
+        speakQueue.push(deferred);
+        diagnosticLog('SPEAK_DEFERRED', 'kind='+displaced.kind+' by=P'+prio+' incoming='+item.kind+' defer_count='+deferred._deferCount);
+      } else {
+        diagnosticLog('SPEAK_DEFER_DISCARDED', 'kind='+displaced.kind+' by=P'+prio+' incoming='+item.kind+' reason=defer_cap_reached defer_count='+(displaced._deferCount||0));
+      }
+    }
     stopCurrentAudio();
   }
   // 溢れたら**優先度の低い方から**捨てる（従来は先頭＝古い順で、安全も落ちえた）
@@ -2416,6 +2523,7 @@ function stopCurrentAudio(){
   isSpeaking=false;
   draining=false;              // ←これが無いとキューが二度と流れない
   currentSpeakPrio=9;
+  currentSpeakItem=null;       // 割り込み後は再生対象なし
   setTimeout(drainQueue, 0);   // 割り込んだ側を即座に再生へ
 }
 
@@ -2423,6 +2531,7 @@ function onUtteranceDone(){
   if(speakWatchdog){ clearTimeout(speakWatchdog); speakWatchdog=null; }
   isSpeaking=false;
   draining=false;
+  currentSpeakItem=null;
   if(speakQueue.length){ drainQueue(); }
   else if(jamesAutoMicEnabled && !jamesMuted){ setTimeout(startAutoMic,400); }
 }
@@ -2447,6 +2556,8 @@ async function drainQueue(){
   const _it = speakQueue.splice(nextIndex,1)[0];
   const raw = (typeof _it === 'string') ? _it : _it.text;
   currentSpeakPrio = (typeof _it === 'object' && typeof _it.prio === 'number') ? _it.prio : 9;
+  // ★Build 265 fix E：現在再生中の item を割り込みルートから再キューできるよう保持する。
+  currentSpeakItem = (typeof _it === 'object') ? _it : null;
   // ★2026-07-20 Codex再レビュー P1-3：'spoke'は取り出し直後でなく**実際に再生を始めた時**に送る。
   //   取り出し直後だと、割り込まれて再生されなかった分やTTS失敗分まで予算を消費していた。
   // ★2026-07-23 Codex再指摘 (P0/P1補完)：play() resolve後の遅延onerror等でreportSpokeが
@@ -3249,10 +3360,156 @@ function matthiasRadio(d){
     default: return null;
   }
 }
+// ★Build 265 fix — Codex 差戻し 3：Lap Readout の最終 4 択に揃え、bridge 側の
+//   クリーン周判定（lap_valid_clean / incidents_this_lap / pit_in / pit_out /
+//   off_track_this_lap）を実 dispatch のところで直接利用する。
+//     off              — 全部発話しない
+//     best_only        — personal_best / session_best のみ発話
+//     every_2_laps     — bridge が判定した「クリーン周」候補のうち 2 周ごとに 1 度発話
+//     every_clean_lap  — bridge が判定した「クリーン周」候補ごとに発話
+//   Best 更新は best_only 以外の 3 択でも常に通す（祝う瞬間を切り捨てない）。
+//   証拠が無い時は safe-side（telemetry_missing:true trace を残して allow）。
+const LAP_READOUT_KINDS = new Set([
+  'personal_best','session_best','first_lap','lap_time','lap_slow','lap_consistent',
+]);
+const BEST_ONLY_KINDS = new Set(['personal_best','session_best']);
+const LAP_READOUT_POLICIES = ['off','best_only','every_2_laps','every_clean_lap'];
+// Every 2 laps の内部カウンタ（セッション内で発話した「クリーン周」候補の累計）。
+// bridge が broadcast/telemetry_live に載せる clean_lap_candidate_count が
+// 権威。カウンタは fallback（証拠が無い時）のみ使う。
+let lapReadoutCleanCount = 0;
+let lapReadoutLastCleanCountFromBridge = null;
+function _hasCleanEvidenceFields(x){
+  return !!(x && (x.lap_valid_clean !== undefined
+    || x.incidents_this_lap !== undefined
+    || x.pit_in_this_lap !== undefined
+    || x.pit_out_this_lap !== undefined
+    || x.off_track_this_lap !== undefined
+    || x.clean_lap_candidate_count !== undefined));
+}
+function _extractCleanEvidence(data, telemetry){
+  // Prefer the radio payload (bridge stamps it directly), otherwise the
+  // telemetry_live snapshot.  Never mix silently.
+  const src = _hasCleanEvidenceFields(data) ? data
+            : (_hasCleanEvidenceFields(telemetry) ? telemetry : null);
+  if(!src) return {
+    lap_valid_clean: undefined, incidents_this_lap: undefined,
+    pit_in_this_lap: false, pit_out_this_lap: false, off_track_this_lap: false,
+    clean_lap_candidate_count: undefined,
+  };
+  return {
+    lap_valid_clean: (typeof src.lap_valid_clean === 'boolean') ? src.lap_valid_clean : undefined,
+    incidents_this_lap: (src.incidents_this_lap === undefined) ? undefined : Number(src.incidents_this_lap),
+    pit_in_this_lap: !!src.pit_in_this_lap,
+    pit_out_this_lap: !!src.pit_out_this_lap,
+    off_track_this_lap: !!src.off_track_this_lap,
+    clean_lap_candidate_count: (src.clean_lap_candidate_count === undefined)
+      ? undefined : Number(src.clean_lap_candidate_count),
+  };
+}
+function _judgeCleanFromEvidence(ev){
+  // Bridge が明示的に判定していれば従う。無ければ evidence の材料で組む。
+  if(typeof ev.lap_valid_clean === 'boolean') return ev.lap_valid_clean;
+  const inc = Number.isFinite(ev.incidents_this_lap) ? ev.incidents_this_lap : 0;
+  return inc === 0
+    && ev.pit_in_this_lap !== true
+    && ev.pit_out_this_lap !== true
+    && ev.off_track_this_lap !== true;
+}
+function lapReadoutPolicyAllows(trigger, data, telemetry){
+  if(!LAP_READOUT_KINDS.has(trigger)) return { allow:true, policy:'not_lap_readout' };
+  // 契約 unsigned は enforcement 対象外（旧挙動と一致・LLM 側の Minimum Mode に任せる）。
+  // 契約 signed のドライバーは UI で選んだ policy を dispatch で強制する。
+  let signed=false, policy='every_clean_lap';
+  try{
+    const raw = localStorage.getItem('pw_contract');
+    if(raw){
+      const c = JSON.parse(raw);
+      signed = !!(c && c.signed);
+      const value = c && c.pace && c.pace.readout;
+      // 旧値（every_lap / after_change / none 等）もここで一度受け取り、下の未知判定で
+      // trace に残してから safe-side へ倒す。silent-loss を作らない。
+      if(typeof value === 'string' && value) policy = value;
+    }
+  }catch(_){}
+  if(!signed) return { allow:true, policy:'contract_unsigned' };
+  // 未知の value（旧値がまだ localStorage に残っている場合）は
+  // safe-side として通す（invisible-loss 禁止・旧値を silently 解釈しない）。
+  if(!LAP_READOUT_POLICIES.includes(policy)){
+    return { allow:true, policy:'unknown_falls_back_to_every_clean_lap' };
+  }
+  if(policy === 'off')       return { allow:false, policy };
+  if(policy === 'best_only') return { allow: BEST_ONLY_KINDS.has(trigger), policy };
+  // ここから every_clean_lap / every_2_laps。両者とも bridge の証拠に依存する。
+  // Best 更新は祝う瞬間として常に通す（bridge 証拠に関わらず）。
+  if(BEST_ONLY_KINDS.has(trigger)) return { allow:true, policy };
+  const tele = telemetry || (typeof lastTelemetry !== 'undefined' ? lastTelemetry : null);
+  const hasBridgeEvidence = _hasCleanEvidenceFields(data) || _hasCleanEvidenceFields(tele);
+  if(!hasBridgeEvidence){
+    // 証拠が無い時は safe-side（無視せず旧挙動 = 通す）で trace に残す。
+    return { allow:true, policy, telemetry_missing:true };
+  }
+  const ev = _extractCleanEvidence(data, tele);
+  const isClean = _judgeCleanFromEvidence(ev);
+  if(policy === 'every_clean_lap'){
+    return { allow: isClean, policy };
+  }
+  if(policy === 'every_2_laps'){
+    if(!isClean) return { allow:false, policy };
+    // Bridge が clean_lap_candidate_count を渡してくれる時はそれを権威に使う。
+    // 無ければローカルカウンタを進めて 2 周ごとの判定に落とす。
+    let n;
+    if(Number.isFinite(ev.clean_lap_candidate_count) && ev.clean_lap_candidate_count > 0){
+      n = Math.trunc(ev.clean_lap_candidate_count);
+      lapReadoutLastCleanCountFromBridge = n;
+    } else {
+      lapReadoutCleanCount += 1;
+      n = lapReadoutCleanCount;
+    }
+    return { allow: (n % 2 === 0), policy, clean_lap_index: n };
+  }
+  return { allow:true, policy };
+}
+function resetLapReadoutCounter(){
+  lapReadoutCleanCount = 0;
+  lapReadoutLastCleanCountFromBridge = null;
+}
 // 英語キャラ（James/Luna/Hajime）はbridgeの英語messageをそのまま使う（既に自然な英語）
 function injectRadio(data){
   if(selMode!=='race') return;
   if(data.trigger==='pit_exit') return;  // limiter_off直後の重複コールは全キャラクターで廃止
+  // ★Build 265 fix — Lap Readout 契約 gate（UI保存 → 実 dispatch 接続）。
+  if(LAP_READOUT_KINDS.has(data.trigger)){
+    const readout = lapReadoutPolicyAllows(data.trigger, data, lastTelemetry);
+    if(!readout.allow){
+      diagnosticLog('LAP_READOUT_SUPPRESSED',
+        'trigger='+data.trigger+' policy='+readout.policy
+        + (Number.isFinite(Number(data.diff))?(' diff='+Number(data.diff)):'')
+        + (Number.isFinite(Number(lastTelemetry&&lastTelemetry.lap))?(' lap='+Math.trunc(Number(lastTelemetry.lap))):''));
+      return;
+    }
+  }
+  // ★Build 265 fix A：燃料P0は必ずプラン認識ガードを通す。
+  //   選択中プランの次ピット窓に到達可能で、planned service が完走できる場合、
+  //   総不足＝planned fuel to add に等しい＝「この周ボックス」は事実と矛盾する。
+  //   その時は速記トレースだけ残して発話は抑止する。真の緊急は override_reason を持つ。
+  if(data.trigger==='fuel_strategy_warning' && window.PitwallFuelPlanGuard){
+    const guardVerdict = evaluateFuelPlanGuard(data);
+    diagnosticLog('FUEL_PLAN_GUARD', JSON.stringify(guardVerdict));
+    if(guardVerdict.allow_p0_pit_now === false){
+      // 発話は捨てるが、事実だけは playbook 内部に反映する。
+      if(guardVerdict.driver_facing_update){
+        activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),fuelReflex:{
+          fuel:Number(data.fuel),
+          pitRequired:false,
+          plannedAddL:guardVerdict.driver_facing_update.planned_add_l,
+          nextPitLap:guardVerdict.driver_facing_update.next_pit_lap,
+          at:Date.now()
+        }};
+      }
+      return;
+    }
+  }
   let text, spokenText;
   if(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP'){
     text=oishiRadio(data,false)||data.message||'';
@@ -3285,6 +3542,9 @@ function injectRadio(data){
       sessionBestLapSeconds=candidate||null;
     }
   }
+  // ★Build 265 lifecycle latches — one-way per session, cleared at session-num reset.
+  if(data.trigger==='final_lap_notice') finalLapNoticeSeen = true;
+  if(data.trigger==='checker_out_notice') checkerOutNoticeSeen = true;
   addMsg('ai',text);
   pushMsg({role:'assistant',content:text});
   // ★2026-07-20 Codexレビュー P0-1：bridgeが決めた優先度をそのまま使う。
@@ -4253,7 +4513,11 @@ const DEFAULT_CONTRACT = {
   signed: false,           // 未契約＝最小限モード
   updated: null,
   start:    { follow: 'necessary', weak_start: false },
-  pace:     { readout: 'best_only', pace_drop: 'after_2' },
+  // ★Build 265 Codex 差戻し 3：Lap Readout 最終仕様の 4 択 = off / best_only /
+  //   every_2_laps / every_clean_lap。既定は every_clean_lap（安全側＝bridge が
+  //   クリーンと判定した周だけ発話。Best 更新は every_2_laps / every_clean_lap
+  //   でも常に通す）。
+  pace:     { readout: 'every_clean_lap', pace_drop: 'after_2' },
   battle:   { behind: 'within_1s', ahead: 'attack_time', side: true, stopped_car: true },
   strategy: { fuel: 'half_and_end', pit: 'on_request', tyre: 'on_request' },
   tone:     { frequency: 'normal', address: 'name', encouragement: false },
@@ -4278,6 +4542,36 @@ function updateContract(patch){
   }
   return saveContract(next);
 }
+// ★Build 265 Codex 差戻し 2：Settings の Lap Readout select と契約 pace.readout を接続。
+//   UI が変わったら pw_contract を更新し（signed=true を含める・enforcement を有効化）、
+//   trace に残す。読込側も呼び出せるよう public。
+function hydrateLapReadoutSelect(){
+  const sel = document.getElementById('lap-readout-select');
+  if(!sel) return;
+  const c = loadContract();
+  const value = (c && c.pace && c.pace.readout) || 'every_clean_lap';
+  const known = ['off','best_only','every_2_laps','every_clean_lap'];
+  sel.value = known.includes(value) ? value : 'every_clean_lap';
+}
+function onLapReadoutChanged(){
+  const sel = document.getElementById('lap-readout-select');
+  if(!sel) return;
+  const value = sel.value;
+  const known = ['off','best_only','every_2_laps','every_clean_lap'];
+  if(!known.includes(value)) return;
+  // Settings で明示的に選んだ = 契約 signed 相当。enforcement 対象へ昇格させる。
+  const cur = loadContract();
+  const next = {
+    ...cur,
+    signed: true,
+    pace: { ...(cur.pace || {}), readout: value },
+    updated: new Date().toISOString(),
+  };
+  saveContract(next);
+  // ポリシー切替時は Every 2 laps カウンタもリセット（前の設定の途中状態を持ち越さない）。
+  try{ resetLapReadoutCounter(); }catch(_){}
+  try{ diagnosticLog('LAP_READOUT_POLICY', 'set='+value+' signed=true'); }catch(_){}
+}
 function buildContractNote(isJ){
   // LLMへ渡すシステム指示テキスト。未契約時は"最小限モード"と明示。
   const c = loadContract();
@@ -4292,8 +4586,8 @@ function buildContractNote(isJ){
   const fol_en = {multi:'more calls',necessary:'only when needed',minimum:'minimal'}[c.start.follow] || c.start.follow;
   L.push(isJ ? `スタート：フォロー${fol}${c.start.weak_start?'／スタート苦手（2-3周我慢戦略）':''}`
              : `Start: follow=${fol_en}${c.start.weak_start?' / weak-starter (2-3 lap patience strategy)':''}`);
-  const ro = {every_lap:'毎周',after_change:'変化があった時',best_only:'ベスト更新時のみ',none:'不要'}[c.pace.readout] || c.pace.readout;
-  const ro_en = {every_lap:'every lap',after_change:'on change',best_only:'best only',none:'none'}[c.pace.readout] || c.pace.readout;
+  const ro = {off:'発話しない',best_only:'ベスト更新のみ',every_2_laps:'クリーン周2周ごと',every_clean_lap:'クリーンな周だけ'}[c.pace.readout] || c.pace.readout;
+  const ro_en = {off:'off',best_only:'best only',every_2_laps:'every 2 clean laps',every_clean_lap:'every clean lap'}[c.pace.readout] || c.pace.readout;
   L.push(isJ ? `ラップ読み上げ：${ro}／ペース落ち指摘：${c.pace.pace_drop}`
              : `Lap readout: ${ro_en} / pace-drop callouts: ${c.pace.pace_drop}`);
   L.push(isJ ? `バトル：後方${c.battle.behind}／前方${c.battle.ahead}／サイド警告=${c.battle.side?'ON':'OFF'}／停止車両警告=${c.battle.stopped_car?'ON':'OFF'}`
@@ -4841,18 +5135,58 @@ function announceStrategyPlaybook(playbook){
     source:playbook.source,memory_record_count:playbook.evidence?.memory_record_count||0,
     historical_sessions:playbook.evidence?.historical_session_count||0,selected_plan:playbook.selected_plan}));
 }
+// ★Build 265 fix B：非緊急の戦略発話を止める。
+//   3周有効ラップで初めて実測へ切り替わった瞬間のみ発話（＝プレイブックのプロビジョナル解除）。
+//   以降は "material change" (プラン切替 / 初回ピット周1周以上変化 / 停止回数変化 /
+//   セーブ目標が閾値越え) の時だけ発話。ローリング5周燃費の 3.64→3.65 では黙る。
+//   Final Lap / Checker / PLAYER_FINISHED / Debrief では P3 戦略発話を禁止する。
+const STRATEGY_MATERIAL_SAVE_STEP_PCT = 1.0;
+function playbookMaterialSignature(pb){
+  if(!pb) return null;
+  const a=pb.plans&&pb.plans.A||{}, b=pb.plans&&pb.plans.B||{}, c=pb.plans&&pb.plans.C||{};
+  return [pb.selected_plan||'A', a.first_pit_lap||0, a.stop_count||0,
+    b.first_pit_lap||0, b.stop_count||0, c.first_pit_lap||0, c.stop_count||0].join('|');
+}
+function playbookMaterialChanged(prev, next){
+  if(!prev) return true;   // becameAvailable / first snapshot
+  if(playbookMaterialSignature(prev)!==playbookMaterialSignature(next)) return true;
+  const priorFirstPit=Number(prev.plans?.A?.first_pit_lap||0);
+  const nextFirstPit=Number(next.plans?.A?.first_pit_lap||0);
+  if(Math.abs(nextFirstPit-priorFirstPit)>=1) return true;
+  const priorSave=Number(prev.plans?.C?.required_fuel_saving_pct||0);
+  const nextSave=Number(next.plans?.C?.required_fuel_saving_pct||0);
+  if(Math.abs(nextSave-priorSave)>=STRATEGY_MATERIAL_SAVE_STEP_PCT) return true;
+  return false;
+}
 function updateStrategyPlaybookFromLive(live){
   if(!window.PitwallStrategyPlaybook) return;
   const becameAvailable=!activeStrategyPlaybook?.available;
+  const priorPlaybook=activeStrategyPlaybook;
   if(becameAvailable) refreshStrategyPlaybook({announce:false});
   if(!activeStrategyPlaybook?.available) return;
   const updated=window.PitwallStrategyPlaybook.updateWithLive(activeStrategyPlaybook,live||{});
   if(updated===activeStrategyPlaybook) return;
   activeStrategyPlaybook=updated;
   activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),strategyPlaybook:updated};
-  const key=[lastSessionNum,updated.evidence?.live_fuel_samples,updated.evidence?.live_fuel_l_per_lap].join('|');
-  if(strategyPlaybookLiveUpdateKey===key) return;
-  strategyPlaybookLiveUpdateKey=key;
+
+  // ★Build 265 fix B-3：Final Lap／Checker／完走／デブリーフでは P3 戦略発話を禁止。
+  //   内部プレイブックの更新は残すが、無線には出さない。
+  if(isSessionEndingLifecycle()){
+    diagnosticLog('STRATEGY_PLAYBOOK_UPDATE_SILENT', JSON.stringify({reason:'session_ending',
+      selected_plan:updated.selected_plan,
+      live_fuel_samples:updated.evidence?.live_fuel_samples,
+      live_fuel_l_per_lap:updated.evidence?.live_fuel_l_per_lap}));
+    return;
+  }
+
+  // ★Build 265 fix B-1：プロビジョナル→ライブへ変わる最初の一度だけ発話。
+  //   priorPlaybook が historical_reference で、updated が live_clean_laps へ切り替わった時。
+  const promotedToLive = (!priorPlaybook || priorPlaybook.source!=='live_clean_laps')
+    && updated.source==='live_clean_laps';
+  // ★Build 265 fix B-2：以降は material change のみ発話。
+  const materialChange = playbookMaterialChanged(priorPlaybook, updated);
+
+  const isJP=isJapaneseEngineer();
   if(becameAvailable){
     announceStrategyPlaybook(updated);
     diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
@@ -4861,12 +5195,29 @@ function updateStrategyPlaybookFromLive(live){
       selected_plan:updated.selected_plan}));
     return;
   }
-  const isJP=isJapaneseEngineer();
+
+  if(!promotedToLive && !materialChange){
+    diagnosticLog('STRATEGY_PLAYBOOK_UPDATE_SILENT', JSON.stringify({
+      reason:'no_material_change',
+      selected_plan:updated.selected_plan,
+      live_fuel_samples:updated.evidence?.live_fuel_samples,
+      live_fuel_l_per_lap:updated.evidence?.live_fuel_l_per_lap,
+      first_pit_lap_a:updated.plans?.A?.first_pit_lap||null,
+      first_pit_lap_c:updated.plans?.C?.first_pit_lap||null,
+      required_fuel_saving_pct:updated.plans?.C?.required_fuel_saving_pct||null}));
+    return;
+  }
+
+  const materialKey=[lastSessionNum, playbookMaterialSignature(updated),
+    promotedToLive?'promoted':'material'].join('|');
+  if(strategyPlaybookLiveUpdateKey===materialKey) return;
+  strategyPlaybookLiveUpdateKey=materialKey;
+
   const msg=isJP
     ? `当日クリーン${updated.evidence.live_fuel_samples}周、燃費${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)}L/周でPlan A・B・Cを更新した。`
     : `Plans A, B, and C updated from ${updated.evidence.live_fuel_samples} clean laps at ${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)} litres per lap.`;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
-  speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_live_update',dedupeKey:key});
+  speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_live_update',dedupeKey:materialKey});
   diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
   diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'three_lap_live_revision',session_num:lastSessionNum,
     clean_laps:updated.evidence.live_fuel_samples,avg_fuel_l_per_lap:updated.evidence.live_fuel_l_per_lap,
