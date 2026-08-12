@@ -1,0 +1,110 @@
+# OMORAY PITWALL Development Rules
+
+## Mission
+
+Codex is the primary implementation agent for OMORAY PITWALL. The default goal is to take a short owner request through investigation, design, implementation, verification, Git bookkeeping, and handoff while minimizing work for Yuji.
+
+Yuji should normally only need to:
+
+1. describe the desired outcome;
+2. inspect the finished product or field-test candidate;
+3. approve it or request a correction.
+
+## Sources of truth
+
+Read in this order before starting work:
+
+1. `AGENTS.md` for durable rules;
+2. `HANDOFF.md` for the current product, engineering, field-test, and cost state;
+3. the relevant code, tests, Git history, and evidence named by `HANDOFF.md`.
+
+Chat history and old review documents are supporting evidence, not the current source of truth. If they conflict with current code, Git history, or `HANDOFF.md`, investigate and correct `HANDOFF.md` rather than asking Yuji to reconstruct the history.
+
+## Authority and owner gates
+
+Codex may autonomously investigate, plan, edit code and documentation, run local tests, debug, refactor within scope, update `HANDOFF.md`, and create focused local commits.
+
+Codex must not push, deploy, publish a release, send customer communications, change production prices, spend on advertising, mutate production data, or make an irreversible external change without Yuji's explicit approval.
+
+Do not mix unrelated existing changes into a commit. Preserve work already present in a dirty worktree and stage exact files only.
+
+## Delivery workflow
+
+For each meaningful task:
+
+1. Establish the current state from `HANDOFF.md`, Git, and the relevant code.
+2. Convert the owner's outcome into the smallest safe implementation slice.
+3. Implement the slice completely, including failure paths.
+4. Run the smallest relevant checks while iterating.
+5. Before committing, run related regression tests and inspect the complete diff.
+6. For a build or release candidate, run the full release gate.
+7. Update `HANDOFF.md` with current facts, tests actually run, remaining field verification, and the next action.
+8. Commit a coherent unit when safe. Report the outcome, not a transcript of routine work.
+
+Do not create a new planning, review-request, response, completion-evidence, or session-log Markdown file when the information belongs in Git history or `HANDOFF.md`. Add a durable document only when it will remain useful after the current task is complete.
+
+## Verification policy
+
+Use three verification levels:
+
+- **Iteration:** targeted tests for the code being changed.
+- **Commit:** related regression tests, syntax/static checks, and full diff review.
+- **Release candidate:** `./preflight.sh`, relevant integration/replay tests, build checks, and an explicit list of items that still require Windows or iRacing field verification.
+
+Automated tests must not call live Anthropic, Google STT, or Google TTS services unless a production integration check is explicitly authorized. Prefer deterministic fixtures, saved telemetry, mocks, and replay tests.
+
+Do not claim that automated verification proves:
+
+- live iRacing telemetry compatibility;
+- Windows installer, overlay, focus, FFB, microphone, STT/TTS, or audio latency behavior;
+- human judgment of timing, usefulness, trust, or naturalness.
+
+Those remain Yuji/tester field-verification responsibilities. Reduce field runs by reproducing every machine-testable condition before handing over a build.
+
+## Product truth and safety
+
+- Deterministic bridge/session state is authoritative for fuel, laps remaining, position, pit state, damage evidence, and strategy calculations. The LLM must not invent these values.
+- Unknown or insufficient evidence must fail closed and be stated as unavailable.
+- A stored value is not proof of an end-to-end feature. Verify the complete path from input through state, decision, radio/output, and persistence.
+- Distinguish implemented, machine-verified, field-verified, released, and commercially proven states.
+- Never describe test payments, testers, or technical funnel checks as paying-customer validation.
+
+## Cost and commercial synchronization
+
+Product work and PITWALL cost research share one current state through `HANDOFF.md`.
+
+For changes that may affect LLM calls, prompt/token size, STT/TTS usage, generated-but-unplayed speech, session duration, Railway load, billing, access control, or pricing economics:
+
+1. identify the expected cost effect before implementation;
+2. add or update measurement/reconciliation where practical;
+3. verify that tests make zero external paid API calls unless explicitly authorized;
+4. record the cost impact or remaining measurement gap in `HANDOFF.md`.
+
+Daily measured cost reports live outside this Git repository at `../OMORAY-PITWALL/reports/daily-cost/`. They are evidence inputs. Do not copy their full contents into the repository.
+
+## Independent review
+
+Claude Code is an exception reviewer, not a mandatory relay for every change. Request independent review only when it has clear value, especially for:
+
+- authentication, authorization, payments, privacy, or production cost controls;
+- significant architecture or data migration;
+- high-impact race truth/safety logic;
+- a difficult defect whose cause remains uncertain;
+- a major release where a second opinion materially reduces risk.
+
+The review package should normally be the commit/diff, objective, risk focus, and test results. Avoid long duplicate review documents. Codex validates findings and owns the resulting fix.
+
+## Handoff discipline
+
+Keep `HANDOFF.md` concise and current. Update it after a meaningful completed slice, before ending a session with unfinished work, and whenever the release/field/cost state changes materially.
+
+It must answer:
+
+- What is released now?
+- What is in the working tree now?
+- What is verified, and how?
+- What still requires field verification?
+- What is the next action?
+- What genuinely requires Yuji's decision?
+
+Replace stale status instead of appending an endless diary. Git is the historical record.
