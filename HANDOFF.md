@@ -132,6 +132,32 @@ Definitions:
 
 The base case is provisional, not a demand claim. With zero independently verified paid conversions and missing current funnel counts, a forecast above six paid customers by the end of September is not evidence-based yet.
 
+### Free-access policy decision — 2026-08-12
+
+Open-ended free access is discontinued as a default acquisition method. Evidence from Shouta, Jaff, Scott, and the recent tester-usage pattern suggests a plausible deferral problem: when access can be started at any time and costs the recipient nothing, there is no reason to begin now, complete onboarding, run a second session, or explain abandonment. This is a hypothesis about behavior, not yet a proven causal claim, but it is sufficient to remove the open-ended incentive.
+
+Future ordinary trials must have two independent server-side deadlines:
+
+- `must_activate_by`: the code becomes unusable if the recipient does not start by this date;
+- `expires_at`: once activated, access ends after the defined trial duration (normally five days).
+
+The intended lifecycle is:
+
+`issued → waiting_for_activation → active_trial → converted | expired | revoked`
+
+Requirements:
+
+- Display the activation deadline before the user accepts the trial.
+- Use server time; client clock changes and old builds must not bypass either deadline.
+- Verify both deadlines on every cost-bearing API request.
+- Record issued, first activation, first iRacing connection, second session, expiry, conversion, and post-expiry denial.
+- Do not silently extend a trial because the user delayed installation or onboarding.
+- Extensions are explicit, auditable owner/admin decisions with a reason.
+
+Complimentary influencer access is a separate commercial instrument, not an unlimited tester code. It must have a named purpose, start/end dates, expected deliverable or evaluation point, cost attribution, and an owner-approved renewal. No perpetual free access by default.
+
+The current `trial_5day` implementation starts five days at first verification but has no `must_activate_by`; this must be corrected before issuing the next ordinary free code.
+
 The fastest way to tighten the forecast is to recover the actual funnel for the latest 14 and 30 days:
 
 `lp_view → primary_cta_click → checkout_started → trial_started → first iRacing connection → second session → first_paid_invoice`
