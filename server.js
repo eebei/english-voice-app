@@ -965,11 +965,18 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         session_type: req.body.sessionType
           || (req.body.liveData && req.body.liveData.session_type),
       };
-      const _engineerRoute = mode === 'race'
-        ? engineerCard.route(_lastText, _engineerLive, _lang, {
-          race: true, recentText: _recentUserText,
-        })
-        : null;
+      // ★八木さん実走ログ 7-1 / 7-2（2026-08-11・Barcelona Practice）：
+      //   セットアップ相談は本来 Practice で起きる。race mode でしかカードを引かないと、
+      //   相談が決定論ハンドラに届かず温度読み上げで終わる。
+      //   影響範囲を広げないため、race 以外で採用するのは setup 相談だけに限定する。
+      const _cardRoute = engineerCard.route(_lastText, _engineerLive, _lang, {
+        race: mode === 'race', recentText: _recentUserText,
+      });
+      const _engineerRoute = (mode === 'race')
+        ? _cardRoute
+        : (_cardRoute && _cardRoute.card
+           && _cardRoute.card.topic === engineerCard.TOPIC.HANDLING_SETUP_ADVICE
+           ? _cardRoute : null);
       // Keep the established Phase-C path for the exact "pit now -> where"
       // contract: it carries calibration reasons, traffic and blend evidence.
       // Broader undercut/cycle language is handled by the new runtime card.
@@ -985,7 +992,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     } catch (e) {
       console.log('[strategy_guard] classify skipped: ' + e.message);   // 分類前の失敗のみ通常経路へ
     }
-    if (_directPitCommand) {
+    // 例外fallbackでもRace以外にピット無線を漏らさない。
+    if (mode === 'race' && _directPitCommand) {
       const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
       const _reply = buildDirectPitReply(_directPitCommand, req.body.liveData, _lang);
       if (_reply) {

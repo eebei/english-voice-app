@@ -67,8 +67,16 @@ ok(html.includes('まず状態確認と安全な継続可否を尋ねる'),
 ok(html.includes('全キャラクター共通安全契約')
   && html.includes('Shared safety contract for every engineer'),
   'safety and observability contract applies to all engineers');
-ok(server.includes("const _engineerRoute = mode === 'race'")
-  && server.includes("mode === 'race' && isFuelQuestion(_lastText)"),
+// ★八木さんログ 7-1 対応でカードは race 以外でも引くようになった。
+// ただし race 以外で採用してよいのはセットアップ相談だけで、燃料系ハンドラは
+// 従来どおり race 限定である。守るべき性質はそこなので、そこを直接検証する。
+ok(server.includes("mode === 'race' && isFuelQuestion(_lastText)")
+  && server.includes("const _engineerRoute = (mode === 'race')")
+  && server.includes("=== engineerCard.TOPIC.HANDLING_SETUP_ADVICE"),
   'live fuel handlers are disabled during debrief and cannot read garage 0.0L');
+ok(!/mode !== 'race'[\s\S]{0,200}isFuelQuestion/.test(server),
+  'no non-race path reaches the live fuel handler');
+ok(server.includes("if (mode === 'race' && _directPitCommand)"),
+  'direct pit command fallback is also race-only');
 
 if(!process.exitCode) console.log(`Fuel authority tests: ${passed}/${passed} passed`);

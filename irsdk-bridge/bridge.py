@@ -42,13 +42,14 @@ import final_lap
 import fuel_strategy as fuel_strategy_mod
 import strategy_options as strategy_options_mod
 import plan_fuel_authority as plan_fuel_authority_mod
+import session_race_state as session_race_state_mod
 import session_authority as session_authority_mod
 import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 265 (authoritative fuel plan, clean-lap radio controls)"
+BUILD_VERSION = "Build 266 (adaptive race intelligence, concise radio)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -514,6 +515,8 @@ PRIORITY = {
     # P3 戦略
     'first_lap': 3,
     'catchup': 3, 'defend': 3, 'battle': 3,
+    # ★Build 266 Phase E：前提無効化による再計算の一文。戦略速報と同格。
+    'strategy_recalculation': 3,
     # P4 情報
     'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
     'rolling_gap': 4, 'lap_time': 4,
@@ -564,6 +567,133 @@ def _consume_manual_resume_signal():
     v = _manual_resume_pending
     _manual_resume_pending = False
     return v
+
+
+# ★Build 266 Phase E：ドライバー申告（会話STT経由）の損傷報告キュー。
+#   会話は renderer/server.js 側で処理されるため、STT確定テキストのうち
+#   損傷関連と renderer が判断したものだけを WebSocket cmd 'driver_damage_report' で
+#   bridge へ転送する。poll_iracing() が毎フレーム消費し、session_race_state へ記録する。
+_pending_driver_damage_reports = []
+
+
+def _queue_driver_damage_report(text):
+    """WebSocket cmd 'driver_damage_report' 受信時に呼ぶ。"""
+    global _pending_driver_damage_reports
+    if isinstance(text, str) and text.strip():
+        _pending_driver_damage_reports.append(text.strip())
+
+
+def _consume_driver_damage_reports():
+    """poll_iracing() が毎フレーム呼ぶ。キューを空にして返す。"""
+    global _pending_driver_damage_reports
+    v = _pending_driver_damage_reports
+    _pending_driver_damage_reports = []
+    return v
+
+
+# ★Build 266 Codex差戻し#2：再計算は「記録」ではなく「実際の再計算」でなければならない。
+#
+#   トリガーが立つ場所（損傷検出・ドライバー申告・燃費/ペース乖離・クリーン3周）は、
+#   フレームの前半にある。一方、再計算に必要な権威データ（残り周回・容量・ピット
+#   リジョイン予測）はフレーム後半でしか揃わない。前半で再計算すると1周古い入力を
+#   使うことになる。
+#
+#   そこで「トリガー検出」と「再計算の実行」を分離する。前半では pending に積むだけ、
+#   後半で最新の権威データを入力して一度だけ実行する。同一フレームで複数トリガーが
+#   立っても順に処理され、取りこぼさない。
+# 前走車の乱流の外と言える最小ギャップ。これ未満は「クリーンエア」と呼ばない。
+PLAN_C_CLEAN_AIR_GAP_S = 2.0
+
+
+def _forecast_positions(forecast):
+    """Pull (likely, worst) out of a pit-exit forecast, or None when the
+    forecast cannot support a comparison.  Mirrors strategy_options'
+    own reading so both sides judge rejoin on identical evidence."""
+    if not isinstance(forecast, dict) or not forecast.get('available'):
+        return None
+    try:
+        likely = int(forecast['likely']['position'])
+        worst = int(forecast['worst']['position'])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if likely < 1 or worst < likely:
+        return None
+    return {'likely': likely, 'worst': worst}
+
+
+def queue_recalculation(pending, *, reason, dedupe_key, driver_message=None,
+                        broadcast_payload=None):
+    """Add one pending recalculation.  Same (reason, dedupe_key) is never
+    queued twice in one frame."""
+    key = (reason, dedupe_key)
+    if any((item.get('reason'), item.get('dedupe_key')) == key for item in pending):
+        return pending
+    return list(pending) + [{
+        'reason': reason,
+        'dedupe_key': dedupe_key,
+        'driver_message': driver_message,
+        'broadcast_payload': broadcast_payload,
+    }]
+
+
+def execute_recalculation(state, item, *, inputs, srs_mod, options_mod):
+    """Run ONE queued recalculation against live authoritative inputs.
+
+    Rebuilds Plan A/B/C from the measured numbers, re-selects, updates
+    `active_plan`, and records the trace.  Returns `(new_state, verdict)`.
+
+    `inputs` carries only values the bridge read from authoritative sources —
+    nothing here infers or guesses.  When the inputs are not sufficient to
+    rebuild plans, the previous plan is kept and the reason is recorded; the
+    old assumption is never silently reused as if it had been re-checked.
+    """
+    reason = item.get('reason')
+    verdict = options_mod.reevaluate_plans(
+        previous=state.get('active_plan_snapshot'),
+        snapshot_id='recalc:%s:%s:%s' % (
+            reason, inputs.get('session_num'), inputs.get('current_lap')),
+        trigger_reason=reason,
+        current_lap=inputs.get('current_lap') if isinstance(
+            inputs.get('current_lap'), int) else -1,
+        fuel_level_l=inputs.get('fuel_level_l'),
+        recent_fuel_per_lap_l=inputs.get('recent_fuel_per_lap_l'),
+        clean_laps_sampled=inputs.get('clean_laps_sampled'),
+        crossings_to_finish=inputs.get('crossings_to_finish'),
+        reserve_l=inputs.get('reserve_l', 0.5),
+        effective_capacity_l=inputs.get('effective_capacity_l'),
+        recent_pace_s=inputs.get('recent_pace_s'),
+        baseline_pace_s=state.get('baseline_pace_s'),
+        pit_now_forecast=inputs.get('pit_now_forecast'),
+        pit_next_lap_forecast=inputs.get('pit_next_lap_forecast'),
+        rival_pitted_first=inputs.get('rival_pitted_first'),
+        clean_air=inputs.get('clean_air'),
+        rejoin_not_worse=inputs.get('rejoin_not_worse'),
+        fuel_save_recent_l_per_lap=inputs.get('fuel_save_recent_l_per_lap'),
+        relative_pace_advantage_s=inputs.get('relative_pace_advantage_s'))
+    if verdict.get('available') and isinstance(verdict.get('options'), dict):
+        state = srs_mod.register_active_plan(
+            state, plan_id=verdict.get('selected_plan'),
+            plan_snapshot=verdict['options'],
+            snapshot_id=(verdict['options'] or {}).get('snapshot_id'))
+    state = srs_mod.recalculate_strategy(
+        state, reason=reason,
+        baseline_fuel_l_per_lap=(
+            inputs.get('baseline_fuel_override')
+            if inputs.get('baseline_fuel_override') is not None
+            else state.get('baseline_fuel_l_per_lap')),
+        recent_fuel_l_per_lap=inputs.get('recent_fuel_per_lap_l'),
+        baseline_pace_s=(
+            inputs.get('baseline_pace_override')
+            if inputs.get('baseline_pace_override') is not None
+            else state.get('baseline_pace_s')),
+        recent_pace_s=inputs.get('recent_pace_s'),
+        previous_plan=verdict.get('previous_plan'),
+        selected_plan=verdict.get('selected_plan'),
+        driver_message=item.get('driver_message'),
+        session_time_s=inputs.get('session_time_s'),
+        lap=inputs.get('current_lap'),
+        dedupe_key=item.get('dedupe_key'))
+    return state, verdict
 
 
 # ★2026-07-26 Unit E0 v2 (Codex P0-4)：allow-list ゲート（deny-by-default）。
@@ -708,6 +838,19 @@ def _session_scoped_reset_values():
         '_lap_had_pit_road_prev': False,
         '_lap_had_off_track': False,
         '_clean_lap_candidate_count': 0,
+        # ★Build 266 Phase E：Session Race Stateもセッションを跨がない。
+        '_session_race_state': session_race_state_mod.init_state(),
+        '_pit_repair_opt_observed_max': None,
+        '_pit_damage_s_max': None,
+        '_pit_service_tracker': session_race_state_mod.init_pit_service_tracker(),
+        '_pending_recalculations': [],
+        '_pending_recalc_baselines': {'fuel': None, 'pace': None},
+        '_onpit_dwell_s': 0.0,
+        '_limiter_cycle_armed': False,
+        'clean_fuel_per_lap_hist': [],
+        'clean_lap_time_hist': [],
+        '_fuel_dev_episode': 0,
+        '_pace_dev_episode': 0,
     }
 
 
@@ -2103,8 +2246,27 @@ def poll_iracing():
     corner_sides_announced = set()  # 今のコーナーで既に知らせた側（'left'/'right'/'both'）。コーナー(ゾーン)が変わったらリセット
     straight_sbs_warned = 0.0   # ストレートでの3台以上並走、最終通知時刻（クールダウン用）
     side_zone_active = False    # ⑤ コーナー or 強ブレーキ中の「サイドカー通知ゾーン」に今いるか（立ち上がりで再武装）
+    # ★Build 266 Codex 差戻し⑥（旧 Build 265 未接続修正②）：ゾーン単位の dedup だけだと、
+    #   同じ相手と長い接近戦（複数コーナー・ブレーキゾーンをまたぐ）で side_by_side が
+    #   ゾーンが変わるたびに再発火し連呼になる。相手 car_idx × side ごとのクールダウンを追加する。
+    #   安全直結(P0)自体は維持しつつ、"同じ相手・同じ側"の短時間再武装だけを抑える。
+    side_by_side_last_fired = {}   # {(car_idx, side): last_fired_session_time}
+    SIDE_BY_SIDE_COOLDOWN_S = 6.0
     prev_limiter_on = False     # ⑥ 直前ループでピットリミッターが作動中だったか（ON→OFF検知用）
     limiter_off_announced_stop = False  # ⑥ 今回のピットストップで既に「リミッターオフ」を鳴らしたか（二重発火防止）
+    # ★八木さん実走ログ 7-4（2026-08-11 18:46:51 / 18:47:00）：同一ピットアウトで
+    #   「リミッターオフ」が2回鳴った。発火条件が EngineWarnings のリミッタービット
+    #   ON→OFF と、ピット退出フォールバックの2経路あり、OnPitRoad が一瞬 True へ
+    #   ちらつくと再武装されて二度目が通ってしまう。
+    #   指示書のとおり OnPitRoad の true→false を **一意の** 発火条件にする。
+    #   再武装は「確定したピット訪問」＝ピットロード上に一定時間いたことを確認して
+    #   から行う。1フレームのちらつきでは再武装しない。
+    _onpit_dwell_s = 0.0
+    _limiter_cycle_armed = False
+    #   しきい値は「ちらつき」と「本物のピット訪問」を分ける値にする。
+    #   最短のドライブスルーでもピットロード上に数秒はいるので 3 秒で足りる。
+    #   1 秒では、実走で観測された1フレームのちらつきを弾けなかった（再生で確認）。
+    LIMITER_OFF_MIN_PIT_DWELL_S = 3.0
     # セッションサマリー蓄積
     session_laps = []           # [{lap, time, sectors, class_pos, incident_delta}]
     session_incidents_total = 0
@@ -2159,6 +2321,12 @@ def poll_iracing():
     fuel_at_lap_start = None    # 直近ラップ開始時点の燃料残量（ラップ消費量算出用）
     fuel_per_lap_hist = []      # 直近ラップ毎の消費量（外れ値を均すため直近5周の平均を使う）
     pit_this_lap = False        # この周でピットを通ったか（アウト/インラップは燃料学習から除外）
+    # ★Codex限定レビュー P1(#3b)：baseline/median は「有効周」だけから作る。
+    #   lap_time_hist / fuel_per_lap_hist は残り周回推定など既存の消費者が多く、
+    #   絞り込むと別機能へ波及するため、Phase E 専用のクリーン周履歴を別に持つ。
+    #   両者は同一の _lap_valid_clean で、同じ周に、同時に積む。
+    clean_fuel_per_lap_hist = []   # 有効周のみの燃費履歴（Phase E baseline/median 用）
+    clean_lap_time_hist = []       # 有効周のみのラップタイム履歴（同上）
     lap_time_hist = []          # 直近ラップタイム履歴（時間制セッションの残り周回推定に使う・瞬間値の異常値対策）
     fuel_strategy = None        # 直近算出した燃料戦略(dict)。telemetry_liveで毎回同送する
     session_check_counter = 0
@@ -2172,6 +2340,23 @@ def poll_iracing():
     track_length_m = None      # コース長(m)。ピット距離の換算用
     lap_delta_hist = []        # 直近ラップのsession_best差分履歴（AIペース判断用の生データ、直近8周）
     debug_counter = 0
+    # ★Build 266 Phase E：Session Race State（bridge権威）。セッションを跨がない。
+    _session_race_state = session_race_state_mod.init_state()
+    # ★Build 266 Codex差戻し#1：ピット"進入時"の一点スナップショットではなく、ピット中も
+    #   更新し続ける最大観測値を持つ。ボックス付近／ボックス内で接触した場合、
+    #   PitOptRepairLeft は OnPitRoad が True になった"後"に初めて非ゼロになるため、
+    #   進入時だけを見ていると任意修理の存在そのものを取り逃がす（Monza 20実走の形）。
+    _pit_service_tracker = session_race_state_mod.init_pit_service_tracker()  # 実施/取消の判定用
+    # ★Codex差戻し#2：トリガー検出とPlan再計算の実行を分離するための待ち行列。
+    #   フレーム前半で積み、権威データが揃うフレーム後半で一度だけ実行する。
+    _pending_recalculations = []
+    _pending_recalc_baselines = {'fuel': None, 'pace': None}
+    _pit_repair_opt_observed_max = None   # 今回のピット訪問中に見えた任意修理秒の最大値
+    _pit_damage_s_max = None              # 同・damage_s(義務+任意)の最大値（実消費秒の算出用）
+    # ★Build 266 Codex差戻し#3：燃費／ペース乖離の自動監視。episodeは「一度許容内へ戻ってから
+    #   再び乖離した」場合に再武装するためのカウンタ（同一乖離での毎周再発話を防ぐ）。
+    _fuel_dev_episode = 0
+    _pace_dev_episode = 0
     # ★2026-07-24 tow_active 削除：towing機能廃止（Yuji方針・ドライバー自発会話に任せる）
     # ★2026-07-24 post_contact_ok：crash_check発火から5秒間の走行継続監視
     #   接触後、5秒間 Speed>30km/h(=8.33m/s) を維持できたら「アライメント影響ある？」の第二声。
@@ -2181,6 +2366,9 @@ def poll_iracing():
     prev_damage_s = 0.0        # 前回計測のdamage_s（義務+任意修理秒）。増えたら1回だけダメージ報告
     prev_incidents = None
     incident_times = []
+    # ★Build 266 Phase E：damage_observation の incident_delta 計算専用。prev_incidents は
+    #   同フレーム内の上のincidentブロックで先に更新されてしまうため、独立して追跡する。
+    _prev_incidents_for_damage = None
     # ★Build 265 Codex 差戻し 3：クリーン周判定を bridge 側で行い、broadcast/telemetry
     #   に証拠を乗せる。renderer の Lap Readout ポリシー (`Every clean lap` /
     #   `Every 2 laps`) はこの証拠だけで判定するため、テレメトリの他フィールドから
@@ -2190,6 +2378,12 @@ def poll_iracing():
     _lap_had_pit_road_prev = False # 前回の周が pit road を通っていた (pit-out lap)
     _lap_had_off_track = False     # この周中に PlayerTrackSurface が off-track だった
     _clean_lap_candidate_count = 0 # セッション内で発行した「クリーン周」候補累計
+    # ★Build 266 Codex 差戻し⑧：PlayerTrackSurface=0(OffTrack) の単発フレームだけで
+    #   その周を永久に "not clean" 扱いにしない。実走ログでの妥当性検証が済むまでは、
+    #   連続2フレーム以上 off-track を観測した時だけ確定させる(1フレームのノイズ耐性)。
+    #   NotInWorld(-1) はデータ欠損として streak に影響させない。
+    _off_track_sample_streak = 0
+    OFF_TRACK_CONFIRM_SAMPLES = 2
     prev_driver_state = None
     leader_lap_time_hist = []       # 1位の直近ラップタイム履歴（タイムサーティン耐久の終了予測用）
     leader_last_laptime_seen = None # 同じラップタイム値を重複して履歴に積まないための直前値
@@ -2200,7 +2394,8 @@ def poll_iracing():
     best_sectors = []
     prev = {
         'pos': None, 'class_pos': None, 'fuel': None, 'lap': None,
-        'lapsTot': None, 'onPit': None, 'tempLap': None
+        'lapsTot': None, 'onPit': None, 'tempLap': None,
+        '_sess_t': None,   # ピット滞在時間の積算用（SessionTime の前フレーム値）
     }
 
     while True:
@@ -2427,6 +2622,19 @@ def poll_iracing():
                         _lap_had_pit_road_prev = _sig_reset['_lap_had_pit_road_prev']
                         _lap_had_off_track = _sig_reset['_lap_had_off_track']
                         _clean_lap_candidate_count = _sig_reset['_clean_lap_candidate_count']
+                        # ★Build 266 Phase E：Session Race State も sig 変更で新規化。
+                        _session_race_state = _sig_reset['_session_race_state']
+                        _pit_repair_opt_observed_max = _sig_reset['_pit_repair_opt_observed_max']
+                        _pit_damage_s_max = _sig_reset['_pit_damage_s_max']
+                        _pit_service_tracker = _sig_reset['_pit_service_tracker']
+                        _pending_recalculations = _sig_reset['_pending_recalculations']
+                        _pending_recalc_baselines = _sig_reset['_pending_recalc_baselines']
+                        _onpit_dwell_s = _sig_reset['_onpit_dwell_s']
+                        _limiter_cycle_armed = _sig_reset['_limiter_cycle_armed']
+                        clean_fuel_per_lap_hist = _sig_reset['clean_fuel_per_lap_hist']
+                        clean_lap_time_hist = _sig_reset['clean_lap_time_hist']
+                        _fuel_dev_episode = _sig_reset['_fuel_dev_episode']
+                        _pace_dev_episode = _sig_reset['_pace_dev_episode']
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
                         last_session_num = _authority_session_num
@@ -2483,9 +2691,16 @@ def poll_iracing():
         #   3=on_track（それ以外＝off track / 芝 / グラベル）。
         if onPit:
             _lap_had_pit_road = True
-        if (isinstance(player_track_surface, int)
-                and player_track_surface not in (-1, 1, 2, 3)):
-            _lap_had_off_track = True
+        # ★Build 266 Codex 差戻し⑧：単発サンプルで確定させない。実走ログでの妥当性
+        #   検証が済むまでは連続 OFF_TRACK_CONFIRM_SAMPLES フレームの確認を要求する。
+        if isinstance(player_track_surface, int) and player_track_surface == -1:
+            pass  # NotInWorld＝データ欠損。streak を維持も破棄もしない。
+        elif isinstance(player_track_surface, int) and player_track_surface not in (1, 2, 3):
+            _off_track_sample_streak += 1
+            if _off_track_sample_streak >= OFF_TRACK_CONFIRM_SAMPLES:
+                _lap_had_off_track = True
+        elif isinstance(player_track_surface, int):
+            _off_track_sample_streak = 0
         if onPit:
             pit_this_lap = True   # この周でピットを通った→燃料学習から除外（アウト/インラップ）
         cur_ss      = reader.read_int('SessionState') or 0
@@ -2595,6 +2810,19 @@ def poll_iracing():
             _lap_had_pit_road_prev = _reset['_lap_had_pit_road_prev']
             _lap_had_off_track = _reset['_lap_had_off_track']
             _clean_lap_candidate_count = _reset['_clean_lap_candidate_count']
+            # ★Build 266 Phase E：Session Race State も SessionNum 変更で新規化。
+            _session_race_state = _reset['_session_race_state']
+            _pit_repair_opt_observed_max = _reset['_pit_repair_opt_observed_max']
+            _pit_damage_s_max = _reset['_pit_damage_s_max']
+            _pit_service_tracker = _reset['_pit_service_tracker']
+            _pending_recalculations = _reset['_pending_recalculations']
+            _pending_recalc_baselines = _reset['_pending_recalc_baselines']
+            _onpit_dwell_s = _reset['_onpit_dwell_s']
+            _limiter_cycle_armed = _reset['_limiter_cycle_armed']
+            clean_fuel_per_lap_hist = _reset['clean_fuel_per_lap_hist']
+            clean_lap_time_hist = _reset['clean_lap_time_hist']
+            _fuel_dev_episode = _reset['_fuel_dev_episode']
+            _pace_dev_episode = _reset['_pace_dev_episode']
             if _transition_summary is not None:
                 _pending_non_race_summary = _transition_summary
                 log("Non-race summary pending at SessionNum transition: %d laps"
@@ -2967,8 +3195,15 @@ def poll_iracing():
             _now3 = time.time()
             if in_side_zone and car_left_right is not None and car_left_right >= 2:
                 _side = {2: 'left', 5: 'left', 3: 'right', 6: 'right', 4: 'both'}.get(car_left_right)
-                if _side and _side not in corner_sides_announced:
+                # ★Build 266 Codex 差戻し⑥：CarLeftRight はスカラー値で相手の car_idx を
+                #   持たない。同じ相手との長い接近戦を近似するため side をキーとした
+                #   クールダウンを追加する(ゾーンをまたいでも短時間の再武装を防ぐ)。
+                #   安全直結(P0)自体は落とさない＝クールダウン内でも新しい side（both等）へは即時反応。
+                _last_fired = side_by_side_last_fired.get(_side, 0.0)
+                _cooldown_elapsed = (_now3 - _last_fired) >= SIDE_BY_SIDE_COOLDOWN_S
+                if _side and _side not in corner_sides_announced and _cooldown_elapsed:
                     corner_sides_announced.add(_side)
+                    side_by_side_last_fired[_side] = _now3
                     if True:  # サイドコールは安全直結＝短めのクールダウン。側ごとにdedup済み。
                         _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
                         broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side, 'message': _side_msg})
@@ -3185,6 +3420,25 @@ def poll_iracing():
         # 直近5周の平均消費量から、残り周回を走り切れるかを算出。数値は捏造せずここで計算した
         # 実測値のみをClaudeへ渡す(prompts.jsのliveNote経由)。
         if lap_time_changed and onTrack:
+            # ★Codex限定レビュー P1(#3b)：有効周（クリーン周）の判定を、燃費履歴を積む
+            #   前に確定させる。以前はこの判定が下の別ブロック（ラップタイム読み上げ側）
+            #   にしか無く、Phase E の baseline / median は「20〜600秒」という緩い条件の
+            #   履歴を使っていた。ピット周・アウトラップ・接触周・off-track周が混ざるため、
+            #   要件の「直近3〜5有効周」を満たしていなかった。
+            #   ここで確定した値を、下のラップタイム読み上げブロックも共有する。
+            if _lap_start_incidents is None:
+                _incidents_this_lap = 0
+            elif isinstance(incidents, int):
+                _incidents_this_lap = max(0, incidents - _lap_start_incidents)
+            else:
+                _incidents_this_lap = 0
+            _lap_valid_clean = bool(
+                _incidents_this_lap == 0
+                and not _lap_had_pit_road
+                and not _lap_had_pit_road_prev  # out lap
+                and not _lap_had_off_track)
+
+            _fuel_used_this_lap = None
             if fuel is not None:
                 if fuel_at_lap_start is not None:
                     used = fuel_at_lap_start - fuel
@@ -3194,8 +3448,46 @@ def poll_iracing():
                         fuel_per_lap_hist.append(used)
                         if len(fuel_per_lap_hist) > 5:
                             fuel_per_lap_hist.pop(0)
+                    if 0 < used < 20:
+                        _fuel_used_this_lap = used
                 fuel_at_lap_start = fuel
             pit_this_lap = False  # 次の周の判定用にリセット
+
+            # ★Codex限定レビュー P1(#3b)：baseline と median は同一の有効周集合から作る。
+            #   燃費とラップタイムの両方が揃った有効周だけを、同じ周に、同時に積む。
+            #   片方だけ積むと2つの履歴が別の周を指し、「同一集合」ではなくなる。
+            if (_lap_valid_clean and _fuel_used_this_lap is not None
+                    and lapTime and 20 < lapTime < 600):
+                clean_fuel_per_lap_hist.append(_fuel_used_this_lap)
+                clean_lap_time_hist.append(lapTime)
+                if len(clean_fuel_per_lap_hist) > 5:
+                    clean_fuel_per_lap_hist.pop(0)
+                if len(clean_lap_time_hist) > 5:
+                    clean_lap_time_hist.pop(0)
+                log('CLEAN LAP SAMPLE lap=%s fuel_used=%.3f lap_time=%.3f n=%d'
+                    % (lap, _fuel_used_this_lap, lapTime, len(clean_lap_time_hist)))
+
+            # ★Build 266 Phase E トリガー①：当日クリーン3周が初めて揃った瞬間、
+            #   baseline_fuel_l_per_lap / baseline_pace_s を確定し一度だけ recalculate する。
+            # ★Codex限定レビュー P1(#3a)：旧実装は `len(fuel_per_lap_hist) == 3` で発火し、
+            #   その時点ではラップタイム履歴がまだ2本しか無いため baseline_pace_s が None の
+            #   まま確定してしまい、以後 `== 3` を二度と満たさないので永久に None で固定され、
+            #   pace_deviation が一度も発火できなかった。両方が3本揃ってから、同じ集合で
+            #   一度だけ確定する（`>=` + should_recalculate の dedupe で一度だけになる）。
+            if (len(clean_fuel_per_lap_hist) >= 3 and len(clean_lap_time_hist) >= 3
+                    and session_race_state_mod.should_recalculate(
+                        _session_race_state, 'clean_3_laps_established')):
+                _recalc_baseline_fuel = session_race_state_mod.recent_median(
+                    clean_fuel_per_lap_hist)
+                _recalc_baseline_pace = session_race_state_mod.recent_median(
+                    clean_lap_time_hist)
+                # ★Codex差戻し#2：ここでは基準値だけ確定し、Plan再計算はフレーム後半で
+                #   最新の権威データ（残り周回・容量・リジョイン予測）を使って実行する。
+                _pending_recalc_baselines = {
+                    'fuel': _recalc_baseline_fuel, 'pace': _recalc_baseline_pace}
+                _pending_recalculations = queue_recalculation(
+                    _pending_recalculations,
+                    reason='clean_3_laps_established', dedupe_key=None)
 
             # ⚠️2026/7/5判明バグ：ラップ切り替わり直後の瞬間的なlapTime単発値をそのまま使うと、
             # 稀に異常に小さい値を拾って「20分で78周」のような物理的にありえない残り周回数を
@@ -3205,6 +3497,46 @@ def poll_iracing():
                 lap_time_hist.append(lapTime)
                 if len(lap_time_hist) > 5:
                     lap_time_hist.pop(0)
+
+            # ★Build 266 Codex差戻し#3：燃費／ペース乖離の自動監視。
+            #   純関数を用意しただけでは配線とは呼べない、という差戻しへの対応。
+            #   周回が確定するたびに「直近3〜5有効周の中央値」と基準値を比較し、
+            #   しきい値を跨いだ時だけ recalculate を1回引く。
+            #   ・毎フレームではなく周回確定時にだけ評価する（brief「毎frame再計算しない」）
+            #   ・同一乖離での毎周再発話を防ぐため、dedupe_key に episode と step を使う
+            #     step  = しきい値の何倍離れているか（悪化したら再発火する）
+            #     episode = 一度許容内へ戻ってから再び乖離した回数（再武装）
+            #   ・基準値が未確定（クリーン3周前）の間は評価しない
+            for _dev_kind, _dev_baseline, _dev_recent, _dev_threshold in (
+                ('fuel_deviation',
+                 _session_race_state.get('baseline_fuel_l_per_lap'),
+                 session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+                 session_race_state_mod.FUEL_DEVIATION_L_PER_LAP),
+                ('pace_deviation',
+                 _session_race_state.get('baseline_pace_s'),
+                 session_race_state_mod.recent_median(clean_lap_time_hist),
+                 session_race_state_mod.PACE_DEVIATION_S),
+            ):
+                _dev_episode = (_fuel_dev_episode if _dev_kind == 'fuel_deviation'
+                                else _pace_dev_episode)
+                # 判定そのものは session_race_state 側の純関数に持たせる。
+                # bridge にインラインで書くと「実配線だが挙動を試験できない」形になり、
+                # 静的な文字列一致でしか裏が取れなくなる（Codex差戻し#3/#6の趣旨）。
+                _dev_fire, _dev_key, _dev_next_episode = (
+                    session_race_state_mod.next_deviation_trigger(
+                        _session_race_state, reason=_dev_kind,
+                        baseline=_dev_baseline, recent=_dev_recent,
+                        threshold=_dev_threshold, episode=_dev_episode))
+                if _dev_kind == 'fuel_deviation':
+                    _fuel_dev_episode = _dev_next_episode
+                else:
+                    _pace_dev_episode = _dev_next_episode
+                if not _dev_fire:
+                    continue
+                _session_race_state = session_race_state_mod.invalidate_assumptions(
+                    _session_race_state, _dev_kind)
+                _pending_recalculations = queue_recalculation(
+                    _pending_recalculations, reason=_dev_kind, dedupe_key=_dev_key)
 
             # ── Final Lap / Last 5-3-1（燃料履歴とは独立）────────────────
             # 時間制マルチクラスでは総合首位のチェッカー時刻と、自車が次に
@@ -3290,6 +3622,26 @@ def poll_iracing():
                 final_lap_notice_sent = (
                     final_lap.commit_milestone_after_dispatch(
                         final_lap_notice_sent, _crossed, _final_result))
+                # ★Build 266 Phase E トリガー⑦：ファイナルラップ確定で一度だけ再計算し、
+                #   以降の Plan 選択・給油コールを閉じる（session_race_state.push_allowed とは
+                #   別の"確定後は新規戦略を出さない"ゲート。実際のブロックは既存の
+                #   race_lifecycle / final-lap 抑止経路が担う。ここは記録のみ）。
+                if (_milestone == 1
+                        and session_race_state_mod.should_recalculate(
+                            _session_race_state, 'final_lap_or_checker')):
+                    _session_race_state = session_race_state_mod.recalculate_strategy(
+                        _session_race_state, reason='final_lap_or_checker',
+                        baseline_fuel_l_per_lap=_session_race_state.get('baseline_fuel_l_per_lap'),
+                        recent_fuel_l_per_lap=_session_race_state.get('recent_fuel_l_per_lap'),
+                        baseline_pace_s=_session_race_state.get('baseline_pace_s'),
+                        recent_pace_s=_session_race_state.get('recent_pace_s'),
+                        previous_plan=_session_race_state.get('active_plan'),
+                        selected_plan=_session_race_state.get('active_plan'),
+                        driver_message=None,
+                        session_time_s=reader.read_double('SessionTime'),
+                        lap=int(lap) if isinstance(lap, (int, float)) else None)
+                    log(session_race_state_mod.format_recalculation_trace(
+                        _session_race_state['last_recalculation']).replace('\n', ' | '))
             if _is_time_race:
                 log("FINAL LAP DIAG lap=%s leaderIdx=%s driverDist=%s leaderDist=%s "
                     "driverAvg=%s leaderAvg=%s timeRem=%s crossings=%s reason=%s confidence=%s"
@@ -3409,6 +3761,12 @@ def poll_iracing():
                         effective_capacity_l=session_effective_fuel_capacity_l)
                     if _authority_candidate.get('available'):
                         _plan_options_for_authority = _authority_candidate
+                # ★Build 266 Phase E フィックス③：それでも None なら、Session Race State に
+                #   登録済みのブリーフィングPlanへ最終フォールバックする。「Planが存在するのに
+                #   no_active_plan へ落ちる」ことを禁止する、という Codex 指示への直接対応。
+                if (_plan_options_for_authority is None
+                        and isinstance(_session_race_state.get('active_plan_snapshot'), dict)):
+                    _plan_options_for_authority = _session_race_state['active_plan_snapshot']
                 # ★Build 265 fix A（Codex 差戻し反映・bridge-authoritative contract）:
                 #   plan-aware ゲートを director/broadcast より手前に置く。
                 #   suppression 時は broadcast() を呼ばない = director 通過も
@@ -3430,8 +3788,13 @@ def poll_iracing():
                 _plan_authority_permits = (
                     _plan_authority_verdict is None
                     or _plan_authority_verdict.get('allow_p0_pit_now') is True)
+                # ★Build 266 Phase E フィックス⑤（旧 Build 265 未接続修正）：ファイナルラップ／
+                #   チェッカー確定後は「この周でボックス」「給油設定」の新規発話を一切禁止する。
+                #   結果の保存(fuel_strategy自体の計算)は続けてよい、発話だけ止める。
+                _strategy_speech_blocked = session_race_state_mod.strategy_speech_blocked(
+                    _session_race_state)
                 if (_fuel_eval.get('should_warn') and not onPit
-                        and _plan_authority_permits):
+                        and _plan_authority_permits and not _strategy_speech_blocked):
                     _fuel_band = _fuel_eval['band']
                     _fuel_margin = _fuel_eval['margin_l']
                     _warning_forecast = (
@@ -3512,14 +3875,23 @@ def poll_iracing():
                       and not onPit):
                     # 給油後に「不足」が解消した事実を一度だけ返す。
                     # 計算成功を黙ったままにせず、通常の戦略情報(P3)として安全窓で発話する。
+                    # ★Build 266 Phase E：損傷証拠があるのに未だ再計算が完了していない間は
+                    #   「ペースを上げていい」を出さない（燃料は安全でも push 可否は別の話）。
+                    _push_ok = session_race_state_mod.push_allowed(_session_race_state)
+                    _safe_msg = (
+                        ('Fuel is good. %.1f liters margin to finish.'
+                         % _fuel_eval['margin_l'])
+                        if _push_ok else
+                        ('Fuel margin is fine, %.1f liters. Push is on hold pending damage '
+                         'assessment.' % _fuel_eval['margin_l']))
                     _fuel_dispatch_result = broadcast({
                         'type': 'radio',
                         'trigger': 'fuel_strategy_safe',
                         'margin_l': _fuel_eval['margin_l'],
                         'required_fuel_l': _fuel_eval['required_fuel_l'],
                         'estimated_crossings_to_finish': _milestone_laps,
-                        'message': 'Fuel is good. %.1f liters margin to finish.'
-                                   % _fuel_eval['margin_l'],
+                        'push_allowed': _push_ok,
+                        'message': _safe_msg,
                     })
                 fuel_warning_band = (
                     fuel_strategy_mod.commit_band_after_dispatch(
@@ -3534,6 +3906,8 @@ def poll_iracing():
                         and _plan_authority_verdict is not None
                         and not _plan_authority_verdict.get('allow_p0_pit_now')):
                     _fuel_dispatch_display = 'SUPPRESSED_BY_PLAN_AUTHORITY'
+                if _fuel_dispatch_display is None and _strategy_speech_blocked:
+                    _fuel_dispatch_display = 'BLOCKED_BY_FINAL_LAP_OR_CHECKER'
                 log("FUEL BAND DIAG lap=%s fuel=%.2f avg=%.3f crossings=%s "
                     "required=%s marginL=%s band=%s prev=%s transition=%s "
                     "warn=%s dispatch=%s reason=%s clean=%s"
@@ -3555,20 +3929,14 @@ def poll_iracing():
                 is_session_best = (session_best is None or lapTime < session_best)
                 is_personal_best = (personal_best is None or lapTime < personal_best)
 
-                # ★Build 265 Codex 差戻し 3：クリーン周判定（有効性証拠）を計算。
+                # ★Build 265 Codex 差戻し 3：クリーン周判定（有効性証拠）。
                 #   有効なクリーン周 = incident 0 かつ pit road 未通過 かつ off-track 未検出。
                 #   `Every clean lap` / `Every 2 laps` はこの証拠だけで判定される。
-                if _lap_start_incidents is None:
-                    _incidents_this_lap = 0
-                elif isinstance(incidents, int):
-                    _incidents_this_lap = max(0, incidents - _lap_start_incidents)
-                else:
-                    _incidents_this_lap = 0
-                _lap_valid_clean = bool(
-                    _incidents_this_lap == 0
-                    and not _lap_had_pit_road
-                    and not _lap_had_pit_road_prev  # out lap
-                    and not _lap_had_off_track)
+                # ★Codex限定レビュー P1(#3b)：この判定は上の燃費履歴ブロックで既に確定
+                #   させている（`_lap_valid_clean` / `_incidents_this_lap`）。同じ周に
+                #   二つの定義が並存しないよう、ここでは再計算せず同じ値を共有する。
+                #   入力（_lap_had_pit_road / _lap_had_off_track / _lap_start_incidents）は
+                #   本フレームのこの区間では変化しない（resetは下の周回切替時）。
                 if _lap_valid_clean:
                     _clean_lap_candidate_count += 1
                 _clean_lap_evidence = {
@@ -3676,6 +4044,7 @@ def poll_iracing():
                 _lap_had_pit_road_prev = _lap_had_pit_road
                 _lap_had_pit_road = False
                 _lap_had_off_track = False
+                _off_track_sample_streak = 0
                 if isinstance(incidents, int):
                     _lap_start_incidents = incidents
                 # ── セッションサマリー用にラップデータを積算 ──
@@ -3805,7 +4174,70 @@ def poll_iracing():
             broadcast({'type': 'radio', 'trigger': 'damage_report', 'mandatory': mandatory,
                 'repair_mand': round(repair_mand or 0, 1), 'repair_opt': round(repair_opt or 0, 1),
                 'message': dmg_msg})
+            # ★Build 266 Phase E：SDK確定の損傷証拠を Session Race State へ記録する。
+            #   `record_damage_observation` は最初の検出周を永久に保持し、後続の増分は
+            #   累計だけ更新する（初検出の事実を消さない）。
+            _session_race_state = session_race_state_mod.record_damage_observation(
+                _session_race_state,
+                mandatory_repair_s=repair_mand or 0.0, optional_repair_s=repair_opt or 0.0,
+                damage_s=damage_s, lap=int(lap) if isinstance(lap, (int, float)) else None,
+                session_time_s=reader.read_double('SessionTime'),
+                incident_delta=(incidents - _prev_incidents_for_damage) if (
+                    isinstance(incidents, int) and isinstance(_prev_incidents_for_damage, int)) else None,
+                on_pit_road=bool(onPit))
+            _session_race_state = session_race_state_mod.invalidate_assumptions(
+                _session_race_state, 'damage_observation')
+            log('SESSION RACE STATE damage_observation: ' + json.dumps(
+                _session_race_state['damage_state']['damage_observation'],
+                ensure_ascii=False, separators=(',', ':')))
+            # ★Build 266 Phase E トリガー③：修理秒数の新規検出でも再計算する。
+            #   damage_observation は上で record 済みなので、fuel/pace の基準値は変えず、
+            #   前提無効化の事実だけを反映して"保守側の一文"を出せるようにする。
+            if session_race_state_mod.should_recalculate(
+                    _session_race_state, 'repair_detected_or_opt_not_taken',
+                    dedupe_key='lap%s' % (int(lap) if isinstance(lap, (int, float)) else 'na')):
+                _pending_recalculations = queue_recalculation(
+                    _pending_recalculations,
+                    reason='repair_detected_or_opt_not_taken',
+                    dedupe_key='lap%s' % (int(lap) if isinstance(lap, (int, float)) else 'na'),
+                    driver_message='Damage confirmed. Standard pace assumption is on hold.')
         prev_damage_s = damage_s
+        _prev_incidents_for_damage = incidents if isinstance(incidents, int) else _prev_incidents_for_damage
+
+        # ★Build 266 Phase E：ドライバー申告（会話STT経由）の損傷報告を消費する。
+        #   SDK確定と混同しないよう source='driver_report' を必ず付ける
+        #   （session_race_state.record_driver_reported_damage が保証）。
+        for _dmg_text in _consume_driver_damage_reports():
+            _dmg_category = session_race_state_mod.parse_driver_reported_damage(_dmg_text)
+            if not _dmg_category:
+                log('DRIVER DAMAGE REPORT unclassified (no known phrase matched): ' + _dmg_text)
+                continue
+            _session_race_state = session_race_state_mod.record_driver_reported_damage(
+                _session_race_state, category=_dmg_category, raw_text=_dmg_text,
+                lap=int(lap) if isinstance(lap, (int, float)) else None,
+                session_time_s=reader.read_double('SessionTime'))
+            _session_race_state = session_race_state_mod.invalidate_assumptions(
+                _session_race_state, 'driver_reported_damage:%s' % _dmg_category)
+            log('SESSION RACE STATE driver_reported_damage: category=%s text=%s'
+                % (_dmg_category, _dmg_text))
+            # ★Build 266 Phase E トリガー②：申告ごとに一度だけ再計算する。同じ申告カテゴリの
+            #   同一ラップでの重複は抑止するが、新しい申告(別カテゴリ or 別ラップ)は必ず通す。
+            _dmg_dedupe = '%s@lap%s' % (
+                _dmg_category, int(lap) if isinstance(lap, (int, float)) else 'na')
+            if session_race_state_mod.should_recalculate(
+                    _session_race_state, 'driver_reported_damage', dedupe_key=_dmg_dedupe):
+                # ★Codex差戻し#2：申告は即座に state へ入るが、Plan再計算と無線は
+                #   フレーム後半で最新の権威データを入力してから出す。
+                #   無線が「前提を外した」と言う時、その裏でPlanが実際に組み直されている
+                #   ことを保証するため、発話も再計算と同じ場所へ移した。
+                _pending_recalculations = queue_recalculation(
+                    _pending_recalculations, reason='driver_reported_damage',
+                    dedupe_key=_dmg_dedupe,
+                    driver_message=(
+                        'Driver-reported %s. Standard pace assumption is on hold. '
+                        'Fuel will update from the next valid laps.' % _dmg_category),
+                    broadcast_payload={'type': 'radio', 'trigger': 'strategy_recalculation',
+                        'reason': 'driver_reported_damage', 'category': _dmg_category})
 
         # Position change（クラス内順位ベース。レースセッション＆コース走行中のみ。
         #   グリッド整列中(OnTrack:False)は順位がシャッフルするので黙る）
@@ -3879,11 +4311,60 @@ def poll_iracing():
         limiter_on = bool(engine_warnings & 0x10) if engine_warnings is not None else False
         _spd_limit = reader.read_float('Speed')
         _spd_ok    = (_spd_limit is not None and _spd_limit > 8.33)   # 30 km/h ゲート
-        if prev_limiter_on and not limiter_on and onTrack and not limiter_off_announced_stop and _spd_ok:
-            broadcast({'type': 'radio', 'trigger': 'limiter_off',
-                'message': 'Limiter off. Hold pace on the out-lap.'})
-            limiter_off_announced_stop = True
+        # ★八木さん実走ログ 7-4：この経路からは発話しない。リミッタービットは
+        #   ボックス出発直後に一瞬落ちることがあり、退出フォールバックと二重に鳴る。
+        #   ビットは診断としてのみ記録し、発話は OnPitRoad true→false だけに任せる。
+        if prev_limiter_on and not limiter_on and onTrack and _spd_ok:
+            log('LIMITER BIT DIAG: limiter released (speech is owned by the pit-exit edge)')
         prev_limiter_on = limiter_on
+
+        # 確定したピット訪問だけが再武装できる。ちらつきでは再武装しない。
+        if onPit:
+            _sess_now = reader.read_double('SessionTime')
+            if isinstance(_sess_now, (int, float)) and isinstance(prev.get('_sess_t'), (int, float)):
+                _onpit_dwell_s += max(0.0, _sess_now - prev['_sess_t'])
+            if (_onpit_dwell_s >= LIMITER_OFF_MIN_PIT_DWELL_S
+                    and not _limiter_cycle_armed):
+                limiter_off_announced_stop = False
+                _limiter_cycle_armed = True
+        else:
+            _onpit_dwell_s = 0.0
+            _limiter_cycle_armed = False
+        prev['_sess_t'] = reader.read_double('SessionTime')
+
+        # ★Build 266 Codex差戻し#1：任意修理秒の「最大観測値」と「初検出時刻」を、
+        #   ピット進入時の一点ではなく、走行中もピット中も毎フレーム更新する。
+        #   record_optional_repair_observation は冪等（同値・より小さい値では state を
+        #   作り替えない）ので、ここから無条件に呼んでよい。ライブ値が 0.0 へ戻っても
+        #   最大値は下がらない＝「見えた」という事実がピットアウトで消えない。
+        if isinstance(repair_opt, (int, float)) and repair_opt > 0:
+            _srs_before_opt = _session_race_state
+            _session_race_state = session_race_state_mod.record_optional_repair_observation(
+                _session_race_state,
+                optional_repair_s=repair_opt,
+                lap=int(lap) if isinstance(lap, (int, float)) else None,
+                session_time_s=reader.read_double('SessionTime'),
+                on_pit_road=bool(onPit))
+            if _session_race_state is not _srs_before_opt:
+                log('SESSION RACE STATE optional_repair_observed: max=%.1fs on_pit_road=%s lap=%s'
+                    % (session_race_state_mod.optional_repair_observed_max(_session_race_state),
+                       bool(onPit), lap))
+        # ピット訪問中の実消費秒を正しく出すため、damage_s の最大値もピット中は更新する。
+        # （進入後にボックス内で接触すると damage_s は進入時より増える。進入時の値を
+        #   基準にすると実消費秒が負になり max(0.0, ...) で 0 に潰れてしまう。）
+        if onPit:
+            if isinstance(repair_opt, (int, float)):
+                _pit_repair_opt_observed_max = max(_pit_repair_opt_observed_max or 0.0, repair_opt)
+            if isinstance(damage_s, (int, float)):
+                _pit_damage_s_max = max(_pit_damage_s_max or 0.0, damage_s)
+            # ★Codex限定レビュー P1(#1)：任意修理を"実施した"か"取り消して出た"かは、
+            #   退出時の残秒が0であることでは区別できない（両方0になる）。実施の唯一の
+            #   証拠は「実時間に沿って減り続けたこと」。1フレームごとの減少が経過秒で
+            #   説明できる時だけサービス消化として積む。
+            _pit_service_tracker = session_race_state_mod.observe_pit_repair_frame(
+                _pit_service_tracker,
+                optional_repair_s=repair_opt,
+                session_time_s=reader.read_double('SessionTime'))
 
         # Pit in/out
         # Build 246: PlayerTrackSurface 3→2 はピット出口側でも発生する（Road America実走）。
@@ -3918,6 +4399,13 @@ def poll_iracing():
             pit_repair_start_s = damage_s
             pit_stall_start_time = None
             pit_stall_total_s = 0.0
+            # ★Build 266 Codex差戻し#1：任意修理が"未実施のままピットアウト"を検知する。
+            #   進入時の値は最大値の初期シードにすぎない。実際の観測は下の「ピット中の
+            #   最大値更新」ブロックが毎フレーム続ける。ボックス付近で接触した場合、
+            #   PitOptRepairLeft は進入後に初めて非ゼロになるため、進入時だけでは取れない。
+            _pit_repair_opt_observed_max = repair_opt or 0.0
+            _pit_damage_s_max = damage_s or 0.0
+            _pit_service_tracker = session_race_state_mod.init_pit_service_tracker()
             # Phase C scoring edge.  Prefer the fresh driver-facing forecast
             # that was available immediately before entry, then score it
             # against the actual class position at pit exit.
@@ -3995,7 +4483,9 @@ def poll_iracing():
                     _pit_cycle_armed, ensure_ascii=False, separators=(',', ':')))
             log("PIT EXIT SHADOW forecast: " + json.dumps(
                 pit_exit_forecast_shadow, ensure_ascii=False, separators=(',', ':')))
-            limiter_off_announced_stop = False   # 新しいピットストップ＝リミッターオフ再武装
+            # ★八木さん実走ログ 7-4：ここでは再武装しない。進入の一瞬のちらつきでも
+            #   この行が走り、同一ピットアウトでの二度目を許してしまうため。
+            #   再武装は上の「確定したピット訪問」判定だけが行う。
             # 先行通知済みなら重複させない。未通知環境のみここでフォールバック。
             if not pit_entry_announced_stop and _pit_entry_speed_ok:
                 broadcast({'type': 'radio', 'trigger': 'pit_entry',
@@ -4018,10 +4508,13 @@ def poll_iracing():
                 pit_enter_time = None
             # ⑥ フォールバック：EngineWarningsのリミッタービットが未検知でこのストップでまだ鳴らして
             # いなければ、ピットレーン退出(OnPitRoad False)の瞬間に「リミッターオフ」を鳴らす。
+            # ★八木さん実走ログ 7-4：OnPitRoad true→false が唯一の発火点。
             if not limiter_off_announced_stop:
                 broadcast({'type': 'radio', 'trigger': 'limiter_off',
                     'message': 'Limiter off. Hold pace on the out-lap.'})
                 limiter_off_announced_stop = True
+            else:
+                log('LIMITER_OFF_SUPPRESSED reason=already_announced_for_pit_cycle')
             # 出口直後の二重コールは廃止。ここでは limiter_off だけを発話する。
             pit_entry_announced_stop = False
             if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
@@ -4029,7 +4522,39 @@ def poll_iracing():
                 _fuel_added = (
                     round(max(0.0, fuel - pit_enter_fuel), 2)
                     if fuel is not None and pit_enter_fuel is not None else None)
-                _repair_done = round(max(0.0, pit_repair_start_s - damage_s), 1)
+                # ★Build 266 Codex差戻し#1：実消費秒は「ピット訪問中に見えた damage_s の
+                #   最大値」から退出時の残りを引く。進入時の値を基準にすると、ボックス内で
+                #   接触して damage_s が増えたケースで負になり 0 に潰れる。
+                _repair_basis_s = max(
+                    pit_repair_start_s if isinstance(pit_repair_start_s, (int, float)) else 0.0,
+                    _pit_damage_s_max if isinstance(_pit_damage_s_max, (int, float)) else 0.0)
+                _repair_done = round(max(0.0, _repair_basis_s - damage_s), 1)
+                # ★Codex限定レビュー P1(#1)：実施／未実施は「退出時の残秒が0」では判定
+                #   しない。取消しても実施しても0になるため区別できない。ピット中に
+                #   実時間へ沿って消化された秒（countdown_s）だけを実施の証拠にする。
+                #   ・取消して燃料だけで出た → countdown_s ≈ 0 → not_taken
+                #   ・実際に修理した          → countdown_s ≈ max_s → taken
+                _pit_repair_outcome = session_race_state_mod.classify_optional_repair(
+                    _pit_service_tracker)
+                _session_race_state = session_race_state_mod.record_optional_repair_outcome(
+                    _session_race_state, tracker=_pit_service_tracker,
+                    lap=int(lap) if isinstance(lap, (int, float)) else None)
+                if _pit_repair_outcome != 'none':
+                    log('SESSION RACE STATE optional_repair_outcome=%s '
+                        'observed_max_in_pit=%.1f countdown_s=%.1f repair_done=%.1f '
+                        'first_seen_on_pit_road=%s'
+                        % (_pit_repair_outcome,
+                           (_pit_service_tracker or {}).get('max_s') or 0.0,
+                           (_pit_service_tracker or {}).get('countdown_s') or 0.0,
+                           _repair_done,
+                           _session_race_state['damage_state'].get(
+                               'optional_repair_first_seen_on_pit_road')))
+                if _pit_repair_outcome == 'not_taken':
+                    _session_race_state = session_race_state_mod.invalidate_assumptions(
+                        _session_race_state, 'optional_repair_observed_but_not_taken')
+                _pit_repair_opt_observed_max = None
+                _pit_damage_s_max = None
+                _pit_service_tracker = session_race_state_mod.init_pit_service_tracker()
                 _classification = 'calibration'
                 _fuel_capacity_known = bool(
                     isinstance(session_effective_fuel_capacity_l, (int, float))
@@ -4915,11 +5440,20 @@ def poll_iracing():
                     crossings_to_finish=_option_crossings,
                     reserve_l=_fuel_strategy_live.get('reserve_l', 0.5),
                     effective_capacity_l=session_effective_fuel_capacity_l)
+                # ★Plan B定義の判断：B は条件付きなので、ブリーフィング時点では
+                #   available=False が正常。燃料ウインドウが開いていることを条件にする。
                 if (_candidate_options.get('available')
-                        and ((_candidate_options.get('plan_b') or {}).get('available'))):
+                        and ((_candidate_options.get('plan_b') or {}).get('fuel_window_open'))):
                     strategy_options = _candidate_options
                     log('STRATEGY OPTIONS ready: ' + json.dumps(
                         strategy_options, ensure_ascii=False, separators=(',', ':')))
+                    # ★Build 266 Phase E フィックス③：ブリーフィングPlanをビルドした同フレームで
+                    #   active_plan を登録する。plan_fuel_authority が no_active_plan へ
+                    #   落ちるのは、この登録が遅延／欠落していたのが原因（Build 265既知不具合）。
+                    _session_race_state = session_race_state_mod.register_active_plan(
+                        _session_race_state, plan_id=(strategy_options.get('selected_plan') or 'A'),
+                        plan_snapshot=strategy_options,
+                        snapshot_id=strategy_options.get('snapshot_id'))
                     _option_a = strategy_options.get('plan_a') or {}
                     _option_b = strategy_options.get('plan_b') or {}
                     strategy_options_dispatch = broadcast({
@@ -4943,7 +5477,10 @@ def poll_iracing():
             if (isinstance(strategy_options, dict)
                     and strategy_options.get('available')
                     and not strategy_options_decision_sent
-                    and is_race_session and onTrack and not onPit):
+                    and is_race_session and onTrack and not onPit
+                    # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
+                    #   新規Plan決定を発話しない。
+                    and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
                 _decision_a = strategy_options.get('plan_a') or {}
                 _decision_target = _decision_a.get('target_lap')
                 if (isinstance(_decision_target, int)
@@ -4957,7 +5494,9 @@ def poll_iracing():
                             'avg_fuel_per_lap') if isinstance(
                                 _fuel_strategy_live, dict) else None,
                         pit_now_forecast=_pit_now_forecast,
-                        pit_next_lap_forecast=_pit_next_forecast)
+                        pit_next_lap_forecast=_pit_next_forecast,
+                        relative_pace_advantage_s=(
+                            (_battle_context or {}).get('player_pace_advantage_s')))
                     _selected_option = _option_decision.get('selected_plan') or 'A'
                     strategy_options['selected_plan'] = _selected_option
                     strategy_options['decision_reason'] = _option_decision.get('reason')
@@ -4971,8 +5510,7 @@ def poll_iracing():
                         'reason': strategy_options['decision_reason'],
                         'decision_id': _option_decision.get('decision_id'),
                         'strategy_options': strategy_options,
-                        'message': (('Fuel timing extended one lap. Stay out, then pit '
-                                     'and set %s liters.'
+                        'message': (('Undercut is on. Box this lap and set %s liters.'
                                      % _selected_plan.get('set_fuel_l'))
                                     if _selected_option == 'B' else
                                     ('Baseline fuel timing selected. Pit this lap and set %s liters.'
@@ -4980,6 +5518,24 @@ def poll_iracing():
                     })
                     if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
                         strategy_options_decision_sent = True
+                    # ★Build 266 Phase E フィックス③：ブリーフィング/ライブPlanが決定した瞬間、
+                    #   必ず active_plan を同フレームで登録する（no_active_plan 誤爆の根絶）。
+                    _prev_active_plan = _session_race_state.get('active_plan')
+                    _session_race_state = session_race_state_mod.register_active_plan(
+                        _session_race_state, plan_id=_selected_option,
+                        plan_snapshot=strategy_options,
+                        snapshot_id=strategy_options.get('snapshot_id'))
+                    # ★トリガー⑥：相手のピット／リジョイン予測でPlan選択が変わった時に再計算する。
+                    if (_prev_active_plan != _selected_option
+                            and session_race_state_mod.should_recalculate(
+                                _session_race_state, 'rival_pit_or_rejoin_shift',
+                                dedupe_key=_option_decision.get('decision_id'))):
+                        # ★Codex差戻し#2：このトリガーだけ別経路で「記録」していると、
+                        #   Plan C を含む再評価を通らない。他の6トリガーと同じ待ち行列へ
+                        #   積み、下の実行ブロックで同じ入力・同じ手順で再計算する。
+                        _pending_recalculations = queue_recalculation(
+                            _pending_recalculations, reason='rival_pit_or_rejoin_shift',
+                            dedupe_key=_option_decision.get('decision_id'))
                     log('STRATEGY OPTIONS decision: snapshot_id=%s selected=%s '
                         'reason=%s decision_id=%s dispatch=%s evidence=%s'
                         % (strategy_options.get('snapshot_id'),
@@ -4989,6 +5545,109 @@ def poll_iracing():
                            _decision_dispatch,
                            json.dumps(_option_decision, ensure_ascii=False,
                                       separators=(',', ':'))))
+            # ★Build 266 Codex差戻し#2：待ち行列に積まれた再計算を、ここで実行する。
+            #   この位置は fuel_strategy / _fuel_strategy_live / ピットリジョイン予測が
+            #   全て今フレームの値に更新された後である。トリガーが立った場所（損傷検出・
+            #   ドライバー申告・燃費/ペース乖離・クリーン3周）より後なので、再計算は
+            #   常に最新の権威データを入力に使う。
+            #   ここで実際に Plan A/B/C を組み直し、選び直し、active_plan を更新する。
+            if _pending_recalculations:
+                # ── Plan C の成立条件を実測から導く ──────────────────────
+                # ①前走車が先にピットした：同クラス前走車が今ピットロード上にいる
+                _recalc_rival_pitted = None
+                _recalc_ahead_idx = (_battle_context or {}).get('ahead_car_idx')
+                if (isinstance(_recalc_ahead_idx, int) and car_on_pitroad_all
+                        and _recalc_ahead_idx < len(car_on_pitroad_all)):
+                    _recalc_rival_pitted = bool(car_on_pitroad_all[_recalc_ahead_idx])
+                # ②クリーンエア：前走車とのギャップが汚れた空気の外にある
+                _recalc_clean_air = None
+                _recalc_gap_ahead = (_battle_context or {}).get('gap_ahead_s')
+                if isinstance(_recalc_gap_ahead, (int, float)):
+                    _recalc_clean_air = bool(_recalc_gap_ahead >= PLAN_C_CLEAN_AIR_GAP_S)
+                # ③リジョインが悪化しない：延長後の予測が現状より悪くない
+                _recalc_rejoin_ok = None
+                _recalc_now_pos = _forecast_positions(_pit_now_forecast)
+                _recalc_next_pos = _forecast_positions(_pit_next_forecast)
+                if _recalc_now_pos and _recalc_next_pos:
+                    _recalc_rejoin_ok = bool(
+                        _recalc_next_pos['likely'] <= _recalc_now_pos['likely']
+                        and _recalc_next_pos['worst'] <= _recalc_now_pos['worst'])
+                _recalc_crossings = None
+                if isinstance(_fuel_strategy_live, dict):
+                    _recalc_crossings = _fuel_strategy_live.get(
+                        'estimated_crossings_to_finish')
+                    if not isinstance(_recalc_crossings, int):
+                        _recalc_crossings = _fuel_strategy_live.get(
+                            'provisional_laps_to_time_expiry')
+                _recalc_inputs = {
+                    'session_num': cur_snum,
+                    'current_lap': int(lap) if isinstance(lap, (int, float)) else None,
+                    'session_time_s': reader.read_double('SessionTime'),
+                    'fuel_level_l': fuel,
+                    'recent_fuel_per_lap_l': session_race_state_mod.recent_median(
+                        clean_fuel_per_lap_hist),
+                    'recent_pace_s': session_race_state_mod.recent_median(
+                        clean_lap_time_hist),
+                    'clean_laps_sampled': len(clean_fuel_per_lap_hist),
+                    # `_option_crossings` はブリーフィング側の入れ子 if の中でしか
+                    # 定義されないため、ここでは同じ権威（_fuel_strategy_live）から
+                    # 独立に取り直す。未定義の変数に依存させない。
+                    'crossings_to_finish': _recalc_crossings,
+                    'reserve_l': (_fuel_strategy_live.get('reserve_l', 0.5)
+                                  if isinstance(_fuel_strategy_live, dict) else 0.5),
+                    'effective_capacity_l': session_effective_fuel_capacity_l,
+                    'pit_now_forecast': _pit_now_forecast,
+                    'pit_next_lap_forecast': _pit_next_forecast,
+                    # ★Plan C の成立条件は実測から埋める。示せないものは None のまま
+                    #   ＝未証明。未証明は「満たされている」とは決して扱わない。
+                    'rival_pitted_first': _recalc_rival_pitted,
+                    'clean_air': _recalc_clean_air,
+                    'rejoin_not_worse': _recalc_rejoin_ok,
+                    # 燃費節約が「実際に起きている」証拠。目標値は提案時にラッチされる
+                    # ので、その後の実測中央値がそれを下回れば達成＝独立した証拠になる。
+                    'fuel_save_recent_l_per_lap': session_race_state_mod.recent_median(
+                        clean_fuel_per_lap_hist),
+                    # Plan B（アンダーカット）の成立条件：前走車への実測ペース優位。
+                    # 正なら自車のクリーン中央値の方が速い。取れない時は None＝未証明。
+                    'relative_pace_advantage_s': (
+                        (_battle_context or {}).get('player_pace_advantage_s')),
+                    'baseline_fuel_override': None,
+                    'baseline_pace_override': None,
+                }
+                for _recalc_item in _pending_recalculations:
+                    _item_inputs = dict(_recalc_inputs)
+                    if _recalc_item.get('reason') == 'clean_3_laps_established':
+                        # クリーン3周の確定だけは、その周に確定した基準値を書き込む。
+                        _item_inputs['baseline_fuel_override'] = _pending_recalc_baselines.get('fuel')
+                        _item_inputs['baseline_pace_override'] = _pending_recalc_baselines.get('pace')
+                    _session_race_state, _recalc_verdict = execute_recalculation(
+                        _session_race_state, _recalc_item, inputs=_item_inputs,
+                        srs_mod=session_race_state_mod,
+                        options_mod=strategy_options_mod)
+                    log(session_race_state_mod.format_recalculation_trace(
+                        _session_race_state['last_recalculation']).replace('\n', ' | '))
+                    log('STRATEGY RECALCULATION OUTCOME reason=%s available=%s '
+                        'previous_plan=%s selected_plan=%s plan_changed=%s decision=%s '
+                        'plan_c=%s'
+                        % (_recalc_item.get('reason'), _recalc_verdict.get('available'),
+                           _recalc_verdict.get('previous_plan'),
+                           _recalc_verdict.get('selected_plan'),
+                           _recalc_verdict.get('plan_changed'),
+                           _recalc_verdict.get('reason'),
+                           json.dumps(_recalc_verdict.get('plan_c_evidence') or {},
+                                      ensure_ascii=False, separators=(',', ':'))))
+                    _recalc_payload = _recalc_item.get('broadcast_payload')
+                    if isinstance(_recalc_payload, dict):
+                        broadcast({
+                            **_recalc_payload,
+                            'selected_plan': _recalc_verdict.get('selected_plan'),
+                            'previous_plan': _recalc_verdict.get('previous_plan'),
+                            'plan_changed': bool(_recalc_verdict.get('plan_changed')),
+                            'message': _session_race_state['last_recalculation'][
+                                'driver_message'],
+                        })
+                _pending_recalculations = []
+
             # A selected Plan B creates a second, mandatory trigger at its
             # target lap.  The extend call can therefore never become a dead
             # promise with no later box instruction.
@@ -4996,7 +5655,10 @@ def poll_iracing():
                     and strategy_options_decision_sent
                     and strategy_options.get('selected_plan') == 'B'
                     and not strategy_options_box_call_sent
-                    and is_race_session and onTrack and not onPit):
+                    and is_race_session and onTrack and not onPit
+                    # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
+                    #   予定していたBox callも発話しない。
+                    and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
                 _box_plan = strategy_options.get('plan_b') or {}
                 _box_target = _box_plan.get('target_lap')
                 if (isinstance(_box_target, int)
@@ -5471,6 +6133,14 @@ async def handler(websocket):
                     #   確定シグナル。将来 UI ボタン追加まで renderer から直接送信可能。
                     _mark_manual_resume_signal()
                     log("MANUAL RESUME: driving support resume requested by user")
+                elif cmd == 'driver_damage_report':
+                    # ★Build 266 Phase E：確定STTテキストのうち renderer が損傷関連と
+                    #   判定したものを転送する。分類自体は session_race_state.
+                    #   parse_driver_reported_damage() が bridge 側で行う（単一の真実源）。
+                    _text = msg.get('text')
+                    if isinstance(_text, str) and _text.strip():
+                        _queue_driver_damage_report(_text)
+                        log('DRIVER DAMAGE REPORT queued: ' + _text.strip())
                 elif cmd == "ptt_stop":
                     stop_ptt_record()
                 elif cmd == 'ptt_setup':

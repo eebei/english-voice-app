@@ -142,5 +142,14 @@ for(const character of ['James','Luna','Hajime','Kanbe','Oishi','HajimeJP','Luna
     && !system.suffix.includes('Never write a lap time with a colon'));
 }
 
+// ★Build 266 Codex 差戻し⑤：質問と無関係な定型文("次のS/Fで燃料、残り、前後GAPを更新する")を
+//   telemetryTruthFallback のデフォルト分岐から除去したことを確認する。
+check('truth-gateデフォルト分岐から無関係な定型文が消えている',
+  !renderer.includes('今は確認できる数値だけで答える。次のS/Fで燃料、残り、前後GAPを更新する。')
+  && !renderer.includes('I will use only confirmed values and update fuel, remaining distance and gaps at the next S/F crossing.'));
+check('truth-gateデフォルト分岐はブロックされたclaim自体の否定に留める',
+  renderer.includes('今の発言は実測で確認できていない。断定はしない。')
+  && renderer.includes('That is not confirmed by current telemetry; I will not state it as fact.'));
+
 console.log(`\nTelemetry Truth Gate: ${pass}/${pass + fail}`);
 if(fail) process.exit(1);

@@ -26,7 +26,7 @@ check('personal_best is broadcast at P2 in the bridge',
 check('renderer declares the current speak item tracker',
   renderer.includes('let currentSpeakItem = null;'));
 check('renderer declares the deferable-kind set including personal_best',
-  renderer.includes("const SPEAK_DEFER_KINDS = new Set(['personal_best','session_best','first_lap']);"));
+  renderer.includes("const SPEAK_DEFER_KINDS = new Set(['personal_best','session_best','first_lap','lap_time']);"));
 check('renderer caps how many times an item may be deferred',
   renderer.includes('const SPEAK_DEFER_MAX = 1;'));
 check('renderer records the current speak item on splice from the queue',

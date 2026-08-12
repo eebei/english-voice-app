@@ -199,4 +199,21 @@ check('telemetry_live exposes lap_valid_clean explicitly',
 check('renderer UI hint acknowledges Off silences Best updates too',
   html.includes('Off はベスト更新も含めラップ読み上げを完全に止める'));
 
+// --- Fate tracing (Build 266 Codex fix ⑦): every lap-readout candidate ------
+// must trace one of: dispatched, policy-suppressed, deferred-by-P0, or
+// discarded-at-defer-cap. None may silently vanish.
+check('allowed lap-readout candidates trace LAP_READOUT_DISPATCHED',
+  html.includes("diagnosticLog('LAP_READOUT_DISPATCHED',"));
+check('policy-denied lap-readout candidates trace LAP_READOUT_SUPPRESSED',
+  html.includes("diagnosticLog('LAP_READOUT_SUPPRESSED',"));
+check('lap_time is deferable so a P0 interrupt does not silently drop it',
+  html.includes("const SPEAK_DEFER_KINDS = new Set(['personal_best','session_best','first_lap','lap_time']);"));
+check('deferred lap-readout items trace SPEAK_DEFERRED',
+  html.includes("diagnosticLog('SPEAK_DEFERRED',"));
+check('defer-cap discards trace SPEAK_DEFER_DISCARDED (never silent)',
+  html.includes("diagnosticLog('SPEAK_DEFER_DISCARDED',"));
+check('the dispatch trace and fuel-plan-guard both live inside injectRadio',
+  /function injectRadio\(data\)\{[\s\S]*?LAP_READOUT_DISPATCHED[\s\S]*?evaluateFuelPlanGuard[\s\S]*?\n\}/
+  .test(html));
+
 console.log(`✅ lap readout event sequence: ${pass} checks`);

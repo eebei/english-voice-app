@@ -21,6 +21,7 @@ const TOPIC = Object.freeze({
   TYRE_STATUS: 'tyre_status',
   DAMAGE_STATUS: 'damage_status',
   WEATHER_STATUS: 'weather_status',
+  HANDLING_SETUP_ADVICE: 'handling_setup_advice',
   TRAFFIC_STATUS: 'traffic_status',
   PLAN_STATUS: 'plan_status',
   SESSION_FORMAT: 'session_format',
@@ -29,6 +30,14 @@ const TOPIC = Object.freeze({
 });
 
 const OPERATIONAL_RE = /燃料|給油|リットル|リッター|ピット|ボックス|順位|何番手|ギャップ|差|ペース|タイヤ|摩耗|ダメージ|修理|天候|気温|路面|雨|残り(?:周|時間)|レース時間|戦略|プラン|アンダー\s*カット|オーバー\s*カット|トラフィック|前の車|後ろの車|fuel|pit|box|position|gap|pace|tyre|tire|damage|repair|weather|rain|laps? left|race time|strategy|plan|traffic|undercut|overcut/i;
+
+function handlingSymptomName(text) {
+  const t = String(text || '');
+  if (/オーバー(?:ステア)?|oversteer|loose|リア.{0,4}(?:出る|流れる)/i.test(t)) return 'oversteer';
+  if (/アンダー(?:ステア)?|understeer|push|曲がらない/i.test(t)) return 'understeer';
+  if (/タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ)|グリップ.{0,6}(?:ない|落ち|不足)/i.test(t)) return 'tyre_degradation';
+  return 'unspecified';
+}
 
 function classify(text, options = {}) {
   const t = String(text || '').trim();
@@ -85,6 +94,21 @@ function classify(text, options = {}) {
     return { topic: TOPIC.POSITION_GAP, targetPosition: m ? Number(m[1]) : null, confidence: 0.97 };
   }
   if (/今.*(?:何位|何番手)|現在.*(?:順位|ポジション)|順位は|current position|what position/i.test(t)) return { topic: TOPIC.CURRENT_POSITION, confidence: 0.98 };
+  // ★八木さん実走ログ 7-1（2026-08-11）：高路温でタイヤが持たない、という
+  //   セットアップ相談が `weather_status` に吸い込まれ、気温と路面温度だけを
+  //   読み上げて終わっていた。相談は温度の質問ではない。
+  //   セットアップ語 or ハンドリング症状があれば weather より先に取る。
+  // セットアップという語そのものは、温度の質問ではありえない。単独で weather に勝つ。
+  const setupNoun = /セッ?ト\s*ア(?:ッ|ツ)?プ|セッティング|set-?up/i.test(t);
+  // 「方向」「変えたい」「意見」等は単独では弱いので、症状と組み合わせて判定する。
+  const setupIntent = /方向性|方向|変えたい|変更したい|振り|アドバイス|意見|どうすれば|balance/i.test(t);
+  const handlingSymptom = /アンダー(?:ステア)?|オーバー(?:ステア)?|タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ|厳しい|きつい)|グリップ.{0,6}(?:ない|落ち|不足)|曲がらない|滑る|リア.{0,4}(?:出る|流れる)|understeer|oversteer|grip|slide|loose|push/i.test(t);
+  if (setupNoun || (setupIntent && handlingSymptom)
+      || (handlingSymptom && /どう|なに|何|対策|解決|直|なおし|改善|what should|how do i|any (?:advice|ideas?|suggestions?)|fix|help/i.test(t))) {
+    return { topic: TOPIC.HANDLING_SETUP_ADVICE,
+             confidence: setupNoun ? 0.99 : 0.97,
+             symptom: handlingSymptomName(t) };
+  }
   // Weather must win before the generic tyre vocabulary.  Previously
   // "路面温度" matched the bare "温度" tyre rule and returned tyre wear.
   if (/天気|天候|気温|路面(?:温度|状況)|路温|トラック温度|雨|濡れ|湿度|weather|track temp|air temp|rain|wet/i.test(t)) return { topic: TOPIC.WEATHER_STATUS, confidence: 0.99 };
@@ -95,6 +119,23 @@ function classify(text, options = {}) {
     return { topic: TOPIC.TYRE_STATUS, tyreQuery, confidence: 0.98 };
   }
   if (/ダメージ|損傷|修理|壊れ|damage|repair/i.test(t)) return { topic: TOPIC.DAMAGE_STATUS, confidence: 0.98 };
+
+  // ★八木さん実走ログ 7-2（2026-08-11）：アンダーステア相談の直後に
+  //   「どうしたらいいですか？」と聞かれ、対象を見失った。
+  //   相談は Practice でも起きる。race ゲートの外で、直前の相談対象を引き継ぐ。
+  //   短くて対象語を含まない問いだけを引き継ぎ対象にする（長い新規質問は奪わない）。
+  const vagueFollowUp = t.length <= 24 && (
+       /^(?:じゃあ|それで|で|でも)?\s*どう(?:したら|すれば|する|なの)[^。.!！?？]{0,10}[?？。.!！]*\s*$/i.test(t)
+    || /^(?:他|ほか)に\s*(?:何|なに)か?\s*(?:ある|ありますか|ない)?[?？。.!！]*\s*$/i.test(t)
+    || /^(?:何|なに)か\s*(?:対策|解決|方法|案)\s*(?:は|ある|ありますか)?[?？。.!！]*\s*$/i.test(t)
+    || /^\s*(?:what should i do|any(?:thing)? else|how do i fix (?:it|that))[?.!]*\s*$/i.test(t));
+  if (vagueFollowUp && options.recentText) {
+    const priorSetup = classify(String(options.recentText), {});
+    if (priorSetup && priorSetup.topic === TOPIC.HANDLING_SETUP_ADVICE) {
+      return { ...priorSetup, confidence: Math.min(priorSetup.confidence || 0.9, 0.9),
+               inherited: true };
+    }
+  }
 
   if (options.race === true && /^\s*\d+(?:\.\d+)?\s*[lL](?:級|ぐらい|くらい|だ|です)?[。.!！?？]?\s*$/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.85 };
   if (options.race === true && /計算|判断|どうする|大丈夫|予測|これ|それ|もう/.test(t)) {
@@ -180,6 +221,13 @@ function buildFuelEmergency(live, lang) {
   if (current <= 0.5) return ja(lang)
     ? `燃料${current.toFixed(1)}L。ガス欠域で、ピット到達は保証できない。次のS/F待ちはしない。安全を優先して。`
     : `Fuel ${current.toFixed(1)}L. This is a fuel-starvation range; pit arrival is not guaranteed. I will not wait for the next S/F. Prioritise safety.`;
+  // ★Build 266 Codex 差戻し⑨：無線側(fuel_strategy_warning/fuel_strategy_safe)が既に
+  //   確定した fuel_band を会話側も同じ権威として読む。band=safe なのに"保証できない"と
+  //   矛盾した答えを返さない。
+  const fs = (live && live.fuel_strategy) || {};
+  if (fs.fuel_band === 'safe') return ja(lang)
+    ? `燃料${current.toFixed(1)}L。直近の判定は安全域。ガス欠の兆候はない。`
+    : `Fuel ${current.toFixed(1)}L. The latest evaluation is in the safe band; no starvation signs.`;
   return ja(lang)
     ? `燃料${current.toFixed(1)}L。ピット到達は保証できない。今は燃費セーブと安全を優先。`
     : `Fuel ${current.toFixed(1)}L. Pit arrival is not guaranteed. Save fuel now and prioritise safety.`;
@@ -581,8 +629,69 @@ function buildTrafficStatus(live, lang) {
   return ja(lang) ? `現在の直前車まで${a == null ? '不明' : a.toFixed(1) + '秒'}、直後車まで${b == null ? '不明' : b.toFixed(1) + '秒'}。` : `Current gaps: ${a == null ? 'unknown' : a.toFixed(1) + 's'} to the car ahead, ${b == null ? 'unknown' : b.toFixed(1) + 's'} to the car behind.`;
 }
 
+// ★八木さん実走ログ 7-1：セットアップ相談への回答。
+//   brief の指定した順序で組む。
+//     1. 実測の環境値を短く根拠として確認する
+//     2. 症状と、低速／中速／高速のどこで強いかを確認する
+//     3. 車種固有の未検証な数値を断定せず、試す方向を最大二つ提案する
+//     4. 次の走行で比較する観測項目を一つ指定する
+//   数値は live テレメトリにある実測だけを使う。無ければ触れない（捏造しない）。
+const SETUP_DIRECTIONS = {
+  understeer: {
+    ja: ['フロントのアンチロールバーを1段柔らかく', 'リアの車高をわずかに上げる'],
+    en: ['soften the front anti-roll bar one step', 'raise the rear ride height slightly'],
+  },
+  oversteer: {
+    ja: ['リアのアンチロールバーを1段柔らかく', 'リアウイングを1段立てる'],
+    en: ['soften the rear anti-roll bar one step', 'add one step of rear wing'],
+  },
+  tyre_degradation: {
+    ja: ['タイヤ内圧を少し下げて発熱を抑える', 'ブレーキバイアスをわずかに後ろへ'],
+    en: ['drop tyre pressures slightly to limit heat build-up',
+         'move brake bias marginally rearward'],
+  },
+  unspecified: {
+    ja: ['まず1周、同じラインで基準を取る'],
+    en: ['run one reference lap on a consistent line first'],
+  },
+};
+
+function buildHandlingSetupAdvice(live, lang, card) {
+  const isJa = ja(lang);
+  const w = (live && live.weather) || {};
+  const track = finite(w.track_temp_c);
+  const air = finite(w.air_temp_c);
+  const symptom = (card && card.symptom) || 'unspecified';
+  const symptomJP = { understeer: 'アンダー', oversteer: 'オーバー',
+                      tyre_degradation: 'タイヤの垂れ', unspecified: '症状' }[symptom];
+  const symptomEN = { understeer: 'understeer', oversteer: 'oversteer',
+                      tyre_degradation: 'tyre degradation', unspecified: 'the symptom' }[symptom];
+
+  // 1. 実測の環境値（取れているものだけ）
+  const env = [];
+  if (track != null) env.push(isJa ? `路面${track.toFixed(1)}℃` : `track ${track.toFixed(1)}C`);
+  if (air != null) env.push(isJa ? `気温${air.toFixed(1)}℃` : `air ${air.toFixed(1)}C`);
+  const envText = env.length
+    ? (isJa ? `${env.join('、')}。` : `${env.join(', ')}. `)
+    : '';
+
+  // 3. 方向は最大二つ。車種固有の数値は断定しない。
+  const directions = (SETUP_DIRECTIONS[symptom] || SETUP_DIRECTIONS.unspecified)[isJa ? 'ja' : 'en']
+    .slice(0, 2);
+
+  if (isJa) {
+    return `${envText}${symptomJP}は低速・中速・高速のどこが強い？`
+         + `車種ごとの正解値は断定できないから、試すなら${directions.join('か、')}。`
+         + `次の走行では、コーナー脱出のスロットル開け始めの位置だけ比べて教えて。`;
+  }
+  return `${envText}Where is ${symptomEN} strongest — slow, medium or fast corners? `
+       + `I will not guess car-specific numbers, but you could ${directions.join(', or ')}. `
+       + `Next run, compare only where you can pick up the throttle on corner exit.`;
+}
+
 function buildUnresolved(lang) {
-  return ja(lang) ? '今は確定のコールを出さない。次のS/F通過で燃料、残り、前後GAPを更新する。' : 'No confirmed call yet. I will update fuel, remaining distance and gaps at the next S/F crossing.';
+  return ja(lang) ? '今、ここでは伝えられない。'
+    : 'I cannot share that here.';
 }
 
 function buildSessionFormat(live, lang) {
@@ -610,6 +719,7 @@ function build(card, live, lang = 'en') {
     [TOPIC.PACE]: buildPace, [TOPIC.CURRENT_POSITION]: buildCurrentPosition,
     [TOPIC.LEADER_GAP]: buildLeaderGap, [TOPIC.TYRE_STATUS]: buildTyreStatus,
     [TOPIC.DAMAGE_STATUS]: buildDamageStatus, [TOPIC.WEATHER_STATUS]: buildWeatherStatus,
+    [TOPIC.HANDLING_SETUP_ADVICE]: (l, lg) => buildHandlingSetupAdvice(l, lg, card),
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
     [TOPIC.SESSION_FORMAT]: buildSessionFormat,
   };

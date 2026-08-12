@@ -58,6 +58,18 @@ reply = cards.build(card, { fuel: 0.0, fuel_strategy: {} }, 'ja');
 check('fuel starvation bypasses next-S/F deferral',
   card.topic === cards.TOPIC.FUEL_EMERGENCY && /燃料0\.0L.*ピット到達は保証できない.*次のS\/F待ちはしない/.test(reply), reply);
 
+// ★Build 266 Codex 差戻し⑨：会話handler(buildFuelEmergency)は無線側が既に確定した
+//   fuel_band を同じ権威として読む。band=safeなのに"保証できない"と矛盾させない。
+card = cards.classify('ピットまで持たないと思うよ。');
+reply = cards.build(card, { fuel: 20.0, fuel_strategy: { fuel_band: 'safe' } }, 'ja');
+check('fuel emergency reply agrees with an already-confirmed safe fuel_band',
+  card.topic === cards.TOPIC.FUEL_EMERGENCY
+  && /燃料20\.0L.*安全域.*ガス欠の兆候はない/.test(reply)
+  && !/保証できない/.test(reply), reply);
+reply = cards.build(card, { fuel: 20.0, fuel_strategy: {} }, 'ja');
+check('fuel emergency reply still hedges when fuel_band is unknown',
+  /ピット到達は保証できない/.test(reply), reply);
+
 card = cards.classify('何リットル不足する？計算なの？ゴールまで。');
 reply = cards.build(card, beforePit, 'ja');
 check('fuel plan gives current/required/add/set',
@@ -219,9 +231,9 @@ routed = cards.route('タイヤ摩耗は？', {
 check('running tyre-wear query waits for pit return',
   routed.card.tyreQuery === 'wear' && /ピット帰還後/.test(routed.reply) && !/100\.0%/.test(routed.reply), routed.reply);
 const unknownRoute = cards.route('ピットの魔法を使える？', build255Live, 'ja', { race:true });
-check('unhandled operational request creates a deterministic follow-up promise',
+check('unhandled operational request uses the short confidential no-data reply',
   unknownRoute && unknownRoute.card.topic===cards.TOPIC.UNRESOLVED_OPERATIONAL
-  && unknownRoute.status==='deferred' && /次のS\/F通過で燃料、残り、前後GAPを更新/.test(unknownRoute.reply));
+  && unknownRoute.status==='deferred' && unknownRoute.reply==='今、ここでは伝えられない。');
 card = cards.classify('燃料 0になってるけど。', {race:true});
 reply = cards.build(card, {...build255Live, fuel:0}, 'ja');
 check('fuel-zero wording routes to an immediate measured emergency handler',
@@ -324,13 +336,17 @@ check('initial Plan A/B radio becomes Luna working state',
   renderer.includes("case 'initial_strategy_plans'")
   && renderer.includes("data.trigger==='initial_strategy_plans'")
   && renderer.includes('strategyOptions:data.strategy_options'));
+// ★Plan B定義の判断（2026-08-12）：B は「1周延長」ではなく条件付きアンダーカット。
+// 旧文言（1周延長／延長案）が残っていないことも併せて確認する。
 check('Plan A target has a proactive measured A/B decision path',
   renderer.includes("case 'strategy_plan_decision'")
   && renderer.includes("data.trigger==='strategy_plan_decision'")
-  && /燃料タイミングは1周延長/.test(renderer));
+  && /アンダーカットに行く/.test(renderer));
 check('selected Plan B has a separate next-lap box call',
   renderer.includes("case 'strategy_plan_box_call'")
-  && renderer.includes("1周延長案、予定どおりこの周でピット"));
+  && renderer.includes("予定どおりこの周でピット"));
+check('Plan Bの無線に「延長」が混ざらない',
+  !/アンダーカットに行く[^`]*延長/.test(renderer));
 check('executed Plan A/B outcome is persisted and traceable',
   renderer.includes('recordStrategyOptionOutcome(data)')
   && renderer.includes("'pw_strategy_option_outcomes'")

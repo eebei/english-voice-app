@@ -8,7 +8,7 @@ Replays the actual Monza 35 GT3 one-make event order from
 
 Bridge must:
   (1) NOT broadcast fuel_strategy_warning at lap 5 (plan A window is reachable).
-  (2) Broadcast strategy_plan_decision exactly once at lap 14 (planned pit).
+  (2) Broadcast strategy_plan_decision exactly once at lap 15 (planned pit).
   (3) Never silently suppress: PLAN FUEL AUTHORITY trace must be emitted.
 """
 
@@ -54,9 +54,12 @@ class Monza35EventOrder(unittest.TestCase):
         self.assertTrue(self.options.get('available'),
                         'plan should build from Monza 35 inputs')
         self.plan_a = self.options.get('plan_a') or {}
-        # The bridge logs "plan_a.target_lap=14" for this scenario.
-        self.assertEqual(self.plan_a.get('target_lap'), 14,
-                         'Monza 35 plan A first stop must be lap 14')
+        # ★Plan B定義の判断（2026-08-12）で A/B の意味を入れ替えたため、同じ入力でも
+        #   Plan A の目標周が変わる。旧契約では A=latest_safe-1（lap 15）だったが、
+        #   新契約では A=latest_safe（lap 15）＝通常ペースで成立する最後の燃料安全周。
+        #   参照ログは旧契約時点の記録であり、周番号そのものは追随させる。
+        self.assertEqual(self.plan_a.get('target_lap'), 15,
+                         'Monza 35 plan A first stop is the latest fuel-safe lap')
 
     # --- Frame 1: lap 5 fuel-band goes critical ------------------------------
     def test_lap5_plan_authority_suppresses_pit_now(self):
@@ -77,19 +80,19 @@ class Monza35EventOrder(unittest.TestCase):
                          'plan authority MUST suppress P0 at lap 5')
         self.assertEqual(verdict['suppression_reason'], 'plan_window_reachable')
         self.assertEqual(verdict['plan_id'], 'A')
-        self.assertEqual(verdict['next_pit_lap'], 14)
-        self.assertEqual(verdict['laps_to_pit'], 9)
+        self.assertEqual(verdict['next_pit_lap'], 15)
+        self.assertEqual(verdict['laps_to_pit'], 10)
         self.assertGreater(verdict['reach_pit_margin_l'], 0,
                            'plan window must be reachable with margin > 0')
 
     # --- Frame 2: at plan A target lap ---------------------------------------
-    def test_lap14_plan_decision_fires_once(self):
+    def test_lap15_plan_decision_fires_once(self):
         # Reaching the target lap consumes ~ (14-5) * 3.641 = 32.8L from the
-        # lap-5 snapshot; the driver actually reaches lap 14 with ~4.75L
+        # lap-5 snapshot; the driver actually reaches lap 15 with ~4.75L
         # (matching the log's fuel_at_stop_l=4.75).
         decision = strategy_options_mod.decide_at_plan_a(
             self.options,
-            current_lap=14, current_fuel_l=4.75, avg_fuel_per_lap_l=3.641,
+            current_lap=15, current_fuel_l=4.75, avg_fuel_per_lap_l=3.641,
             pit_now_forecast={'available': False},
             pit_next_lap_forecast={'available': False})
         self.assertTrue(decision.get('available'),
@@ -102,17 +105,17 @@ class Monza35EventOrder(unittest.TestCase):
         self.assertIn(decision.get('selected_plan'), ('A', 'B'))
         self.assertIn('decision_id', decision)
 
-    # --- Frame at lap 14 with COMPLETE proofs → SUPPRESS. ---------------------
+    # --- Frame at lap 15 with COMPLETE proofs → SUPPRESS. ---------------------
     # ★Codex 差戻し 3：target-lap suppression is conditional on capacity fits,
     #   planned_add is defined, AND post-stop finish margin >= 0.  With all
     #   three proofs, strategy_plan_decision is the sole speaker.
-    def test_lap14_plan_authority_suppresses_when_all_proofs_hold(self):
+    def test_lap15_plan_authority_suppresses_when_all_proofs_hold(self):
         fuel_eval = {'band': fuel_strategy_mod.CRITICAL, 'should_warn': True,
                      'margin_l': -3.0, 'previous_band': None,
                      'reason': 'warning_candidate'}
         verdict = plan_fuel_authority_mod.evaluate(
             fuel_eval, self.options,
-            current_lap=14, fuel_level_l=4.75, avg_fuel_per_lap_l=3.641,
+            current_lap=15, fuel_level_l=4.75, avg_fuel_per_lap_l=3.641,
             effective_capacity_l=53)
         self.assertFalse(verdict['allow_p0_pit_now'],
                          'complete proofs at target lap: P0 suppressed, strategy speaks')
@@ -121,7 +124,7 @@ class Monza35EventOrder(unittest.TestCase):
         self.assertTrue(verdict['capacity_fits_plan'])
         self.assertGreaterEqual(verdict['finish_margin_after_stop_l'], 0)
 
-    def test_lap14_authority_allows_p0_when_capacity_does_not_fit(self):
+    def test_lap15_authority_allows_p0_when_capacity_does_not_fit(self):
         # Overshoot the plan's add_fuel_l to exceed capacity.
         options = dict(self.options)
         options['plan_a'] = dict(options['plan_a'])
@@ -131,14 +134,14 @@ class Monza35EventOrder(unittest.TestCase):
                      'reason': 'warning_candidate'}
         verdict = plan_fuel_authority_mod.evaluate(
             fuel_eval, options,
-            current_lap=14, fuel_level_l=4.75, avg_fuel_per_lap_l=3.641,
+            current_lap=15, fuel_level_l=4.75, avg_fuel_per_lap_l=3.641,
             effective_capacity_l=53)
         self.assertTrue(verdict['allow_p0_pit_now'],
                         'proof-incomplete at target lap must NOT silence P0')
         self.assertEqual(verdict['override_reason'],
                          'planned_pit_lap_but_strategy_proof_incomplete')
 
-    def test_lap14_authority_allows_p0_when_finish_margin_missing(self):
+    def test_lap15_authority_allows_p0_when_finish_margin_missing(self):
         # No remaining_crossings_after_stop → cannot prove finish; safe side.
         options = dict(self.options)
         options['plan_a'] = dict(options['plan_a'])
@@ -148,7 +151,7 @@ class Monza35EventOrder(unittest.TestCase):
                      'reason': 'warning_candidate'}
         verdict = plan_fuel_authority_mod.evaluate(
             fuel_eval, options,
-            current_lap=14, fuel_level_l=4.75, avg_fuel_per_lap_l=3.641,
+            current_lap=15, fuel_level_l=4.75, avg_fuel_per_lap_l=3.641,
             effective_capacity_l=53)
         self.assertTrue(verdict['allow_p0_pit_now'])
         self.assertEqual(verdict['override_reason'],
@@ -211,8 +214,8 @@ class Monza35FullTimeline(unittest.TestCase):
     """Walk the whole 21-lap Monza 35 race and verify the integrated dispatch
     order.  Fuel-band goes critical from lap 5 onward (finish requirement
     ~ 76L vs 37L on board).  The plan authority must suppress on every
-    frame between lap 5 and lap 13 (inclusive), and must permit on lap 14.
-    The plan-decision (planned pit) fires exactly once at lap 14."""
+    frame between lap 5 and lap 13 (inclusive), and must permit on lap 15.
+    The plan-decision (planned pit) fires exactly once at lap 15."""
 
     def _decide_at(self, options, *, lap, fuel):
         # Simulates the bridge's per-frame decisions with the same modules
@@ -232,11 +235,11 @@ class Monza35FullTimeline(unittest.TestCase):
         options = build_monza35_strategy_options(
             current_lap=5, fuel_level_l=37.63, avg_fuel=3.641)
         target_lap = options['plan_a']['target_lap']
-        self.assertEqual(target_lap, 14)
+        self.assertEqual(target_lap, 15)
 
         fuel = 37.63
         events = []  # each frame's (lap, band, allow_p0, reason)
-        for lap in range(5, 15):
+        for lap in range(5, 16):
             eval_, authority = self._decide_at(options, lap=lap, fuel=fuel)
             events.append((lap, eval_['band'], authority['allow_p0_pit_now'],
                           authority['suppression_reason']
@@ -253,13 +256,13 @@ class Monza35FullTimeline(unittest.TestCase):
             self.assertEqual(reason, 'plan_window_reachable',
                              f'lap {lap} suppression reason must be plan_window_reachable')
 
-        # Lap 14: authority SUPPRESSES the P0.  The strategy path
+        # Lap 15 (= Plan A target): authority SUPPRESSES the P0.  The strategy path
         # (strategy_plan_decision) is the sole speaker at the planned pit lap;
-        # a P0 through here would double-speak.  See test_lap14_plan_decision_fires_once.
-        lap14, band14, allow14, reason14 = events[-1]
-        self.assertEqual(lap14, 14)
+        # a P0 through here would double-speak.  See test_lap15_plan_decision_fires_once.
+        lap15, band14, allow14, reason14 = events[-1]
+        self.assertEqual(lap15, 15)
         self.assertFalse(allow14,
-                         'lap 14 authority MUST suppress P0 (strategy path is sole speaker)')
+                         'lap 15 authority MUST suppress P0 (strategy path is sole speaker)')
         self.assertEqual(reason14,
                          'planned_pit_lap_speaks_via_strategy_decision')
 
@@ -316,7 +319,7 @@ class BridgeWiring(unittest.TestCase):
         self.assertIn('_plan_authority_permits', self.bridge)
         self.assertRegex(self.bridge,
             r"if \(_fuel_eval\.get\('should_warn'\) and not onPit\s*\n\s*"
-            r"and _plan_authority_permits\):")
+            r"and _plan_authority_permits and not _strategy_speech_blocked\):")
 
     def test_suppression_leaves_dedupe_uncommitted(self):
         # commit_band_after_dispatch only commits when dispatch_result is

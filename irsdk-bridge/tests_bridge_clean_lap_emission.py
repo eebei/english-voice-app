@@ -45,10 +45,33 @@ class LapReadoutBroadcastCarriesCleanEvidence(unittest.TestCase):
                 'clean-lap state var %s must be initialised to %s' % (name, initial))
 
     def test_per_frame_updates_mark_pit_road_and_off_track(self):
-        # onPit → _lap_had_pit_road; PlayerTrackSurface not in (-1,1,2,3) → off_track
+        # onPit → _lap_had_pit_road; PlayerTrackSurface confirmation → off_track
         self.assertIn('if onPit:\n            _lap_had_pit_road = True', self.src)
         self.assertIn('_lap_had_off_track = True', self.src)
-        self.assertIn('player_track_surface not in (-1, 1, 2, 3)', self.src)
+
+    def test_off_track_requires_confirmation_not_single_sample(self):
+        # ★Build 266 Codex 差戻し⑧：単発フレームだけで off-track を確定させない。
+        self.assertIn('OFF_TRACK_CONFIRM_SAMPLES = 2', self.src)
+        self.assertIn('_off_track_sample_streak += 1', self.src)
+        i = self.src.index('_off_track_sample_streak += 1')
+        window = self.src[i:i + 200]
+        self.assertIn('if _off_track_sample_streak >= OFF_TRACK_CONFIRM_SAMPLES:', window)
+
+    def test_not_in_world_does_not_affect_streak(self):
+        # NotInWorld(-1) は欠損データとして streak を進めも壊しもしない。
+        i = self.src.index('player_track_surface == -1')
+        window = self.src[i:i + 150]
+        self.assertIn('pass', window)
+
+    def test_confirmed_track_surface_resets_streak(self):
+        i = self.src.index('elif isinstance(player_track_surface, int):')
+        window = self.src[i:i + 100]
+        self.assertIn('_off_track_sample_streak = 0', window)
+
+    def test_streak_resets_on_lap_rollover(self):
+        idx = self.src.index('last_lap_time = lapTime')
+        window = self.src[idx:idx + 700]
+        self.assertIn('_off_track_sample_streak = 0', window)
 
     def test_lap_readout_broadcasts_carry_clean_evidence(self):
         # The evidence must be spread into each of the three lap-readout paths.

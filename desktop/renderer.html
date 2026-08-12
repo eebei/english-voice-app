@@ -686,6 +686,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="memory-action-layer.js"></script>
 <script src="strategy-playbook.js"></script>
 <script src="fuel-plan-guard.js"></script>
+<script src="cost-meter.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -1081,10 +1082,15 @@ async function deliverOperationalFollowUp(){
       telemetry:iracingLive?'live':(bridgeConnected?'bridge':'off'),liveData:lastTelemetry,sessionType:lastSessionType,
       sessionAuthority:lastSessionAuthority,driverState,driverActivity,carClass:lastCarClass,max_tokens:80,usageSessionId};
     applyPitwallAccess(headers,body);
+    typeof costApiCall==='function'&&costApiCall('anthropic', {external:true});
     const res=await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body)});
     if(!res.ok) throw new Error('http '+res.status);
     const data=await res.json();
     const reply=normalizeLunaSpeech((data.content&&data.content[0]&&data.content[0].text||'').trim());
+    // ★生成した時点で原価は発生している。発話まで届かなくても計上する
+    //   （不可視の無駄生成を見えるようにするのが原価ゲートの目的）。
+    typeof costRecord==='function'&&costRecord('generated', {kind:'operational_followup',
+                             tokens:(data && data.usage) || null});
     if(!reply) return;
     addMsg('ai',reply); pushMsg({role:'assistant',content:reply});
     speak(reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'operational_followup',dedupeKey:'operational_followup'});
@@ -1219,6 +1225,22 @@ function updateNamedRivalFromUser(text){
   if(!/ライバル|rival|gap|差|何秒|どれくらい|どのくらい|号車|car\s*#?/i.test(String(text||''))) return;
   const hit=resolveMentionedCompetitor(text);
   if(hit) namedRival={carIdx:hit.car_idx,name:hit.name||'',carNumber:hit.car_number||''};
+}
+// ★Build 266 Phase E：損傷関連の発話だけを bridge へ転送する（軽量フィルタ）。
+//   分類そのもの（front_aero_or_body 等）は bridge 側 session_race_state.
+//   parse_driver_reported_damage() が単一の真実源として行う。ここは
+//   「転送する価値があるか」のゲートに過ぎない（過検出しても bridge 側で弾かれる）。
+const DRIVER_DAMAGE_REPORT_RE = /バンパー|ステアリング\s*コラム|アライメント|ハンドル.{0,6}(?:取られ|流れ|曲が)|フロント.{0,10}(?:壊れ|破損|傷ん)|bumper|steering\s*column|alignment|steering.{0,10}(?:pull|off)|front.{0,10}damag/i;
+function forwardDriverDamageReport(text){
+  const t=String(text||'').trim();
+  if(!t || !DRIVER_DAMAGE_REPORT_RE.test(t)) return;
+  if(selMode!=='race') return;
+  try{
+    if(irBridge && irBridge.readyState===1){
+      irBridge.send(JSON.stringify({cmd:'driver_damage_report', text:t}));
+      diagnosticLog('DRIVER_DAMAGE_REPORT_FORWARDED', t);
+    }
+  }catch(_){}
 }
 function buildNamedRivalNote(isJP){
   if(!namedRival) return '';
@@ -2087,11 +2109,14 @@ function telemetryTruthFallback(live, userText, isJP){
   if(isJP){
     if(live && live.on_pit_road===true) return 'ピットレーン内。';
     if(pitIntent) return sel==='LunaJP' ? 'うん、ボックス準備。' : 'ボックス準備。';
-    return '今は確認できる数値だけで答える。次のS/Fで燃料、残り、前後GAPを更新する。';
+    // ★Build 266 Codex 差戻し⑤：質問と無関係な定型文("次のS/Fで燃料、残り、前後GAPを更新する")を
+    //   出さない。ブロックされたのはテレメトリ未確認の断定claimなので、それ自体を否定するだけに
+    //   留め、無関係な"次のS/F約束"を付け足さない。
+    return '今の発言は実測で確認できていない。断定はしない。';
   }
   if(live && live.on_pit_road===true) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
-  return 'I will use only confirmed values and update fuel, remaining distance and gaps at the next S/F crossing.';
+  return 'That is not confirmed by current telemetry; I will not state it as fact.';
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -2122,6 +2147,7 @@ async function callAPI(inputSource, memoryStatus=''){
     // サーバー側の文字数ゲートへ希望上限を渡す。戦略質問だけは数字と根拠を言い切れる余裕を持たせる。
     const latestUserText = [...messages].reverse().find(m=>m && m.role==='user')?.content || '';
     updateNamedRivalFromUser(latestUserText);
+    forwardDriverDamageReport(latestUserText);
     const isStrategyQuestion = /燃料|給油|リットル|リッター|ピット|戦略|作戦|残り.{0,4}(?:周|時間)|何周|アンダーカット|オーバーカット|fuel|pit|strategy|laps? left|undercut|overcut/i.test(latestUserText);
     const maxChars = selMode==='race' ? (isStrategyQuestion ? 60 : 35)
                    : selMode==='debrief' ? 70
@@ -2158,6 +2184,8 @@ async function callAPI(inputSource, memoryStatus=''){
     chatBody.stream = true;   // ストリーミング要求（文が出来た端から喋る＝流れるような会話）
     const ctrl = new AbortController();
     const fetchTimer = setTimeout(()=>ctrl.abort(), 30000);  // Chat API 30秒でタイムアウト
+    typeof costApiCall==='function'&&costApiCall('anthropic', {external:true});
+    typeof costRecord==='function'&&costRecord('generated', {kind:'reply'});
     const res = await fetch(API_BASE+'/api/chat',{
       method:'POST',
       headers:chatHeaders,
@@ -2167,6 +2195,9 @@ async function callAPI(inputSource, memoryStatus=''){
     if(!res.ok){ clearTimeout(fetchTimer); throw new Error('http '+res.status); }
     const responseAuthority = res.headers.get('X-Pitwall-Authority') || 'llm';
     const responseIntent = res.headers.get('X-Pitwall-Intent') || '';
+    // ★八木さん実走ログ 7-3：技術相談が続いている間はデブリーフへ入らない。
+    //   相談だったという事実は、サーバが返した確定intentで判断する（推測しない）。
+    if(typeof markConsultationTurn==='function') markConsultationTurn(responseIntent);
     // ── ストリーミング受信：チャンクを溜め、文が完成するたびに順次TTS再生 ──
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -2390,6 +2421,20 @@ function updateVolLabel(){
 // ── 発話キュー（二重音声防止：常に1つずつ順番に再生）──
 let ttsAudio = null;          // 現在再生中のCloud TTS audio要素
 let ttsDisabledUntil = 0;     // TTS失敗時はこの時刻まで一時的にWeb Speech。過ぎたらCloud TTSへ自動復帰（恒久無効化しない）
+// ★Build 266 原価ゲート計装（Codex差戻し#7 / 内部シミュレーション正本 §Cost gate）。
+//   生成／キュー投入／TTS要求／後送り／再生／完了／破棄を **別イベント** として記録する。
+//   生成したのに一度も再生されなかった回答は「不可視の無駄生成」として集計される。
+//   ここは会計のみ。発話するかどうかの判断には一切関与しない。
+const costMeter = (typeof window!=='undefined' && window.PitwallCostMeter)
+  ? window.PitwallCostMeter.createMeter() : null;
+let _costReplySeq = 0;
+function costReplyId(kind){ return (kind||'radio')+'#'+(++_costReplySeq); }
+function costRecord(event, detail){
+  try{ if(costMeter) costMeter.record(event, detail||{}); }catch(e){}
+}
+function costApiCall(provider, detail){
+  try{ if(costMeter) costMeter.recordApiCall(provider, detail||{}); }catch(e){}
+}
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
 let speakQueue = [];          // 発話待ち行列（{text,prio,kind,ts,dedupeKey}）
 let currentSpeakPrio = 9;     // 再生中の優先度（割り込み判定用・9=何も鳴っていない）
@@ -2412,7 +2457,9 @@ const MAX_RADIO_QUEUE = 2;    // 溜まりすぎた古いラジオは捨てる�
 // ★Build 265 fix E：割り込みで消えかけた P2 の personal_best / ラップ読み上げを
 //   バウンドされた一度きりの後送りへ回すため、現在再生中の item を保持する。
 let currentSpeakItem = null;
-const SPEAK_DEFER_KINDS = new Set(['personal_best','session_best','first_lap']);
+// ★Build 266 Codex 差戻し⑦：'lap_time' もクリーン周ごとの決定論的候補（一度きり発行）なので、
+//   P0割り込みで消える場合は他のラップ読み上げ種別と同じく後送り対象にする(無言消滅の禁止)。
+const SPEAK_DEFER_KINDS = new Set(['personal_best','session_best','first_lap','lap_time']);
 const SPEAK_DEFER_MAX = 1;
 
 // text を発話キューに積む。priority=true（ドライバーへの会話返答）は古いラジオを捨てて先頭へ。
@@ -2460,10 +2507,15 @@ function speak(text, opts){
   const prio = (typeof o.prio === 'number') ? o.prio : SPEAK_PRIO.P4_INFO;
   const kind = o.kind||'radio';
   const item = {text, prio, kind, ts:Date.now(), dedupeKey:o.dedupeKey||null,
+                costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
+  typeof costRecord==='function'&&costRecord('queued', {id:item.costId, kind:kind});
 
   // 同一ハザードの重複は捨てる（「必ず届ける」は「毎サンプル喋る」ではない＝Codex指摘）
-  if(item.dedupeKey && speakQueue.some(q=>q.dedupeKey===item.dedupeKey)) return;
+  if(item.dedupeKey && speakQueue.some(q=>q.dedupeKey===item.dedupeKey)){
+    typeof costRecord==='function'&&costRecord('discarded', {id:item.costId, kind:kind, reason:'duplicate_dedupe_key'});
+    return;
+  }
 
   // 割り込みは一方向：**上位だけが再生中の下位を止められる**。会話はP0/P1を止めない。
   if(prio <= SPEAK_PRIO.P1_HAZARD && isSpeaking && currentSpeakPrio > prio){
@@ -2481,8 +2533,10 @@ function speak(text, opts){
           _deferCount:(displaced._deferCount||0)+1};
         speakQueue.push(deferred);
         diagnosticLog('SPEAK_DEFERRED', 'kind='+displaced.kind+' by=P'+prio+' incoming='+item.kind+' defer_count='+deferred._deferCount);
+        typeof costRecord==='function'&&costRecord('deferred', {id:displaced.costId, kind:displaced.kind});
       } else {
         diagnosticLog('SPEAK_DEFER_DISCARDED', 'kind='+displaced.kind+' by=P'+prio+' incoming='+item.kind+' reason=defer_cap_reached defer_count='+(displaced._deferCount||0));
+        typeof costRecord==='function'&&costRecord('discarded', {id:displaced.costId, kind:displaced.kind, reason:'defer_cap_reached'});
       }
     }
     stopCurrentAudio();
@@ -2492,7 +2546,10 @@ function speak(text, opts){
   if(speakQueue.length > MAX_RADIO_QUEUE + 2){
     let worst=-1, wi=-1;
     speakQueue.forEach((q,i)=>{ if(q.prio>worst){ worst=q.prio; wi=i; } });
-    if(wi>=0 && speakQueue[wi].prio > SPEAK_PRIO.P1_HAZARD) speakQueue.splice(wi,1);
+    if(wi>=0 && speakQueue[wi].prio > SPEAK_PRIO.P1_HAZARD){
+      typeof costRecord==='function'&&costRecord('discarded', {id:speakQueue[wi].costId, kind:speakQueue[wi].kind, reason:'queue_overflow'});
+      speakQueue.splice(wi,1);
+    }
   }
   // 常に優先度順（同順位は到着順）で並べ替える
   speakQueue.sort((a,b)=> a.prio-b.prio || a.ts-b.ts);
@@ -2502,7 +2559,9 @@ function speak(text, opts){
 function speakReplyChunk(text){
   if(!voiceOn || !text) return;
   // 返答の続きは捨てない。会話と同じP2で、到着順を保つため末尾へ。
-  speakQueue.push({text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null, immediate:false});
+  const chunkId=(typeof costReplyId==='function')?costReplyId('reply_chunk'):null;
+  if(typeof costRecord==='function') costRecord('queued', {id:chunkId, kind:'reply_chunk'});
+  speakQueue.push({text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null, immediate:false, costId:chunkId});
   drainQueue();
 }
 
@@ -2575,6 +2634,7 @@ async function drainQueue(){
   const _completeOnce = ()=>{
     if(_completed || myGen !== speakGeneration) return;
     _completed = true;
+    typeof costRecord==='function'&&costRecord('completed', {id:(_it&&_it.costId)||null, kind:(_it&&_it.kind)||'radio'});
     ttsAudio = null;
     onUtteranceDone();
   };
@@ -2645,6 +2705,8 @@ async function drainQueue(){
       speakFetchCtrl = ctrl;
       const fetchTimer = setTimeout(()=>ctrl.abort(), 5000);
       try{
+        typeof costRecord==='function'&&costRecord('tts_requested', {id:(_it&&_it.costId)||null, kind:(_it&&_it.kind)||'radio'});
+        typeof costApiCall==='function'&&costApiCall('google_tts', {external:true, chars:(clean||'').length});
         r = await fetch(API_BASE+'/api/tts',{
           method:'POST', headers:ttsHeaders,
           body:JSON.stringify(ttsBody),
@@ -2702,6 +2764,7 @@ async function drainQueue(){
       _fallbackOnce('audio_element_onerror', err);
     };
     try{
+      typeof costRecord==='function'&&costRecord('played', {id:(_it&&_it.costId)||null, kind:(_it&&_it.kind)||'radio'});
       await audio.play();
       ttsEventLog('cloud_playing', 'voice='+c.gVoice+' chars='+clean.length+
         ' volume='+pwVolume.toFixed(2));
@@ -3184,21 +3247,54 @@ function oishiRadio(d, forSpeech=false){
           ? `この周ボックス。${setting}リットル。残り${oneStopShort.toFixed(1)}リットルはセーブかスプラッシュ。`
           : `この周ボックス。${setting}リットル。`;
       }
+    // ★Plan B定義の判断（2026-08-12）：A=基準／B=条件付きアンダーカット（Aより前）／
+    //   C=条件付きオーバーカット。「1周延長」という言い方は B には使わない。
+    //   未証明の相対ペース・復帰を断定しない。B は「候補」として出すに留める。
     case 'initial_strategy_plans': {
       const options=d.strategy_options||{}, a=options.plan_a||{}, b=options.plan_b||{};
-      if(!a.available||!b.available) return null;
+      if(!a.available) return null;
       const timing=n=>Number(n)===0?'この周':`あと${Math.trunc(Number(n))}周走って`;
-      return `燃料タイミング比較。基準案は${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。1周延長案は次周ピット、給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。延長は燃料予測と復帰トラフィックを再確認して出す。`;
+      const baseline=`燃料タイミング。基準は${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。`;
+      if(!b.fuel_window_open) return baseline;
+      return `${baseline}アンダーカットの窓は${timing(b.target_in_laps)}。前とのペース差と復帰位置が揃えば出す。`;
     }
     case 'strategy_plan_decision': {
-      const selected=d.selected_plan==='B'?'B':'A';
+      const selected=(d.selected_plan==='B'||d.selected_plan==='C')?d.selected_plan:'A';
       const plan=(d.strategy_options&&d.strategy_options[`plan_${selected.toLowerCase()}`])||{};
-      if(selected==='B') return `燃料タイミングは1周延長。もう1周走って、次の周でピット。給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
-      return `燃料タイミングは基準案。この周でピット、給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+      const fuel=Math.trunc(Number(plan.set_fuel_l)||0);
+      if(selected==='B') return `アンダーカットに行く。この周でピット、給油設定${fuel}リットル。`;
+      if(selected==='C') return `延長する。燃費目標を維持して、${Math.trunc(Number(plan.target_in_laps)||0)}周後にピット。給油設定${fuel}リットル。`;
+      return `燃料タイミングは基準。この周でピット、給油設定${fuel}リットル。`;
     }
     case 'strategy_plan_box_call': {
-      const b=(d.strategy_options&&d.strategy_options.plan_b)||{};
-      return `1周延長案、予定どおりこの周でピット。給油設定${Math.trunc(Number(b.set_fuel_l)||0)}リットル。`;
+      const sel=(d.selected_plan==='C')?'c':'b';
+      const plan=(d.strategy_options&&d.strategy_options[`plan_${sel}`])||{};
+      return `予定どおりこの周でピット。給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+    }
+    // ★Build 266 Codex差戻し#5：strategy_recalculation の日本語ケース。
+    //   これが無いと injectRadio が bridge の英語 driver_message をそのまま
+    //   LunaJP に喋らせる（上の pit_box_here と同じ実走事故の形）。
+    //   英語 message は読まない。reason / category という構造化フィールドだけから
+    //   日本語を組み立てる＝発話の権威は bridge の状態、文面はこちら側。
+    //   unknown reason でも英語へ落とさないため、必ず日本語を返す。
+    case 'strategy_recalculation': {
+      const part={
+        steering_or_front_end:'操舵異常',
+        steering_alignment:'アライメント異常',
+        front_aero_or_body:'フロントの損傷'
+      }[d.category]||'異常';
+      switch(d.reason){
+        case 'driver_reported_damage':
+          return `${part}の申告あり。通常ペース前提を外した。次の有効周で燃費を更新する。`;
+        case 'repair_detected_or_opt_not_taken':
+          return `損傷を確認。通常ペース前提は保留。次の有効周で燃費を更新する。`;
+        case 'fuel_deviation':
+          return `燃費が基準から変わった。前提を更新する。`;
+        case 'pace_deviation':
+          return `ペースが基準から変わった。前提を更新する。`;
+        default:
+          return `状況が変わった。前提を更新する。`;
+      }
     }
     case 'tyre_cold':      return `フロント${d.temp}度。温度低い。`;
     case 'tyre_hot':       return `フロント熱だれ。縁石注意。`;
@@ -3213,7 +3309,11 @@ function oishiRadio(d, forSpeech=false){
     case 'pit_box_here':   return `ボックスここ。`;
     case 'pit_box_stop':   return ``;
     case 'fuel_strategy_safe':
-      return `燃料OK。約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。ペースを上げていい。`;
+      // ★Build 266 Phase E：損傷評価が未完の間は「ペースを上げていい」を出さない。
+      //   bridge が push_allowed:false を付けてきた時は保留の一文にする。
+      return d.push_allowed===false
+        ? `燃料は約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。プッシュは損傷評価待ち、保留。`
+        : `燃料OK。約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。ペースを上げていい。`;
     // ★2026-07-24 post_contact_ok（Yuji設計）：crash_check の5秒後に走行継続確認できたら発火。
     //   Pattern B（走行継続）の第二声。Pattern A（停止）は bridge 側で自動抑止＝ここには来ない。
     case 'post_contact_ok': {
@@ -3478,16 +3578,22 @@ function resetLapReadoutCounter(){
 function injectRadio(data){
   if(selMode!=='race') return;
   if(data.trigger==='pit_exit') return;  // limiter_off直後の重複コールは全キャラクターで廃止
-  // ★Build 265 fix — Lap Readout 契約 gate（UI保存 → 実 dispatch 接続）。
+  // ★Build 265/266 fix — Lap Readout 契約 gate（UI保存 → 実 dispatch 接続）。
+  //   Codex 差戻し⑦：候補ごとの運命（発話／policy抑止／P0延期／破棄）を必ず trace する。
+  //   candidate だけ作って無言で消えることを禁止する。
   if(LAP_READOUT_KINDS.has(data.trigger)){
     const readout = lapReadoutPolicyAllows(data.trigger, data, lastTelemetry);
+    const _lapReadoutLapTag = Number.isFinite(Number(lastTelemetry&&lastTelemetry.lap))
+      ? (' lap='+Math.trunc(Number(lastTelemetry.lap))) : '';
     if(!readout.allow){
       diagnosticLog('LAP_READOUT_SUPPRESSED',
         'trigger='+data.trigger+' policy='+readout.policy
         + (Number.isFinite(Number(data.diff))?(' diff='+Number(data.diff)):'')
-        + (Number.isFinite(Number(lastTelemetry&&lastTelemetry.lap))?(' lap='+Math.trunc(Number(lastTelemetry.lap))):''));
+        + _lapReadoutLapTag);
       return;
     }
+    diagnosticLog('LAP_READOUT_DISPATCHED',
+      'trigger='+data.trigger+' policy='+readout.policy + _lapReadoutLapTag);
   }
   // ★Build 265 fix A：燃料P0は必ずプラン認識ガードを通す。
   //   選択中プランの次ピット窓に到達可能で、planned service が完走できる場合、
@@ -3569,7 +3675,7 @@ function buildActiveRaceFactsNote(isJP){
   if(options&&options.available){
     const a=options.plan_a||{}, b=options.plan_b||{};
     notes.push(isJP
-      ? `【発話済み燃料タイミング比較】基準案: ${a.target_in_laps}周後pit、給油設定${a.set_fuel_l}L。1周延長案: ${b.target_in_laps}周後pit、給油設定${b.set_fuel_l}L。選択中は${options.selected_plan==='B'?'延長':'基準'}。最新の燃料と復帰比較で更新せよ。`
+      ? `【発話済み燃料タイミング】基準(A): ${a.target_in_laps}周後pit、給油設定${a.set_fuel_l}L。アンダーカット(B): ${b.target_in_laps}周後pit、給油設定${b.set_fuel_l}L。選択中は${options.selected_plan==='B'?'アンダーカット':(options.selected_plan==='C'?'延長':'基準')}。最新の燃料と復帰比較で更新せよ。`
       : `[ANNOUNCED FUEL TIMING COMPARISON] Baseline: pit in ${a.target_in_laps} laps, set ${a.set_fuel_l} L. One-lap extension: pit in ${b.target_in_laps} laps, set ${b.set_fuel_l} L. Update only from current fuel and rejoin evidence.`);
   }
   const playbook=activeRaceFacts.strategyPlaybook;
@@ -3944,11 +4050,30 @@ function offerPracticeRunReview(data){
   question.appendChild(startButton);
   document.getElementById('debrief-guide-cancel').textContent=c.cancel;
   document.getElementById('debrief-guide-actions').style.display='none';
+  if(consultationInProgress()){
+    diagnosticLog('DEBRIEF_OFFER_SUPPRESSED', 'reason=consultation_in_progress');
+    return;
+  }
   const msg=isJP?'練習データがまとまったよ。このスティントを振り返る？'
     :'The practice data is ready. Shall we review this stint?';
   addMsg('ai',msg);pushMsg({role:'assistant',content:msg});speak(msg);
 }
+// ★八木さん実走ログ 7-3（2026-08-11）：高路温・アンダーステア・セットアップの
+//   相談が続いている最中に、デブリーフ質問が割り込んだ。
+//   相談turnが継続中はデブリーフへ入らない。明示的な開始か、相談が途切れてからにする。
+const CONSULTATION_QUIET_MS = 90 * 1000;
+let lastConsultationAt = 0;
+function markConsultationTurn(topic){
+  if(topic==='handling_setup_advice') lastConsultationAt = Date.now();
+}
+function consultationInProgress(){
+  return (Date.now() - lastConsultationAt) < CONSULTATION_QUIET_MS;
+}
 function startPracticeRunReview(data){
+  if(consultationInProgress()){
+    diagnosticLog('DEBRIEF_SUPPRESSED', 'reason=consultation_in_progress');
+    return;
+  }
   switchMode('debrief');beginEvidenceDebrief(data||buildPracticeRunSummary());
 }
 function startManualRunReview(){
