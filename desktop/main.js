@@ -419,47 +419,32 @@ async function checkForUpdate(rendererReady = Promise.resolve()) {
     const localN = parseInt(buildTag.replace('-', ''), 10);
     const remoteN = parseInt(latestTag.replace('-', ''), 10);
     if (remoteN > localN) {
-      log('update required (blocking): local=' + buildTag + ' remote=' + latestTag);
-      // ゲートに「現在 Build X / 最新 Build Y」を出す。ローカルはbuild-info.jsonのbuildNum、
-      // リモートはリリース名「… Build N」から取る（利用者に分かりやすい連番で示す）。
+      log('update available: local=' + buildTag + ' remote=' + latestTag);
+      // 利用者を止めない。更新は次のセッション前に選べる任意の案内にする。
       const localBuild = (info.buildNum != null) ? String(info.buildNum) : buildTag;
       const remoteMatch = (release.name || '').match(/Build\s+(\d+)/i);
       const remoteBuild = remoteMatch ? remoteMatch[1] : latestTag;
       const buildLine = 'Current: Build ' + localBuild + '   →   Latest: Build ' + remoteBuild;
-      // 閉じるボタンなし＝強制ゲート。理由：PITWALLはテレメトリ解釈がバージョン依存なので、
-      // 古いクライアントのまま使うと燃料/ギャップ等を「静かに」誤読するリスクがある（＝捏造と同じ害）。
-      // iRacing自体が採用してる「更新しないと入れない」方式に合わせる。
       await rendererReady;
       if (win && !win.isDestroyed()) win.webContents.executeJavaScript(`
         (function(){
-          if (document.getElementById('omoray-update-gate')) return;
+          if (document.getElementById('omoray-update-note')) return;
           var g = document.createElement('div');
-          g.id = 'omoray-update-gate';
-          g.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(7,8,15,.97);color:#eee;' +
-            'font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;' +
-            'justify-content:center;text-align:center;padding:40px';
+          g.id = 'omoray-update-note';
+          g.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:99999;width:min(360px,calc(100vw - 36px));' +
+            'background:#131625;color:#eee;border:1px solid #41476a;border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.45);' +
+            'font-family:system-ui,sans-serif;padding:16px';
           g.innerHTML =
-            '<div style="font-size:15px;letter-spacing:2px;color:#9D4EDD;font-weight:700;margin-bottom:14px">UPDATE REQUIRED</div>' +
-            '<div style="font-size:20px;font-weight:700;margin-bottom:10px">A new version is required</div>' +
-            '<div style="font-family:Oxanium,system-ui,sans-serif;font-size:13px;letter-spacing:.5px;color:#cbd5e1;margin-bottom:18px">${buildLine}</div>' +
-            '<div style="font-size:14px;color:#aaa;max-width:440px;margin-bottom:26px;line-height:1.6">' +
-            'An older build may misread telemetry like fuel and gaps. Please update before you drive.' +
-            '<br><span style="color:#777;font-size:13px">古いバージョンのままだと燃料・ギャップ等を正しく読めない場合があります。更新してからご利用ください。</span></div>' +
-            '<a href="${LATEST_EXE_URL}" target="_blank" style="display:inline-block;background:#9D4EDD;color:#fff;' +
-            'font-weight:700;padding:14px 32px;border-radius:10px;text-decoration:none;font-size:15px">' +
-            '⬇ Download the latest version</a>' +
-            '<div style="font-size:12.5px;color:#9aa;margin-top:22px;max-width:470px;text-align:left;line-height:1.75">' +
-            '<b style="color:#cbd">After downloading:</b><br>' +
-            '1. Close this app, then run the new .exe.<br>' +
-            '2. If Windows says "protected your PC": click <b>More info → Run anyway</b> (or right-click the file → Properties → tick <b>Unblock</b> → OK).<br>' +
-            '3. Delete older dated .exe files so you do not launch an old one by mistake. Your settings are kept.<br>' +
-            '<span style="color:#788;display:block;margin-top:8px">DL後：① このアプリを閉じて新しいexeを起動 ②「WindowsによってPCが保護されました」が出たら<b>詳細情報→実行</b>（または右クリック→プロパティ→<b>「許可する」にチェック</b>→OK） ③ 古い日付のexeは削除して誤起動を防止（設定は引き継がれます）</span>' +
-            '</div>';
+            '<button id="omoray-update-later" aria-label="Close" style="position:absolute;right:9px;top:7px;border:0;background:transparent;color:#aab;font-size:22px;cursor:pointer">×</button>' +
+            '<div style="font-size:15px;font-weight:700;margin-bottom:6px">Update available</div>' +
+            '<div style="font-size:13px;color:#bbc3da;margin-bottom:14px">${buildLine}<br>次のセッション前に、都合のよい時に更新できます。</div>' +
+            '<a href="${LATEST_EXE_URL}" target="_blank" style="display:inline-block;background:#9D4EDD;color:#fff;font-weight:700;padding:10px 16px;border-radius:8px;text-decoration:none;font-size:14px">Update when ready</a>';
           document.body.appendChild(g);
+          document.getElementById('omoray-update-later').onclick = function(){ g.remove(); };
           var s = document.getElementById('omoray-update-check-shield');
           if (s) s.remove();
         })();
-      `).catch((e) => log('update gate inject failed: ' + e.message));
+      `).catch((e) => log('update note inject failed: ' + e.message));
     } else {
       await dismissUpdateCheckShield(rendererReady);
       log('up to date (local=' + buildTag + ')');
