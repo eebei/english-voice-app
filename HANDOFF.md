@@ -88,6 +88,24 @@ These are measured usage plus pricing estimates, not reconciled invoices. Anthro
 
 Cost varies heavily by behavior: observed daily user rates ranged from roughly `$0.0245` to `$1.1130` per connected hour. Do not price from the blended average alone. Build 266 must expose generated-but-not-played speech and wasted-generation cost before its strategy-radio expansion is considered cost-verified.
 
+## Upcoming Founding renewals
+
+Stripe screenshots supplied by Yuji on 2026-08-12 confirm that the two original one-month-free testers are active Founding subscriptions, not standalone expiring beta grants:
+
+- Masato Takeda: first `$29.99` invoice scheduled for 2026-08-17.
+- Masao Kamijo (Dirt): first `$29.99` invoice scheduled for 2026-08-21.
+
+If they continue, Stripe charges automatically and PITWALL access remains active. If they do not continue, the subscription must be cancelled before its invoice date. The current webhook circuit handles `customer.subscription.deleted` and terminal `customer.subscription.updated` states by setting `users.is_member=false` and revoking the linked exe code; the entitlement middleware then blocks chat, translate, TTS, and STT on every request.
+
+Operational audit:
+
+1. Confirm each driver's intention before the invoice date; do not cancel on assumption.
+2. After a requested cancellation/end date, verify the Stripe subscription state and corresponding PITWALL member/access-code state.
+3. Check the next day's usage report for unexpected API usage.
+4. If the webhook or state reconciliation fails, use the existing admin member revoke as the immediate fail-safe and investigate before restoring access.
+
+Do not treat `billing_start` on legacy beta tokens as an expiry control; it is not enforced by `verifyBetaToken()`.
+
 ## Commercial state and forecast
 
 Known commercial facts:
