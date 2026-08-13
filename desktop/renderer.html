@@ -3256,7 +3256,7 @@ function oishiRadio(d, forSpeech=false){
       const timing=n=>Number(n)===0?'この周':`あと${Math.trunc(Number(n))}周走って`;
       const baseline=`燃料タイミング。基準は${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。`;
       if(!b.fuel_window_open) return baseline;
-      return `${baseline}アンダーカットの窓は${timing(b.target_in_laps)}。前とのペース差と復帰位置が揃えば出す。`;
+      return `${baseline}アンダーカットの窓は${timing(b.target_in_laps)}。前走車とのペース差と復帰位置が揃えば出す。`;
     }
     case 'strategy_plan_decision': {
       const selected=(d.selected_plan==='B'||d.selected_plan==='C')?d.selected_plan:'A';
@@ -3314,6 +3314,8 @@ function oishiRadio(d, forSpeech=false){
       return d.push_allowed===false
         ? `燃料は約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。プッシュは損傷評価待ち、保留。`
         : `燃料OK。約${Number(d.margin_l||0).toFixed(1)}リットル余る見込み。ペースを上げていい。`;
+    case 'fuel_margin_hold':
+      return `残量下方修正。ペースキープ。`;
     // ★2026-07-24 post_contact_ok（Yuji設計）：crash_check の5秒後に走行継続確認できたら発火。
     //   Pattern B（走行継続）の第二声。Pattern A（停止）は bridge 側で自動抑止＝ここには来ない。
     case 'post_contact_ok': {
@@ -3352,7 +3354,9 @@ function oishiRadio(d, forSpeech=false){
     case 'danger_behind': return `注意。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバー（${d.reason}）。`;
     case 'danger_ahead':  return `抜く時気をつけて。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバー（${d.reason}）。`;
     case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
-    case 'stopped_ahead':  return `前方に停止車両。${d.delta}秒。注意。`;
+    case 'stopped_ahead':  return Number.isFinite(Number(d.delta))
+      ? `前方に停止車両。${d.delta}秒。注意。`
+      : `前方に停止車両。注意。`;
     case 'damage_report':
       return d.mandatory ? `義務修理、約${fmtDuration(d.repair_mand,true)}。次ピット。`
                           : `挙動に異常なければ継続。`;
@@ -3518,21 +3522,19 @@ function _judgeCleanFromEvidence(ev){
 }
 function lapReadoutPolicyAllows(trigger, data, telemetry){
   if(!LAP_READOUT_KINDS.has(trigger)) return { allow:true, policy:'not_lap_readout' };
-  // 契約 unsigned は enforcement 対象外（旧挙動と一致・LLM 側の Minimum Mode に任せる）。
-  // 契約 signed のドライバーは UI で選んだ policy を dispatch で強制する。
-  let signed=false, policy='every_clean_lap';
+  // ラップ読み上げは Settings の直接設定であり、契約の署名状態に従属させない。
+  // Build 266では未署名時にここを迂回して毎周発話していた。選んだ4択は必ず実行する。
+  let policy='every_clean_lap';
   try{
     const raw = localStorage.getItem('pw_contract');
     if(raw){
       const c = JSON.parse(raw);
-      signed = !!(c && c.signed);
       const value = c && c.pace && c.pace.readout;
       // 旧値（every_lap / after_change / none 等）もここで一度受け取り、下の未知判定で
       // trace に残してから safe-side へ倒す。silent-loss を作らない。
       if(typeof value === 'string' && value) policy = value;
     }
   }catch(_){}
-  if(!signed) return { allow:true, policy:'contract_unsigned' };
   // 未知の value（旧値がまだ localStorage に残っている場合）は
   // safe-side として通す（invisible-loss 禁止・旧値を silently 解釈しない）。
   if(!LAP_READOUT_POLICIES.includes(policy)){
@@ -3804,6 +3806,12 @@ function extractJudgeSpeech(reply, kind){
 }
 
 async function runJudgeCall(data){
+  // 最終周の通常バトル情報は、追い上げられている事実だけを伝えて
+  // 不要なプレッシャーにしない。P0の横並び／停止車はbridgeから別経路で即時に来る。
+  if(finalLapNoticeSeen && ['catchup','defend','battle'].includes(data && data.kind)){
+    diagnosticLog('FINAL_LAP_BATTLE_SUPPRESSED', 'kind='+(data && data.kind));
+    return;
+  }
   usageCount('auto_judge');
   const authToken = localStorage.getItem('pw_auth_token');
   const headers = {'Content-Type':'application/json'};
@@ -4667,9 +4675,7 @@ function updateContract(patch){
   }
   return saveContract(next);
 }
-// ★Build 265 Codex 差戻し 2：Settings の Lap Readout select と契約 pace.readout を接続。
-//   UI が変わったら pw_contract を更新し（signed=true を含める・enforcement を有効化）、
-//   trace に残す。読込側も呼び出せるよう public。
+// Settings の Lap Readout select と保存値を接続する。読み上げ設定は契約署名と独立。
 function hydrateLapReadoutSelect(){
   const sel = document.getElementById('lap-readout-select');
   if(!sel) return;
@@ -4684,18 +4690,17 @@ function onLapReadoutChanged(){
   const value = sel.value;
   const known = ['off','best_only','every_2_laps','every_clean_lap'];
   if(!known.includes(value)) return;
-  // Settings で明示的に選んだ = 契約 signed 相当。enforcement 対象へ昇格させる。
+  // Settings で明示的に選んだ値は、契約の署名有無にかかわらず dispatch で強制する。
   const cur = loadContract();
   const next = {
     ...cur,
-    signed: true,
     pace: { ...(cur.pace || {}), readout: value },
     updated: new Date().toISOString(),
   };
   saveContract(next);
   // ポリシー切替時は Every 2 laps カウンタもリセット（前の設定の途中状態を持ち越さない）。
   try{ resetLapReadoutCounter(); }catch(_){}
-  try{ diagnosticLog('LAP_READOUT_POLICY', 'set='+value+' signed=true'); }catch(_){}
+  try{ diagnosticLog('LAP_READOUT_POLICY', 'set='+value); }catch(_){}
 }
 function buildContractNote(isJ){
   // LLMへ渡すシステム指示テキスト。未契約時は"最小限モード"と明示。
@@ -5339,7 +5344,7 @@ function updateStrategyPlaybookFromLive(live){
   strategyPlaybookLiveUpdateKey=materialKey;
 
   const msg=isJP
-    ? `当日クリーン${updated.evidence.live_fuel_samples}周、燃費${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)}L/周でPlan A・B・Cを更新した。`
+    ? `当日クリーン${updated.evidence.live_fuel_samples}周、燃費${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)}L/周。基準案を再計算、B/Cは条件確認中。`
     : `Plans A, B, and C updated from ${updated.evidence.live_fuel_samples} clean laps at ${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)} litres per lap.`;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
   speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_live_update',dedupeKey:materialKey});
@@ -5362,7 +5367,7 @@ function evaluateLiveStrategySwitch(live){
   const e=decision.evidence||{}, isJP=isJapaneseEngineer();
   let msg;
   if(decision.selected_plan==='B') msg=isJP
-    ? `Plan B、アンダーカット候補。前は${Number(e.gap_ahead_s).toFixed(1)}秒、こちらが${Number(e.player_pace_advantage_s).toFixed(1)}秒速い。今入る物理復帰P${e.physical_rejoin_position}。`
+    ? `Plan B、アンダーカット候補。前走車まで${Number(e.gap_ahead_s).toFixed(1)}秒、こちらが${Number(e.player_pace_advantage_s).toFixed(1)}秒速い。今入る物理復帰P${e.physical_rejoin_position}。`
     : `Plan B, undercut candidate. The gap is ${Number(e.gap_ahead_s).toFixed(1)} seconds and we are ${Number(e.player_pace_advantage_s).toFixed(1)} seconds faster. Physical rejoin P${e.physical_rejoin_position}.`;
   else msg=isJP
     ? `Plan C、オーバーカット候補。前とのペース差は${Math.abs(Number(e.player_pace_advantage_s)).toFixed(1)}秒。燃料は次周まで成立、今P${e.pit_now_position}予測に対して次周P${e.pit_next_lap_position}予測。`
@@ -5745,6 +5750,10 @@ async function transcribePttAudio(data){
       try{
         const sttHeaders={'Content-Type':'application/json'};
         applyPitwallAccess(sttHeaders, payload);
+        // 実STT要求は試行ごとに計上する。通常のfixtureテストではこの経路を通らない。
+        typeof costApiCall==='function'&&costApiCall('google_stt', {
+          external:true, seconds:Number(payload.audioDurationSeconds)||0
+        });
         const r=await fetch(API_BASE+'/api/stt',{
           method:'POST',
           headers:sttHeaders,

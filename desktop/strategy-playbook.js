@@ -214,6 +214,12 @@
   function evaluateSwitch(playbook, live = {}) {
     if (!playbook || !playbook.available || !/race/i.test(String(live.session_type || ''))
         || live.on_track !== true || live.on_pit_road === true) return null;
+    // 履歴プレイブックは「候補を作る」だけで、レース中のPlan B/C決定権は持たない。
+    // 完走周回とFuel Windowを同一frameで確定した bridge の strategy_options が無い限り、
+    // 数字付きのアンダー／オーバー候補を自発発話しない。
+    const authority = live.strategy_options;
+    const crossings = finite(live.fuel_strategy && live.fuel_strategy.estimated_crossings_to_finish);
+    if (!authority || authority.available !== true || !Number.isInteger(crossings)) return null;
     const lap = Math.trunc(finite(live.lap) || 0);
     const gap = finite(live.gap_ahead);
     const paceAdvantage = finite(live.battle_context && live.battle_context.player_pace_advantage_s);
@@ -225,7 +231,9 @@
     const nowLikely = physicalPosition(now, 'likely');
     const nextLikely = physicalPosition(next, 'likely');
     const nowClear = nowLikely != null && now.likely && now.likely.traffic_state !== 'blend_risk';
-    if (undercut.available && lap >= Math.max(1, undercut.first_pit_lap - 1)
+    const authorityB = authority.plan_b || {};
+    if (authority.selected_plan === 'B' && authorityB.fuel_window_open === true
+        && undercut.available && lap >= Math.max(1, undercut.first_pit_lap - 1)
         && lap <= baseline.first_pit_lap && gap <= 1.5 && paceAdvantage >= 0.4 && nowClear) {
       return {
         decision_id: `playbook:${live.session_num ?? 'x'}:${lap}:B`, selected_plan: 'B',
@@ -239,7 +247,7 @@
     const lapsToTarget = overcut.first_pit_lap != null ? Math.max(1, overcut.first_pit_lap - lap) : null;
     const fuelSafe = avg != null && currentFuel != null && lapsToTarget != null
       && currentFuel - avg * lapsToTarget >= RESERVE_L;
-    if (overcut.available && lap >= Math.max(1, baseline.first_pit_lap - 1)
+    if (authority.selected_plan === 'C' && overcut.available && lap >= Math.max(1, baseline.first_pit_lap - 1)
         && lap <= baseline.first_pit_lap && gap <= 1.5 && Math.abs(paceAdvantage) <= 0.3
         && fuelSafe && nowLikely != null && nextLikely != null && nextLikely <= nowLikely) {
       return {
@@ -276,16 +284,15 @@
     }
     const rememberedSessions = Math.max(0, Math.trunc(finite(playbook.evidence && playbook.evidence.historical_session_count) || 0));
     return `${live
-      ? `当日実測${playbook.evidence.live_fuel_l_per_lap.toFixed(2)}L/周で更新した案。`
+      ? `当日実測${playbook.evidence.live_fuel_l_per_lap.toFixed(2)}L/周で基準案を再計算。`
       : `${rememberedSessions ? `保存履歴${rememberedSessions}セッション、` : ''}過去実測${playbook.evidence.historical_fuel_l_per_lap.toFixed(2)}L/周を基準にした暫定案。`}`
-      + `スタート燃料は実効上限${playbook.evidence.starting_fuel_assumption_l.toFixed(1)}L前提。`
-      + `ベースラインは${formatLapList(a)}周目にピット。`
-      + `アンダーカットは${b.available ? `${b.first_pit_lap}周目` : '同じ給油回数では不成立'}。`
-      + `オーバーカットは${c.first_pit_lap}周目、燃費${c.required_fuel_saving_pct.toFixed(1)}%改善が条件。`
+      + `開始はPlan Aを基準にする。`
+      + `Plan Bは燃料ウィンドウ、前との相対ペース、復帰位置がそろった時だけ。`
+      + `Plan Cは節約燃費と次周の復帰が成立した時だけ。`
       + (qualifier != null
-        ? `予選P${Math.trunc(qualifier)}、${undercutFirst ? '後方スタートなのでPlan Bの成立確認を優先する。' : 'Plan Aを開始優先にする。'}`
+        ? `予選P${Math.trunc(qualifier)}、${undercutFirst ? 'Plan Bの成立を優先確認する。' : 'Plan Aを開始優先にする。'}`
         : '予選順位は未確定なので、開始優先は暫定Plan A。')
-      + (live ? '' : `当日クリーン3周で更新する。`);
+      + (live ? '' : `当日クリーン3周で、成立条件を更新する。`);
   }
 
   return { durationSeconds, normalizeFormat, buildPlaybook, updateWithLive, evaluateSwitch, briefing };

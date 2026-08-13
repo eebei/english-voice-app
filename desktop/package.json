@@ -24,6 +24,7 @@
       "main.js",
       "preload.js",
       "renderer.html",
+      "cost-meter.js",
       "memory-action-layer.js",
       "strategy-playbook.js",
       "overlay.html",

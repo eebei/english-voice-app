@@ -95,7 +95,7 @@ reply = cards.build(card, {
   pit_exit_forecast:{available:true,likely:{position:8,traffic_state:'clear_air'}},
 }, 'ja');
 check('verified traffic and pace make undercut root cause explicit',
-  /Plan B、アンダーカットを推奨.*こちらが0\.7秒速く詰まっている.*燃料不足ではなくトラフィック回避.*物理復帰P8/.test(reply), reply);
+  /Plan B、アンダーカットを推奨.*前走車まで0\.8秒.*こちらが0\.7秒速く詰まっている.*燃料不足ではなくトラフィック回避.*物理復帰P8/.test(reply), reply);
 
 card = cards.classify('2リッター 足りないってこと？');
 reply = cards.build(card, {
@@ -288,7 +288,7 @@ reply=cards.route('戦略プランは？',{
   }},
 },'ja',{race:true}).reply;
 check('driver-facing Plan A/B/C meanings are stable',
-  /Plan Aはベースライン5・10周.*Plan Bはアンダーカット4周.*Plan Cはオーバーカット6周/.test(reply),reply);
+  /Plan Aは基準.*Plan Bは燃料ウィンドウ成立時のアンダーカット.*Plan Cは節約燃費が成立した時のオーバーカット.*具体的なピット周は当日計算が揃ってから/.test(reply),reply);
 card = cards.classify('今 16位だけど、なんか 戦略 ある？', {race:true});
 reply = cards.build(card, {...build255Live, class_pos:16, fuel_strategy:{avg_fuel_per_lap:3.63,clean_laps_sampled:1}}, 'ja');
 check('8/9 real strategy wording gives facts and a fuel-evidence condition',
@@ -381,6 +381,8 @@ const outLapLive = {
 reply = cards.build(cards.classify('どう、ペース上げて行った方がいいね。'), outLapLive, 'ja');
 check('post-stop stale Box is suppressed on the out-lap',
   /アウトラップ.*ペースキープ/.test(reply) && !/ピット優先|Box/.test(reply), reply);
+check('out-lap pace answer does not pretend the fuel-save quantity is final',
+  /燃費セーブ量は次の有効周で更新する/.test(reply) && !/ピット完了/.test(reply), reply);
 reply = cards.build(cards.classify('どう、ペース上げて行った方がいいね。'), {
   ...outLapLive, fuel: 20.0,
   fuel_strategy: { ...outLapLive.fuel_strategy, required_fuel_l: 24.5 },
@@ -413,6 +415,22 @@ check('finished race cannot produce another Box plan',
 reply = cards.build(cards.classify('了解'), outLapLive, 'ja');
 check('race acknowledgement is deterministic and number-free',
   reply === '了解。', reply);
+
+const mixedPitSnapshot = {
+  session_type: 'Race', fuel: 22.2,
+  fuel_strategy: { avg_fuel_per_lap: 3.51, laps_of_fuel_left: 0.4,
+    evaluated_fuel_l: 1.5 },
+};
+reply = cards.build(cards.classify('燃料消費は？'), mixedPitSnapshot, 'ja');
+check('post-pit fuel-use recomputes range from current fuel, never the pre-pit snapshot',
+  /平均3\.51L\/周.*約6\.3周/.test(reply) && !/約0\.4周/.test(reply), reply);
+reply = cards.build(cards.classify('ゴールまで燃料は？'), {
+  ...mixedPitSnapshot,
+  fuel_strategy: { ...mixedPitSnapshot.fuel_strategy, estimated_crossings_to_finish: 3,
+    required_fuel_l: 10.6, margin_l: 11.6, pit_required:false },
+}, 'ja');
+check('finish-crossing wording states that the current lap is included',
+  /現在周を含めて、チェッカーまでS\/Fあと3回/.test(reply), reply);
 
 console.log(`\n[Engineer cards] 合格 ${pass} / 不合格 ${fail}`);
 process.exit(fail ? 1 : 0);

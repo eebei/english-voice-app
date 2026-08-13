@@ -24,17 +24,18 @@ check('overcut first stop is lap 6', monza.plans.C.first_pit_lap === 6);
 check('overcut labels required saving', monza.plans.C.required_fuel_saving_pct > 0);
 check('rear-half qualifying prioritises undercut review', monza.opening_priority[0] === 'B');
 check('briefing labels historical evidence provisional', /過去実測.*暫定案.*クリーン3周/.test(playbook.briefing(monza, 'ja')));
-check('qualifying position changes the opening review priority',
-  /予選P15.*後方スタートなのでPlan B/.test(playbook.briefing(monza, 'ja')));
+check('briefing never voices historical pit-lap schedules',
+  /Plan Bは燃料ウィンドウ.*復帰位置.*Plan Cは節約燃費/.test(playbook.briefing(monza, 'ja'))
+  && !/ベースラインは.*周目|アンダーカットは.*周目|オーバーカットは.*周目/.test(playbook.briefing(monza, 'ja')));
 check('planned first add never exceeds tank', monza.plans.A.first_service.estimated_add_l <= 20.14);
-check('start-fuel assumption is explicit, not silently invented',
-  /スタート燃料は実効上限20\.1L前提/.test(playbook.briefing(monza,'ja')));
+check('historical start-fuel assumption stays internal until bridge authority exists',
+  !/スタート燃料は.*前提|給油設定.*L/.test(playbook.briefing(monza,'ja')));
 
 const live = playbook.updateWithLive(monza, { fuel_strategy: { clean_laps_sampled: 3, avg_fuel_per_lap: 3.7 } });
 check('three clean laps replace historical source', live.source === 'live_clean_laps');
 check('live sample count is retained', live.evidence.live_fuel_samples === 3);
 check('live briefing no longer calls itself historical provisional',
-  /当日実測3\.70L\/周で更新した案/.test(playbook.briefing(live, 'ja'))
+  /当日実測3\.70L\/周で基準案を再計算/.test(playbook.briefing(live, 'ja'))
   && !/暫定案|クリーン3周で更新/.test(playbook.briefing(live, 'ja')));
 check('two live laps do not replace history', playbook.updateWithLive(monza, {
   fuel_strategy: { clean_laps_sampled: 2, avg_fuel_per_lap: 3.7 },
@@ -50,12 +51,22 @@ const baseLive = {
 let decision = playbook.evaluateSwitch(monza, {
   ...baseLive, battle_context: { player_pace_advantage_s: 0.7 },
 });
-check('blocked faster driver triggers undercut candidate', decision && decision.selected_plan === 'B', JSON.stringify(decision));
+check('historical playbook never selects a race plan without bridge authority', decision === null, JSON.stringify(decision));
 
 decision = playbook.evaluateSwitch(monza, {
-  ...baseLive, fuel: 12.0, battle_context: { player_pace_advantage_s: 0.1 },
+  ...baseLive,
+  fuel_strategy: { avg_fuel_per_lap: 3.58, estimated_crossings_to_finish: 8 },
+  strategy_options: { available:true, selected_plan:'B', plan_b:{fuel_window_open:true} },
+  battle_context: { player_pace_advantage_s: 0.7 },
 });
-check('similar pace and safe extension triggers overcut candidate', decision && decision.selected_plan === 'C', JSON.stringify(decision));
+check('bridge-authoritative fuel window allows undercut candidate', decision && decision.selected_plan === 'B', JSON.stringify(decision));
+decision = playbook.evaluateSwitch(monza, {
+  ...baseLive, fuel: 12.0,
+  fuel_strategy: { avg_fuel_per_lap: 3.58, estimated_crossings_to_finish: 8 },
+  strategy_options: { available:true, selected_plan:'C', plan_b:{} },
+  battle_context: { player_pace_advantage_s: 0.1 },
+});
+check('bridge-authoritative evidence allows overcut candidate', decision && decision.selected_plan === 'C', JSON.stringify(decision));
 check('missing pace evidence never switches plan', playbook.evaluateSwitch(monza, baseLive) === null);
 check('blend-risk rejoin blocks undercut', playbook.evaluateSwitch(monza, {
   ...baseLive, battle_context: { player_pace_advantage_s: 0.7 },
@@ -92,5 +103,7 @@ check('renderer updates after live clean laps before evaluating a switch',
 check('live decision has trace and speech path',
   renderer.includes("diagnosticLog('STRATEGY_PLAYBOOK_DECISION'")
   && renderer.includes("kind:'strategy_playbook_switch'"));
+check('playbook switch refuses to speak before bridge strategy authority exists',
+  fs.readFileSync(__dirname+'/desktop/strategy-playbook.js','utf8').includes('authority.available !== true'));
 
 console.log(`✅ strategy playbook: ${pass} checks`);

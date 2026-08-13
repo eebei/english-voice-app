@@ -235,7 +235,11 @@ function buildFuelEmergency(live, lang) {
 
 function buildFuelUse(live, lang) {
   const fs = live && live.fuel_strategy || {};
-  const avg = finite(fs.avg_fuel_per_lap), samples = finite(fs.clean_laps_sampled), range = finite(fs.laps_of_fuel_left);
+  const avg = finite(fs.avg_fuel_per_lap), samples = finite(fs.clean_laps_sampled);
+  // fuel_strategy is lap-boundary evidence while live.fuel is a frequent snapshot.
+  // Never read a pit-entry `laps_of_fuel_left` together with post-refuel fuel.
+  const current = finite(live && live.fuel);
+  const range = current != null && avg != null ? current / avg : null;
   if (avg == null) return ja(lang) ? '一周あたりの燃料消費はまだ実測できていない。' : 'Measured fuel use per lap is not ready.';
   return ja(lang)
     ? `平均${avg.toFixed(2)}L/周、クリーン${samples == null ? '不明' : Math.trunc(samples)}周の実測。現在燃料で約${range == null ? '不明' : range.toFixed(1)}周。`
@@ -301,7 +305,7 @@ function buildFuelPlan(live, lang, card = {}) {
     : `Set ${set}L.`;
   if (current != null && required != null && add != null) {
     const distance = Number.isInteger(exact)
-      ? (ja(lang) ? `チェッカーまでS/Fあと${exact}回。` : `${exact} S/F crossings to the finish. `)
+      ? (ja(lang) ? `現在周を含めて、チェッカーまでS/Fあと${exact}回。` : `${exact} S/F crossings to the finish, including this lap. `)
       : Number.isInteger(provisional) ? (ja(lang) ? `暫定あと${provisional}周分。` : `Provisional ${provisional}-lap plan. `) : '';
     if (ja(lang)) {
       if (finite(card.shortageClarificationL) != null) return add > 0
@@ -398,10 +402,10 @@ function buildStrategySwitch(live, lang, card = {}) {
   if(requested==='B'){
     if(gap!=null&&pace!=null&&gap<=1.5&&pace>=0.4&&nowPos!=null
       &&String(now.likely?.traffic_state||'')!=='blend_risk') return ja(lang)
-      ? `Plan B、アンダーカットを推奨。前は${gap.toFixed(1)}秒、こちらが${pace.toFixed(1)}秒速く詰まっている。根拠は燃料不足ではなくトラフィック回避。今入る物理復帰P${nowPos}。`
+      ? `Plan B、アンダーカットを推奨。前走車まで${gap.toFixed(1)}秒、こちらが${pace.toFixed(1)}秒速く詰まっている。根拠は燃料不足ではなくトラフィック回避。今入る物理復帰P${nowPos}。`
       : `Recommend Plan B, the undercut. The gap is ${gap.toFixed(1)}s and we are ${pace.toFixed(1)}s faster. The reason is traffic avoidance, not a fuel shortfall. Physical rejoin P${nowPos}.`;
     return ja(lang)
-      ? `Plan Bの条件を確認中。${gap!=null?`前は${gap.toFixed(1)}秒。`:''}${pace!=null?`相対ペースは${pace>=0?'こちらが'+pace.toFixed(1)+'秒速い':'こちらが'+Math.abs(pace).toFixed(1)+'秒遅い'}。`:'3周の相対ペース待ち。'}物理復帰がクリアになればアンダーカットを出す。`
+      ? `Plan Bの条件を確認中。${gap!=null?`前走車まで${gap.toFixed(1)}秒。`:''}${pace!=null?`相対ペースは${pace>=0?'こちらが'+pace.toFixed(1)+'秒速い':'こちらが'+Math.abs(pace).toFixed(1)+'秒遅い'}。`:'3周の相対ペース待ち。'}物理復帰がクリアになればアンダーカットを出す。`
       : `Plan B conditions are still being checked. ${gap!=null?`Gap ${gap.toFixed(1)}s. `:''}${pace!=null?`Our pace delta is ${pace.toFixed(1)}s. `:'Waiting for a three-lap relative pace sample. '}I will call the undercut only with a clear physical rejoin.`;
   }
   const fs=live.fuel_strategy||{}, avg=finite(fs.avg_fuel_per_lap), fuel=finite(live.fuel);
@@ -495,12 +499,12 @@ function buildPlanStatus(live, lang, card = {}) {
       const condition=chosen==='B'?'前で詰まり、こちらの相対ペースが速く、物理復帰がクリアなら切り替える。'
         :chosen==='C'?`ペース差が小さく、次周の復帰が悪化せず、燃費${Number(plan.required_fuel_saving_pct||0).toFixed(1)}%改善が成立すれば切り替える。`
           :'現在の基準案。';
-      return ja(lang)?`Plan ${chosen}は${label}。ピット予定${stops}周。${condition}`
+      return ja(lang)?`Plan ${chosen}は${label}。${condition}`
         :`Plan ${chosen} is the ${chosen==='A'?'baseline':chosen==='B'?'undercut':'overcut'}. Planned stops: laps ${stops}.`;
     }
     const a=playbook.plans.A||{}, b=playbook.plans.B||{}, c=playbook.plans.C||{};
     return ja(lang)
-      ? `現在はPlan ${playbook.selected_plan||'A'}。Plan Aはベースライン${(a.pit_laps||[]).join('・')}周、Plan Bはアンダーカット${b.first_pit_lap||'不明'}周、Plan Cはオーバーカット${c.first_pit_lap||'不明'}周。`
+      ? `現在はPlan ${playbook.selected_plan||'A'}。Plan Aは基準、Plan Bは燃料ウィンドウ成立時のアンダーカット、Plan Cは節約燃費が成立した時のオーバーカット。具体的なピット周は当日計算が揃ってから出す。`
       : `Current selection is Plan ${playbook.selected_plan||'A'}. Plan A is the baseline, Plan B the undercut, and Plan C the overcut.`;
   }
   const options=live&&live.strategy_options;
@@ -536,7 +540,7 @@ function buildPace(live, lang) {
   if (phase === 'out_lap') return ja(lang)
     ? (add != null && add > 0
       ? `給油不足が${add.toFixed(1)}L残っている。ペースは上げず、次の周で再ピット。`
-      : `ピット完了。${margin != null && margin >= 0 ? `ゴール時約${margin.toFixed(1)}L余る見込み。` : ''}タイヤを作って、アウトラップはペースキープ。`)
+      : `アウトラップ。タイヤを作ってペースキープ。燃費セーブ量は次の有効周で更新する。`)
     : (add != null && add > 0
       ? `Fuel shortfall ${add.toFixed(1)}L. Do not push; box again next lap.`
       : `Stop complete. ${margin != null && margin >= 0 ? `Projected finish margin ${margin.toFixed(1)}L. ` : ''}Build the tyres and hold pace.`);

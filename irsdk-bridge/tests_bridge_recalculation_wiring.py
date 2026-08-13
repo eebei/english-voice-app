@@ -567,6 +567,81 @@ class PushGateWiring(unittest.TestCase):
         self.assertIn("d.push_allowed===false", renderer)
         self.assertIn('プッシュは損傷評価待ち', renderer)
 
+    def test_finish_safe_is_not_automatically_push_safe(self):
+        src = bridge_src()
+        i = src.index("_fuel_eval.get('transition') == 'critical_to_safe'")
+        window = src[i:i + 2600]
+        self.assertIn("FUEL_PUSH_MIN_MARGIN_L", window)
+        self.assertIn("_fuel_eval['margin_l'] >= FUEL_PUSH_MIN_MARGIN_L", window)
+        self.assertIn("'trigger': 'fuel_margin_hold'", src)
+        self.assertIn("'fuel_margin_hold': 2", src)
+        renderer_path = os.path.join(os.path.dirname(HERE), 'desktop', 'renderer.html')
+        with open(renderer_path, encoding='utf-8') as fh:
+            renderer = fh.read()
+        self.assertIn('残量下方修正。ペースキープ。', renderer)
+
+
+class StraightSideBySideWiring(unittest.TestCase):
+    def test_straight_single_side_call_requires_racing_and_cooldown(self):
+        src = bridge_src()
+        i = src.index("car_left_right in (2, 3))")
+        window = src[i - 300:i + 700]
+        self.assertIn('session_racing_started', window)
+        self.assertIn('SIDE_BY_SIDE_COOLDOWN_S', window)
+        self.assertIn("'trigger': 'side_by_side'", window)
+
+
+class StartSafetyAndFinalLapWiring(unittest.TestCase):
+    def test_startup_stopped_car_has_conservative_no_last_lap_path(self):
+        src = bridge_src()
+        i = src.index("_startup_close = (not _has_lap_time")
+        window = src[i - 500:i + 1800]
+        self.assertIn("pct_diff <= 0.0015", window)
+        self.assertIn("_speech_speed >= 5.0", window)
+        self.assertIn("Stopped car ahead. Caution.", window)
+
+    def test_final_lap_normal_battle_is_suppressed_in_renderer(self):
+        renderer_path = os.path.join(os.path.dirname(HERE), 'desktop', 'renderer.html')
+        with open(renderer_path, encoding='utf-8') as fh:
+            renderer = fh.read()
+        i = renderer.index('async function runJudgeCall(data)')
+        window = renderer[i:i + 850]
+        self.assertIn('finalLapNoticeSeen', window)
+        self.assertIn("['catchup','defend','battle']", window)
+        self.assertIn('FINAL_LAP_BATTLE_SUPPRESSED', window)
+
+
+class PostPitOpeningPlanGuardWiring(unittest.TestCase):
+    """8/13 Build 266 replay: an opening A/B brief must never be created
+    after refuelling.  That is a separate lifecycle from later live replans."""
+
+    def test_initial_strategy_plan_requires_no_completed_pit_service(self):
+        src = bridge_src()
+        i = src.index('if (strategy_options is None and last_pit_service is None')
+        window = src[i - 700:i + 2600]
+        self.assertIn('opening-plan contract only', window)
+        self.assertIn('last_pit_service is None', window)
+        self.assertIn("'trigger': 'initial_strategy_plans'", src)
+
+
+class TimedFinishPitContinuityWiring(unittest.TestCase):
+    """8/13 Build 266 replay: refuelling cannot erase the previously valid
+    checker authority before the driver's next completed lap."""
+
+    def test_recent_valid_projection_is_cached_and_session_scoped(self):
+        src = bridge_src()
+        self.assertIn("'_last_valid_timed_finish': None", src)
+        self.assertIn('_last_valid_timed_finish = _sig_reset', src)
+        self.assertIn('_last_valid_timed_finish = _reset', src)
+
+    def test_driver_off_line_uses_bounded_continuity_function(self):
+        src = bridge_src()
+        i = src.index("_timed_final_eval.get('reason') == 'driver_off_racing_line'")
+        window = src[i - 700:i + 1300]
+        self.assertIn('carry_forward_finish_projection', window)
+        self.assertIn('FINAL LAP continuity', window)
+        self.assertIn('CONFIDENCE_MODEL_CARRIED', window)
+
 
 if __name__ == '__main__':
     result = unittest.main(verbosity=2, exit=False).result

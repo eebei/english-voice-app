@@ -24,6 +24,7 @@ DEBRIEF = 'DEBRIEF'
 KNOWN_LIFECYCLE_STATES = {RACING, CHECKER_OUT, PLAYER_FINISHED, DEBRIEF}
 
 CONFIDENCE_MODEL_VALID = 'model_valid'
+CONFIDENCE_MODEL_CARRIED = 'model_carried_forward'
 CONFIDENCE_AMBIGUOUS = 'ambiguous'
 CONFIDENCE_NONE = 'none'
 
@@ -155,6 +156,55 @@ def evaluate_final_lap_for_driver(
         leader_checkered_s=leader_checkered_s,
         driver_next_sf_s=driver_next_sf_s,
         confidence=CONFIDENCE_MODEL_VALID)
+
+
+def carry_forward_finish_projection(previous_evaluation,
+                                    elapsed_session_s,
+                                    driver_lap_dist_pct,
+                                    driver_avg_lap_s,
+                                    max_age_s=150.0):
+    """Keep a recent, previously-valid leader checker clock usable through
+    a pit transition.
+
+    iRacing reports the driver's pit-road state at the lap boundary, where the
+    normal model deliberately fails closed.  The *leader* checker projection
+    is still recent, and the driver's new progress is available immediately
+    after refuelling.  Rebase that checker clock to the current frame instead
+    of mixing a pre-pit fuel snapshot with ``crossings=None``.  This is a
+    bounded continuity fallback: it never announces a Final Lap and expires
+    rather than becoming a substitute for a fresh model.
+    """
+    if not isinstance(previous_evaluation, dict):
+        return _result('no_previous_valid_projection')
+    if previous_evaluation.get('confidence') not in (
+            CONFIDENCE_MODEL_VALID, CONFIDENCE_MODEL_CARRIED):
+        return _result('previous_projection_not_valid')
+    prior_checker_s = previous_evaluation.get('leader_time_to_checkered_s')
+    if (not _finite_number(prior_checker_s)
+            or not _finite_number(elapsed_session_s)
+            or elapsed_session_s < 0 or elapsed_session_s > max_age_s):
+        return _result('previous_projection_expired')
+    if (not _finite_number(driver_lap_dist_pct)
+            or not 0.0 <= driver_lap_dist_pct <= 1.0
+            or not _finite_number(driver_avg_lap_s)
+            or not MIN_AVG_LAP_S <= driver_avg_lap_s <= MAX_AVG_LAP_S):
+        return _result('carry_forward_inputs_invalid')
+    leader_checkered_s = prior_checker_s - elapsed_session_s
+    if leader_checkered_s <= 0:
+        return _result('previous_projection_expired')
+    driver_next_sf_s = (1.0 - driver_lap_dist_pct) * driver_avg_lap_s
+    if driver_next_sf_s >= leader_checkered_s:
+        crossings = 1
+    else:
+        crossings = 1 + int(math.ceil(
+            (leader_checkered_s - driver_next_sf_s) / driver_avg_lap_s))
+    return _result(
+        'carried_forward_during_pit_transition',
+        should_announce=False,
+        crossings=crossings,
+        leader_checkered_s=leader_checkered_s,
+        driver_next_sf_s=driver_next_sf_s,
+        confidence=CONFIDENCE_MODEL_CARRIED)
 
 
 def select_milestone_laps(is_time_race, timed_evaluation,

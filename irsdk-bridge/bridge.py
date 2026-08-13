@@ -509,6 +509,8 @@ PRIORITY = {
     'checker_out_notice': 2,
     # 燃料不足は数値根拠のP0。band dedupで連呼を防ぐ。
     'fuel_warning': 0, 'fuel_strategy_warning': 0, 'fuel_strategy_safe': 3,
+    # 「プッシュ可」だった余裕が縮んだ訂正。運転判断なので通常情報より上。
+    'fuel_margin_hold': 2,
     'initial_strategy_plans': 3,
     'strategy_plan_decision': 2,
     'strategy_plan_box_call': 1,
@@ -786,6 +788,7 @@ def _session_scoped_reset_values():
         'final_lap_notice_sent': {5: False, 3: False, 1: False},
         '_timed_final_eval': {'reason': 'awaiting_completed_lap'},
         '_milestone_laps': None,
+        '_last_valid_timed_finish': None,
         'fuel_strategy_warned': False,
         'fuel_per_lap_hist': [],
         'fuel_at_lap_start': None,
@@ -2227,6 +2230,10 @@ def poll_iracing():
     _legacy_laps_remaining = None
     _timed_final_eval = {'reason': 'awaiting_completed_lap'}
     _milestone_laps = None
+    # A fresh timed model is evaluated at completed laps.  Keep its checker
+    # clock only long enough to bridge a real pit transition; never retain it
+    # across a session and never use it to auto-announce Final Lap.
+    _last_valid_timed_finish = None
     nearest_ahead_gap = None    # 直前の車とのギャップ（秒）
     nearest_behind_gap = None   # 直後の車とのギャップ（秒）
     car_pos_hist = {}           # car_idx -> (LapDistPct, timestamp)（停止車両検知用）
@@ -2309,6 +2316,11 @@ def poll_iracing():
     session_racing_started = False  # SessionState 4(Racing)を確認した後のみサマリー送信
     fuel_strategy_warned = False
     fuel_warning_band = None
+    # 完走可能とプッシュ可能は別条件。終盤に余裕が縮んだ時、以前の
+    # 「ペースを上げていい」を放置せず一度だけペースキープへ戻す。
+    fuel_push_authorized = False
+    fuel_margin_hold_announced = False
+    FUEL_PUSH_MIN_MARGIN_L = 1.5
     # ★2026-07-21 Codex指示R1：レース終了状態機械（RACING/CHECKER_OUT/PLAYER_FINISHED/DEBRIEF）。
     #   詳細はrace_lifecycle.py参照。リーダーのチェッカーと自分の完走を区別できていなかった
     #   2026-07-21 Monza実走の誤発話（燃料警告誤爆・レース終了訂正）を受けて新設。
@@ -2577,8 +2589,11 @@ def poll_iracing():
                         final_lap_notice_sent = _sig_reset['final_lap_notice_sent']
                         _timed_final_eval = _sig_reset['_timed_final_eval']
                         _milestone_laps = _sig_reset['_milestone_laps']
+                        _last_valid_timed_finish = _sig_reset['_last_valid_timed_finish']
                         fuel_strategy_warned = _sig_reset['fuel_strategy_warned']
                         fuel_warning_band = _sig_reset['fuel_warning_band']
+                        fuel_push_authorized = False
+                        fuel_margin_hold_announced = False
                         fuel_per_lap_hist = _sig_reset['fuel_per_lap_hist']
                         fuel_at_lap_start = _sig_reset['fuel_at_lap_start']
                         lap_time_hist = _sig_reset['lap_time_hist']
@@ -2759,8 +2774,11 @@ def poll_iracing():
             final_lap_notice_sent = _reset['final_lap_notice_sent']
             _timed_final_eval = _reset['_timed_final_eval']
             _milestone_laps = _reset['_milestone_laps']
+            _last_valid_timed_finish = _reset['_last_valid_timed_finish']
             fuel_strategy_warned = _reset['fuel_strategy_warned']
             fuel_warning_band = _reset['fuel_warning_band']
+            fuel_push_authorized = False
+            fuel_margin_hold_announced = False
             fuel_per_lap_hist = _reset['fuel_per_lap_hist']
             fuel_at_lap_start = _reset['fuel_at_lap_start']
             lap_time_hist = _reset['lap_time_hist']
@@ -3208,8 +3226,20 @@ def poll_iracing():
                         _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
                         broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side, 'message': _side_msg})
                         last_battle_global = _now3
+            # ストレートでも、追い抜き直後の横並びは公式spotter値をそのまま一度だけ伝える。
+            # ただし formation/grid の誤案内を避け、Race が実際に開始済みの場合だけに限定する。
+            elif (not in_side_zone and session_racing_started
+                  and car_left_right in (2, 3)):
+                _side = {2: 'left', 3: 'right'}[car_left_right]
+                _last_fired = side_by_side_last_fired.get(_side, 0.0)
+                if _now3 - _last_fired >= SIDE_BY_SIDE_COOLDOWN_S:
+                    side_by_side_last_fired[_side] = _now3
+                    _side_msg = {'left': 'Car left.', 'right': 'Car right.'}[_side]
+                    broadcast({'type': 'radio', 'trigger': 'side_by_side',
+                               'side': _side, 'message': _side_msg})
+                    last_battle_global = _now3
             # ストレート(ゾーン外)で3台以上並走の検知。CarLeftRight=4(両側)/5/6(片側2台)を代用
-            # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。2台までは自分で見えるのでスルー。
+            # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。
             elif not in_side_zone and car_left_right in (4, 5, 6):
                 if _now3 - straight_sbs_warned > 20:
                     broadcast({'type': 'radio', 'trigger': 'multi_car_straight', 'message': 'Three wide. Watch the space.'})
@@ -3605,6 +3635,30 @@ def poll_iracing():
                 driver_lap=lap,
                 leader_lap=leader_lap)
 
+            _timed_eval_session_s = reader.read_double('SessionTime')
+            if _timed_final_eval.get('confidence') == final_lap.CONFIDENCE_MODEL_VALID:
+                _last_valid_timed_finish = dict(_timed_final_eval)
+                _last_valid_timed_finish['evaluated_session_time_s'] = _timed_eval_session_s
+            elif (_is_time_race
+                  and _timed_final_eval.get('reason') == 'driver_off_racing_line'
+                  and isinstance(_last_valid_timed_finish, dict)
+                  and isinstance(_timed_eval_session_s, (int, float))):
+                _previous_at_s = _last_valid_timed_finish.get('evaluated_session_time_s')
+                _carried_finish = final_lap.carry_forward_finish_projection(
+                    _last_valid_timed_finish,
+                    elapsed_session_s=(
+                        _timed_eval_session_s - _previous_at_s
+                        if isinstance(_previous_at_s, (int, float)) else None),
+                    driver_lap_dist_pct=_driver_dist,
+                    driver_avg_lap_s=_driver_avg_lap)
+                if (_carried_finish.get('confidence')
+                        == final_lap.CONFIDENCE_MODEL_CARRIED):
+                    _timed_final_eval = _carried_finish
+                    log('FINAL LAP continuity: using bounded pre-pit checker '
+                        'projection at lap=%s crossings=%s'
+                        % (lap, _timed_final_eval.get(
+                            'estimated_crossings_to_finish')))
+
             _milestone_laps = final_lap.select_milestone_laps(
                 _is_time_race, _timed_final_eval, _legacy_laps_remaining)
             _milestone, _crossed = final_lap.select_milestone(
@@ -3877,7 +3931,10 @@ def poll_iracing():
                     # 計算成功を黙ったままにせず、通常の戦略情報(P3)として安全窓で発話する。
                     # ★Build 266 Phase E：損傷証拠があるのに未だ再計算が完了していない間は
                     #   「ペースを上げていい」を出さない（燃料は安全でも push 可否は別の話）。
-                    _push_ok = session_race_state_mod.push_allowed(_session_race_state)
+                    _push_ok = (session_race_state_mod.push_allowed(_session_race_state)
+                                and _fuel_eval['margin_l'] >= FUEL_PUSH_MIN_MARGIN_L)
+                    fuel_push_authorized = _push_ok
+                    fuel_margin_hold_announced = False
                     _safe_msg = (
                         ('Fuel is good. %.1f liters margin to finish.'
                          % _fuel_eval['margin_l'])
@@ -3893,6 +3950,22 @@ def poll_iracing():
                         'push_allowed': _push_ok,
                         'message': _safe_msg,
                     })
+                elif (fuel_push_authorized and not onPit
+                      and _fuel_eval.get('band') == fuel_strategy_mod.SAFE
+                      and _fuel_eval.get('margin_l', 0) < FUEL_PUSH_MIN_MARGIN_L
+                      and not fuel_margin_hold_announced):
+                    # 余裕が安全帯のまま縮んだ場合でも、プッシュ許可は取り消す。
+                    # 0.8〜0.9 Lを「ペースを上げていい」とは扱わない。
+                    _fuel_dispatch_result = broadcast({
+                        'type': 'radio',
+                        'trigger': 'fuel_margin_hold',
+                        'margin_l': _fuel_eval['margin_l'],
+                        'push_allowed': False,
+                        'message': 'Fuel margin revised down. Hold pace.',
+                    })
+                    if _fuel_dispatch_result is True or _fuel_dispatch_result == 'DISPATCHED':
+                        fuel_margin_hold_announced = True
+                    fuel_push_authorized = False
                 fuel_warning_band = (
                     fuel_strategy_mod.commit_band_after_dispatch(
                         fuel_warning_band, _fuel_eval,
@@ -4832,7 +4905,7 @@ def poll_iracing():
                 _car_last_laps_stopped = reader.read_float_array('CarIdxLastLapTime', 64)
                 player_last_lap_stopped = (_car_last_laps_stopped[player_car_idx]
                                             if _car_last_laps_stopped and player_car_idx < len(_car_last_laps_stopped) else 0) or 0
-                if player_pct is not None and player_pct >= 0 and player_last_lap_stopped > 0:
+                if player_pct is not None and player_pct >= 0:
                     _now2 = time.time()
                     for idx in list(car_stopped_since.keys()):
                         if idx == player_car_idx or idx >= len(car_dist_pct):
@@ -4848,8 +4921,17 @@ def poll_iracing():
                         elif pct_diff < -0.5: pct_diff += 1.0
                         if pct_diff <= 0:  # 前方でなければ対象外
                             continue
-                        _sdist = pct_diff * player_last_lap_stopped
-                        if _sdist > 6.0:
+                        # Start直後は自車のLastLapTimeが未成立。そこで警告回路まで
+                        # 閉じない。ラップタイムが無い間だけは、停止車が周回の0.15%
+                        # 以内かつ自車が走行中という、極近距離の保守的条件で発話する。
+                        _has_lap_time = player_last_lap_stopped > 0
+                        _sdist = (pct_diff * player_last_lap_stopped
+                                  if _has_lap_time else None)
+                        _startup_close = (not _has_lap_time
+                                          and pct_diff <= 0.0015
+                                          and isinstance(_speech_speed, (int, float))
+                                          and _speech_speed >= 5.0)
+                        if _has_lap_time and _sdist > 6.0:
                             stopped_armed[idx] = True
                         # ★2026-07-19 停止車警告が一度も鳴らない2つの穴を塞ぐ（Yuji: Monza/Interlagosで
                         #   GT3が数台止まってたのに無言＝クレーム）。
@@ -4858,12 +4940,13 @@ def poll_iracing():
                         #        衝突リスク直結の警告を雑談のクールダウンで殺すのは本末転倒なので撤廃。
                         #   穴2: stopped_armed（6秒圏外で一度"武装"が必要）。目の前でスピンした車は遠距離の観測
                         #        履歴が無く永久に武装できない＝一番危ない瞬間に黙る。未警告の車は武装なしでも鳴らす。
-                        elif _sdist <= 5.0 and (stopped_armed.get(idx, False) or idx not in stopped_warned):
+                        elif ((_has_lap_time and _sdist <= 5.0) or _startup_close) and (stopped_armed.get(idx, False) or idx not in stopped_warned):
                             _lastw = stopped_warned.get(idx, 0)
                             if _now2 - _lastw > 20:
                                 broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
-                                    'delta': round(_sdist, 1),
-                                    'message': 'Stopped car ahead, ' + _fmt_gap(_sdist) + '.'})
+                                    'delta': round(_sdist, 1) if _has_lap_time else None,
+                                    'message': ('Stopped car ahead, ' + _fmt_gap(_sdist) + '.'
+                                                if _has_lap_time else 'Stopped car ahead. Caution.')})
                                 stopped_armed[idx] = False
                                 stopped_warned[idx] = _now2
                                 last_battle_global = _now2
@@ -5420,7 +5503,14 @@ def poll_iracing():
             # Phase D first vertical slice: once clean fuel and finish distance
             # are authoritative, latch Plan A and Plan B from one snapshot.
             # Do not continuously move their target laps with live telemetry.
-            if (strategy_options is None and is_race_session and onTrack and not onPit
+            # This is the opening-plan contract only.  It is never valid to
+            # introduce a fresh "initial" Plan A/B after a completed service:
+            # at that point the plan must be recalculated from the post-stop
+            # state by the live decision path, not reconstructed from the
+            # opening playbook.  The latter produced the 8/13 trace where a
+            # lap-7, 22L post-pit state announced a fictional one-litre stop.
+            if (strategy_options is None and last_pit_service is None
+                    and is_race_session and onTrack and not onPit
                     and isinstance(_fuel_strategy_live, dict)):
                 _option_crossings = _fuel_strategy_live.get(
                     'estimated_crossings_to_finish')

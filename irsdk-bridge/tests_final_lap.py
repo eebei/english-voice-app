@@ -181,6 +181,32 @@ def test_milestone_path():
           fl.select_milestone(1, fl.CHECKER_OUT, sent) == (None, ()))
 
 
+def test_pit_transition_continuity():
+    print('\n══ pit-transition checker continuity ══')
+    prior = evaluate(
+        is_driver_overall_leader=False,
+        driver_lap_dist_pct=0.01, leader_lap_dist_pct=0.16,
+        driver_avg_lap_s=110.0, leader_avg_lap_s=107.0,
+        session_time_remain_s=647.0)
+    check('prior checker projection is valid',
+          prior['confidence'] == fl.CONFIDENCE_MODEL_VALID, prior)
+    carried = fl.carry_forward_finish_projection(
+        prior, elapsed_session_s=106.0, driver_lap_dist_pct=0.01,
+        driver_avg_lap_s=110.0)
+    check('pit transition retains a bounded checker projection',
+          carried['confidence'] == fl.CONFIDENCE_MODEL_CARRIED
+          and isinstance(carried['estimated_crossings_to_finish'], int)
+          and carried['estimated_crossings_to_finish'] >= 1, carried)
+    check('carried projection cannot auto-announce Final Lap in pit transition',
+          carried['should_announce'] is False, carried)
+    expired = fl.carry_forward_finish_projection(
+        prior, elapsed_session_s=151.0, driver_lap_dist_pct=0.01,
+        driver_avg_lap_s=110.0)
+    check('old checker projection expires instead of becoming a false authority',
+          expired['reason'] == 'previous_projection_expired'
+          and expired['estimated_crossings_to_finish'] is None, expired)
+
+
 def test_ai_leader_activity_fallback():
     print('\n══ AI leader activity fallback ══')
     check('missing surface with advancing P1 remains active',
@@ -259,6 +285,7 @@ def run_all():
     test_timed_cases()
     test_fail_closed()
     test_milestone_path()
+    test_pit_transition_continuity()
     test_ai_leader_activity_fallback()
     test_checker_edge()
     test_mutations()

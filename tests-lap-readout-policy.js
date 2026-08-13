@@ -57,12 +57,14 @@ function runInContext(contractRaw) {
   return { gate: sandbox.gate, reset: sandbox.resetCounter };
 }
 
-// --- Unsigned contract: enforcement off (backwards compatible). -------------
+// --- Unsigned contract: Settings value is still authoritative. --------------
+// The radio preference is not a strategy-contract privilege.  A fresh user
+// must never get every lap merely because they have not signed the contract.
 const unsigned = runInContext(JSON.stringify({ signed: false, pace: { readout: 'off' } }));
-check('unsigned contract lets lap_time through (backwards compatible)',
-  unsigned.gate('lap_time', { lap_valid_clean: true }).allow === true);
-check('unsigned contract exposes the trace policy',
-  unsigned.gate('lap_time', { lap_valid_clean: true }).policy === 'contract_unsigned');
+check('unsigned contract still honors Off',
+  unsigned.gate('lap_time', { lap_valid_clean: true }).allow === false);
+check('unsigned contract traces the selected policy',
+  unsigned.gate('lap_time', { lap_valid_clean: true }).policy === 'off');
 
 // --- off: everything silenced (even best). ----------------------------------
 const off = runInContext(JSON.stringify({ signed: true, pace: { readout: 'off' } }));
@@ -171,5 +173,7 @@ check('onLapReadoutChanged resets the counter on policy change',
   /function onLapReadoutChanged\(\)\{[\s\S]*?resetLapReadoutCounter\(\)/.test(html));
 check('DEFAULT_CONTRACT default is every_clean_lap (safe side)',
   html.includes("pace:     { readout: 'every_clean_lap'"));
+check('Lap Readout policy is not bypassed by unsigned contract',
+  !html.includes("return { allow:true, policy:'contract_unsigned' }"));
 
 console.log(`✅ lap readout policy: ${pass} checks`);
