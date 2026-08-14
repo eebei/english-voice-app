@@ -67,6 +67,32 @@ check('stale unavailable profile statements are rejected',
 check('real driver preference remains actionable',
   memoryLayer.isStaleUnavailableNote('無線は要点だけ短くしてほしい。') === false);
 
+const debriefRecords = [
+  { review_id:'old-other-track', driver:'Yuji', updated_at:'2026-08-12T10:00:00Z',
+    scope:{track:'Spa',car:'Mercedes-AMG GT3 2020'}, qa:[{question:'どこが課題？',answer:'ブレーキング'}] },
+  { review_id:'monza-review', driver:'Yuji', updated_at:'2026-08-13T10:00:00Z',
+    scope:{track:'Autodromo Nazionale Monza',car:'Mercedes-AMG GT3 2020'},
+    qa:[
+      {question:'今日いちばん良かった判断は？',answer:'ターン1で無理をしなかった'},
+      {question:'製品への感想は？',answer:'無線が少し多い'}
+    ] },
+];
+const followUp = memoryLayer.selectDebriefFollowUp(debriefRecords, {
+  driver:'Yuji', track:'monza full', car:'Mercedes-AMG GT3 2020'
+});
+check('matching debrief evidence becomes one next-session follow-up',
+  followUp && followUp.key === 'monza-review:0' && /ターン1/.test(followUp.answer), JSON.stringify(followUp));
+check('product feedback is never repurposed as driving follow-up',
+  followUp && !/製品/.test(followUp.question));
+check('already used follow-up is not asked again',
+  memoryLayer.selectDebriefFollowUp(debriefRecords, {
+    driver:'Yuji', track:'monza full', car:'Mercedes-AMG GT3 2020', usedKeys:['monza-review:0']
+  }) === null);
+check('different car-or-track evidence never becomes a follow-up',
+  memoryLayer.selectDebriefFollowUp(debriefRecords, {
+    driver:'Yuji', track:'Spa', car:'BMW M4 GT3'
+  }) === null);
+
 const provisional = playbook.buildPlaybook({
   track: 'Autodromo Nazionale Monza', car: 'Mercedes-AMG GT3 2020',
   raceDetail: { session_type: 'Race', session_time: '1200 sec' },

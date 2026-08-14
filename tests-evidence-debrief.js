@@ -43,6 +43,14 @@ check('結果帯別の具体質問をローテーション',
   renderer.includes('raceTop:') && renderer.includes('raceMid:') && renderer.includes('raceLow:')
   && renderer.includes('pickRotatingQuestion(resultPool)')
   && renderer.includes("history.slice(-3).includes(q)"));
+check('同条件の過去申告は次回の一点確認になり、質問票を繰り返さない',
+  renderer.includes('function buildMemoryAwareDebriefFollowup(data)')
+  && renderer.includes('selectDebriefFollowUp(loadEvidenceRecords()')
+  && renderer.includes('DEBRIEF_FOLLOWUP_HISTORY_KEY')
+  && renderer.includes("phase:'debrief_followup_selected'")
+  && renderer.includes('return [memoryFollowup.question];'));
+check('初回デブリーフも最大2問でドライバー負担を固定する',
+  renderer.includes('return qs.filter(Boolean).slice(0,2);'));
 check('製品評価は低頻度で提示し回答有無だけ中央計測',
   renderer.includes('function shouldAskProductFeedback()')
   && renderer.includes('7*24*60*60*1000')

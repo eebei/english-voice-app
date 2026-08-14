@@ -82,6 +82,43 @@ function ipcDesktopSettingsSetup() {
   });
 }
 
+// サポートへ渡すログは、利用者に手作業で探させない。一方でアクセストークン等を
+// そのまま複製しないよう、現在セッションのログだけを最小限に伏せ字化してDesktopへ出す。
+function diagnosticFileStamp() {
+  const now = new Date();
+  return now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0')
+    + '-' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
+}
+function redactDiagnosticText(value) {
+  return String(value || '')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/(X-Pitwall-(?:Access-Code|Device-Id)\s*[:=]\s*)\S+/gi, '$1[REDACTED]')
+    .replace(/\bPITWALL-[A-Z0-9-]{6,}\b/g, 'PITWALL-[REDACTED]');
+}
+function ipcDiagnosticsSetup() {
+  ipcMain.handle('diagnostics:export', async () => {
+    try {
+      const desktop = app.getPath('desktop');
+      const destination = path.join(desktop, 'OMORAY-PITWALL-support-' + diagnosticFileStamp() + '.txt');
+      const raw = (LOG_FILE && fs.existsSync(LOG_FILE)) ? fs.readFileSync(LOG_FILE, 'utf8') : '';
+      const header = [
+        'OMORAY PITWALL support package',
+        'Created: ' + new Date().toISOString(),
+        'Build: ' + (currentBuildLabel() || 'unknown'),
+        'This package contains the current local diagnostic log with access credentials redacted.',
+        '',
+      ].join('\n');
+      fs.writeFileSync(destination, header + redactDiagnosticText(raw));
+      try { shell.showItemInFolder(destination); } catch (_) {}
+      log('diagnostic package exported: ' + destination);
+      return { ok: true, fileName: path.basename(destination) };
+    } catch (e) {
+      log('diagnostic package export failed: ' + e.message);
+      return { ok: false, reason: 'export_failed' };
+    }
+  });
+}
+
 // ── レースオーバーレイの設定（位置/透明度/スケール/ロック）を永続化 ──
 let OVL_CFG_FILE = '';
 let ovlCfg = { bounds:null, opacity:1, scale:1, locked:true, enabled:false, lang:'en' };
@@ -474,6 +511,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);   // File/Edit/View/Window/Help の無意味な既定メニューを消す（Windows）
   loadDesktopSettings(); // installer更新後も保持される本体設定
   ipcDesktopSettingsSetup();
+  ipcDiagnosticsSetup();
   loadOvlCfg();       // オーバーレイの保存済み設定を読む
   ipcOverlaySetup();  // オーバーレイ制御IPCを登録
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動

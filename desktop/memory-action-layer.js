@@ -128,5 +128,47 @@
     return /(?:取得できない|実測.*揃っていない|まだ確定できない|データを受信中|完走目標が確定していない|unavailable|not (?:yet )?(?:available|confirmed)|awaiting .*data)/i.test(text);
   }
 
-  return { normalizeTrack, normalizeCar, matchingEntries, resolve, matches, isStaleUnavailableNote };
+  // デブリーフは毎回同じ質問票を消化する場ではない。保存済みの同条件申告から、
+  // 次回に「変わったか」だけを確認する一点を選ぶ。数値や結論は作らず、
+  // driver/track/car が揃わない記憶は絶対に拾わない。
+  function isProductFeedbackQuestion(value) {
+    return /(?:製品|プロダクト|サポート.*(?:役|邪魔)|product|support.*(?:help|hinder)|feedback)/i.test(String(value || ''));
+  }
+
+  function selectDebriefFollowUp(records, context = {}) {
+    const wantedDriver = String(context.driver || '').trim();
+    const wantedTrack = String(context.track || '').trim();
+    const wantedCar = String(context.car || '').trim();
+    const used = new Set(Array.isArray(context.usedKeys) ? context.usedKeys.map(String) : []);
+    if (!wantedDriver || !wantedTrack || !wantedCar || !Array.isArray(records)) return null;
+
+    const rows = records.slice().filter(record => {
+      if (!record || record.driver !== wantedDriver || record.kind === 'driver_preference') return false;
+      const scope = record.scope && typeof record.scope === 'object' ? record.scope : {};
+      const storedCar = scope.car || scope.car_class || '';
+      return matches(wantedTrack, wantedCar, scope.track || '', storedCar);
+    }).sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+
+    for (const record of rows) {
+      const qa = Array.isArray(record.qa) ? record.qa : [];
+      for (let i = qa.length - 1; i >= 0; i--) {
+        const pair = qa[i] || {};
+        const answer = String(pair.answer || '').trim().replace(/\s+/g, ' ');
+        const question = String(pair.question || '').trim().replace(/\s+/g, ' ');
+        const key = `${String(record.review_id || record.created_at || 'record')}:${i}`;
+        if (!answer || !question || answer.length < 2 || used.has(key) || isProductFeedbackQuestion(question)) continue;
+        return {
+          key,
+          reviewId: String(record.review_id || ''),
+          question,
+          answer: answer.slice(0, 180),
+          confidence: String(record.confidence || 'driver_reported'),
+        };
+      }
+    }
+    return null;
+  }
+
+  return { normalizeTrack, normalizeCar, matchingEntries, resolve, matches, isStaleUnavailableNote,
+    selectDebriefFollowUp };
 }));

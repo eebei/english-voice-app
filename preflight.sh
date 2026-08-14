@@ -38,6 +38,9 @@ if node tests-speak-async.js >/dev/null 2>&1; then echo "   ✅ 全ケース合�
 echo "── TTS/Audio失敗経路の診断計装テスト（2026-07-23 Codex再指摘 P0/P1）"
 if node tests-tts-fail-logging.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-tts-fail-logging.js 2>&1|grep "❌"|head -6; fail=1; fi
 
+echo "── 発話レイテンシー／fate trace契約（公開前実測ゲート）"
+if node tests-speech-latency-trace.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speech-latency-trace.js 2>&1|grep "❌"|head -6; fail=1; fi
+
 echo "── usageSessionId初期化テスト（TDZ再発防止・2026-07-23 Codex再指摘）"
 if node tests-usage-session-init.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-usage-session-init.js 2>&1|tail -10; fail=1; fi
 

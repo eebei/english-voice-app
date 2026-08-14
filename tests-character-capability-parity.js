@@ -35,7 +35,7 @@ for(const [character,language] of Object.entries(characters)){
   check(`${character}: complete localized Q&A controls`,
     Array.isArray(copy.race)&&copy.race.length===3&&copy.save&&copy.discard&&copy.cancel&&copy.ready&&copy.saved);
   const questions=context.buildEvidenceQuestions({event_type:'Race',finish_pos:5,avg_fuel_per_lap:3.8});
-  check(`${character}: localized contextual evidence structure`,questions.length>=3&&questions.length<=4);
+  check(`${character}: localized, low-burden evidence structure`,questions.length>=1&&questions.length<=2);
 }
 
 const evidenceNote=renderer.slice(

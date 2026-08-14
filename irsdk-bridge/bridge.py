@@ -49,7 +49,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 269 (post-pit margin hold, pit conversation continuity)"
+BUILD_VERSION = "Build 270 (debrief continuity and radio diagnostics)"
 PORT = 8765
 connected_clients = set()
 loop = None

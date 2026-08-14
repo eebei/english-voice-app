@@ -38,6 +38,13 @@ check('会話中に設定へ移動して戻れる',
   && renderer.includes('id="btn-return-session"')
   && renderer.includes('function returnToSession(){ if(sessionActive)'));
 check('preflightへ追加済み', preflight.includes('tests-desktop-state.js'));
+check('診断ログはアプリ内からDesktopへexportし、認証情報は伏せ字化する',
+  main.includes("ipcMain.handle('diagnostics:export'")
+  && main.includes("OMORAY-PITWALL-support-")
+  && main.includes('function redactDiagnosticText(value)')
+  && preload.includes("exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export')")
+  && renderer.includes('onclick="exportDiagnostics()"')
+  && renderer.includes('function exportDiagnostics()'));
 
 console.log(`\nDesktop Persistent State / Navigation: ${pass}/${pass + fail}`);
 if (fail) process.exit(1);
