@@ -79,8 +79,8 @@ function classify(text, options = {}) {
     requestedPlan: /オーバー\s*カット|overcut/i.test(t) ? 'C' : 'B',
     confidence: 0.99,
   };
-  if (/ボックス(?:する|入る|入れ)|ピット(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
-  if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
+  if (/ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
+  if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|暫定.{0,12}(?:何位|何番手|順位|ポジション)|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABCＡＢＣ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[abc]/i.test(t)) {
     const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
     return { topic: TOPIC.PLAN_STATUS, planChoice: choice, confidence: 0.96 };
@@ -146,6 +146,12 @@ function classify(text, options = {}) {
       inherited: true,
       actionRequested: /どうする|どっち|ゆっくり|セーブ|飛ば|ペース/i.test(t),
     };
+  }
+  // A driver calling "final lap" is a status acknowledgement, not a request
+  // for a fresh strategy calculation.  Do not answer it through the generic
+  // no-data/Truth Gate path while they are finishing the race.
+  if (/^(?:ファイナル(?:ラップ)?|最終(?:周|ラップ)|final lap)[。.!！?？]*$/i.test(t)) {
+    return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1, finalLap: true };
   }
   if (options.race === true && OPERATIONAL_RE.test(t)) return { topic: TOPIC.UNRESOLVED_OPERATIONAL, confidence: 0 };
   if (/^(?:了解|了解です|分かった|わかった|なるほど|OK|オーケー|ありがとう|ナイス)[。.!！?？]*$/i.test(t)) {
@@ -532,8 +538,12 @@ function buildPlanStatus(live, lang, card = {}) {
 
 function buildPace(live, lang) {
   const { fs, current, required, add } = fuelPlan(live || {});
-  const computedMargin = current != null && required != null ? current - required : null;
-  const margin = computedMargin != null ? computedMargin : finite(fs.margin_l);
+  // `required_fuel_l` is evaluated at an S/F crossing.  Subtracting it from
+  // the *current* tank later in the same lap double-counts burned fuel and
+  // produced the 8/14 false “0.1L margin, push” call.  Only the Bridge's
+  // margin and explicit push permission are valid for a pace decision.
+  const margin = finite(fs.margin_l);
+  const pushAllowed = fs.push_allowed === true;
   const phase = pitPhase(live);
   if (phase === 'finished') return ja(lang) ? 'レース終了。ペース指示は終了。' : 'Race finished; pace calls are complete.';
   if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。作業完了を優先。' : 'Currently in the pit lane; complete the stop.';
@@ -545,7 +555,8 @@ function buildPace(live, lang) {
       ? `Fuel shortfall ${add.toFixed(1)}L. Do not push; box again next lap.`
       : `Stop complete. ${margin != null && margin >= 0 ? `Projected finish margin ${margin.toFixed(1)}L. ` : ''}Build the tyres and hold pace.`);
   if (fs.pit_required === true || (add != null && add > 0)) return ja(lang) ? `今はペースアップよりピット優先。現在${current != null ? current.toFixed(1) : '不明'}L、必要総量${required != null ? required.toFixed(1) : '未確定'}L。` : `Prioritise the stop, not a pace increase. Current ${current != null ? current.toFixed(1) : 'unknown'}L; ${required != null ? required.toFixed(1) + 'L required' : 'requirement unconfirmed'}.`;
-  if (margin != null && margin >= 0) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースを上げていい。` : `${margin.toFixed(1)}L fuel margin. You can push.`;
+  if (margin != null && margin >= 0 && pushAllowed) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースを上げていい。` : `${margin.toFixed(1)}L fuel margin. You can push.`;
+  if (margin != null && margin >= 0) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースキープ。` : `${margin.toFixed(1)}L fuel margin. Hold pace.`;
   return ja(lang) ? 'ペースアップ可否を決める燃料余裕がまだ確定していない。' : 'Fuel margin is not confirmed, so I cannot clear a push yet.';
 }
 
@@ -727,7 +738,10 @@ function build(card, live, lang = 'en') {
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
     [TOPIC.SESSION_FORMAT]: buildSessionFormat,
   };
-  if (card.topic === TOPIC.ACKNOWLEDGEMENT) return ja(lang) ? '了解。' : 'Copy.';
+  if (card.topic === TOPIC.ACKNOWLEDGEMENT) {
+    if (card.finalLap) return ja(lang) ? '了解。ファイナルラップ。' : 'Copy. Final lap.';
+    return ja(lang) ? '了解。' : 'Copy.';
+  }
   if (card.topic === TOPIC.FUEL_PLAN) return buildFuelPlan(live || {}, lang, card);
   if (card.topic === TOPIC.POSITION_GAP) return buildPositionGap(live || {}, card.targetPosition, lang);
   if (card.topic === TOPIC.UNRESOLVED_OPERATIONAL) return buildUnresolved(lang);

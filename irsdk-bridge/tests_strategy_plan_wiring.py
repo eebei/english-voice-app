@@ -36,9 +36,9 @@ checks = {
     "same-lap fuel burn is not double-counted after S/F":
         "recomputing required-current here" in SOURCE
         and "fuel - _fuel_strategy_live['required_fuel_l']" not in SOURCE,
-    "post-stop fuel waits for next S/F authority":
-        "'awaiting_post_pit_s_f': True" in SOURCE
-        and "'fuel_band': 'awaiting_post_pit_s_f'" in SOURCE,
+    "post-stop fuel recalculates from the authoritative checker projection":
+        "FUEL POST-PIT RECALC crossings=%s" in SOURCE
+        and "'live_post_pit_recalculation': True" in SOURCE,
     "fuel setting is capped by effective tank capacity":
         "_set_fuel = min(_set_fuel, _max_setting)" in SOURCE
         and "'one_stop_shortfall_l'" in SOURCE,

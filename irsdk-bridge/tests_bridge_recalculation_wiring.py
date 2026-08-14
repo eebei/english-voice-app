@@ -643,6 +643,27 @@ class TimedFinishPitContinuityWiring(unittest.TestCase):
         self.assertIn('CONFIDENCE_MODEL_CARRIED', window)
 
 
+class ConversationPushAuthorityWiring(unittest.TestCase):
+    """8/14 live replay: deterministic conversation must receive the
+    bridge's push decision, rather than deriving permission from a margin."""
+
+    def test_live_fuel_snapshot_carries_push_allowed(self):
+        src = bridge_src()
+        i = src.index("_fuel_strategy_live['push_allowed'] = bool(fuel_push_authorized)")
+        window = src[i - 450:i + 250]
+        self.assertIn('Conversation handlers must never infer a push clearance', window)
+        self.assertIn("_fuel_strategy_live['push_allowed']", window)
+
+    def test_post_pit_refuel_reuses_authoritative_checker_crossings(self):
+        src = bridge_src()
+        i = src.index("FUEL POST-PIT RECALC crossings=%s")
+        window = src[i - 2400:i + 250]
+        self.assertIn('fuel_strategy_mod.evaluate_fuel_to_finish(', window)
+        self.assertIn("'estimated_crossings_to_finish'", window)
+        self.assertIn("'live_post_pit_recalculation': True", window)
+        self.assertIn("'push_allowed': False", window)
+
+
 if __name__ == '__main__':
     result = unittest.main(verbosity=2, exit=False).result
     if not result.wasSuccessful():

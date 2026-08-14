@@ -49,7 +49,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 267 (optional update notice, adaptive race intelligence)"
+BUILD_VERSION = "Build 268 (post-pit fuel authority, safe pace clearance)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -5433,6 +5433,12 @@ def poll_iracing():
                 pit_exit_forecast_live_at = None
             _fuel_strategy_live = (
                 dict(fuel_strategy) if isinstance(fuel_strategy, dict) else None)
+            if isinstance(_fuel_strategy_live, dict):
+                # Conversation handlers must never infer a push clearance from
+                # fuel margin alone.  Carry the bridge-owned decision with the
+                # same snapshot so a 1.4L finish margin cannot become a false
+                # "push" call after current-lap burn is applied twice.
+                _fuel_strategy_live['push_allowed'] = bool(fuel_push_authorized)
             _driver_pace_samples = sorted(
                 v for v in lap_time_hist[-5:]
                 if isinstance(v, (int, float)) and 20 < v < 900)
@@ -5471,21 +5477,64 @@ def poll_iracing():
                 # later in the same lap reduces both current fuel and the
                 # remaining requirement; recomputing required-current here
                 # double-counted that burn and created false repeat-pit calls.
-                # A detected refuel invalidates the old crossing entirely until
-                # the next S/F snapshot proves the new margin.
+                # A detected refuel changes the available fuel, not the
+                # already-authoritative checker projection.  Keep the same
+                # leader-clock crossing count and solve the fresh tank against
+                # it immediately.  Waiting for another S/F here made a driver
+                # who had just left the pits hear "required fuel is unknown"
+                # despite an intact final-lap model.
                 _evaluated_fuel = _fuel_strategy_live.get('evaluated_fuel_l')
                 if (isinstance(_evaluated_fuel, (int, float))
                         and fuel > _evaluated_fuel + 0.2):
-                    _fuel_strategy_live.update({
-                        'awaiting_post_pit_s_f': True,
-                        'required_fuel_l': None,
-                        'fuel_needed': None,
-                        'margin_l': None,
-                        'add_fuel_l': None,
-                        'set_fuel_l': None,
-                        'pit_required': False,
-                        'fuel_band': 'awaiting_post_pit_s_f',
-                    })
+                    _post_pit_eval = fuel_strategy_mod.evaluate_fuel_to_finish(
+                        fuel_level_l=fuel,
+                        avg_fuel_per_lap_l=_fuel_strategy_live.get(
+                            'avg_fuel_per_lap'),
+                        estimated_crossings_to_finish=_fuel_strategy_live.get(
+                            'estimated_crossings_to_finish'),
+                        clean_laps_sampled=_fuel_strategy_live.get(
+                            'clean_laps_sampled'),
+                        lifecycle_state=lifecycle_state,
+                        previous_band=_fuel_strategy_live.get('fuel_band'))
+                    if _post_pit_eval.get('available'):
+                        _fuel_strategy_live.update({
+                            'awaiting_post_pit_s_f': False,
+                            'live_post_pit_recalculation': True,
+                            # Refuelling invalidates any earlier pace release.
+                            # A new release can only come from the normal live
+                            # strategy decision after the post-stop state is
+                            # observed; a full tank is not a push instruction.
+                            'push_allowed': False,
+                            'evaluated_fuel_l': round(fuel, 3),
+                            'required_fuel_l': _post_pit_eval['required_fuel_l'],
+                            'fuel_needed': _post_pit_eval['required_fuel_l'],
+                            'margin_l': _post_pit_eval['margin_l'],
+                            'reserve_l': _post_pit_eval['reserve_l'],
+                            'add_fuel_l': round(max(
+                                0.0, -_post_pit_eval['margin_l']), 3),
+                            'pit_required': (
+                                _post_pit_eval['band']
+                                == fuel_strategy_mod.CRITICAL),
+                            'fuel_band': _post_pit_eval['band'],
+                        })
+                        log('FUEL POST-PIT RECALC crossings=%s fuel=%.3f '
+                            'required=%.3f margin=%.3f' % (
+                                _fuel_strategy_live.get(
+                                    'estimated_crossings_to_finish'), fuel,
+                                _post_pit_eval['required_fuel_l'],
+                                _post_pit_eval['margin_l']))
+                    else:
+                        # No fresh model: do not invent a post-stop number.
+                        _fuel_strategy_live.update({
+                            'awaiting_post_pit_s_f': True,
+                            'required_fuel_l': None,
+                            'fuel_needed': None,
+                            'margin_l': None,
+                            'add_fuel_l': None,
+                            'set_fuel_l': None,
+                            'pit_required': False,
+                            'fuel_band': 'awaiting_post_pit_s_f',
+                        })
                 else:
                     _requested_add = max(0.0, float(
                         _fuel_strategy_live.get('add_fuel_l') or 0.0))

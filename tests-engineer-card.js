@@ -37,7 +37,7 @@ const afterPit = {
   class_pos: 20,
   fuel: 26.0,
   fuel_strategy: { ...beforePit.fuel_strategy, margin_l: 4.7, pit_required: false,
-    required_fuel_l: 21.3, add_fuel_l: 0 },
+    required_fuel_l: 21.3, add_fuel_l: 0, push_allowed: true },
   pit_cycle_status: {
     active: true, physical_exit_position: 20, conditional_cycle_position: 14,
     observed_pack_car_count: 10, observed_pack_pit_count: 0,
@@ -389,6 +389,26 @@ reply = cards.build(cards.classify('どう、ペース上げて行った方が�
 }, 'ja');
 check('a real post-stop fuel shortfall orders another stop instead of pace keep',
   /給油不足が4\.5L.*次の周で再ピット/.test(reply) && !/ペースキープ/.test(reply), reply);
+reply = cards.build(cards.classify('プッシュしていい？大丈夫？'), {
+  session_type:'Race', fuel:7.4,
+  fuel_strategy:{required_fuel_l:7.26, margin_l:1.465, push_allowed:false,
+    estimated_crossings_to_finish:2, pit_required:false, add_fuel_l:0},
+}, 'ja');
+check('8/14 live replay never double-counts current-lap burn into a false push call',
+  reply === '燃料は1.5L余裕。ペースキープ。', reply);
+reply = cards.build(cards.classify('プッシュしていい？大丈夫？'), {
+  session_type:'Race', fuel:8.8,
+  fuel_strategy:{required_fuel_l:7.26, margin_l:1.5, push_allowed:true,
+    estimated_crossings_to_finish:2, pit_required:false, add_fuel_l:0},
+}, 'ja');
+check('explicit Bridge push permission is required before a push call',
+  reply === '燃料は1.5L余裕。ペースを上げていい。', reply);
+check('8/14 spoken pit wording routes to the pit-decision handler',
+  cards.classify('ピット 入る？').topic === cards.TOPIC.PIT_DECISION);
+check('8/14 STT 周/州 wording routes to the pit-decision handler',
+  cards.classify('どうするのはこの州 入るのか？次の週なのか？').topic === cards.TOPIC.PIT_DECISION);
+check('8/14 provisional-position wording routes to the rejoin handler',
+  cards.classify('暫定 何番手 ぐらい？').topic === cards.TOPIC.REJOIN);
 reply = cards.build(cards.classify('ルナの予測通りじゃないか？この順位どう？'), outLapLive, 'ja');
 check('current P3 does not grade conditional P4 before the stop condition is met',
   /現在順位P3.*4\/14台で条件はまだ未成立.*P4は条件付き予測.*一致判定はまだしない/.test(reply), reply);
@@ -415,6 +435,9 @@ check('finished race cannot produce another Box plan',
 reply = cards.build(cards.classify('了解'), outLapLive, 'ja');
 check('race acknowledgement is deterministic and number-free',
   reply === '了解。', reply);
+reply = cards.build(cards.classify('ファイナルラップ', { race: true }), outLapLive, 'ja');
+check('8/14 final-lap acknowledgement bypasses generic truth gate',
+  reply === '了解。ファイナルラップ。', reply);
 
 const mixedPitSnapshot = {
   session_type: 'Race', fuel: 22.2,
