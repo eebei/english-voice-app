@@ -5,16 +5,16 @@
 ## 公開済みの基準点
 
 - リポジトリ: `eebei/english-voice-app` / ブランチ: `main`
-- 公開済みビルド: **269** — コミット `70acbf4`（`Build 269 stabilize post-pit race calls`）
+- 公開済みビルド: **270** — コミット `f05b86e`（`Build 270 debrief continuity and radio diagnostics`）
 - 公開インストーラー: `https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe`
-- GitHub Actions の Windows ビルド: `31766204384` 成功。
-- 公開後の URL 取得を確認済み: 96MB、SHA-256 `1dd81e2c0e5ed1f73eb5022d09246d8e955aad9a2240ce66f2d5dc3872464fb5`。
+- GitHub Actions の Windows ビルド: `31791353378` 成功。
+- 公開後の URL 取得を確認済み: 96MB、SHA-256 `e3baabcdd7054904d7a210ff6418b9521d9b7240dcb310a333247ccb5251a6ee`。
 
-Build 269 は、ピット直後に同一周回で燃料余裕を誤って更新する問題、`ボックス` などの短いピット追加入力、ピットサイクル中の一時的な順位コールを扱う修正を含む。
+Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加入力・ピットサイクル中順位コールの修正を含む。その上で、デブリーフ継続質問、質問数の圧縮、発話診断、利用者向けの秘匿情報を伏せた診断ログを追加する。
 
 これは Windows 側の更新受信確認、実 iRacing テレメトリ、音声の間合い、ドライバーにとっての有用性を実証するものではない。これらは実走で確認する。
 
-## 現在の作業ツリー — 未公開 Build 270 候補（運用品質改善）
+## Build 270 の運用品質改善
 
 既存の未追跡ファイルやレビュー成果物を、この変更群に混ぜない。意図した変更は以下。
 
@@ -65,6 +65,6 @@ Build 269 は、ピット直後に同一周回で燃料余裕を誤って更新�
 
 ## 次の作業
 
-1. 完全な `./preflight.sh` を実行し、意図した差分全体を確認する。
-2. 全ゲート成功後、上記の運用品質改善ファイルだけをコミット候補にする。
-3. push / build / 公開の前に、Yuji の明示 GO を得る。
+1. Windows 実機で、旧ビルドからの更新、表示 Build 番号、Bridge 自動開始を確認する。
+2. iRacing 実走で、無線診断・デブリーフ継続質問を確認する。
+3. 本当の無操作自動更新とストリーミング TTS は、別の安全確認付き設計として進める。
