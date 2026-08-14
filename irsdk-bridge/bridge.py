@@ -49,7 +49,7 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 268 (post-pit fuel authority, safe pace clearance)"
+BUILD_VERSION = "Build 269 (post-pit margin hold, pit conversation continuity)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -4314,7 +4314,13 @@ def poll_iracing():
 
         # Position change（クラス内順位ベース。レースセッション＆コース走行中のみ。
         #   グリッド整列中(OnTrack:False)は順位がシャッフルするので黙る）
-        if is_race_session and onTrack and class_pos is not None and prev['class_pos'] is not None and class_pos != prev['class_pos']:
+        # A pit visit reorders the whole class.  Those transient positions are
+        # not overtakes: stay silent while on pit road and while a conditional
+        # pit-cycle forecast is still blending toward its observable outcome.
+        _pit_cycle_blending = bool(pit_cycle_tracker.status())
+        if (is_race_session and onTrack and not onPit and not _pit_cycle_blending
+                and class_pos is not None and prev['class_pos'] is not None
+                and class_pos != prev['class_pos']):
             gained = prev['class_pos'] - class_pos
             if gained > 0:
                 _pu_msg = random.choice(['P' + str(class_pos) + '.', 'P' + str(class_pos) + ', good pass.',
@@ -5500,6 +5506,14 @@ def poll_iracing():
                         _fuel_strategy_live.update({
                             'awaiting_post_pit_s_f': False,
                             'live_post_pit_recalculation': True,
+                            # The checker crossing count cannot change until
+                            # the next S/F.  Until then fuel and remaining
+                            # requirement burn together, so this margin is the
+                            # one driver-facing fact; do not manufacture a
+                            # splash from a live tank versus stale full-lap
+                            # requirement.
+                            'post_pit_margin_hold': True,
+                            'post_pit_margin_l': _post_pit_eval['margin_l'],
                             # Refuelling invalidates any earlier pace release.
                             # A new release can only come from the normal live
                             # strategy decision after the post-stop state is
@@ -5523,6 +5537,11 @@ def poll_iracing():
                                     'estimated_crossings_to_finish'), fuel,
                                 _post_pit_eval['required_fuel_l'],
                                 _post_pit_eval['margin_l']))
+                        # `_fuel_strategy_live` is rebuilt each telemetry
+                        # cadence. Persist this post-stop snapshot so the next
+                        # frame does not compare the refuelled tank with the
+                        # original pre-stop tank again.
+                        fuel_strategy = dict(_fuel_strategy_live)
                     else:
                         # No fresh model: do not invent a post-stop number.
                         _fuel_strategy_live.update({

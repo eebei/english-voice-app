@@ -79,7 +79,7 @@ function classify(text, options = {}) {
     requestedPlan: /オーバー\s*カット|overcut/i.test(t) ? 'C' : 'B',
     confidence: 0.99,
   };
-  if (/ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
+  if (/^(?:ボックス|box)[。.!！?？]*$|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|暫定.{0,12}(?:何位|何番手|順位|ポジション)|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABCＡＢＣ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[abc]/i.test(t)) {
     const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
@@ -259,6 +259,18 @@ function buildFuelPlan(live, lang, card = {}) {
     return ja(lang)
       ? `${current != null ? `現在${current.toFixed(1)}L。` : ''}${avg != null ? `平均${avg.toFixed(2)}L/周。` : ''}完走目標が確定していないため、必要燃料・給油量・ピット周は出さない。`
       : `${current != null ? `Current ${current.toFixed(1)}L. ` : ''}${avg != null ? `Average ${avg.toFixed(2)}L/lap. ` : ''}The finish target is not authoritative, so I will not give required fuel, an add amount, or a pit-lap call.`;
+  }
+  // A refuel can happen between two S/F crossings. During that out-lap the
+  // live tank and the fixed S/F requirement burn together, so use the
+  // Bridge-owned post-stop margin until the next S/F recalculation.
+  const heldPostPitMargin = finite(fs.post_pit_margin_l);
+  if (fs.post_pit_margin_hold === true && heldPostPitMargin != null) {
+    if (ja(lang)) return heldPostPitMargin >= 0
+      ? `燃料は足りる。ピット後の完走余裕は${heldPostPitMargin.toFixed(1)}L。次のS/Fで更新する。`
+      : `追加給油が必要。ピット後の見込みで${Math.abs(heldPostPitMargin).toFixed(1)}L不足。`;
+    return heldPostPitMargin >= 0
+      ? `Fuel is sufficient. Post-stop finish margin ${heldPostPitMargin.toFixed(1)}L; I will refresh it at the next S/F.`
+      : `Additional fuel is required; post-stop projection is ${Math.abs(heldPostPitMargin).toFixed(1)}L short.`;
   }
   if (card.splashQuestion) {
     const bridgeProjection = live && live.post_stop_fuel_projection || {};

@@ -409,6 +409,21 @@ check('8/14 STT 周/州 wording routes to the pit-decision handler',
   cards.classify('どうするのはこの州 入るのか？次の週なのか？').topic === cards.TOPIC.PIT_DECISION);
 check('8/14 provisional-position wording routes to the rejoin handler',
   cards.classify('暫定 何番手 ぐらい？').topic === cards.TOPIC.REJOIN);
+check('8/14 bare box acknowledgement routes to the pit-decision handler',
+  cards.classify('ボックス。').topic === cards.TOPIC.PIT_DECISION);
+check('8/14 missed-pit report routes to the pit-decision handler',
+  cards.classify('今ピットに入れなかった。').topic === cards.TOPIC.PIT_DECISION);
+reply = cards.build(cards.classify('これどう？燃料を最後まで持つ どんな感じ？'), {
+  session_type: 'Race', fuel: 20.124,
+  fuel_strategy: {
+    avg_fuel_per_lap: 3.47, estimated_crossings_to_finish: 6,
+    required_fuel_l: 20.82, evaluated_fuel_l: 22.252,
+    margin_l: 1.432, add_fuel_l: 0, pit_required: false,
+    post_pit_margin_hold: true, post_pit_margin_l: 1.432,
+  },
+}, 'ja');
+check('8/14 post-pit replay keeps the 1.43L margin through the same lap',
+  reply === '燃料は足りる。ピット後の完走余裕は1.4L。次のS/Fで更新する。', reply);
 reply = cards.build(cards.classify('ルナの予測通りじゃないか？この順位どう？'), outLapLive, 'ja');
 check('current P3 does not grade conditional P4 before the stop condition is met',
   /現在順位P3.*4\/14台で条件はまだ未成立.*P4は条件付き予測.*一致判定はまだしない/.test(reply), reply);

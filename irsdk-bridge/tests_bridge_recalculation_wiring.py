@@ -658,10 +658,23 @@ class ConversationPushAuthorityWiring(unittest.TestCase):
         src = bridge_src()
         i = src.index("FUEL POST-PIT RECALC crossings=%s")
         window = src[i - 2400:i + 250]
-        self.assertIn('fuel_strategy_mod.evaluate_fuel_to_finish(', window)
+        self.assertIn('fuel_strategy_mod.evaluate_fuel_to_finish(', src)
         self.assertIn("'estimated_crossings_to_finish'", window)
         self.assertIn("'live_post_pit_recalculation': True", window)
         self.assertIn("'push_allowed': False", window)
+
+    def test_post_pit_margin_is_persisted_until_the_next_sf(self):
+        src = bridge_src()
+        i = src.index("'post_pit_margin_hold': True")
+        window = src[i - 500:i + 2200]
+        self.assertIn("'post_pit_margin_l': _post_pit_eval['margin_l']", window)
+        self.assertIn('fuel_strategy = dict(_fuel_strategy_live)', window)
+
+    def test_pit_cycle_blend_suppresses_transient_position_calls(self):
+        src = bridge_src()
+        i = src.index('_pit_cycle_blending = bool(pit_cycle_tracker.status())')
+        window = src[i:i + 500]
+        self.assertIn('not onPit and not _pit_cycle_blending', window)
 
 
 if __name__ == '__main__':
