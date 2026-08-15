@@ -1,117 +1,119 @@
-# DRE vs OMORAY PITWALL — Product and Cost Comparison
+# DREとOMORAY PITWALLの比較・初期ターゲット仮説
 
-Date: 2026-08-15 JST
+更新日: 2026-08-15 JST
 
-## Executive conclusion
+## 結論
 
-DRE is not merely a spotter. Its foundation is a broad deterministic telemetry/event engine, spatial spotter, and large voice-command system, but it also publicly claims race simulation and race-strategy planning/execution using fuel, tyres, weather, congestion, and pit forecasts.
+DREは単なるスポッターではない。高速スポッター、燃料、音声操作、アラート、分析、決定論的な戦略計算をまとめた成熟したレース支援ツールである。公式トップページも「目を解放し、耳を使う」「必要な情報を必要な時に聞く」と訴求しており、PITWALLがダッシュボードを増やすだけでは差別化にならない。
 
-OMORAY PITWALL overlaps with DRE in its deterministic Fast Lane and telemetry truth layer. Its intended differentiation is a continuous AI race-engineer relationship: natural conversation, contextual judgment, Plan A/B/C adaptation, debrief, and driver memory across sessions.
+また「レース前・中・後を同じエンジニアがつなぎ、本人を理解する」だけでも弱い。記憶や人格は手段であり、購入理由は次である。
 
-The differentiation is credible as a product direction, but it must not be expressed as “DRE only reacts; PITWALL thinks.” DRE already contains substantial deterministic strategy. The defensible distinction is:
+> 走り方は分かっている。しかし、レース中の状況整理と戦略判断まで一人で背負っているドライバーに、次に何をするかを一つに絞って伝える。
 
-- **DRE:** broad, mature telemetry automation, spotter, commands, controls, signals, and deterministic strategy tooling.
-- **PITWALL:** narrower current GT3/endurance scope, conversational decision support, race narrative continuity, debrief, personality, and persistent driver understanding.
+初期の有力顧客仮説は、Road iRating 1,800〜3,000前後で、GT3・IMSA・耐久を定期的に走り、人間のエンジニアはいないが改善意欲と支払意思がある層。iRatingだけで決めず、参加頻度、レース時間、カテゴリー、既存ツール利用、支払継続を合わせて検証する。
 
-## Current public pricing
+## 現行料金
 
-| Product | Entry/trial | Monthly | Annual effective monthly | Notes |
+| 製品 | 導入・試用 | 月額 | 年払いの月額換算 | 備考 |
 |---|---:|---:|---:|---|
-| DRE Free | Free | `$0` | `$0` | Broad free feature set |
-| DRE Essentials | 10-day trial | `$5.99` | `$4.49` | Competitor and Auto Fuel alerts |
-| DRE Performance | 10-day trial | `$9.99` | `$6.99` | Higher-quality voice, signals, team data, more customization |
-| DRE Ultimate | 10-day trial | `$29.99` | `$19.99` | Highest voice quality and maximum adjustments |
-| PITWALL current Founding | Five-day free trial | `$29.99` locked while active | None | Current public/Stripe operation; existing promise must be preserved |
-| PITWALL proposed entry | Paid Starter Pass | `$9.99` one-time | N/A | Duration not yet decided or implemented |
-| PITWALL possible new standard | TBD | `$34.99` candidate | TBD | Not approved or public; must be validated against conversion and cost |
+| DRE Free | 無料 | `$0` | `$0` | 無料枠が広い |
+| DRE Essentials | 10日試用 | `$5.99` | `$4.49` | 競合車・自動燃料等 |
+| DRE Performance | 10日試用 | `$9.99` | `$6.99` | 上位音声、信号、チームデータ等 |
+| DRE Ultimate | 10日試用 | `$29.99` | `$19.99` | 最高音声品質、最大調整幅 |
+| PITWALL Founding | 5日無料 | `$29.99` | なし | 有効会員の価格約束は維持 |
+| PITWALL Starter案 | 有料 | `$9.99`買い切り | 該当なし | 期間未決定・未実装 |
+| PITWALL新標準案 | 未決定 | `$34.99`候補 | 未決定 | 未承認・未公開。転換率と原価で検証 |
 
-Sources: [DRE official pricing](https://www.thedigitalraceengineer.com/pricing/). PITWALL facts come from the current repository, Stripe screenshots supplied by Yuji, and `HANDOFF.md`.
+出典: [DRE公式料金](https://www.thedigitalraceengineer.com/pricing/)。PITWALLは現行コード、Stripe画面、`HANDOFF.md`。
 
-## Service comparison
+## サービス比較
 
-Status language:
-
-- **Publicly available:** vendor currently lists it as available.
-- **Verified/current:** PITWALL code or field evidence currently supports it.
-- **Candidate/validation:** implemented or planned but not yet release/field proven.
-- **Not evidenced:** not found as a current public claim; this does not prove the product cannot do it.
-
-| Area | DRE | OMORAY PITWALL | Assessment |
+| 領域 | DRE | OMORAY PITWALL | 現時点の評価 |
 |---|---|---|---|
-| Core architecture | Deterministic telemetry/event engine, commands, signals and audio | Deterministic Bridge/Fast Lane plus LLM judgment and speech layers | Partial overlap; PITWALL adds generative/contextual layer |
-| Spotter/proximity | Rapid Spotter, longitudinal/3D spatial positioning, overtake signals, blue-flag and rejoin awareness | Side-by-side, stopped-car and selected safety/pit calls in Fast Lane | DRE is broader and more mature today |
-| Voice commands | Official table lists 800+ commands, binds, custom commands, local/cloud recognition and intent recognition | Natural-language PTT/typed conversation routed through intent handlers and LLM fallback | DRE wins breadth/control; PITWALL aims for conversational flexibility |
-| Fuel | Fuel graphs, windows, auto fuel, exact fill, buffers, multiple averaging modes, preservation | Fuel truth gate, fuel-to-finish, planned pit/fuel authority, live radio | Strong overlap; DRE currently exposes more mature controls |
-| Race strategy | Publicly claims race simulation and ownership of strategy planning/execution; pit/fuel/tyre forecasts using weather and congestion | Plan A/B/C, pit/rejoin and adaptive Phase E are under active implementation/validation | DRE cannot be described as reaction-only; PITWALL must prove adaptive conversational value |
-| Pit/rejoin | Pit-exit windows, opponent pit exit, projected positions, rejoin proximity | Pit-loss calibration, pit-exit forecast, rejoin context and deterministic pit handlers | Similar problem space; PITWALL field validation remains limited |
-| Tyres/weather | Tyre wear/health, compounds, rain, wetness, wind and weather alerts | Truth-gated track wetness/weather; tyre truth constrained by iRacing availability | DRE has broader current public coverage |
-| Team/endurance | Rapid shared team data and teammate busy detection | Driver handoff/session authority and endurance strategy work | DRE has stronger current team tooling; PITWALL focuses on engineer continuity |
-| Before race | Checklist, grid fuel, race simulation and strategy | Conversational briefing using format/history and Plan A/B/C | PITWALL differentiation is the natural briefing relationship, if reliably delivered |
-| During race | Extensive alerts, commands, signals and deterministic strategy | Contextual radio, LLM silence/judgment, strategy changes, mistake recovery | PITWALL differentiator; still requires field proof and cost control |
-| After race | Analytics and racing results are publicly available | AI-led debrief, session evidence, local memory and next-session context | PITWALL has the clearer relationship/learning proposition |
-| Driver history/memory | Official feature table lists Driver History as `Planned` | Local driver memory and historical race evidence exist; deeper action layer is evolving | Current PITWALL differentiation |
-| Personality/emotional continuity | Multiple voice identities and voice quality; emotion listed as `Planned` | Multiple named engineer characters, conversational tone and mistake recovery | PITWALL differentiation, subject to consistency |
-| Multi-sim | Publicly available | iRacing-focused | DRE advantage; PITWALL deliberately narrower |
-| Offline/local cost protection | Local voice and recognition options are available | Cloud Anthropic plus Google STT/TTS currently create variable cost | DRE has structural cost advantage; PITWALL needs entitlement and cost gates |
+| 基盤 | テレメトリ、イベント、音声コマンド、信号、戦略計算 | 決定論的Bridge/Fast Lane＋LLM判断・音声 | 一部重複。PITWALLは文脈判断層を追加 |
+| スポッター | Rapid Spotter、3D位置、追越・復帰等 | 並走、停止車両、安全・ピット系の即時コール | 現状DREが広く成熟 |
+| 音声操作 | 数百のコマンド、ローカル/クラウド認識 | 自然言語PTT・文字会話 | 操作の広さはDRE、柔軟な会話はPITWALL |
+| 燃料・戦略 | 自動給油、燃料窓、天候・混雑・タイヤを使う予測 | 燃料truth gate、Plan A/B/C、変更相談 | 同じ問題領域。PITWALLは対話価値の実証が必要 |
+| レース中 | 多数のアラート、信号、操作、決定論的支援 | 状況を要約し、次の判断を絞ることを目指す | 「情報量」ではなく判断負荷削減で差別化 |
+| レース後 | 分析・結果 | AIデブリーフ、履歴、次戦への持越し | PITWALLの補強要素だが単独では購入理由にならない |
+| 人格・記憶 | 複数音声。感情・Driver Historyは計画扱い | 複数エンジニア人格、ローカル記憶 | PITWALL優位候補。判断改善への接続が必要 |
+| 表示 | Analytics等を提供 | 表示競争は主戦場にしない | iRacingの正本値と推定値を混同しない |
+| 対応言語 | 公式トップ画像は `en, de, fr, it, es, pt, br, tr` | 現在は英語中心 | DREは欧州言語に強い。日本語は表示上確認できない |
+| シム | iRacing、LMU、ACC、AC | iRacing特化 | 広さはDRE、深さをPITWALLの選択にする |
+| 原価構造 | ローカル音声・認識の選択肢あり | Anthropic、Google STT/TTSの従量原価 | DREが構造的に有利。PITWALLは原価gate必須 |
 
-Primary feature source: [DRE official feature/pricing table](https://www.thedigitalraceengineer.com/pricing/).
+公式トップページ: [DRE](https://www.thedigitalraceengineer.com/)。機能・価格: [DRE料金表](https://www.thedigitalraceengineer.com/pricing/)。
 
-## Is DRE “Crew Chief/reflex” and PITWALL “thinking”?
+## iRating別の初期ターゲット仮説
 
-The accurate answer is **partly, but not enough to use as positioning**.
+これは実利用・有料転換で検証する仮説である。
 
-DRE is Crew Chief-like in that much of its value is deterministic and event-driven: spotter calls, flags, pit signals, commands, fuel rules, thresholds, audio cues, and telemetry visualizations. These paths correspond to PITWALL's Fast Lane and deterministic handlers.
+| 層 | ニーズ | 支払・定着上の懸念 | 初期方針 |
+|---|---|---|---|
+| 〜1,500 | 基礎支援の必要性は高い | 基礎走行・参加頻度・導入が支配的 | 主対象にしない |
+| 1,800〜3,000 | 走行は成立し、戦略・状況判断で伸びしろ | 実益を短期間で示す必要 | **最優先候補** |
+| 3,000〜4,000 | 判断支援・耐久運用の価値あり | 既存手法へのこだわりが強まる | 耐久・長時間レースに絞る |
+| 4,000〜 | 一般的な助言の必要性は低下 | 誤助言への許容が低く、自前環境やチームを持つ場合 | スプリント一般の主対象にしない。耐久・チーム運用は別 |
 
-However, DRE also publishes race simulation, race strategy, pit-stop forecasts, tyre/fuel prediction, congestion inputs, projected position, and pit-exit logic. Those are strategy calculations, even if they are not an LLM conversation. Calling all of DRE “reflection only” would be factually wrong and easy for an informed customer to reject.
+推奨する最初のICP:
 
-PITWALL's stronger positioning is:
+- Road iRating 1,800〜3,000を中心とする。
+- GT3、IMSA、耐久系を週2回以上、または30分以上のレースで継続利用する。
+- 人間のエンジニアはいない。Crew Chiefやoverlayを既に使い、問題を理解している。
+- 求める価値は追加データではなく、燃料・ピット・天候・トラフィックをまとめた「今の優先判断」。
 
-> DRE gives the driver a large and mature race-control toolkit. PITWALL is building one engineer that discusses the plan, notices when the plan stops fitting, explains the next decision naturally, debriefs the result, and remembers the driver next time.
+比較検証は1,500〜2,000、2,000〜3,000、3,000以上から最低5人ずつ集め、初回起動ではなく、2戦以上の利用率、有料転換、30日継続、不要コール率、役立った具体的判断で見る。
 
-## PITWALL measured variable cost
+## ダッシュボードに対する方針
 
-Evidence window: 2026-08-09 through 2026-08-14 JST. Costs include estimated Anthropic and Google STT/TTS variable cost. User rows exclude Railway common cost because it is not allocated per user in the reports.
+「外部ダッシュボードは必ず誤差が出る」と一括りにはしない。iRacing SDKの生値を表示する項目と、燃料予測、ピットロス、順位予測、タイヤ状態などの派生推定は別である。誤差が問題になるのは主に後者と更新遅延・定義差である。
 
-| Driver | Connected time | API variable cost | Variable cost/hour | Activity pattern in window | 30-day same-pace projection |
-|---|---:|---:|---:|---|---:|
-| Yagi | 18.68 h | `$1.0976` | `$0.0587/h` | Long connected sessions, relatively few expensive interactions | `$5.49` |
-| Yuji | 5.42 h | `$3.7942` | `$0.7005/h` | High PTT/STT and Anthropic interaction density | `$18.97` |
-| Masato Takeda | 2.85 h | `$0.8919` | `$0.3129/h` | Activity on Aug 9–10; no measured session Aug 11–14 | `$4.46` |
-| All measured usage | 26.95 h | `$5.7837` | `$0.2146/h` | Six-day combined sample | `$28.92` total across the observed cohort pattern |
+PITWALLは別画面の情報量で競わない。
 
-Railway allocation during the same six days was approximately `$0.5210`, bringing cohort cost to approximately `$6.3047` or `$0.2339` per connected hour. This does not include final Railway plan fees/tax/credits, Stripe fees, refunds, support labor, or all Google invoice/free-tier effects.
+1. iRacing由来の確定値とPITWALLの推定値を明確に分ける。
+2. 根拠や鮮度が不足する時は断言しない。
+3. ドライバーの視線を奪わず、意思決定に必要な差分だけ話す。
+4. ダッシュボードを作る場合も診断・根拠確認用とし、商品中心にしない。
 
-### Illustrative unit economics
+DRE自身も「Nothing to look at」「Utilize your ears」と売っているため、単に音声化するだけでは勝てない。PITWALLは、複数の正しい情報から**どれを今伝え、どれを黙るか**の判断品質を商品にする。
 
-These are not customer forecasts. They hold the six-day behavior pattern constant for 30 days and exclude Stripe, tax, support, and unallocated infrastructure.
+## PITWALL実測変動原価
 
-| Observed behavior profile | Projected variable cost/month | Gross margin at `$29.99` before omitted costs | Gross margin at `$34.99` before omitted costs |
+対象: 2026-08-09〜2026-08-14 JST。AnthropicとGoogle STT/TTSの推定従量原価。個人行にはRailway共通費を未配賦。
+
+| 利用者 | 接続時間 | API変動原価 | 1時間当たり | 同ペース30日換算 |
+|---|---:|---:|---:|---:|
+| 八木 | 18.68 h | `$1.0976` | `$0.0587/h` | `$5.49` |
+| Yuji | 5.42 h | `$3.7942` | `$0.7005/h` | `$18.97` |
+| まーぼー | 2.85 h | `$0.8919` | `$0.3129/h` | `$4.46` |
+| 合計 | 26.95 h | `$5.7837` | `$0.2146/h` | `$28.92` |
+
+同期間のRailway配賦推定 `$0.5210` を含めると、合計約 `$6.3047`、接続1時間当たり `$0.2339`。Stripe手数料、税、返金、サポート工数、最終的なGoogle請求差は含まない。
+
+| 利用傾向 | 月間変動原価見込 | `$29.99`時の粗利率 | `$34.99`時の粗利率 |
 |---|---:|---:|---:|
-| Yagi-like | `$5.49` | 81.7% | 84.3% |
-| Yuji-like | `$18.97` | 36.7% | 45.8% |
-| Masato-like | `$4.46` | 85.1% | 87.3% |
+| 八木型 | `$5.49` | 81.7% | 84.3% |
+| Yuji型 | `$18.97` | 36.7% | 45.8% |
+| まーぼー型 | `$4.46` | 85.1% | 87.3% |
 
-The main cost driver is not connected time. It is interaction density, STT duration, TTS output, model calls, token size, and generated speech that may never be played. A fair-use/cost gate should therefore meter cost-bearing actions rather than racing hours alone.
+主原価は接続時間ではなく、PTT/STT時間、モデル呼出し、トークン、TTS生成量と再生されない音声である。制限・診断は走行時間より原価発生処理を測る。
 
-Source reports:
+## 価格への示唆
 
-- `../../OMORAY-PITWALL/reports/daily-cost/2026-08-09.md`
-- `../../OMORAY-PITWALL/reports/daily-cost/2026-08-10.md`
-- `../../OMORAY-PITWALL/reports/daily-cost/2026-08-11.md`
-- `../../OMORAY-PITWALL/reports/daily-cost/2026-08-12.md`
-- `../../OMORAY-PITWALL/reports/daily-cost/2026-08-13.md`
-- `../../OMORAY-PITWALL/reports/daily-cost/2026-08-14.md`
+DREは `$29.99/月` が存在することを示す一方、Ultimate年払いは実質 `$19.99/月` で、処理の多くをローカルで実行できる。PITWALLは機能数で `$34.99` を正当化できない。
 
-## Pricing implication
+`$34.99`を決める前に、無関係な有料利用者が期限付きStarterを完了し、2戦以上利用した後、提示価格で継続を選ぶ実績を最低3人分取る。無料期間は「いつでも開始できる権利」にせず、開始期限と終了期限を設定する。
 
-DRE establishes that `$29.99/month` exists at the top of this category, but its annual Ultimate offer is effectively `$19.99/month`, and much of its workload can run locally. PITWALL therefore cannot justify `$34.99` merely by matching DRE's feature checklist.
+## 現時点の訴求案
 
-PITWALL must justify a premium through evidence that a driver receives something structurally different:
+> You know how to drive. But you are still making every race decision alone.
+>
+> PITWALL turns fuel, traffic, weather and race context into the next decision that matters — without another screen.
 
-1. a useful pre-race plan;
-2. correct and timely adaptation when the situation changes;
-3. fewer irrelevant calls rather than more alerts;
-4. a debrief that carries verified learning into the next race;
-5. a persistent engineer relationship that is valuable enough to miss when absent.
+日本語の意味:
 
-Do not finalize `$34.99` until at least three unrelated paid users complete a time-boxed paid Starter, use PITWALL in two or more sessions, and explicitly choose continued access at the offered price. The Starter duration must be selected from onboarding behavior, not copied from DRE's ten-day trial or another competitor.
+> 走り方は分かっている。それでも、レースの判断は全部一人で背負っている。
+>
+> PITWALLは燃料、トラフィック、天候、レース状況を、今必要な一つの判断に変える。新しい画面は要らない。
+
+「同じエンジニア」「ドライバー記憶」「前後の継続」は、この約束を実現する根拠として下位に置く。
