@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-15 JST
 
-## Build 272 候補（作業ツリー・未commit / 未build / 未公開）
+## Build 272 公開完了
 
 - 8/15 Yuji Monza 20 と八木さん12時間耐久の報告を同じ燃料権威へ統合した。
 - 長時間レースの総必要燃料（例: 約429L）は内部計画値として保持するが、それ自体を「この周Box」の根拠にしない。現在スティントの燃料レンジだけが即時ピット判断を所有する。
@@ -25,6 +25,13 @@
 - Cost Gate — 36/36。`external_anthropic_calls=0`、`external_google_stt_calls=0`、`external_google_tts_calls=0`。HTTP失敗試験もAnthropic SDKのローカルstubへ変更し、外部APIを呼ばない。
 - `git diff --check`、Python compile、JavaScriptおよびrenderer抽出スクリプト構文を確認済み。
 
+### 公開証拠
+
+- 実装コミット: `94fe328`（`Build 272 harden endurance fuel and radio calls`）。
+- GitHub Actions: push build `31874909906` 成功、公開workflow `31875015398` 成功。
+- Release: `desktop-latest` は **OMORAY PITWALL Desktop — Build 272** を表示。
+- 公開installer: `OMORAY-PITWALL-Setup-latest.exe` 100,602,321 bytes、SHA-256 `eb0b9f60806a3e44ceaeb8b0e156ce428bc68eed98eadb784f3f51b284be9b13`。GitHub Releaseから取得して照合済み。
+
 ### Build後の実走確認
 
 1. Monza 20で「ゴールまでの数量が増えている」に燃料handlerが最新値で短く返すこと。
@@ -35,7 +42,7 @@
 6. タイム読み上げ後に「今はペースアップよりピット優先」を周期的に繰り返さないこと。同一スティントでクリーン3周／Plan B/C再計算通知が繰り返されないこと。
 7. 音声の自然さ、舵角／ブレーキ中の間合い、実iRacing SDK接続は機械テストで実証していないため実走で確認する。
 
-次のowner gateは、Build 272のcommit / Windows build / 公開。Yujiの明示GOまで実行しない。
+次はBuild 272の実走確認。Windows側でBuild番号、Bridge自動開始、実iRacingテレメトリ、音声の間合いを確認する。
 
 ## Build 271 公開完了
 
@@ -52,10 +59,10 @@
 ## 公開済みの基準点
 
 - リポジトリ: `eebei/english-voice-app` / ブランチ: `main`
-- 公開済みビルド: **271** — コミット `db9ce61`（`Build 271 add Chief Engineer handoff and fuel window calls`）
+- 公開済みビルド: **272** — コミット `94fe328`（`Build 272 harden endurance fuel and radio calls`）
 - 公開インストーラー: `https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe`
-- GitHub Actions の Windows ビルド: `31863165606` 成功。
-- 公開後の URL 取得を確認済み: 100,595,692 bytes、SHA-256 `f01ba76c5d82b1701bcc5d62bba4a59777a7231e3cdebf49580c24fa6063751a`。
+- GitHub Actions の公開Windowsビルド: `31875015398` 成功。
+- 公開後の URL 取得を確認済み: 100,602,321 bytes、SHA-256 `eb0b9f60806a3e44ceaeb8b0e156ce428bc68eed98eadb784f3f51b284be9b13`。
 
 Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加入力・ピットサイクル中順位コールの修正を含む。その上で、デブリーフ継続質問、質問数の圧縮、発話診断、利用者向けの秘匿情報を伏せた診断ログを追加する。
 
