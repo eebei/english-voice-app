@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import driver_activity as da  # noqa: E402
 import bridge  # noqa: E402
 import race_lifecycle  # noqa: E402
+import endurance_handoff as chief  # noqa: E402
 
 pass_n, fail_n = 0, 0
 
@@ -450,7 +451,8 @@ def test_allow_list_meta_pass_during_inactive():
         bridge._set_driver_activity(da.INACTIVE_DRIVER)
         for etype in ('ptt', 'ptt_text', 'ptt_audio', 'ptt_error', 'ptt_diagnostic',
                       'iracing_connected', 'session_summary',
-                      'driver_state', 'session_info', 'speak_gate', 'pit_timing'):
+                      'driver_state', 'session_info', 'speak_gate', 'pit_timing',
+                      'chief_engineer_handoff'):
             check(f'INACTIVE × {etype} → allowed',
                   bridge._activity_allows_broadcast({'type': etype}) is True)
     finally:
@@ -718,6 +720,34 @@ def test_preflight_wires_driver_handoff_tests():
     check('tests_driver_handoff.py 実行行', 'tests_driver_handoff.py' in pf)
 
 
+def test_chief_engineer_packet_and_race_only_wiring():
+    print('\n══ Chief Engineer v0：交代引き継ぎパケット ══')
+    state={'active_plan':'A','active_plan_snapshot':{'plan_a':{
+        'target_lap':12,'set_fuel_l':21,'projected_finish_margin_l':1.1}},
+        'last_recalculation':{'reason':'clean_3_laps_established'}}
+    packet=chief.build_packet(
+        state,current_lap=5,class_position=3,gap_ahead_s=4.2,
+        roster=['八木さん','まーぼーさん','ダートさん'],current_index=0)
+    check('Plan/次pit/給油/余裕を保持', packet['selected_plan']=='A' and packet['next_pit_lap']==12 and packet['fuel_set_l']==21 and packet['finish_margin_l']==1.1)
+    check('次ドライバーとindexを決定', packet['current_driver']=='八木さん' and packet['next_driver']=='まーぼーさん' and packet['next_driver_index']==1)
+    packet2=chief.build_packet(state,roster=['八木さん','まーぼーさん','ダートさん'],current_index=2)
+    check('最終ドライバー後は先頭へ循環', packet2['next_driver']=='八木さん' and packet2['next_driver_index']==0)
+    missing=chief.build_packet({},roster=['八木さん','まーぼーさん'],current_index=0)
+    check('戦略証拠なしは利用不可・数値を捏造しない', missing['available'] is False and missing['next_pit_lap'] is None and missing['fuel_set_l'] is None)
+    cfg={'enabled':True,'roster':['八木さん','まーぼーさん','ダートさん'],'current_index':0}
+    check('再生: ACTIVE→HANDOFF×Raceだけ発火', chief.should_emit(cfg,previous_activity='ACTIVE',new_activity='DRIVER_HANDOFF',is_race=True) is True)
+    check('再生: モードOFFは発火しない', chief.should_emit({**cfg,'enabled':False},previous_activity='ACTIVE',new_activity='DRIVER_HANDOFF',is_race=True) is False)
+    check('再生: Practiceは発火しない', chief.should_emit(cfg,previous_activity='ACTIVE',new_activity='DRIVER_HANDOFF',is_race=False) is False)
+    check('再生: 1名だけでは発火しない', chief.should_emit({'enabled':True,'roster':['八木さん']},previous_activity='ACTIVE',new_activity='DRIVER_HANDOFF',is_race=True) is False)
+    check('再生: ACTIVE以外からの遷移は発火しない', chief.should_emit(cfg,previous_activity='INACTIVE_DRIVER',new_activity='DRIVER_HANDOFF',is_race=True) is False)
+    src=_bridge_source()
+    check('race handoff時だけ専用packetを送る', "'type': 'chief_engineer_handoff'" in src and 'is_race=is_race_session' in src)
+    check('発火条件は純粋関数を通る', 'endurance_handoff_mod.should_emit(' in src)
+    transition=src[src.find('if _new_activity != _driver_activity_local:'):src.find("fuel_at_lap_start = None",src.find('if _new_activity != _driver_activity_local:'))]
+    check('ACTIVE→HANDOFF遷移ブロック内でpacket生成', 'endurance_handoff_mod.build_packet' in transition and "'type': 'chief_engineer_handoff'" in transition)
+    check('通常radioへ偽装せず非搭乗allow-listで配送', "'chief_engineer_handoff'," in src and "'type': 'radio', 'trigger': 'chief_engineer_handoff'" not in src)
+
+
 def run_all():
     print('══ Unit E0 v3（Driver Handoff/Inactive Driver・Codex再差戻し全対応）テスト ══')
     # 純粋関数
@@ -782,6 +812,7 @@ def run_all():
     test_mutation_allow_list_becomes_allow_all()
     # preflight
     test_preflight_wires_driver_handoff_tests()
+    test_chief_engineer_packet_and_race_only_wiring()
     print(f"\n[driver handoff v3] 合格 {pass_n} / 不合格 {fail_n}")
     return fail_n == 0
 

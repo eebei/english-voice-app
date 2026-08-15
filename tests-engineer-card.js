@@ -311,6 +311,7 @@ for (const [utterance, topic] of logReplayCases) {
 }
 
 const renderer = fs.readFileSync(__dirname + '/desktop/renderer.html', 'utf8');
+const bridge = fs.readFileSync(__dirname + '/irsdk-bridge/bridge.py', 'utf8');
 check('renderer reads response authority header',
   renderer.includes("res.headers.get('X-Pitwall-Authority')"));
 check('renderer records deterministic intent trace without overlay mirroring',
@@ -338,15 +339,16 @@ check('initial Plan A/B radio becomes Luna working state',
   && renderer.includes('strategyOptions:data.strategy_options'));
 // ★Plan B定義の判断（2026-08-12）：B は「1周延長」ではなく条件付きアンダーカット。
 // 旧文言（1周延長／延長案）が残っていないことも併せて確認する。
-check('Plan A target has a proactive measured A/B decision path',
+check('Fuel Window T-1 has a proactive measured A/B decision path',
   renderer.includes("case 'strategy_plan_decision'")
   && renderer.includes("data.trigger==='strategy_plan_decision'")
-  && /アンダーカットに行く/.test(renderer));
+  && /アンダーカットで決定/.test(renderer)
+  && /int\(lap\) >= max\(0, _decision_target - 1\)/.test(bridge));
 check('selected Plan B has a separate next-lap box call',
   renderer.includes("case 'strategy_plan_box_call'")
   && renderer.includes("予定どおりこの周でピット"));
 check('Plan Bの無線に「延長」が混ざらない',
-  !/アンダーカットに行く[^`]*延長/.test(renderer));
+  !/アンダーカットで決定[^`]*延長/.test(renderer));
 check('executed Plan A/B outcome is persisted and traceable',
   renderer.includes('recordStrategyOptionOutcome(data)')
   && renderer.includes("'pw_strategy_option_outcomes'")

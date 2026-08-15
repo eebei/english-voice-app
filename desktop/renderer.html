@@ -521,6 +521,21 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       </div>
       <div class="setup-hint" data-i18n="setup_lap_readout_hint">Off はベスト更新も含めラップ読み上げを完全に止める。Best only はベスト更新のみ発話。Every clean lap はインシデントなし・ピット外・オフトラックなしの周だけ発話（ベスト更新は常に通す）。Every 2 laps はそのクリーン周のうち 2 周ごとに 1 度発話（ベスト更新は常に通す）。</div>
 
+      <div class="field-label" style="margin-top:18px">Chief Engineer Mode</div>
+      <label class="setup-row" style="cursor:pointer">
+        <div class="setup-lbl">耐久チーム引き継ぎ</div>
+        <input id="chief-mode-enabled" type="checkbox" onchange="onChiefEngineerSettingsChanged()">
+      </label>
+      <div id="chief-roster-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <input class="field-input" id="chief-driver-1" maxlength="30" placeholder="Driver 1" oninput="onChiefEngineerSettingsChanged()">
+        <input class="field-input" id="chief-driver-2" maxlength="30" placeholder="Driver 2" oninput="onChiefEngineerSettingsChanged()">
+        <input class="field-input" id="chief-driver-3" maxlength="30" placeholder="Driver 3" oninput="onChiefEngineerSettingsChanged()">
+        <select class="mic-select" id="chief-current-driver" onchange="onChiefEngineerSettingsChanged()">
+          <option value="0">現在担当: Driver 1</option><option value="1">現在担当: Driver 2</option><option value="2">現在担当: Driver 3</option>
+        </select>
+      </div>
+      <div class="setup-hint">走行順に登録。交代時は現在担当の次へ引き継ぎ、Plan・次のピット・給油量・燃料余裕を共有します。</div>
+
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
       <button class="start-btn" id="btn-return-session" onclick="returnToSession()" style="display:none;margin-top:12px">会話へ戻る →</button>
     </div>
@@ -695,6 +710,7 @@ const API_BASE = 'https://english-voice-app-production.up.railway.app';
 const PERSISTENT_SETTING_KEYS = [
   'pw_beta_code','pw_auth_token','pw_auth_user','pw_username','pw_device_id',
   'pw_ui_lang','pw_volume','pw_voice_on'
+  ,'pw_chief_enabled','pw_chief_driver_1','pw_chief_driver_2','pw_chief_driver_3','pw_chief_current_driver'
 ];
 function persistentSet(key,value){
   try{
@@ -1636,6 +1652,7 @@ function showScreen(id){
   if(id==='screen-setup'){
     try{ updatePTTLabel(); updateVolLabel(); }catch(e){}
     try{ hydrateLapReadoutSelect(); }catch(e){}
+    try{ hydrateChiefEngineerSettings(); }catch(e){}
     const back=document.getElementById('btn-return-session');
     if(back) back.style.display=sessionActive?'block':'none';
   }
@@ -3002,6 +3019,7 @@ function connectBridge(){
       // Bridge接続時点で既にrenderer側に発行済みのsession_idがあれば渡す
       // （iRacing接続前でもPTTは使われうるため、iracing_connectedを待たない）。
       try{ irBridge.send(JSON.stringify({cmd:'usage_session', session_id:usageSessionId})); }catch(e){}
+      try{ sendChiefEngineerSettings(); }catch(e){}
     };
     irBridge.onmessage=(e)=>{
       let data; try{data=JSON.parse(e.data);}catch{return;}
@@ -3046,6 +3064,15 @@ function connectBridge(){
         speakGateActive=false; speakWindowOk=true; drainQueue();
         flushUsageTelemetry('iracing_disconnected',false,false);
         updateBridgeStatus(); bridgeVoice('iracing_lost'); return;
+      }
+      if(data.type==='chief_engineer_handoff'){
+        const next=Number(data.packet&&data.packet.next_driver_index);
+        if(Number.isInteger(next) && next>=0 && next<=2){
+          persistentSet('pw_chief_current_driver',String(next));
+          hydrateChiefEngineerSettings();
+        }
+        injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet:data.packet||{}});
+        return;
       }
       if(data.type==='radio') injectRadio(data);
       if(data.type==='speak_gate'){
@@ -3307,14 +3334,24 @@ function oishiRadio(d, forSpeech=false){
       const selected=(d.selected_plan==='B'||d.selected_plan==='C')?d.selected_plan:'A';
       const plan=(d.strategy_options&&d.strategy_options[`plan_${selected.toLowerCase()}`])||{};
       const fuel=Math.trunc(Number(plan.set_fuel_l)||0);
-      if(selected==='B') return `アンダーカットに行く。この周でピット、給油設定${fuel}リットル。`;
+      if(selected==='B') return `アンダーカットで決定。今周はペースキープ、次周ピット。給油設定${fuel}リットル。`;
       if(selected==='C') return `延長する。燃費目標を維持して、${Math.trunc(Number(plan.target_in_laps)||0)}周後にピット。給油設定${fuel}リットル。`;
-      return `燃料タイミングは基準。この周でピット、給油設定${fuel}リットル。`;
+      return `燃料タイミングは基準。今周はペースキープ、予定周にピット。給油設定${fuel}リットル。`;
     }
     case 'strategy_plan_box_call': {
-      const sel=(d.selected_plan==='C')?'c':'b';
+      const sel=(d.selected_plan==='B'||d.selected_plan==='C')?d.selected_plan.toLowerCase():'a';
       const plan=(d.strategy_options&&d.strategy_options[`plan_${sel}`])||{};
       return `予定どおりこの周でピット。給油設定${Math.trunc(Number(plan.set_fuel_l)||0)}リットル。`;
+    }
+    case 'chief_engineer_handoff': {
+      const p=d.packet||{};
+      if(!p.available) return `引き継ぎ。戦略は次の計測で確認する。`;
+      const who=p.next_driver?`${p.next_driver}へ引き継ぎ。`:`引き継ぎ。`;
+      const pit=Number.isFinite(Number(p.next_pit_lap))?`次のピットは${Math.trunc(Number(p.next_pit_lap))}周目目安。`:'';
+      const fuel=Number.isFinite(Number(p.fuel_set_l))?`給油設定${Math.trunc(Number(p.fuel_set_l))}リットル。`:'';
+      const margin=Number.isFinite(Number(p.finish_margin_l))?`チェッカー予測余裕${Number(p.finish_margin_l).toFixed(1)}リットル。`:'';
+      const damage=p.damage_observed?'損傷確認あり。':'';
+      return `${who}Plan ${p.selected_plan}継続。${pit}${fuel}${margin}${damage}`;
     }
     // ★Build 266 Codex差戻し#5：strategy_recalculation の日本語ケース。
     //   これが無いと injectRadio が bridge の英語 driver_message をそのまま
@@ -4786,6 +4823,37 @@ function onLapReadoutChanged(){
   // ポリシー切替時は Every 2 laps カウンタもリセット（前の設定の途中状態を持ち越さない）。
   try{ resetLapReadoutCounter(); }catch(_){}
   try{ diagnosticLog('LAP_READOUT_POLICY', 'set='+value); }catch(_){}
+}
+function chiefEngineerSettings(){
+  return {
+    enabled:localStorage.getItem('pw_chief_enabled')==='true',
+    roster:[1,2,3].map(n=>(localStorage.getItem('pw_chief_driver_'+n)||'').trim()).filter(Boolean),
+    current_index:Math.max(0,Math.min(2,Number(localStorage.getItem('pw_chief_current_driver')||0)||0))
+  };
+}
+function hydrateChiefEngineerSettings(){
+  const cfg=chiefEngineerSettings();
+  const enabled=document.getElementById('chief-mode-enabled'); if(enabled) enabled.checked=cfg.enabled;
+  [1,2,3].forEach(n=>{ const el=document.getElementById('chief-driver-'+n); if(el) el.value=localStorage.getItem('pw_chief_driver_'+n)||''; });
+  const cur=document.getElementById('chief-current-driver');
+  if(cur){
+    [...cur.options].forEach((opt,index)=>{
+      const name=(localStorage.getItem('pw_chief_driver_'+(index+1))||'').trim();
+      opt.textContent='現在担当: '+(name||('Driver '+(index+1)));
+    });
+    cur.value=String(cfg.current_index);
+  }
+}
+function sendChiefEngineerSettings(){
+  if(irBridge&&irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'chief_engineer_config',...chiefEngineerSettings()}));
+}
+function onChiefEngineerSettingsChanged(){
+  const enabled=!!document.getElementById('chief-mode-enabled')?.checked;
+  persistentSet('pw_chief_enabled',enabled?'true':'false');
+  [1,2,3].forEach(n=>persistentSet('pw_chief_driver_'+n,document.getElementById('chief-driver-'+n)?.value.trim()||''));
+  persistentSet('pw_chief_current_driver',document.getElementById('chief-current-driver')?.value||'0');
+  hydrateChiefEngineerSettings();
+  sendChiefEngineerSettings();
 }
 function buildContractNote(isJ){
   // LLMへ渡すシステム指示テキスト。未契約時は"最小限モード"と明示。

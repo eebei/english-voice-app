@@ -134,6 +134,9 @@ if python3 irsdk-bridge/tests_session_results.py >/dev/null 2>&1; then echo "   
 echo "── Driver Handoff / Inactive Driver 認識（Unit E0・2026-07-26 Codex指示）"
 if python3 irsdk-bridge/tests_driver_handoff.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_driver_handoff.py 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── Chief Engineer Mode v0：耐久引き継ぎ・Fuel Window T-1動線"
+if node tests-chief-engineer-mode.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-chief-engineer-mode.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo "── Final Lap総合首位・壁時計モデル（Unit 1・2026-07-26）"
 if python3 irsdk-bridge/tests_final_lap.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_final_lap.py 2>&1|grep "❌"|head -8; fail=1; fi
 

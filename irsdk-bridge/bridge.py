@@ -47,9 +47,10 @@ import session_authority as session_authority_mod
 import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
+import endurance_handoff as endurance_handoff_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 270 (debrief continuity and radio diagnostics)"
+BUILD_VERSION = "Build 271 (Chief Engineer and Fuel Window T-1)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -85,6 +86,7 @@ ptt_discard_recording = False  # rendererがbusy等で拒否した即時録音�
 
 # ── コスト計測用session_id（rendererから受け取りメモリ保持。認証には使わない）──
 usage_session_id = None
+chief_engineer_config = {'enabled': False, 'roster': [], 'current_index': 0}
 
 # ── 音量ボタン（ステアリングのダイヤル/ボタンで走行中に音量上下）──
 vol_binding = {"up": None, "down": None}   # 各 {"joy": int, "button": int}
@@ -715,6 +717,10 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
     'driver_state', 'driver_activity', 'speak_gate', 'lap_sectors', 'pit_timing',
+    # ACTIVE -> DRIVER_HANDOFF の遷移後に生成される耐久引き継ぎパケット。
+    # 通常 radio にすると非搭乗ゲートで破棄されるため、データイベントとして届け、
+    # renderer が一度だけ本人向け無線へ変換する。
+    'chief_engineer_handoff',
     # UI の liveness 判定に必要。ガレージ/ピット中も正常 telemetry は流れているため、
     # activity gate で落とすと desktop が「停止」と誤認する。音声イベントではない。
     'telemetry_live',
@@ -2947,6 +2953,25 @@ def poll_iracing():
             # Cost Telemetry とUIが「チーム車が走行中」と「本人が搭乗中」を混同しないための
             # 非音声メタデータ。E0の権威状態をそのままrendererへ渡す。
             broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+            if endurance_handoff_mod.should_emit(
+                    chief_engineer_config,
+                    previous_activity=_activity_before,
+                    new_activity=_new_activity,
+                    is_race=is_race_session):
+                _handoff_packet = endurance_handoff_mod.build_packet(
+                    _session_race_state, current_lap=lap,
+                    class_position=class_pos,
+                    # _battle_context はこのフレーム後段で構築されるため、ここでは
+                    # 前フレームまでのBridge権威値（次のgap走査で更新）を使う。
+                    gap_ahead_s=nearest_ahead_gap,
+                    roster=chief_engineer_config.get('roster'),
+                    current_index=chief_engineer_config.get('current_index', 0))
+                broadcast({'type': 'chief_engineer_handoff',
+                           'packet': _handoff_packet})
+                log('CHIEF ENGINEER HANDOFF: %s' % json.dumps(
+                    _handoff_packet, ensure_ascii=False, separators=(',', ':')))
+                if isinstance(_handoff_packet.get('next_driver_index'), int):
+                    chief_engineer_config['current_index'] = _handoff_packet['next_driver_index']
             # 非搭乗中もチーム車テレメトリは更新されるため、各候補のarmed/stage/historyを
             # そのまま残すと、本人復帰時に「チームメイト走行中に消費した段階」を引き継ぐ。
             # ACTIVE復帰を新しい本人スティント境界として、本人向け判断状態だけを初期化する。
@@ -5620,16 +5645,20 @@ def poll_iracing():
                         'strategy_options': strategy_options,
                         'message': (
                             'Fuel timing comparison. Baseline: pit in %s laps, set %s liters. '
-                            'One-lap extension: pit next lap and set %s liters. '
-                            'I will extend only after fuel and rejoin checks.'
+                            'Undercut window: pit in %s laps and set %s liters. '
+                            'I will call it only after fuel capacity, pace, and rejoin checks.'
                             % (_option_a.get('target_in_laps'),
                                _option_a.get('set_fuel_l'),
+                               _option_b.get('target_in_laps'),
                                _option_b.get('set_fuel_l'))),
                     })
                     log('STRATEGY OPTIONS dispatch: snapshot_id=%s result=%s'
                         % (strategy_options.get('snapshot_id'),
                            strategy_options_dispatch))
-            # The Plan A target is a real decision boundary.  Compare physical
+            # 決定はFuel Window（Plan Bの最初に容量内で完走分を積める周）の
+            # 一周前に行う。ピット入口で初めて考えるのでは遅いので、この周は
+            # 協議/ペース維持、次周だけを短いbox callにする。
+            # Plan Bが燃料上成立しない場合だけ、Plan Aの一周前を境界にする。
             # rejoin for this lap versus one lap later from one live snapshot.
             # Conditional rival pit-cycle position is never used to select B.
             if (isinstance(strategy_options, dict)
@@ -5640,10 +5669,14 @@ def poll_iracing():
                     #   新規Plan決定を発話しない。
                     and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
                 _decision_a = strategy_options.get('plan_a') or {}
-                _decision_target = _decision_a.get('target_lap')
+                _decision_b = strategy_options.get('plan_b') or {}
+                _window_target = (_decision_b.get('target_lap')
+                                  if _decision_b.get('fuel_window_open') else None)
+                _decision_target = (_window_target if isinstance(_window_target, int)
+                                    else _decision_a.get('target_lap'))
                 if (isinstance(_decision_target, int)
                         and isinstance(lap, (int, float))
-                        and int(lap) >= _decision_target):
+                        and int(lap) >= max(0, _decision_target - 1)):
                     _option_decision = strategy_options_mod.decide_at_plan_a(
                         strategy_options,
                         current_lap=int(lap),
@@ -5668,10 +5701,10 @@ def poll_iracing():
                         'reason': strategy_options['decision_reason'],
                         'decision_id': _option_decision.get('decision_id'),
                         'strategy_options': strategy_options,
-                        'message': (('Undercut is on. Box this lap and set %s liters.'
+                        'message': (('Undercut window next lap. Hold pace this lap; set %s liters.'
                                      % _selected_plan.get('set_fuel_l'))
                                     if _selected_option == 'B' else
-                                    ('Baseline fuel timing selected. Pit this lap and set %s liters.'
+                                    ('Baseline selected. Hold pace; box on the planned lap, set %s liters.'
                                      % _selected_plan.get('set_fuel_l'))),
                     })
                     if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
@@ -5806,18 +5839,19 @@ def poll_iracing():
                         })
                 _pending_recalculations = []
 
-            # A selected Plan B creates a second, mandatory trigger at its
-            # target lap.  The extend call can therefore never become a dead
-            # promise with no later box instruction.
+            # A selected Plan B creates a second, mandatory trigger at its target lap.
+            # 現行契約では確定したPlan A/Bの両方を対象周の短いbox callへ接続する。
+            # 事前決定済みPlanは対象周に一度だけ短いbox callを出す。
             if (isinstance(strategy_options, dict)
                     and strategy_options_decision_sent
-                    and strategy_options.get('selected_plan') == 'B'
+                    and strategy_options.get('selected_plan') in ('A', 'B')
                     and not strategy_options_box_call_sent
                     and is_race_session and onTrack and not onPit
                     # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
                     #   予定していたBox callも発話しない。
                     and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
-                _box_plan = strategy_options.get('plan_b') or {}
+                _box_selected = strategy_options.get('selected_plan') or 'A'
+                _box_plan = strategy_options.get('plan_' + _box_selected.lower()) or {}
                 _box_target = _box_plan.get('target_lap')
                 if (isinstance(_box_target, int)
                         and isinstance(lap, (int, float))
@@ -5826,10 +5860,10 @@ def poll_iracing():
                     _box_dispatch = broadcast({
                         'type': 'radio',
                         'trigger': 'strategy_plan_box_call',
-                        'selected_plan': 'B',
+                        'selected_plan': _box_selected,
                         'decision_id': _box_evidence.get('decision_id'),
                         'strategy_options': strategy_options,
-                        'message': ('One-lap fuel extension complete. Pit this lap and set %s liters.'
+                        'message': ('Box this lap. Set %s liters.'
                                     % _box_plan.get('set_fuel_l')),
                     })
                     if _box_dispatch is True or _box_dispatch == 'DISPATCHED':
@@ -6221,7 +6255,7 @@ def poll_joystick():
 
 
 async def handler(websocket):
-    global ptt_capturing, ptt_lang, vol_capturing, selected_mic_index, ptt_test_active, usage_session_id
+    global ptt_capturing, ptt_lang, vol_capturing, selected_mic_index, ptt_test_active, usage_session_id, chief_engineer_config
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
@@ -6274,6 +6308,16 @@ async def handler(websocket):
                     if isinstance(sid, str) and 0 < len(sid) <= 64:
                         usage_session_id = sid
                         log("USAGE_SESSION " + sid)
+                    continue
+                if cmd == 'chief_engineer_config':
+                    names = [str(x).strip()[:30] for x in (msg.get('roster') or []) if str(x).strip()][:3]
+                    idx = msg.get('current_index', 0)
+                    if not isinstance(idx, int) or idx < 0 or idx >= max(1, len(names)):
+                        idx = 0
+                    chief_engineer_config = {'enabled': msg.get('enabled') is True,
+                                             'roster': names, 'current_index': idx}
+                    log('CHIEF ENGINEER CONFIG enabled=%s roster=%s current=%s' %
+                        (chief_engineer_config['enabled'], names, idx))
                     continue
                 log("CMD received: " + str(cmd))
                 if cmd == "ptt_start":

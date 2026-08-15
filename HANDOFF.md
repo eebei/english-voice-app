@@ -1,6 +1,15 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-14 JST
+最終更新: 2026-08-15 JST
+
+## Build 271 公開候補
+
+- Chief Engineer Mode v0、Fuel Window T-1判断、Plan A/Bの対象周BOX callを実装。
+- `⚙ Settings` で走行順3名・現在担当・ON/OFFを保存し、Race中の本人 `ACTIVE → DRIVER_HANDOFF` だけでローカル引き継ぎを発話する。
+- Plan Bの旧「1周延長」をFuel Window起点の条件付きアンダーカットへ統一。
+- 内部実測: Chief Engineer 16/16、Driver Handoff 154/154、Engineer Cards 94/94、Bridge再計算75/75、全`preflight.sh`合格・`出荷可`。
+- 詳細証拠: `review/BUILD271_CHIEF_ENGINEER_AND_FUEL_WINDOW_EVIDENCE.md`。
+- 別PCの次ドライバーへ送るチーム共有クラウドは未実装。v0は同じPC上のLunaによる引き継ぎ。
 
 ## 公開済みの基準点
 
