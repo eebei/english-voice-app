@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-15 JST
 
-## Build 271 公開候補
+## Build 271 公開完了
 
 - Chief Engineer Mode v0、Fuel Window T-1判断、Plan A/Bの対象周BOX callを実装。
 - `⚙ Settings` で走行順3名・現在担当・ON/OFFを保存し、Race中の本人 `ACTIVE → DRIVER_HANDOFF` だけでローカル引き継ぎを発話する。
@@ -10,14 +10,17 @@
 - 内部実測: Chief Engineer 16/16、Driver Handoff 154/154、Engineer Cards 94/94、Bridge再計算75/75、全`preflight.sh`合格・`出荷可`。
 - 詳細証拠: `review/BUILD271_CHIEF_ENGINEER_AND_FUEL_WINDOW_EVIDENCE.md`。
 - 別PCの次ドライバーへ送るチーム共有クラウドは未実装。v0は同じPC上のLunaによる引き継ぎ。
+- 実装コミット: `db9ce61`（`Build 271 add Chief Engineer handoff and fuel window calls`）。
+- 公開workflow: `31863165606` 成功。
+- 公開installer: 100,595,692 bytes、SHA-256 `f01ba76c5d82b1701bcc5d62bba4a59777a7231e3cdebf49580c24fa6063751a`。
 
 ## 公開済みの基準点
 
 - リポジトリ: `eebei/english-voice-app` / ブランチ: `main`
-- 公開済みビルド: **270** — コミット `f05b86e`（`Build 270 debrief continuity and radio diagnostics`）
+- 公開済みビルド: **271** — コミット `db9ce61`（`Build 271 add Chief Engineer handoff and fuel window calls`）
 - 公開インストーラー: `https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe`
-- GitHub Actions の Windows ビルド: `31791353378` 成功。
-- 公開後の URL 取得を確認済み: 96MB、SHA-256 `e3baabcdd7054904d7a210ff6418b9521d9b7240dcb310a333247ccb5251a6ee`。
+- GitHub Actions の Windows ビルド: `31863165606` 成功。
+- 公開後の URL 取得を確認済み: 100,595,692 bytes、SHA-256 `f01ba76c5d82b1701bcc5d62bba4a59777a7231e3cdebf49580c24fa6063751a`。
 
 Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加入力・ピットサイクル中順位コールの修正を含む。その上で、デブリーフ継続質問、質問数の圧縮、発話診断、利用者向けの秘匿情報を伏せた診断ログを追加する。
 

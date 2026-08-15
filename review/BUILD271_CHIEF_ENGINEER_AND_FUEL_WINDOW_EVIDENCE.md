@@ -2,7 +2,7 @@
 
 日時: 2026-08-15 JST
 基準公開版: Build 270
-状態: 実装・内部再生・全preflight完了。Build 271公開作業中。
+状態: 実装・内部再生・全preflight・Windows Build・公開URL取得確認まで完了。
 
 ## 実装した動線
 
@@ -54,4 +54,13 @@
 
 ## 出荷判断
 
-コードと内部ゲートは出荷可能。commit / push / build / 公開にはYujiの明示GOが必要。
+Yujiの明示GO後にBuild 271として公開完了。
+
+- 実装コミット: `db9ce61`
+- 公開workflow: `31863165606`、全工程成功
+- Release名: `OMORAY PITWALL Desktop — Build 271`
+- 公開URL: `https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe`
+- 公開installer実取得: 100,595,692 bytes
+- SHA-256: `f01ba76c5d82b1701bcc5d62bba4a59777a7231e3cdebf49580c24fa6063751a`
+
+Windowsでの起動・旧Buildからの更新取得・実iRacing交代・実音声は未実測のため、公開完了と実走確認完了を混同しない。
