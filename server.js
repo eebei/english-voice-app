@@ -780,6 +780,9 @@ function isAccountChangeRequest(text) {
 // let conversational text improvise either one during a race.
 function buildFuelAuthorityReply(liveData, lang) {
   const live = liveData && typeof liveData === 'object' ? liveData : {};
+  const cardReply = engineerCard.build(
+    { topic: engineerCard.TOPIC.FUEL_PLAN }, live, lang);
+  if (cardReply) return cardReply;
   const fs = live.fuel_strategy && typeof live.fuel_strategy === 'object'
     ? live.fuel_strategy : {};
   if (!engineerCard.hasAuthoritativeFinishTarget(live)) {
@@ -850,12 +853,12 @@ function buildRacePlanReply(liveData, lang) {
         ? `残り${engineerCard.formatDuration(Math.max(0, remaining), 'ja')}。`
         : `${engineerCard.formatDuration(Math.max(0, remaining), 'en')} remaining. `)
       : '';
-    const distance = Number.isInteger(crossings) && crossings >= 1
+    const distance = Number.isInteger(crossings) && crossings >= 1 && crossings <= 10
       ? (lang === 'ja' ? `チェッカーまで自車のS/F通過あと${crossings}回。` : `${crossings} driver S/F crossings to the finish.`)
-      : (lang === 'ja' ? 'チェッカーまでの周回数はまだ確定していない。' : 'Finish crossings are not confirmed yet.');
+      : '';
     return lang === 'ja'
-      ? `${minutes}分のタイムレース。${remain}${distance}`
-      : `${minutes}-minute timed race. ${remain}${distance}`;
+      ? `${duration >= 3600 ? Math.round(duration / 3600) + '時間' : minutes + '分'}のタイムレース。${remain}${distance}`
+      : `${duration >= 3600 ? Math.round(duration / 3600) + '-hour' : minutes + '-minute'} timed race. ${remain}${distance}`;
   }
   if (plan.kind === 'laps') {
     const total = numberOrNull(liveData && liveData.laps_total);
@@ -972,7 +975,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const _cardRoute = engineerCard.route(_lastText, _engineerLive, _lang, {
         race: mode === 'race', recentText: _recentUserText,
       });
-      const _engineerRoute = (mode === 'race')
+      // Internal pace probes are not driver questions. Routing the literal
+      // "[PACE_CHECK]" through the conversation card matched PACE and turned
+      // a periodic background probe into the deterministic fuel reply every
+      // few laps. Keep it on the dedicated one-shot judgement path below.
+      const _engineerRoute = (mode === 'race' && !req.body.paceCheck)
         ? _cardRoute
         : (_cardRoute && _cardRoute.card
            && _cardRoute.card.topic === engineerCard.TOPIC.HANDLING_SETUP_ADVICE

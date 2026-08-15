@@ -182,7 +182,7 @@ check('Plan B includes a deterministic switch condition',
 
 const intentCases = [
   ['燃費は？', cards.TOPIC.FUEL_USE, /3\.45L\/周/],
-  ['残り何周？', cards.TOPIC.RACE_DISTANCE, /残り5分2秒.*S\/Fあと4回/],
+  ['残り何周？', cards.TOPIC.RACE_DISTANCE, /残り5分2秒.*残り4周/],
   ['ピットロス何秒？', cards.TOPIC.PIT_LOSS, /42\.8秒.*実測値/],
   ['今ボックスするべき？', cards.TOPIC.PIT_DECISION, /ステイアウトしてプッシュ/],
   ['直近のピットサービスは？', cards.TOPIC.PIT_SERVICE, /IN→OUT 42\.8秒.*給油12\.6L/],
@@ -241,12 +241,12 @@ check('fuel-zero wording routes to an immediate measured emergency handler',
 card = cards.classify('レースのフォーマットは知ってますか？', {race:true});
 reply = cards.build(card, build255Live, 'ja');
 check('session-format question has a deterministic SessionInfo answer',
-  card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分の時間制。残り5分2秒。/.test(reply), reply);
+  card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分のレース。残り5分2秒。/.test(reply), reply);
 for (const utterance of ['ルナ 今日のレース フォーマットは？', 'レースフォーマーと どうなった？', '何分 製のレースなの？それ？']) {
   card = cards.classify(utterance, {race:true});
   reply = cards.build(card, build255Live, 'ja');
   check('8/9 real format wording is deterministic: '+utterance,
-    card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分の時間制。残り5分2秒。/.test(reply), reply);
+    card.topic===cards.TOPIC.SESSION_FORMAT && /Race、20分のレース。残り5分2秒。/.test(reply), reply);
 }
 for (const utterance of ['このセッションなんだっけ？', 'セッションどれ？', '練習、予選、決勝はどういう流れ？']) {
   card=cards.classify(utterance,{race:true});
@@ -319,10 +319,9 @@ check('renderer records deterministic intent trace without overlay mirroring',
   && renderer.includes("diagnosticLog('INTENT_ROUTE'"));
 check('deterministic response bypasses generic LLM Truth Gate',
   renderer.includes("responseAuthority!=='deterministic' && selMode==='race'"));
-check('deferred operational answer arms an automatic next-S/F update',
-  renderer.includes("armOperationalFollowUp(responseIntent,latestUserText)")
-  && renderer.includes('maybeRunOperationalFollowUp(data)')
-  && renderer.includes('originalText:String(originalText'));
+check('generic unresolved replies do not auto-repeat at the next S/F',
+  renderer.includes("OPERATIONAL_FOLLOWUP_SUPPRESSED','reason=no_concrete_update_contract")
+  && !renderer.includes("armOperationalFollowUp(responseIntent,latestUserText)"));
 check('renderer promotes SessionInfo duration into Race live telemetry',
   renderer.includes('function applySessionFormatAuthority(snapshot)')
   && renderer.includes('configured_duration_s:duration')
@@ -471,6 +470,61 @@ reply = cards.build(cards.classify('ゴールまで燃料は？'), {
 }, 'ja');
 check('finish-crossing wording states that the current lap is included',
   /現在周を含めて、チェッカーまでS\/Fあと3回/.test(reply), reply);
+
+check('465 minutes is spoken as hours and minutes',
+  cards.formatDuration(465*60,'ja') === '7時間45分', cards.formatDuration(465*60,'ja'));
+check('driver position report is an acknowledgement, not unresolved',
+  cards.classify('Luna 今ポジション8位', {race:true}).topic === cards.TOPIC.ACKNOWLEDGEMENT);
+reply=cards.build(cards.classify('Luna 今ポジション8位',{race:true}),{class_pos:8,pos:8},'ja');
+check('matching position report is acknowledged with team truth',
+  reply === '了解、現在P8。',reply);
+reply=cards.build(cards.classify('今8位',{race:true}),{class_pos:7,pos:7},'ja');
+check('mismatching position report is corrected from telemetry',
+  reply === '確認、現在P7。',reply);
+reply=cards.build(cards.classify('はい、ピットイン！',{race:true}),{on_pit_road:true},'ja');
+check('pit-entry report gets a short acknowledgement',
+  reply === '了解、ピットイン。',reply);
+check('STT ビット timing normalizes to pit decision',
+  cards.classify('次のビット タイミングはいつ？',{race:true}).topic === cards.TOPIC.PIT_DECISION);
+
+const enduranceLive={
+  session_type:'Race',fuel:92,
+  fuel_strategy:{avg_fuel_per_lap:4.12,estimated_crossings_to_finish:104,
+    required_fuel_l:429,evaluated_fuel_l:92,margin_l:-337,add_fuel_l:337,
+    endurance_plan:{available:true,multi_stop:true,box_this_lap:false,
+      next_fuel_stop_in_laps:22,future_stop_count:4,
+      splash_forecast:{available:false,reason:'race_not_halfway'}}}
+};
+reply=cards.build(cards.classify('ゴールまで燃料は？'),enduranceLive,'ja');
+check('endurance reply never reads the 429L total as a pit-now shortage',
+  /次の給油目安はあと22周.*残り給油は4回/.test(reply)&&!/429|この周/.test(reply),reply);
+reply=cards.build(cards.classify('次のビット タイミングはいつ？',{race:true}),enduranceLive,'ja');
+check('endurance pit timing answers current-stint horizon',
+  reply === 'ステイアウト。次の給油目安はあと22周。',reply);
+
+reply=cards.build(cards.classify('燃料不足は？'),{
+  session_type:'Race',fuel:10.4,
+  fuel_strategy:{estimated_crossings_to_finish:4,required_fuel_l:14.5,
+    evaluated_fuel_l:12.8,add_fuel_l:1.7,margin_l:-1.7}
+},'ja');
+check('same-lap fuel answer uses one time basis',
+  /現在10\.4L.*ゴールまで12\.1L必要.*燃料は1\.7L不足/.test(reply),reply);
+reply=cards.build(cards.classify('燃料不足は？'),{
+  session_type:'Race',lap:9,fuel:10.4,
+  fuel_strategy:{evaluated_lap:8,estimated_crossings_to_finish:4,
+    required_fuel_l:14.5,evaluated_fuel_l:12.8,add_fuel_l:1.7,margin_l:-1.7}
+},'ja');
+check('continuous no-refuel fuel answer keeps one time basis across a crossing',
+  /現在10\.4L.*ゴールまで12\.1L必要.*燃料は1\.7L不足/.test(reply),reply);
+
+const changedQuantityCard=cards.classify('ゴールまでの数量が増えちゃってるぞ。',{race:true});
+reply=cards.build(changedQuantityCard,{
+  session_type:'Race',fuel:9.6,
+  fuel_strategy:{estimated_crossings_to_finish:4,required_fuel_l:14.5,
+    evaluated_fuel_l:12.8,add_fuel_l:1.7,margin_l:-1.7}
+},'ja');
+check('8/15 exact changing-quantity report reaches fuel authority',
+  changedQuantityCard.topic===cards.TOPIC.FUEL_PLAN&&/現在9\.6L.*ゴールまで11\.3L必要.*1\.7L不足/.test(reply),reply);
 
 console.log(`\n[Engineer cards] 合格 ${pass} / 不合格 ${fail}`);
 process.exit(fail ? 1 : 0);

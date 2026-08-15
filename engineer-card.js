@@ -40,7 +40,11 @@ function handlingSymptomName(text) {
 }
 
 function classify(text, options = {}) {
-  const t = String(text || '').trim();
+  const raw = String(text || '').trim();
+  // Japanese STT frequently turns ピット into ビット.  Normalize only when
+  // the following word proves a race-operation context; ordinary "bit" talk
+  // remains untouched.
+  const t = raw.replace(/ビット(?=\s*(?:イン|タイミング|戦略|作戦|レーン|ロード|ウインドウ|給油))/g, 'ピット');
   if (!t) return null;
 
   if (/ピット(?:レーン)?(?:ロス|タイム|時間)|IN.{0,8}OUT|制限ライン.{0,8}(?:秒|時間)|直近.{0,8}ピット.{0,8}(?:秒|時間)|pit loss|pit lane time|in.{0,8}out/i.test(t)) return { topic: TOPIC.PIT_LOSS, confidence: 0.99 };
@@ -67,6 +71,13 @@ function classify(text, options = {}) {
   if (fuelWord && /燃費|消費|一周|1周|周あたり|平均|per lap|consumption|burn/i.test(t)) return { topic: TOPIC.FUEL_USE, confidence: 0.99 };
   const fuelPlan = /給油|足り|必要|不足|余裕|完走|最後|ゴール|チェッカー|入れ|セット|何周.*(?:持|走)|make it|to (?:the )?finish|add fuel|fuel plan/i.test(t);
   if (fuelWord && fuelPlan) return { topic: TOPIC.FUEL_PLAN, confidence: 0.99 };
+  // Real 8/15 STT: 「ゴールまでの数量が増えちゃってるぞ」.  The driver is
+  // challenging the to-finish fuel figure, but STT omitted the word 燃料.
+  // Keep this narrow to a changing finish/required quantity so ordinary
+  // comments about an unrelated quantity do not enter the fuel authority.
+  if (/(?:ゴールまで|完走まで).{0,12}(?:数量|必要量|量).{0,10}(?:増|減|変)|(?:必要量|数量).{0,10}(?:増|減|変)/i.test(t)) {
+    return { topic: TOPIC.FUEL_PLAN, confidence: 0.99 };
+  }
   if (fuelWord && /搭載|残量|現在|いま|今|スタート|積ん|どれだけ|何(?:リットル|リッター|L)|0(?:\.?0*)?(?:\s*[lL])?|ゼロ|on board|remaining|right now|how much/i.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.99 };
   if (/給油|何(?:リットル|リッター|L).*(?:入れ|セット)|(?:入れ|セット).*何(?:リットル|リッター|L)/i.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.97 };
   if (/\d+(?:\.\d+)?\s*[lL].*(?:大丈夫|足り|必要)|(?:大丈夫|足り|必要).*\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.FUEL_PLAN, confidence: 0.96 };
@@ -79,7 +90,7 @@ function classify(text, options = {}) {
     requestedPlan: /オーバー\s*カット|overcut/i.test(t) ? 'C' : 'B',
     confidence: 0.99,
   };
-  if (/^(?:ボックス|box)[。.!！?？]*$|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
+  if (/^(?:ボックス|box)[。.!！?？]*$|次のピット.{0,6}(?:タイミング|いつ|何周)|ピット.{0,6}(?:タイミング|いつ)|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|暫定.{0,12}(?:何位|何番手|順位|ポジション)|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABCＡＢＣ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[abc]/i.test(t)) {
     const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
@@ -93,6 +104,12 @@ function classify(text, options = {}) {
     const m = t.match(/(?:P|p)\s*(\d+)/);
     return { topic: TOPIC.POSITION_GAP, targetPosition: m ? Number(m[1]) : null, confidence: 0.97 };
   }
+  const positionReport = t.match(/^(?:Luna[、,\s]*)?(?:現在|今)?\s*(?:ポジション)?\s*(?:P\s*)?(\d{1,3})\s*(?:位|番手)(?:だ|です|ね|になった|まで上がった|まで下がった)?[。.!！?？]*$/i);
+  if (positionReport) return {
+    topic: TOPIC.ACKNOWLEDGEMENT,
+    reportedPosition: Number(positionReport[1]),
+    confidence: 0.99,
+  };
   if (/今.*(?:何位|何番手)|現在.*(?:順位|ポジション)|順位は|current position|what position/i.test(t)) return { topic: TOPIC.CURRENT_POSITION, confidence: 0.98 };
   // ★八木さん実走ログ 7-1（2026-08-11）：高路温でタイヤが持たない、という
   //   セットアップ相談が `weather_status` に吸い込まれ、気温と路面温度だけを
@@ -153,6 +170,9 @@ function classify(text, options = {}) {
   if (/^(?:ファイナル(?:ラップ)?|最終(?:周|ラップ)|final lap)[。.!！?？]*$/i.test(t)) {
     return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1, finalLap: true };
   }
+  if (/^(?:はい[、,\s]*)?(?:ピットイン|ボックスへ入る|ピットへ入る)[。.!！?？]*$/i.test(t)) {
+    return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1, pitEntryReport: true };
+  }
   if (options.race === true && OPERATIONAL_RE.test(t)) return { topic: TOPIC.UNRESOLVED_OPERATIONAL, confidence: 0 };
   if (/^(?:了解|了解です|分かった|わかった|なるほど|OK|オーケー|ありがとう|ナイス)[。.!！?？]*$/i.test(t)) {
     return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1 };
@@ -174,8 +194,11 @@ function formatDuration(seconds, lang = 'en') {
   const value = finite(seconds);
   if (value == null) return null;
   const total = Math.max(0, Math.round(value));
-  const minutes = Math.floor(total / 60), rest = total % 60;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60), rest = total % 60;
+  if (ja(lang) && hours > 0) return `${hours}時間${minutes}分`;
   if (ja(lang)) return minutes > 0 ? `${minutes}分${rest}秒` : `${rest}秒`;
+  if (hours > 0) return `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`;
   if (minutes > 0) return `${minutes} minute${minutes === 1 ? '' : 's'} ${rest} second${rest === 1 ? '' : 's'}`;
   return `${rest} second${rest === 1 ? '' : 's'}`;
 }
@@ -192,7 +215,16 @@ function pitPhase(live) {
 function fuelPlan(live) {
   const fs = live && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
   const current = finite(live && live.fuel);
-  const required = finite(fs.required_fuel_l);
+  let required = finite(fs.required_fuel_l);
+  const evaluated = finite(fs.evaluated_fuel_l);
+  // required_fuel_l and add_fuel_l are one S/F snapshot.  Between crossings,
+  // the car burns the same amount from both the tank and the remaining race
+  // requirement.  Bring the displayed requirement forward to the live tank
+  // instead of mixing a live current value with a stale full-lap total.
+  if (required != null && evaluated != null && current != null
+      && current <= evaluated + 0.2) {
+    required = Math.max(0, required - Math.max(0, evaluated - current));
+  }
   const authoritativeAdd = finite(fs.evaluated_fuel_l) != null || fs.awaiting_post_pit_s_f === true
     ? finite(fs.add_fuel_l) : null;
   const add = authoritativeAdd != null ? authoritativeAdd
@@ -254,11 +286,39 @@ function buildFuelUse(live, lang) {
 
 function buildFuelPlan(live, lang, card = {}) {
   const { fs, current, required, add, set } = fuelPlan(live || {});
+  const endurance = fs.endurance_plan || live.endurance_fuel_plan || {};
   if (!hasAuthoritativeFinishTarget(live)) {
     const avg = finite(fs.avg_fuel_per_lap);
     return ja(lang)
       ? `${current != null ? `現在${current.toFixed(1)}L。` : ''}${avg != null ? `平均${avg.toFixed(2)}L/周。` : ''}完走目標が確定していないため、必要燃料・給油量・ピット周は出さない。`
       : `${current != null ? `Current ${current.toFixed(1)}L. ` : ''}${avg != null ? `Average ${avg.toFixed(2)}L/lap. ` : ''}The finish target is not authoritative, so I will not give required fuel, an add amount, or a pit-lap call.`;
+  }
+  if (endurance.available === true && endurance.multi_stop === true) {
+    const stops = finite(endurance.future_stop_count);
+    const next = finite(endurance.next_fuel_stop_in_laps);
+    const splash = endurance.splash_forecast || {};
+    if (card.splashQuestion) {
+      if (splash.available !== true) return ja(lang)
+        ? 'スプラッシュ予測は後半の燃費が成立してから出す。今は通常スティントを継続。'
+        : 'I will project the splash after halfway with stable fuel data; continue the normal stint.';
+      if (splash.splash_candidate !== true) return ja(lang)
+        ? '現状燃費なら、終盤スプラッシュは不要の見込み。'
+        : 'At the current fuel rate, no final splash is projected.';
+      const finalAdd = finite(splash.projected_final_service_l);
+      const save = finite(splash.avoid_splash_save_l_per_lap);
+      if (splash.avoid_splash_feasible === true) return ja(lang)
+        ? `終盤スプラッシュ約${finalAdd.toFixed(1)}L見込み。回避には毎周${save.toFixed(2)}Lセーブ。`
+        : `Projected final splash ${finalAdd.toFixed(1)}L. Avoiding it requires ${save.toFixed(2)}L saving per lap.`;
+      return ja(lang)
+        ? `終盤スプラッシュ約${finalAdd.toFixed(1)}L見込み。回避セーブは大きすぎるため、現状はスプラッシュ前提。`
+        : `Projected final splash ${finalAdd.toFixed(1)}L. The saving required is too large, so plan for the splash.`;
+    }
+    if (endurance.box_this_lap === true) return ja(lang)
+      ? `この周ボックス。通常給油、残り給油はあと${Math.max(0, Math.trunc(stops) - 1)}回見込み。`
+      : `Box this lap for the normal fuel stop; about ${Math.max(0, Math.trunc(stops) - 1)} further stops projected.`;
+    return ja(lang)
+      ? `現在${current == null ? '燃料不明' : current.toFixed(1) + 'L'}。次の給油目安はあと${Math.trunc(next)}周、残り給油は${Math.trunc(stops)}回見込み。`
+      : `Current ${current == null ? 'fuel unavailable' : current.toFixed(1) + 'L'}. Next fuel stop in about ${Math.trunc(next)} laps; ${Math.trunc(stops)} stops projected.`;
   }
   // A refuel can happen between two S/F crossings. During that out-lap the
   // live tank and the fixed S/F requirement burn together, so use the
@@ -355,8 +415,9 @@ function buildRaceDistance(live, lang) {
   const totalLaps = finite(live && live.laps_total), lap = finite(live && live.lap);
   if (plan.kind === 'timed') {
     const clock = formatDuration(remaining, lang);
-    if (ja(lang)) return `${clock ? `残り${clock}。` : '残り時間は未取得。'}${crossings != null ? `チェッカーまでS/Fあと${Math.trunc(crossings)}回。` : '残り周回はまだ確定していない。'}`;
-    return `${clock ? `${clock} remaining. ` : 'Remaining time unavailable. '}${crossings != null ? `${Math.trunc(crossings)} S/F crossings to the finish.` : 'Remaining laps are not confirmed yet.'}`;
+    const shortDistance = crossings != null && crossings <= 10;
+    if (ja(lang)) return `${clock ? `残り${clock}。` : '残り時間は未取得。'}${shortDistance ? `残り${Math.trunc(crossings)}周。` : ''}`;
+    return `${clock ? `${clock} remaining. ` : 'Remaining time unavailable. '}${shortDistance ? `${Math.trunc(crossings)} laps remaining.` : ''}`;
   }
   if (plan.kind === 'laps' && totalLaps != null && lap != null) {
     const left = Math.max(0, Math.trunc(totalLaps - lap));
@@ -484,6 +545,16 @@ function derivedAction(live) {
 }
 
 function buildPitDecision(live, lang) {
+  const endurance = live && ((live.fuel_strategy || {}).endurance_plan
+    || live.endurance_fuel_plan) || {};
+  if (endurance.available === true && endurance.multi_stop === true) {
+    if (endurance.box_this_lap === true) return ja(lang)
+      ? 'この周ボックス。通常給油。' : 'Box this lap for the normal fuel stop.';
+    const next = finite(endurance.next_fuel_stop_in_laps);
+    return ja(lang)
+      ? `ステイアウト。次の給油目安はあと${Math.trunc(next)}周。`
+      : `Stay out. Next fuel stop in about ${Math.trunc(next)} laps.`;
+  }
   const p = derivedAction(live), phase = pitPhase(live), shortage = fuelPlan(live || {}).add;
   if (phase === 'finished') return ja(lang) ? 'レース終了。追加のピット判断は出さない。' : 'Race finished; no further pit decision.';
   if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。今の作業を完了する。' : 'Currently in the pit lane; complete this stop.';
@@ -550,6 +621,7 @@ function buildPlanStatus(live, lang, card = {}) {
 
 function buildPace(live, lang) {
   const { fs, current, required, add } = fuelPlan(live || {});
+  const endurance = fs.endurance_plan || live.endurance_fuel_plan || {};
   // `required_fuel_l` is evaluated at an S/F crossing.  Subtracting it from
   // the *current* tank later in the same lap double-counts burned fuel and
   // produced the 8/14 false “0.1L margin, push” call.  Only the Bridge's
@@ -559,6 +631,13 @@ function buildPace(live, lang) {
   const phase = pitPhase(live);
   if (phase === 'finished') return ja(lang) ? 'レース終了。ペース指示は終了。' : 'Race finished; pace calls are complete.';
   if (phase === 'pit_lane') return ja(lang) ? '現在ピットレーン内。作業完了を優先。' : 'Currently in the pit lane; complete the stop.';
+  if (endurance.available === true && endurance.multi_stop === true
+      && endurance.box_this_lap !== true) {
+    const next = finite(endurance.next_fuel_stop_in_laps);
+    return ja(lang)
+      ? `通常スティント継続。ペースキープ、次の給油目安はあと${Math.trunc(next)}周。`
+      : `Continue the normal stint and hold pace; next fuel stop in about ${Math.trunc(next)} laps.`;
+  }
   if (phase === 'out_lap') return ja(lang)
     ? (add != null && add > 0
       ? `給油不足が${add.toFixed(1)}L残っている。ペースは上げず、次の周で再ピット。`
@@ -726,10 +805,15 @@ function buildSessionFormat(live, lang) {
   const type = String(live && live.session_type || '').trim();
   const remaining = finite(live && live.session_time_remaining_s);
   const configuredDuration = finite(plan.configured_duration_s);
+  const configuredLabel = configuredDuration != null
+    ? (configuredDuration >= 3600
+      ? (ja(lang) ? `${Math.round(configuredDuration / 3600)}時間の` : `${Math.round(configuredDuration / 3600)}-hour `)
+      : (ja(lang) ? `${Math.round(configuredDuration / 60)}分の` : `${Math.round(configuredDuration / 60)}-minute `))
+    : '';
   const totalLaps = finite(live && live.laps_total);
   if (plan.kind === 'timed') return ja(lang)
-    ? `${type || 'レース'}、${configuredDuration != null ? `${Math.round(configuredDuration / 60)}分の` : ''}時間制。${remaining != null ? `残り${formatDuration(remaining, lang)}。` : '残り時間は未取得。'}`
-    : `${type || 'Race'}, ${configuredDuration != null ? `${Math.round(configuredDuration / 60)}-minute ` : ''}timed.${remaining != null ? ` ${formatDuration(remaining, lang)} remaining.` : ' Remaining time unavailable.'}`;
+    ? `${type || 'レース'}、${configuredLabel}レース。${remaining != null ? `残り${formatDuration(remaining, lang)}。` : '残り時間は未取得。'}`
+    : `${type || 'Race'}, ${configuredLabel}race.${remaining != null ? ` ${formatDuration(remaining, lang)} remaining.` : ' Remaining time unavailable.'}`;
   if (plan.kind === 'laps' && totalLaps != null) return ja(lang)
     ? `${type || 'レース'}、${Math.trunc(totalLaps)}周制。` : `${type || 'Race'}, ${Math.trunc(totalLaps)} laps.`;
   return ja(lang) ? `${type || '現在のセッション'}の形式は、確定データを受信中。次の更新で伝える。` : `Session format data is still being confirmed; I will update on the next snapshot.`;
@@ -752,6 +836,13 @@ function build(card, live, lang = 'en') {
   };
   if (card.topic === TOPIC.ACKNOWLEDGEMENT) {
     if (card.finalLap) return ja(lang) ? '了解。ファイナルラップ。' : 'Copy. Final lap.';
+    if (card.pitEntryReport) return ja(lang) ? '了解、ピットイン。' : 'Copy, pit entry.';
+    if (Number.isInteger(card.reportedPosition)) {
+      const actual = position(live && live.class_pos);
+      if (actual != null && actual !== card.reportedPosition) return ja(lang)
+        ? `確認、現在P${actual}。` : `Checked, currently P${actual}.`;
+      return ja(lang) ? `了解、現在P${card.reportedPosition}。` : `Copy, currently P${card.reportedPosition}.`;
+    }
     return ja(lang) ? '了解。' : 'Copy.';
   }
   if (card.topic === TOPIC.FUEL_PLAN) return buildFuelPlan(live || {}, lang, card);

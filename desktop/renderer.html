@@ -521,9 +521,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       </div>
       <div class="setup-hint" data-i18n="setup_lap_readout_hint">Off はベスト更新も含めラップ読み上げを完全に止める。Best only はベスト更新のみ発話。Every clean lap はインシデントなし・ピット外・オフトラックなしの周だけ発話（ベスト更新は常に通す）。Every 2 laps はそのクリーン周のうち 2 周ごとに 1 度発話（ベスト更新は常に通す）。</div>
 
-      <div class="field-label" style="margin-top:18px">Chief Engineer Mode</div>
+      <div class="field-label" data-i18n="chief_engineer_mode_title" style="margin-top:18px">Chief Engineer Mode</div>
       <label class="setup-row" style="cursor:pointer">
-        <div class="setup-lbl">耐久チーム引き継ぎ</div>
+        <div class="setup-lbl" data-i18n="chief_engineer_mode_enable">耐久チーム引き継ぎ</div>
         <input id="chief-mode-enabled" type="checkbox" onchange="onChiefEngineerSettingsChanged()">
       </label>
       <div id="chief-roster-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
@@ -534,7 +534,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
           <option value="0">現在担当: Driver 1</option><option value="1">現在担当: Driver 2</option><option value="2">現在担当: Driver 3</option>
         </select>
       </div>
-      <div class="setup-hint">走行順に登録。交代時は現在担当の次へ引き継ぎ、Plan・次のピット・給油量・燃料余裕を共有します。</div>
+      <div class="setup-hint" data-i18n="chief_engineer_mode_hint">走行順に登録。交代時は現在担当の次へ引き継ぎ、Plan・次のピット・給油量・燃料余裕を共有します。</div>
 
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
       <button class="start-btn" id="btn-return-session" onclick="returnToSession()" style="display:none;margin-top:12px">会話へ戻る →</button>
@@ -775,6 +775,15 @@ const I18N = {
     setup_mic_hint:'Press "Test" and speak — if the green bar moves, that mic is being heard. If it doesn\'t move, pick a different mic above. Sim PCs often have several mics connected and the default is the wrong one.',
     mic_trouble_link:'Mic not being picked up? Troubleshooting →',
     mic_err:'Could not open that microphone: ',
+    setup_lap_readout_title:'Lap Readout',
+    lap_readout_off:'Off',
+    lap_readout_best_only:'Best only',
+    lap_readout_every_2_laps:'Every 2 laps',
+    lap_readout_every_clean_lap:'Every clean lap',
+    setup_lap_readout_hint:'Off disables all lap-time calls. Best only calls personal bests. Every clean lap calls laps without incidents, pit entry/exit or off-track. Every 2 laps calls every second clean lap.',
+    chief_engineer_mode_title:'Chief Engineer Mode',
+    chief_engineer_mode_enable:'Endurance team handoff',
+    chief_engineer_mode_hint:'Enter the drivers in running order. At a change, the current plan, next stop, fuel target and margin pass to the next driver.',
     next_btn:'Next →',
     // ── Engineer select ──
     select_title:'Choose Your Engineer',
@@ -905,6 +914,15 @@ const I18N = {
     setup_mic_hint:'「テスト」を押して喋る→緑のバーが動けばそのマイクで聞こえてる。動かなければ上のリストから別のマイクを選ぶ。SIM PCは複数マイクが繋がっていて既定が違うことが多い。',
     mic_trouble_link:'マイクが認識されない時はこちら（トラブルシューティング）',
     mic_err:'そのマイクを開けませんでした: ',
+    setup_lap_readout_title:'ラップタイム読み上げ',
+    lap_readout_off:'オフ',
+    lap_readout_best_only:'ベスト更新のみ',
+    lap_readout_every_2_laps:'クリーン2周ごと',
+    lap_readout_every_clean_lap:'クリーンラップ毎周',
+    setup_lap_readout_hint:'オフはベスト更新も含めて停止。ベスト更新のみ、クリーン2周ごと、クリーンラップ毎周から選べます。クリーンラップはインシデント、ピットイン／アウト、オフトラックを除外します。',
+    chief_engineer_mode_title:'チーフエンジニアモード',
+    chief_engineer_mode_enable:'耐久チーム引き継ぎ',
+    chief_engineer_mode_hint:'走行順に登録。交代時は現在担当の次へ、プラン・次のピット・給油量・燃料余裕を引き継ぎます。',
     next_btn:'次へ →',
     select_title:'エンジニアを選ぶ',
     role_chief_engineer:'チーフエンジニア',
@@ -1065,6 +1083,12 @@ function armOperationalFollowUp(intent, originalText=''){
 // ★Build 265 fix A helper：現行の telemetry と activeStrategyPlaybook を橋渡しし、
 //   共有の fuel-plan-guard に決断を委ねる。
 function evaluateFuelPlanGuard(data){
+  // Bridge already evaluated the multi-stop current-stint horizon.  Such a
+  // radio event exists only when the in-lap is due; do not re-suppress it
+  // with the desktop's short-race A/B guard.
+  if(data?.endurance_plan?.available===true&&data?.endurance_plan?.multi_stop===true){
+    return {allow_p0_pit_now:true,override_reason:'bridge_current_stint_fuel_window_due'};
+  }
   const engine = window.PitwallFuelPlanGuard;
   if(!engine) return { allow_p0_pit_now: true, override_reason: 'guard_module_missing' };
   const lap = Number(lastTelemetry && lastTelemetry.lap);
@@ -1171,8 +1195,11 @@ let activeRaceFacts = { sessionKey:'', fuelReflex:null, strategyOptions:null, st
 let activeStrategyPlaybook = null;
 let strategyPlaybookBriefedKey = '';
 let strategyPlaybookLiveUpdateKey = '';
+let strategyLivePromotionAnnounced = false;
 let strategyPlaybookRefreshKey = '';
 let strategyPlaybookDecisionKeys = new Set();
+let enduranceForecastAnnouncedKey = '';
+let enduranceFuelWindowAnnouncedKey = '';
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
@@ -1196,8 +1223,17 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   activeStrategyPlaybook=null;
   strategyPlaybookBriefedKey='';
   strategyPlaybookLiveUpdateKey='';
+  strategyLivePromotionAnnounced=false;
   strategyPlaybookRefreshKey='';
   strategyPlaybookDecisionKeys=new Set();
+  enduranceForecastAnnouncedKey='';
+  enduranceFuelWindowAnnouncedKey='';
+  // Session boundary is also a hard pace-evaluation boundary.  Do not let a
+  // direction evaluated in Practice/Qualifying mute the first Race judgement.
+  try{
+    paceJudgmentHandledDirections.clear();
+    paceJudgmentPendingDirections.clear();
+  }catch(_){ }
   // ★Build 265：lifecycle latches must not carry over to a new session.
   finalLapNoticeSeen=false;
   checkerOutNoticeSeen=false;
@@ -1395,6 +1431,14 @@ let usageBuild = 'unknown';
 let usageTelemetry = null;
 let usageIracingLive = false;
 let driverActivity = 'ACTIVE';
+let paceJudgmentHandledDirections = new Set();
+let paceJudgmentPendingDirections = new Set();
+function resetPaceJudgmentStint(){
+  paceJudgmentHandledDirections.clear();
+  paceJudgmentPendingDirections.clear();
+  strategyLivePromotionAnnounced=false;
+  diagnosticLog('PACE_CHECK_RESET','reason=new_active_stint');
+}
 let usageFlushInFlight = null;
 let usageFlushKeepaliveRequested = false;
 const USAGE_QUEUE_KEY = 'pw_usage_checkpoint_queue_v1';
@@ -2104,27 +2148,37 @@ function telemetryTruthFallback(live, userText, isJP){
   }
   if(/残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(asked)){
     const crossings=Number(live?.finish_crossings_authority);
-    if(Number.isInteger(crossings)&&crossings>=1) return isJP ? `チェッカーまで、自車のS/F通過はあと${crossings}回。` : `${crossings} driver S/F crossing${crossings===1?'':'s'} to the finish.`;
+    if(Number.isInteger(crossings)&&crossings>=1&&crossings<=10) return isJP ? `残り${crossings}周。` : `${crossings} lap${crossings===1?'':'s'} remaining.`;
     const sec=Number(live?.session_time_remaining_s);
     return Number.isFinite(sec)
       ? (isJP ? `残り${fmtDuration(Math.max(0,sec),true)}。残り周回はまだ確定できない。` : `${fmtDuration(Math.max(0,sec),false)} remain; finish crossings are not confirmed.`)
       : (isJP ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.');
   }
   if(/燃料|給油|足りる|リットル|リッター|fuel|lit(?:er|re)|make it/i.test(asked)){
+    const endurance=fs.endurance_plan||live?.endurance_fuel_plan||{};
+    if(endurance.available===true&&endurance.multi_stop===true){
+      const next=Number(endurance.next_fuel_stop_in_laps), stops=Number(endurance.future_stop_count);
+      return isJP
+        ? `次の給油目安はあと${Math.trunc(next)}周、残り給油は${Math.trunc(stops)}回見込み。`
+        : `Next fuel stop in about ${Math.trunc(next)} laps; ${Math.trunc(stops)} stops projected.`;
+    }
     const required=fs.required_fuel_l==null?NaN:Number(fs.required_fuel_l);
     const current=live?.fuel==null?NaN:Number(live.fuel);
-    if(Number.isFinite(required)&&Number.isFinite(current)){
-      const add=Math.max(0,required-current), setFuel=Math.ceil(add);
+    const evaluated=fs.evaluated_fuel_l==null?NaN:Number(fs.evaluated_fuel_l);
+    const requiredNow=(Number.isFinite(required)&&Number.isFinite(current)&&Number.isFinite(evaluated)&&current<=evaluated+0.2)
+      ? Math.max(0,required-Math.max(0,evaluated-current)):required;
+    if(Number.isFinite(requiredNow)&&Number.isFinite(current)){
+      const add=Math.max(0,requiredNow-current), setFuel=Math.ceil(add);
       const claim=asked.match(/(\d+(?:\.\d+)?)\s*(?:リットル|リッター|[lL])\s*(?:足りない|たりない|不足)/i);
       if(isJP){
         const correction=claim?`${Number(claim[1]).toFixed(0)}リットル不足という意味ではない。`:'';
         return add>0
-          ? `${correction}最新値では現在${current.toFixed(1)}リットル、ゴールまで${required.toFixed(1)}リットル必要。燃料は${add.toFixed(1)}リットル不足。給油設定は切り上げて${setFuel}リットル。`
-          : `${correction}最新値では燃料は足りる。現在${current.toFixed(1)}リットル、ゴールまで${required.toFixed(1)}リットル必要。`;
+          ? `${correction}最新値では現在${current.toFixed(1)}リットル、ゴールまで${requiredNow.toFixed(1)}リットル必要。燃料は${add.toFixed(1)}リットル不足。給油設定は切り上げて${setFuel}リットル。`
+          : `${correction}最新値では燃料は足りる。現在${current.toFixed(1)}リットル、ゴールまで${requiredNow.toFixed(1)}リットル必要。`;
       }
       return add>0
-        ? `Current ${current.toFixed(1)} litres; ${required.toFixed(1)} litres required to finish. ${add.toFixed(1)} litres short; set ${setFuel} litres.`
-        : `Fuel is sufficient. Current ${current.toFixed(1)} litres; ${required.toFixed(1)} litres required to finish.`;
+        ? `Current ${current.toFixed(1)} litres; ${requiredNow.toFixed(1)} litres required to finish. ${add.toFixed(1)} litres short; set ${setFuel} litres.`
+        : `Fuel is sufficient. Current ${current.toFixed(1)} litres; ${requiredNow.toFixed(1)} litres required to finish.`;
     }
     const fuel=Number(live?.fuel), sec=Number(live?.session_time_remaining_s);
     const fact=Number.isFinite(fuel)?(isJP?`燃料${fuel.toFixed(1)}リットル。`:`Fuel ${fuel.toFixed(1)} litres. `):'';
@@ -2295,10 +2349,14 @@ async function callAPI(inputSource, memoryStatus=''){
       ? truthFallback
       : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
     diagnosticLog('INTENT_ROUTE',`intent=${responseIntent||'conversation'} authority=${responseAuthority}`);
-    if(responseAuthority==='deterministic' && responseIntent==='unresolved_operational'){
-      armOperationalFollowUp(responseIntent,latestUserText);
+    // A generic no-data reply has no concrete completion condition.  Arming
+    // it caused the same canned sentence to fire again at the next S/F even
+    // when no new authority existed.  Supported fuel/lap/position intents
+    // already have deterministic handlers; unresolved/Truth-Gate replies end
+    // here and wait for the driver to ask again after facts change.
+    if((responseAuthority==='deterministic'&&responseIntent==='unresolved_operational')||truthBlocked){
+      diagnosticLog('OPERATIONAL_FOLLOWUP_SUPPRESSED','reason=no_concrete_update_contract intent='+(responseIntent||'telemetry_truth_gate'));
     }
-    if(truthBlocked) armOperationalFollowUp('telemetry_truth_gate',latestUserText);
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
     pushMsg({role:'assistant',content:display});
@@ -3121,6 +3179,7 @@ function connectBridge(){
         updateStrategyPlaybookFromLive(lastTelemetry);
         if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         evaluateLiveStrategySwitch(lastTelemetry);
+        maybeAnnounceEnduranceFuelForecast(lastTelemetry);
         updatePracticeRun(data);
         announceActiveStrategyObjective(lastTelemetry);
         maybeRunOperationalFollowUp(lastTelemetry);
@@ -3131,7 +3190,9 @@ function connectBridge(){
       }
       if(data.type==='driver_state'){ driverState=data.state; maybeAutoRace(data.state); }
       if(data.type==='driver_activity'){
+        const previousDriverActivity=driverActivity;
         driverActivity=String(data.state||'UNKNOWN');
+        if(driverActivity==='ACTIVE' && previousDriverActivity!=='ACTIVE') resetPaceJudgmentStint();
         // summary配送が遅延／欠落しても、本人完走という権威状態からデブリーフへ必ず到達する。
         // 直前のPractice/Qualify summaryを使うと、Raceを「2周」等と誤報する。
         // FINISHED時点は現在のRace live値を暫定権威とし、後着する完全summaryで差し替える。
@@ -3306,6 +3367,9 @@ function oishiRadio(d, forSpeech=false){
     case 'fuel_strategy_warning':
       if(d.fuel_band === 'tight') return `燃料マージン0.5リットル未満。セーブ開始。`;
       {
+        if(d.endurance_plan?.available===true&&d.endurance_plan?.multi_stop===true){
+          return 'この周ボックス。通常給油。';
+        }
         const projected=d.post_stop_fuel_projection||{};
         const oneStopShort=Number(d.one_stop_shortfall_l)||0;
         const setting=Number.isFinite(Number(d.set_fuel_l))?Math.trunc(Number(d.set_fuel_l)):Math.ceil(Number(d.add_fuel_l)||0);
@@ -3778,6 +3842,17 @@ function buildActiveRaceFactsNote(isJP){
 // （エラー時にrole交互が壊れる問題を再発させないため・独立した単発リクエストとして扱う）。
 async function checkPaceJudgment(data){
   if(selMode!=='race') return;
+  const direction=String(data&&data.direction||'unknown').toLowerCase();
+  const fuelStrategy=(data&&data.fuel_strategy)||{};
+  if(fuelStrategy.pit_required===true || fuelStrategy.box_this_lap===true){
+    diagnosticLog('PACE_CHECK_SUPPRESSED','reason=pit_call_owned_elsewhere direction='+direction);
+    return;
+  }
+  if(paceJudgmentHandledDirections.has(direction) || paceJudgmentPendingDirections.has(direction)){
+    diagnosticLog('PACE_CHECK_SUPPRESSED','reason=already_evaluated_this_stint direction='+direction);
+    return;
+  }
+  paceJudgmentPendingDirections.add(direction);
   usageCount('auto_pace');
   const authToken = localStorage.getItem('pw_auth_token');
   const headers = {'Content-Type':'application/json'};
@@ -3799,11 +3874,16 @@ async function checkPaceJudgment(data){
     const res = await fetch(API_BASE+'/api/chat',{method:'POST',headers,body:JSON.stringify(body),signal:ctrl.signal});
     clearTimeout(fetchTimer);
     const resData = await res.json();
+    paceJudgmentPendingDirections.delete(direction);
+    paceJudgmentHandledDirections.add(direction);
     const reply = (resData.content?.[0]?.text||'').trim();
     if(!reply || reply==='NO_CALL' || reply.includes('NO_CALL')) return;  // 喋る価値なしと判断＝無音
     addMsg('ai',reply);
-    speak(reply);
-  }catch(e){ /* サイレント失敗でよい（元々テンプレ発話ではないため無理に埋めない） */ }
+    speak(reply,{prio:SPEAK_PRIO.P4_INFO,kind:'pace_check',dedupeKey:'stint|'+direction});
+  }catch(e){
+    paceJudgmentPendingDirections.delete(direction);
+    /* サイレント失敗でよい（元々テンプレ発話ではないため無理に埋めない） */
+  }
 }
 
 // ★2026-07-19 LLM判断コール：bridgeの"判断候補"(catchup/defend)を受け、AIが「言うか黙るか」を決める。
@@ -4032,7 +4112,8 @@ function fmtLap(v){
 function fmtDuration(v, isJP=true){
   const n=Number(v);
   if(!Number.isFinite(n)||n<0) return '';
-  const total=Math.round(n), minutes=Math.floor(total/60), seconds=total%60;
+  const total=Math.round(n), hours=Math.floor(total/3600), minutes=Math.floor((total%3600)/60), seconds=total%60;
+  if(hours>0) return isJP?`${hours}時間${minutes}分`:`${hours}h ${minutes}m`;
   if(minutes>0) return isJP?`${minutes}分${seconds}秒`:`${minutes}m ${seconds}s`;
   return isJP?`${seconds}秒`:`${seconds}s`;
 }
@@ -5491,15 +5572,27 @@ function updateStrategyPlaybookFromLive(live){
     return;
   }
 
+  if(promotedToLive && strategyLivePromotionAnnounced){
+    diagnosticLog('STRATEGY_PLAYBOOK_UPDATE_SILENT',JSON.stringify({reason:'live_promotion_already_announced_this_stint',
+      selected_plan:updated.selected_plan,live_fuel_samples:updated.evidence?.live_fuel_samples}));
+    return;
+  }
+
   const materialKey=[lastSessionNum, playbookMaterialSignature(updated),
     promotedToLive?'promoted':'material'].join('|');
   if(strategyPlaybookLiveUpdateKey===materialKey) return;
   strategyPlaybookLiveUpdateKey=materialKey;
 
+  if(!promotedToLive){
+    diagnosticLog('STRATEGY_PLAYBOOK_UPDATE_SILENT',JSON.stringify({reason:'background_recalculation',
+      selected_plan:updated.selected_plan,live_fuel_samples:updated.evidence?.live_fuel_samples}));
+    return;
+  }
   const msg=isJP
-    ? `当日クリーン${updated.evidence.live_fuel_samples}周、燃費${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)}L/周。基準案を再計算、B/Cは条件確認中。`
-    : `Plans A, B, and C updated from ${updated.evidence.live_fuel_samples} clean laps at ${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)} litres per lap.`;
+    ? `実測燃費成立、${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)}L/周。基準プラン継続。`
+    : `Measured fuel rate established at ${Number(updated.evidence.live_fuel_l_per_lap).toFixed(2)} litres per lap. Baseline plan continues.`;
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
+  strategyLivePromotionAnnounced=true;
   speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'strategy_playbook_live_update',dedupeKey:materialKey});
   diagnosticLog('STRATEGY_PLAYBOOK_UPDATE',JSON.stringify(updated));
   diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'three_lap_live_revision',session_num:lastSessionNum,
@@ -5528,6 +5621,46 @@ function evaluateLiveStrategySwitch(live){
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
   speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'strategy_playbook_switch',dedupeKey:decision.decision_id});
   diagnosticLog('STRATEGY_PLAYBOOK_DECISION',JSON.stringify(decision));
+}
+function maybeAnnounceEnduranceFuelForecast(live){
+  if(!/race/i.test(String(lastSessionType||live?.session_type||''))||isSessionEndingLifecycle()) return;
+  const plan=live?.endurance_fuel_plan||live?.fuel_strategy?.endurance_plan||{};
+  const splash=plan.splash_forecast||{};
+  if(plan.available!==true||plan.multi_stop!==true) return;
+  const next=Number(plan.next_fuel_stop_in_laps);
+  if(next===1){
+    const windowKey=[String(lastSessionNum??''),Number(live?.lap)||0,Number(plan.future_stop_count)||0].join('|');
+    if(enduranceFuelWindowAnnouncedKey!==windowKey){
+      enduranceFuelWindowAnnouncedKey=windowKey;
+      const windowMsg=isJapaneseEngineer()?'次周ボックス。通常給油。':'Box next lap for the normal fuel stop.';
+      addMsg('ai',windowMsg);pushMsg({role:'assistant',content:windowMsg});
+      speak(windowMsg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'endurance_fuel_window_t1',dedupeKey:windowKey});
+      diagnosticLog('ENDURANCE_FUEL_WINDOW',JSON.stringify({windowKey,plan}));
+    }
+  }
+  if(splash.available!==true) return;
+  const key=[String(lastSessionNum??''),splash.splash_candidate===true,
+    splash.avoid_splash_feasible===true].join('|');
+  if(enduranceForecastAnnouncedKey===key) return;
+  enduranceForecastAnnouncedKey=key;
+  const isJP=isJapaneseEngineer();
+  const finalAdd=Number(splash.projected_final_service_l);
+  const save=Number(splash.avoid_splash_save_l_per_lap);
+  let msg;
+  if(splash.splash_candidate!==true){
+    msg=isJP?'現状燃費なら、終盤スプラッシュは不要の見込み。':'At the current fuel rate, no final splash is projected.';
+  }else if(splash.avoid_splash_feasible===true){
+    msg=isJP
+      ?`終盤スプラッシュ約${finalAdd.toFixed(1)}L見込み。回避には毎周${save.toFixed(2)}Lセーブ。`
+      :`Projected final splash ${finalAdd.toFixed(1)}L. Avoiding it requires ${save.toFixed(2)}L saving per lap.`;
+  }else{
+    msg=isJP
+      ?`終盤スプラッシュ約${finalAdd.toFixed(1)}L見込み。現状はスプラッシュ前提。`
+      :`Projected final splash ${finalAdd.toFixed(1)}L. Plan for the splash at the current fuel rate.`;
+  }
+  addMsg('ai',msg);pushMsg({role:'assistant',content:msg});
+  speak(msg,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'endurance_splash_forecast',dedupeKey:key});
+  diagnosticLog('ENDURANCE_FUEL_FORECAST',JSON.stringify({key,plan}));
 }
 function captureConfirmedFuelCapacity(text){
   // SessionInfoの実効上限が取れている場合、会話/STT値で権威データを上書きしない。

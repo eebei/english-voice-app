@@ -41,7 +41,8 @@ def _selected_plan(strategy_options):
 
 
 def evaluate(fuel_eval, strategy_options, *, current_lap, fuel_level_l,
-             avg_fuel_per_lap_l, effective_capacity_l, safety_override=False):
+             avg_fuel_per_lap_l, effective_capacity_l, safety_override=False,
+             endurance_plan=None):
     """Return a verdict on whether the bridge may broadcast fuel_strategy_warning.
 
     Inputs are the exact objects the bridge already holds at the dispatch site.
@@ -102,6 +103,24 @@ def evaluate(fuel_eval, strategy_options, *, current_lap, fuel_level_l,
     if not _finite(avg_fuel_per_lap_l) or avg_fuel_per_lap_l <= 0:
         return {**base, 'allow_p0_pit_now': True,
                 'override_reason': 'insufficient_evidence_no_live_burn'}
+
+    # A multi-stop endurance deficit is not an immediate fuel emergency.  The
+    # total-to-finish evaluator can legitimately report hundreds of litres,
+    # but the driver only needs to box when the *current stint* reaches its
+    # window.  This gate runs before the opening A/B/C plan because that short
+    # race planner intentionally cannot represent multiple future services.
+    if (isinstance(endurance_plan, dict)
+            and endurance_plan.get('available') is True
+            and endurance_plan.get('multi_stop') is True):
+        if endurance_plan.get('box_this_lap') is True:
+            return {**base, 'allow_p0_pit_now': True,
+                    'override_reason': 'current_stint_fuel_window_due'}
+        return {
+            **base,
+            'allow_p0_pit_now': False,
+            'suppression_reason': 'multi_stop_total_is_not_pit_now',
+            'laps_to_pit': endurance_plan.get('next_fuel_stop_in_laps'),
+        }
 
     # No plan (options not yet built OR unavailable) → safe side.
     plan_id, plan = _selected_plan(strategy_options)

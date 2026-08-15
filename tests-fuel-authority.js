@@ -71,7 +71,7 @@ ok(html.includes('全キャラクター共通安全契約')
 // ただし race 以外で採用してよいのはセットアップ相談だけで、燃料系ハンドラは
 // 従来どおり race 限定である。守るべき性質はそこなので、そこを直接検証する。
 ok(server.includes("mode === 'race' && isFuelQuestion(_lastText)")
-  && server.includes("const _engineerRoute = (mode === 'race')")
+  && server.includes("const _engineerRoute = (mode === 'race' && !req.body.paceCheck)")
   && server.includes("=== engineerCard.TOPIC.HANDLING_SETUP_ADVICE"),
   'live fuel handlers are disabled during debrief and cannot read garage 0.0L');
 ok(!/mode !== 'race'[\s\S]{0,200}isFuelQuestion/.test(server),

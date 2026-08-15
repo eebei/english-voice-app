@@ -10,7 +10,7 @@ set -u
 fail=0
 
 echo "── Python: 未定義変数・構文（pyflakes）"
-if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py irsdk-bridge/driver_activity.py irsdk-bridge/final_lap.py irsdk-bridge/fuel_strategy.py irsdk-bridge/strategy_options.py irsdk-bridge/session_authority.py irsdk-bridge/pit_loss_calibrator.py irsdk-bridge/pit_exit_forecaster.py irsdk-bridge/pit_cycle_tracker.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
+if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py irsdk-bridge/driver_activity.py irsdk-bridge/final_lap.py irsdk-bridge/fuel_strategy.py irsdk-bridge/endurance_fuel.py irsdk-bridge/strategy_options.py irsdk-bridge/session_authority.py irsdk-bridge/pit_loss_calibrator.py irsdk-bridge/pit_exit_forecaster.py irsdk-bridge/pit_cycle_tracker.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
   echo "   ❌ 致命的な問題あり"; fail=1
 else
   echo "   ✅ 未定義変数なし"
@@ -92,6 +92,9 @@ if node tests-strategy-guard.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── 8/8実走失敗ログ再現・Intent実行エンジニア（Build 255）"
 if node tests-engineer-card.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-engineer-card.js 2>&1|grep "❌"|head -10; fail=1; fi
 
+echo "── 8/15八木さん12h：PACE誤配線・同一スティント反復抑止"
+if node tests-live-pace-repetition.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-live-pace-repetition.js; fail=1; fi
+
 echo "── レース形式→Plan A/B/C事前戦略・ライブ切替（次期Build）"
 if node tests-strategy-playbook.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-playbook.js 2>&1|tail -15; fail=1; fi
 
@@ -145,6 +148,9 @@ if python3 irsdk-bridge/tests_final_lap_wiring.py >/dev/null 2>&1; then echo "  
 
 echo "── 耐久燃料L単位band・dispatch確定契約（Unit 2・2026-07-26）"
 if python3 irsdk-bridge/tests_fuel_strategy.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_fuel_strategy.py 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── Build 272 現在スティント燃料・複数ストップ・スプラッシュ動線"
+if python3 irsdk-bridge/tests_endurance_fuel.py >/dev/null 2>&1 && node tests-endurance-radio.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_endurance_fuel.py; node tests-endurance-radio.js; fail=1; fi
 
 echo "── Final Lap authority→耐久燃料本番配線（Unit 2・2026-07-26）"
 if python3 irsdk-bridge/tests_fuel_strategy_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_fuel_strategy_wiring.py 2>&1|grep "❌"|head -8; fail=1; fi

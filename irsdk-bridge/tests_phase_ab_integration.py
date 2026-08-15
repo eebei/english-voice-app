@@ -83,9 +83,10 @@ def test_production_contract():
             and 'fuel_strategy_mod.commit_band_after_dispatch(' in bridge,
         'checker notice commits only DISPATCHED':
             'if _checker_result == BROADCAST_DISPATCHED:' in bridge,
-        'checker notice retries while CHECKER_OUT':
+        'checker notice retries through own finish':
             '_pending_checker_notice is not None' in bridge
-            and 'lifecycle_state == race_lifecycle.CHECKER_OUT' in bridge,
+            and 'race_lifecycle.CHECKER_OUT,' in bridge
+            and 'race_lifecycle.PLAYER_FINISHED' in bridge,
         'non-race transition summary has independent retry':
             '_pending_non_race_summary = _transition_summary' in bridge
             and '_non_race_result == BROADCAST_DISPATCHED' in bridge,

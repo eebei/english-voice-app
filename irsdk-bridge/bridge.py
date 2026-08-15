@@ -48,9 +48,10 @@ import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 import endurance_handoff as endurance_handoff_mod
+import endurance_fuel as endurance_fuel_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 271 (Chief Engineer and Fuel Window T-1)"
+BUILD_VERSION = "Build 272 candidate (Endurance fuel horizon and radio truth)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -2911,7 +2912,8 @@ def poll_iracing():
         _lifecycle_state = lifecycle_state  # ★P0：director_gate（module-level）から参照できるようにする
         if final_lap.should_dispatch_checker_notice(
                 _previous_lifecycle_state, lifecycle_state,
-                bool(final_lap_notice_sent.get(1, False))):
+                bool(final_lap_notice_sent.get(1, False)),
+                bool(checker_out_notice_sent)):
             _notice_fuel = round(fuel, 1) if fuel is not None else None
             _pending_checker_notice = {
                 'type': 'radio',
@@ -3021,12 +3023,16 @@ def poll_iracing():
         # only a real DISPATCHED result consumes it.
         if (_pending_checker_notice is not None
                 and not checker_out_notice_sent
-                and lifecycle_state == race_lifecycle.CHECKER_OUT):
+                and lifecycle_state in (
+                    race_lifecycle.CHECKER_OUT,
+                    race_lifecycle.PLAYER_FINISHED)):
             _checker_result = broadcast(_pending_checker_notice)
             if _checker_result == BROADCAST_DISPATCHED:
                 checker_out_notice_sent = True
                 _pending_checker_notice = None
-        elif lifecycle_state != race_lifecycle.CHECKER_OUT:
+        elif lifecycle_state not in (
+                race_lifecycle.CHECKER_OUT,
+                race_lifecycle.PLAYER_FINISHED):
             _pending_checker_notice = None
 
         # ★v3 Codex P0-4：session_summary の pending 化＋通常ポーリング位置での再試行。
@@ -3807,6 +3813,43 @@ def poll_iracing():
                             'add_fuel_l': round(max(0.0, -_provisional['margin_l']), 3),
                         })
 
+                # Build 272: translate the whole-race fuel total into a
+                # current-stint horizon before any pit-now authority runs.
+                # A 12-hour race can correctly require 400+ litres overall;
+                # that total must never be compared with one tank to produce
+                # an immediate box call.
+                _endurance_crossings = fuel_strategy.get(
+                    'estimated_crossings_to_finish')
+                if not isinstance(_endurance_crossings, int):
+                    _endurance_crossings = fuel_strategy.get(
+                        'provisional_laps_to_time_expiry')
+                _race_progress_fraction = None
+                if (_is_time_race
+                        and isinstance(_configured_duration_s, (int, float))
+                        and _configured_duration_s > 0
+                        and isinstance(timeRemain, (int, float))):
+                    _race_progress_fraction = max(0.0, min(
+                        1.0, 1.0 - float(timeRemain) / _configured_duration_s))
+                elif (isinstance(lapsTot, int) and lapsTot > 0
+                      and isinstance(lap, int) and lap >= 0):
+                    _race_progress_fraction = max(0.0, min(
+                        1.0, float(lap) / lapsTot))
+                _endurance_plan = endurance_fuel_mod.evaluate(
+                    fuel_level_l=fuel,
+                    avg_fuel_per_lap_l=avg_fuel_lap,
+                    crossings_to_finish=_endurance_crossings,
+                    effective_capacity_l=session_effective_fuel_capacity_l,
+                    reserve_l=fuel_strategy.get('reserve_l', 0.5),
+                    race_progress_fraction=_race_progress_fraction)
+                if _endurance_plan.get('available'):
+                    fuel_strategy['endurance_plan'] = _endurance_plan
+                    if _endurance_plan.get('multi_stop'):
+                        fuel_strategy['decision_horizon'] = 'current_stint'
+                        fuel_strategy['pit_required'] = bool(
+                            _endurance_plan.get('box_this_lap'))
+                        fuel_strategy['total_fuel_to_add_l'] = (
+                            _endurance_plan.get('total_fuel_to_add_l'))
+
                 _fuel_dispatch_result = None
                 # ★Build 265 fix A (Codex 差戻し 2 反映・same-frame plan snapshot):
                 #   Plan 生成を燃料 P0 判定の手前まで前倒し、同じフレームの同じ入力から
@@ -3860,7 +3903,8 @@ def poll_iracing():
                         fuel_level_l=fuel,
                         avg_fuel_per_lap_l=avg_fuel_lap,
                         effective_capacity_l=session_effective_fuel_capacity_l,
-                        safety_override=False)
+                        safety_override=False,
+                        endurance_plan=_endurance_plan)
                     log('PLAN FUEL AUTHORITY: '
                         + json.dumps(_plan_authority_verdict, ensure_ascii=False,
                                      separators=(',', ':')))
@@ -3886,13 +3930,20 @@ def poll_iracing():
                     _warning_cycle = (((_warning_forecast.get('pit_cycle') or {})
                                        .get('if_pack_stops') or {}).get('likely') or {})
                     _warning_requested_add = fuel_strategy.get('add_fuel_l', 0.0)
+                    if (_endurance_plan.get('available')
+                            and _endurance_plan.get('multi_stop')):
+                        _warning_requested_add = max(
+                            0.0, float(session_effective_fuel_capacity_l or 0.0)
+                            - float(fuel or 0.0))
                     _warning_max_set = (int(math.floor(session_effective_fuel_capacity_l))
                                         if isinstance(session_effective_fuel_capacity_l, (int, float))
                                         and session_effective_fuel_capacity_l > 0 else None)
                     _warning_set = (min(int(math.ceil(_warning_requested_add)), _warning_max_set)
                                     if _warning_max_set is not None
                                     else int(math.ceil(_warning_requested_add)))
-                    _warning_one_stop_short = max(0.0, _warning_requested_add - _warning_set)
+                    _warning_one_stop_short = (
+                        0.0 if _endurance_plan.get('multi_stop') else
+                        max(0.0, _warning_requested_add - _warning_set))
                     _warning_flags = reader.read_int('SessionFlags') or 0
                     _warning_caution = ('caution'
                                         if (_warning_flags & 0xC000) else 'green')
@@ -3930,6 +3981,9 @@ def poll_iracing():
                          if _warning_one_stop_short > 0.05 else
                          'Fuel short %.1f liters. Set %d liters; pit this lap.'
                          % (abs(_fuel_margin), _warning_set)))
+                    if (_endurance_plan.get('available')
+                            and _endurance_plan.get('multi_stop')):
+                        _fuel_message = 'Box this lap. Normal fuel stop.'
                     _fuel_dispatch_result = broadcast({
                         'type': 'radio',
                         'trigger': 'fuel_strategy_warning',
@@ -3942,6 +3996,7 @@ def poll_iracing():
                         'effective_capacity_l': session_effective_fuel_capacity_l,
                         'one_stop_shortfall_l': round(_warning_one_stop_short, 3),
                         'post_stop_fuel_projection': _warning_post_stop,
+                        'endurance_plan': _endurance_plan,
                         'estimated_crossings_to_finish': _milestone_laps,
                         'pit_physical_position': _warning_likely.get('position'),
                         'pit_best_position': _warning_best.get('position'),
@@ -4343,7 +4398,8 @@ def poll_iracing():
         # not overtakes: stay silent while on pit road and while a conditional
         # pit-cycle forecast is still blending toward its observable outcome.
         _pit_cycle_blending = bool(pit_cycle_tracker.status())
-        if (is_race_session and onTrack and not onPit and not _pit_cycle_blending
+        if (is_race_session and lifecycle_state == race_lifecycle.RACING
+                and onTrack and not onPit and not _pit_cycle_blending
                 and class_pos is not None and prev['class_pos'] is not None
                 and class_pos != prev['class_pos']):
             gained = prev['class_pos'] - class_pos
@@ -5886,7 +5942,15 @@ def poll_iracing():
             if isinstance(_fuel_strategy_live, dict):
                 _plan_set_fuel = _fuel_strategy_live.get('set_fuel_l')
                 _plan_margin = _fuel_strategy_live.get('margin_l')
-                if (_fuel_strategy_live.get('pit_required') is True
+                _owned_endurance = _fuel_strategy_live.get('endurance_plan') or {}
+                if _owned_endurance.get('multi_stop') is True:
+                    if _owned_endurance.get('box_this_lap') is True:
+                        _plan_action, _plan_reason = (
+                            'box', 'current_stint_fuel_window')
+                    else:
+                        _plan_action, _plan_reason = (
+                            'hold', 'endurance_stint_in_progress')
+                elif (_fuel_strategy_live.get('pit_required') is True
                         or (isinstance(_fuel_strategy_live.get('add_fuel_l'), (int, float))
                             and _fuel_strategy_live.get('add_fuel_l') > 0)):
                     _plan_action, _plan_reason = 'box', 'fuel_shortfall'
@@ -6013,6 +6077,9 @@ def poll_iracing():
                 'player_track_surface': player_track_surface,
                 'pit_service_status': pit_service_status,
                 'fuel_strategy': _fuel_strategy_live,
+                'endurance_fuel_plan': (
+                    (_fuel_strategy_live or {}).get('endurance_plan')
+                    if isinstance(_fuel_strategy_live, dict) else None),
                 'strategy_plan': strategy_plan,
                 'strategy_options': strategy_options,
                 'tires': tires,

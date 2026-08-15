@@ -284,10 +284,18 @@ def commit_milestone_after_dispatch(sent, crossed, dispatch_result):
 
 
 def should_dispatch_checker_notice(previous_state, new_state,
-                                   final_lap_dispatched):
-    """Only the RACING -> CHECKER_OUT edge may dispatch the fallback notice."""
-    return (
-        previous_state == RACING
-        and new_state == CHECKER_OUT
-        and not bool(final_lap_dispatched)
-    )
+                                   final_lap_dispatched,
+                                   checker_notice_dispatched=False):
+    """Dispatch one checker notice on the path the driver actually takes.
+
+    If the final-lap call was missed, the leader-checker edge remains the
+    fallback.  If it was heard, wait for the player's own finish.  A leader
+    who crosses in the same frame can move RACING -> PLAYER_FINISHED directly,
+    so that edge must also be accepted.
+    """
+    if checker_notice_dispatched:
+        return False
+    if new_state == PLAYER_FINISHED and previous_state in (RACING, CHECKER_OUT):
+        return True
+    return (previous_state == RACING and new_state == CHECKER_OUT
+            and not bool(final_lap_dispatched))

@@ -8,9 +8,9 @@
 //   さらに、strategy-guard.js のevaluateAvailability/buildUnavailableReplyを
 //   意図的にthrowさせ、fail-closed（LLMへ絶対に流れず固定の安全文を返す）を
 //   実際のHTTPレスポンスで確認する（P1-2再指摘）。
-//   ★どの経路もAnthropic APIを一切呼ばない（guardが入口で止める）ため、
-//     ダミーのAPIキーで安全にテストできる。フォールト注入時にもし誤って
-//     LLM経路へ流れたら、ダミーキーでAnthropicが401を返し500になる＝検出できる。
+//   ★Anthropic SDKはtests-auth-ready-preload.jsでローカル失敗stubへ置換する。
+//     通常テストの外部API呼出はゼロ。フォールト注入時にもし誤ってLLM経路へ
+//     流れたら、stubの401で500になる＝ネットワークなしで検出できる。
 // ══════════════════════════════════════════════════════════════════════
 'use strict';
 const { spawn } = require('child_process');
@@ -56,7 +56,7 @@ async function withServer(port, extraEnv, fn) {
     env: {
       ...process.env,
       PORT: String(port),
-      ANTHROPIC_API_KEY: 'sk-test-dummy-not-called',   // guard経路はAnthropicを呼ばないので実キー不要
+      ANTHROPIC_API_KEY: 'sk-test-local-stub',
       DATABASE_URL: '', JWT_SECRET: '', STRIPE_SECRET_KEY: '',
       ...extraEnv,
     },
@@ -121,6 +121,22 @@ async function testBaseline(port) {
     let parsed = null;
     try { parsed = JSON.parse(r.body); } catch (e) {}
     check('④non-stream judge_call: JSON内のtextがNO_CALL', !!(parsed && parsed.content && parsed.content[0] && parsed.content[0].text === 'NO_CALL'), r.body);
+  }
+
+  // ── ④p internal pace probe must not become a deterministic PACE/fuel card ──
+  // The local Anthropic stub returns 401.  That failure is the expected proof
+  // that this request reached the dedicated LLM judgement path; if the old
+  // card misroute returns, status becomes 200 with deterministic authority.
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { fuel: 18.0, fuel_strategy: { pit_required: true, required_fuel_l: 24.0 } },
+      paceCheck: { direction: 'slower', recent_deltas: [1.2, 1.4] },
+      messages: [{ role: 'user', content: '[PACE_CHECK]' }],
+    });
+    check('④p internal PACE_CHECK bypasses deterministic conversation cards',
+      r.status !== 200 && r.headers['x-pitwall-authority'] !== 'deterministic',
+      `status=${r.status} authority=${r.headers['x-pitwall-authority'] || ''} body=${r.body}`);
   }
 
   // ── Race Plan / Fuel / Account は会話LLMでなく権威データから返す ──
@@ -407,8 +423,8 @@ async function testFaultInjection(port, faultMode, label) {
 //   非ガード経路（通常会話）でAnthropic API呼び出しが失敗すると、outer catchが
 //   `character`/`mode`（tryブロック内let・catchのスコープ外）を参照してReferenceErrorを
 //   投げ、意図したJSONエラーが返らずソケットが切断されていた。
-//   ここでは実際に無効なAPIキーでAnthropicへ届かせ、本物の401を発生させて検証する
-//   （guardが介入しない通常の雑談メッセージを送る＝strategy guard/judge_callの経路を通らない）。
+//   ここではローカルAnthropic stubの401を発生させて検証する。ネットワークへは
+//   一切出ない（guardが介入しない通常の雑談メッセージを送る）。
 async function testApiFailureRecovery(port) {
   console.log('\n══ 非ガード経路：Anthropic API失敗時にJSONエラーを返しプロセスが生存するか ══');
 

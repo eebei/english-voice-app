@@ -227,14 +227,17 @@ def test_checker_edge():
     print('\n══ CHECKER_OUT edge ══')
     check('RACING -> CHECKER_OUT dispatches',
           fl.should_dispatch_checker_notice(fl.RACING, fl.CHECKER_OUT, False))
-    check('already Final dispatched suppresses',
+    check('Final call waits through leader checker',
           not fl.should_dispatch_checker_notice(fl.RACING, fl.CHECKER_OUT, True))
-    check('same-frame PLAYER_FINISHED suppresses',
-          not fl.should_dispatch_checker_notice(fl.RACING, fl.PLAYER_FINISHED, False))
+    check('same-frame PLAYER_FINISHED dispatches',
+          fl.should_dispatch_checker_notice(fl.RACING, fl.PLAYER_FINISHED, False))
     check('CHECKER_OUT stay suppresses',
           not fl.should_dispatch_checker_notice(fl.CHECKER_OUT, fl.CHECKER_OUT, False))
-    check('CHECKER_OUT -> PLAYER_FINISHED suppresses',
-          not fl.should_dispatch_checker_notice(fl.CHECKER_OUT, fl.PLAYER_FINISHED, False))
+    check('CHECKER_OUT -> PLAYER_FINISHED dispatches own finish',
+          fl.should_dispatch_checker_notice(fl.CHECKER_OUT, fl.PLAYER_FINISHED, True))
+    check('already checker dispatched suppresses own finish',
+          not fl.should_dispatch_checker_notice(
+              fl.CHECKER_OUT, fl.PLAYER_FINISHED, True, True))
 
 
 def test_mutations():

@@ -506,12 +506,16 @@ class PlanBUndercutContract(unittest.TestCase):
     def test_no_undercut_room_is_reported(self):
         """ウインドウが基準以降にしか開かないなら、そもそも早入れできない。"""
         cramped = so.build_initial_plans(
-            snapshot_id='s', current_lap=3, fuel_level_l=18.0,
+            # 10.5L gives two safe laps.  The 24L finish-capacity window also
+            # opens in two laps, so there is no lap strictly before Plan A.
+            # The previous 18L fixture had five safe laps and therefore did
+            # contain a real three-lap undercut window.
+            snapshot_id='s', current_lap=3, fuel_level_l=10.5,
             avg_fuel_per_lap_l=3.5, clean_laps_sampled=3,
             crossings_to_finish=8, reserve_l=0.5, effective_capacity_l=24.0)
         self.assertFalse(cramped['plan_b']['fuel_window_open'])
         verdict = so.decide_at_plan_a(
-            cramped, current_lap=3, current_fuel_l=18.0, avg_fuel_per_lap_l=3.5,
+            cramped, current_lap=3, current_fuel_l=10.5, avg_fuel_per_lap_l=3.5,
             pit_now_forecast=None, pit_next_lap_forecast=None,
             relative_pace_advantage_s=2.0)
         self.assertEqual(verdict['selected_plan'], 'A')
