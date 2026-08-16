@@ -530,11 +530,16 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         <input class="field-input" id="chief-driver-1" maxlength="30" placeholder="Driver 1" oninput="onChiefEngineerSettingsChanged()">
         <input class="field-input" id="chief-driver-2" maxlength="30" placeholder="Driver 2" oninput="onChiefEngineerSettingsChanged()">
         <input class="field-input" id="chief-driver-3" maxlength="30" placeholder="Driver 3" oninput="onChiefEngineerSettingsChanged()">
+        <select class="mic-select" id="chief-this-driver" onchange="onChiefEngineerSettingsChanged()">
+          <option value="0">このPC: Driver 1</option><option value="1">このPC: Driver 2</option><option value="2">このPC: Driver 3</option>
+        </select>
+        <input class="field-input" id="chief-team-code" maxlength="64" placeholder="Team Link Code (same on every PC)" oninput="onChiefEngineerSettingsChanged()">
         <select class="mic-select" id="chief-current-driver" onchange="onChiefEngineerSettingsChanged()">
           <option value="0">現在担当: Driver 1</option><option value="1">現在担当: Driver 2</option><option value="2">現在担当: Driver 3</option>
         </select>
       </div>
-      <div class="setup-hint" data-i18n="chief_engineer_mode_hint">走行順に登録。交代時は現在担当の次へ引き継ぎ、Plan・次のピット・給油量・燃料余裕を共有します。</div>
+      <div class="setup-hint" data-i18n="chief_engineer_mode_hint">全PCで同じTeam Link Codeと走行順を設定。このPCの担当へ、交代時のPlan・次のピット・給油量・燃料余裕を共有します。</div>
+      <div id="chief-share-status" class="setup-hint" style="margin-top:4px"></div>
 
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
       <button class="start-btn" id="btn-return-session" onclick="returnToSession()" style="display:none;margin-top:12px">会話へ戻る →</button>
@@ -784,7 +789,7 @@ const I18N = {
     setup_lap_readout_hint:'Off disables all lap-time calls. Best only calls personal bests. Every clean lap calls laps without incidents, pit entry/exit or off-track. Every 2 laps calls every second clean lap.',
     chief_engineer_mode_title:'Chief Engineer Mode',
     chief_engineer_mode_enable:'Endurance team handoff',
-    chief_engineer_mode_hint:'Enter the drivers in running order. At a change, the current plan, next stop, fuel target and margin pass to the next driver.',
+    chief_engineer_mode_hint:'Set the same Team Link Code and running order on every PC. At a change, the confirmed plan, next stop, fuel target and margin go to the next driver’s PC.',
     next_btn:'Next →',
     // ── Engineer select ──
     select_title:'Choose Your Engineer',
@@ -923,7 +928,7 @@ const I18N = {
     setup_lap_readout_hint:'オフはベスト更新も含めて停止。ベスト更新のみ、クリーン2周ごと、クリーンラップ毎周から選べます。クリーンラップはインシデント、ピットイン／アウト、オフトラックを除外します。',
     chief_engineer_mode_title:'チーフエンジニアモード',
     chief_engineer_mode_enable:'耐久チーム引き継ぎ',
-    chief_engineer_mode_hint:'走行順に登録。交代時は現在担当の次へ、プラン・次のピット・給油量・燃料余裕を引き継ぎます。',
+    chief_engineer_mode_hint:'全PCで同じTeam Link Codeと走行順を設定。このPCの担当へ、交代時のPlan・次のピット・給油量・燃料余裕を共有します。',
     next_btn:'次へ →',
     select_title:'エンジニアを選ぶ',
     role_chief_engineer:'チーフエンジニア',
@@ -3151,6 +3156,10 @@ function connectBridge(){
           persistentSet('pw_chief_current_driver',String(next));
           hydrateChiefEngineerSettings();
         }
+        // The outgoing driver's Bridge is the only authoritative source for
+        // this snapshot.  Publish it for the named next driver's separate PC;
+        // the local radio is retained for same-PC development/replay use.
+        publishChiefTeamHandoff(data.packet||{});
         injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet:data.packet||{}});
         return;
       }
@@ -4931,7 +4940,9 @@ function chiefEngineerSettings(){
   return {
     enabled:localStorage.getItem('pw_chief_enabled')==='true',
     roster:[1,2,3].map(n=>(localStorage.getItem('pw_chief_driver_'+n)||'').trim()).filter(Boolean),
-    current_index:Math.max(0,Math.min(2,Number(localStorage.getItem('pw_chief_current_driver')||0)||0))
+    current_index:Math.max(0,Math.min(2,Number(localStorage.getItem('pw_chief_current_driver')||0)||0)),
+    this_driver_index:Math.max(0,Math.min(2,Number(localStorage.getItem('pw_chief_this_driver')||0)||0)),
+    team_code:(localStorage.getItem('pw_chief_team_code')||'').trim().toUpperCase()
   };
 }
 function hydrateChiefEngineerSettings(){
@@ -4946,18 +4957,75 @@ function hydrateChiefEngineerSettings(){
     });
     cur.value=String(cfg.current_index);
   }
+  const mine=document.getElementById('chief-this-driver');
+  if(mine){
+    [...mine.options].forEach((opt,index)=>{
+      const name=(localStorage.getItem('pw_chief_driver_'+(index+1))||'').trim();
+      opt.textContent='このPC: '+(name||('Driver '+(index+1)));
+    });
+    mine.value=String(cfg.this_driver_index);
+  }
+  const team=document.getElementById('chief-team-code'); if(team) team.value=cfg.team_code;
 }
 function sendChiefEngineerSettings(){
-  if(irBridge&&irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'chief_engineer_config',...chiefEngineerSettings()}));
+  const cfg=chiefEngineerSettings();
+  if(irBridge&&irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'chief_engineer_config',enabled:cfg.enabled,roster:cfg.roster,current_index:cfg.current_index}));
 }
 function onChiefEngineerSettingsChanged(){
   const enabled=!!document.getElementById('chief-mode-enabled')?.checked;
   persistentSet('pw_chief_enabled',enabled?'true':'false');
   [1,2,3].forEach(n=>persistentSet('pw_chief_driver_'+n,document.getElementById('chief-driver-'+n)?.value.trim()||''));
   persistentSet('pw_chief_current_driver',document.getElementById('chief-current-driver')?.value||'0');
+  persistentSet('pw_chief_this_driver',document.getElementById('chief-this-driver')?.value||'0');
+  persistentSet('pw_chief_team_code',(document.getElementById('chief-team-code')?.value||'').trim().toUpperCase());
   hydrateChiefEngineerSettings();
   sendChiefEngineerSettings();
+  pollChiefTeamHandoff(true);
 }
+
+function chiefAccessHeaders(){
+  const headers={};
+  const token=localStorage.getItem('pw_auth_token');
+  if(token) headers.Authorization='Bearer '+token;
+  else {
+    const code=localStorage.getItem('pw_beta_code');
+    if(code){ headers['X-Pitwall-Access-Code']=code; headers['X-Pitwall-Device-Id']=getDeviceId(); }
+  }
+  return headers;
+}
+function chiefShareStatus(text){ const el=document.getElementById('chief-share-status'); if(el) el.textContent=text||''; }
+let chiefLastReceivedHandoffId='';
+async function publishChiefTeamHandoff(packet){
+  const cfg=chiefEngineerSettings();
+  if(!cfg.enabled || cfg.roster.length<2 || !cfg.team_code) return;
+  const handoffId='ch-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+  const outgoing={...packet,handoff_id:handoffId,roster:cfg.roster};
+  try{
+    const r=await fetch(API_BASE+'/api/chief/handoff',{method:'POST',headers:{'Content-Type':'application/json',...chiefAccessHeaders()},body:JSON.stringify({teamCode:cfg.team_code,packet:outgoing})});
+    const data=await r.json();
+    if(data&&data.ok) chiefShareStatus('チーム引き継ぎを送信しました。');
+    else chiefShareStatus('チーム引き継ぎを送信できませんでした。');
+  }catch(_){ chiefShareStatus('チーム引き継ぎはオフラインです。'); }
+}
+async function pollChiefTeamHandoff(force){
+  const cfg=chiefEngineerSettings();
+  if(!cfg.enabled || cfg.roster.length<2 || !cfg.team_code) { if(force) chiefShareStatus('Team Link Codeを全PCで同じ値に設定してください。'); return; }
+  try{
+    const r=await fetch(API_BASE+'/api/chief/handoff?teamCode='+encodeURIComponent(cfg.team_code),{headers:chiefAccessHeaders()});
+    const data=await r.json(); const handoff=data&&data.handoff;
+    if(!handoff){ if(force) chiefShareStatus(data&&data.stale?'古い引き継ぎは破棄されました。':'次の引き継ぎを待っています。'); return; }
+    if(handoff.id===chiefLastReceivedHandoffId) return;
+    const packet=handoff.packet||{};
+    // Only the named next driver's PC may consume a team handoff.  A stale or
+    // other-driver packet must never overwrite this PC's live race context.
+    if(packet.next_driver_index!==cfg.this_driver_index) return;
+    chiefLastReceivedHandoffId=handoff.id;
+    persistentSet('pw_chief_current_driver',String(cfg.this_driver_index));
+    hydrateChiefEngineerSettings(); chiefShareStatus('チーム引き継ぎを受信しました。');
+    injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet});
+  }catch(_){ if(force) chiefShareStatus('チーム引き継ぎを確認できませんでした。'); }
+}
+setInterval(()=>pollChiefTeamHandoff(false),10000);
 function buildContractNote(isJ){
   // LLMへ渡すシステム指示テキスト。未契約時は"最小限モード"と明示。
   const c = loadContract();

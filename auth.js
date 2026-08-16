@@ -337,6 +337,22 @@ async function init() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_credit_ledger_account_created ON credit_ledger(account_id, created_at);`);
 
+  // Cross-PC endurance handoff.  The shared team code is never stored in
+  // plaintext; only its SHA-256 digest is the row key.  One latest,
+  // evidence-only handoff is enough for the next driver's PITWALL to resume
+  // a stint without treating unrelated local telemetry as team truth.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chief_team_handoffs (
+      team_key_hash TEXT PRIMARY KEY,
+      handoff_id TEXT NOT NULL,
+      sender_identity TEXT NOT NULL,
+      packet JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chief_team_handoffs_updated ON chief_team_handoffs (updated_at);`);
+
   if (BREVO_API_KEY) {
     mailer = 'brevo';
     // 診断：鍵の長さと頭だけログ（秘密は出さない）。正しいv3鍵は xkeysib- で始まり約89文字。
@@ -1495,6 +1511,86 @@ async function getFunnelStatsByCtaLocation() {
   return rows;
 }
 
+// ── Cross-PC Chief Engineer handoff ────────────────────────────────────────
+// A Team Link Code is a shared secret entered locally by the drivers.  It is
+// deliberately separate from a personal EXE access code and is stored only as
+// a digest.  The server accepts only a compact, deterministic handoff packet;
+// it is not a general team chat or telemetry archive.
+const CHIEF_HANDOFF_TTL_MS = 6 * 60 * 60 * 1000;
+
+function chiefTeamKey(raw) {
+  const code = String(raw || '').trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9-]{7,63}$/.test(code)) return null;
+  return crypto.createHash('sha256').update('pitwall-chief-team:v1:' + code).digest('hex');
+}
+
+function cleanChiefPacket(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const str = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : null;
+  const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const int = value => Number.isInteger(value) && value >= 0 && value <= 100000 ? value : null;
+  const roster = Array.isArray(raw.roster)
+    ? raw.roster.map(v => str(v, 30)).filter(Boolean).slice(0, 3) : [];
+  const selectedPlan = str(raw.selected_plan, 12);
+  if (!roster.length || !selectedPlan || !['A', 'B', 'C'].includes(selectedPlan.toUpperCase())) return null;
+  const nextIndex = int(raw.next_driver_index);
+  if (nextIndex === null || nextIndex >= roster.length) return null;
+  const handoffId = str(raw.handoff_id, 80);
+  if (!handoffId || !/^[A-Za-z0-9_-]{8,80}$/.test(handoffId)) return null;
+  return {
+    handoff_id: handoffId,
+    roster,
+    selected_plan: selectedPlan.toUpperCase(),
+    current_lap: int(raw.current_lap),
+    class_position: int(raw.class_position),
+    next_pit_lap: int(raw.next_pit_lap),
+    fuel_set_l: finite(raw.fuel_set_l),
+    finish_margin_l: finite(raw.finish_margin_l),
+    gap_ahead_s: finite(raw.gap_ahead_s),
+    strategy_reason: str(raw.strategy_reason, 180),
+    damage_observed: raw.damage_observed === true,
+    damage_seconds: finite(raw.damage_seconds),
+    current_driver: str(raw.current_driver, 30),
+    next_driver: roster[nextIndex],
+    next_driver_index: nextIndex,
+  };
+}
+
+async function publishChiefTeamHandoff({ teamCode, senderIdentity, packet } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const teamHash = chiefTeamKey(teamCode);
+  const clean = cleanChiefPacket(packet);
+  const sender = String(senderIdentity || '').slice(0, 160);
+  if (!teamHash || !clean || !sender) throw new Error('invalid_chief_handoff');
+  await pool.query(
+    `INSERT INTO chief_team_handoffs (team_key_hash,handoff_id,sender_identity,packet,created_at,updated_at)
+     VALUES ($1,$2,$3,$4,now(),now())
+     ON CONFLICT (team_key_hash) DO UPDATE SET
+       handoff_id=EXCLUDED.handoff_id, sender_identity=EXCLUDED.sender_identity,
+       packet=EXCLUDED.packet, updated_at=now()`,
+    [teamHash, clean.handoff_id, sender, JSON.stringify(clean)]
+  );
+  return { ok: true, handoffId: clean.handoff_id };
+}
+
+async function getChiefTeamHandoff({ teamCode } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const teamHash = chiefTeamKey(teamCode);
+  if (!teamHash) throw new Error('invalid_chief_team');
+  const { rows } = await pool.query(
+    `SELECT handoff_id,packet,updated_at FROM chief_team_handoffs WHERE team_key_hash=$1`, [teamHash]
+  );
+  const row = rows[0];
+  if (!row) return { ok: true, handoff: null };
+  const updatedAt = new Date(row.updated_at).getTime();
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > CHIEF_HANDOFF_TTL_MS) {
+    return { ok: true, handoff: null, stale: true };
+  }
+  const packet = cleanChiefPacket(row.packet);
+  if (!packet || packet.handoff_id !== row.handoff_id) return { ok: true, handoff: null };
+  return { ok: true, handoff: { id: row.handoff_id, packet, updatedAt: row.updated_at } };
+}
+
 module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
@@ -1509,6 +1605,7 @@ module.exports = {
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
   recordApiUsage, getApiUsageStats, recordGoogleUsage, recordUsageSessionCheckpoint, getUsageSessionStats,
   enrollShadowCreditAccount, recordCreditLedgerEvent, recordAnthropicCreditDebit, recordGoogleCreditDebit, reconcileCreditLedger, getCreditAccountStats,
+  publishChiefTeamHandoff, getChiefTeamHandoff,
   FOUNDING_CAP,
   _pool: () => pool,
 };

@@ -477,6 +477,36 @@ async function requirePitwallEntitlement(req, res, next) {
 
 app.use(['/api/chat', '/api/translate', '/api/tts', '/api/stt'], requirePitwallEntitlement);
 
+// Cross-PC endurance handoff.  Each driver still authenticates with their own
+// PITWALL entitlement; a Team Link Code only selects the team's latest compact
+// handoff packet and is never persisted in plaintext.
+const chiefShareLimiter = rateLimit({ windowMs: 60 * 1000, max: 24, standardHeaders: true, legacyHeaders: false });
+function chiefSenderIdentity(req) {
+  if (req.user && req.user.id) return 'user:' + req.user.id;
+  if (req.betaTokenHash) return 'beta:' + req.betaTokenHash;
+  return null;
+}
+app.post('/api/chief/handoff', chiefShareLimiter, express.json(), requirePitwallEntitlement, async (req, res) => {
+  try {
+    const r = await auth.publishChiefTeamHandoff({
+      teamCode: req.body && req.body.teamCode,
+      senderIdentity: chiefSenderIdentity(req),
+      packet: req.body && req.body.packet,
+    });
+    res.json(r);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: 'invalid_chief_handoff' });
+  }
+});
+app.get('/api/chief/handoff', chiefShareLimiter, requirePitwallEntitlement, async (req, res) => {
+  try {
+    const r = await auth.getChiefTeamHandoff({ teamCode: req.query && req.query.teamCode });
+    res.json(r);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: 'invalid_chief_team' });
+  }
+});
+
 // Build 251: beta access code hash is resolved by the entitlement middleware.
 // The desktop receives only its own pending seed and acknowledges only after
 // its local memory write succeeds. Paid accounts do not receive beta seeds.
