@@ -882,6 +882,21 @@ async function unsetMemberByCustomer(stripeCustomerId, status) {
   }
 }
 
+// 決済失敗で一度停止した会員は、Stripeの再請求が成功した時だけ復帰させる。
+// メールアドレスではなくStripe customer idで限定するので、別アカウントを誤って
+// 有効化しない。beta_tokens（テスターアクセス）はこの操作の対象外。
+async function restoreMemberByCustomer(stripeCustomerId, status = 'active') {
+  if (!ready || !stripeCustomerId) return { ok: false, reason: 'missing_customer' };
+  const { rows } = await pool.query(
+    `UPDATE users SET is_member = true, subscription_status = $2 WHERE stripe_customer_id = $1
+     RETURNING email, is_member, subscription_status`,
+    [stripeCustomerId, status]
+  );
+  if (!rows.length) return { ok: false, reason: 'customer_not_found' };
+  log('member restored after paid invoice: ' + rows[0].email);
+  return { ok: true, ...rows[0] };
+}
+
 // Founding Checkout Session作成（LP CTAから直接Stripe Checkoutへ。匿名IDをmetadataに載せてファネル接続）。
 const STRIPE_FOUNDING_PRICE_ID = process.env.STRIPE_FOUNDING_PRICE_ID || null;
 // customer: テスト専用。Test Clockに紐付けた顧客IDを渡すとトライアル進行を早送りできる。
@@ -1618,7 +1633,7 @@ module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
-  setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, foundingStatus,
+  setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, restoreMemberByCustomer, foundingStatus,
   recordReferralAttribution, countReferralConversion,
   createFoundingCheckout,
   createBillingPortalSession,

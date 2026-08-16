@@ -157,6 +157,9 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       // 2ヶ月目以降の請求もここを通るが、referral_conversionsのPRIMARY KEYで二重加算は起きない。
       const inv = event.data.object;
       const isTestInv = !event.livemode;
+      // 支払い失敗で停止済みでも、Stripeが再請求に成功した場合だけ自動で戻す。
+      // tester codeのアクセス権には一切触れない。
+      if (inv.customer) await auth.restoreMemberByCustomer(inv.customer, 'active');
       if (inv.amount_paid > 0 && inv.customer && inv.billing_reason === 'subscription_cycle') {
         // invoiceオブジェクト自身にsubscriptionのmetadataが埋め込まれている（Stripe API 2026-06-24〜の invoice.parent.subscription_details）。
         //   まずここから読む。無ければ古い形の inv.subscription 経由で取得にフォールバック。
@@ -181,7 +184,10 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       await auth.unsetMemberByCustomer(event.data.object.customer, 'canceled');
     } else if (event.type === 'customer.subscription.updated') {
       const sub = event.data.object;
-      if (['canceled', 'unpaid', 'incomplete_expired'].includes(sub.status)) {
+      // 原価が発生するAPIは、最初の決済失敗（past_due）から止める。
+      // 回収成功時だけinvoice.paid上で復帰する。Stripeの再試行期間を無制限の
+      // 無料利用期間にしない。
+      if (['canceled', 'past_due', 'unpaid', 'incomplete_expired'].includes(sub.status)) {
         await auth.unsetMemberByCustomer(sub.customer, sub.status);
       }
     }
