@@ -83,6 +83,17 @@ def evaluate(*, fuel_level_l, avg_fuel_per_lap_l, crossings_to_finish,
         and final_service > 0.05
         and final_service <= capacity * SPLASH_SERVICE_FRACTION)
 
+    # The final-service window is a planning fact available as soon as three
+    # clean laps establish burn.  It does *not* order an early pit: traffic
+    # and rejoin evidence are a separate decision at the window.  This makes
+    # a 3-hour GT race discussable before halfway without reviving the old
+    # "whole-race fuel total means box now" failure.
+    final_stint_capacity_laps = max(0, int(math.floor(
+        max(0.0, capacity - reserve) / average + 1e-12)))
+    final_stint_window_in_laps = max(0, crossings_to_finish - final_stint_capacity_laps)
+    final_stint_window_open = final_stint_window_in_laps == 0
+    final_stint_window_reachable = current_stint_laps >= final_stint_window_in_laps
+
     progress = (float(race_progress_fraction)
                 if _finite(race_progress_fraction) else None)
     second_half = progress is not None and progress >= 0.5
@@ -90,11 +101,21 @@ def evaluate(*, fuel_level_l, avg_fuel_per_lap_l, crossings_to_finish,
                     if splash_candidate and crossings_to_finish > 0 else 0.0)
     save_fraction = save_per_lap / average if average > 0 else 0.0
     splash_forecast = {
+        # "available" owns automatic race-radio timing; planning evidence is
+        # deliberately available earlier for briefing and driver handoff.
         'available': bool(second_half),
+        'planning_available': True,
         'reason': ('second_half_projection'
                    if second_half else 'race_not_halfway'),
         'splash_candidate': bool(splash_candidate),
         'projected_final_service_l': round(final_service, 3),
+        'final_stint_capacity_laps': final_stint_capacity_laps,
+        'final_stint_window_in_laps': final_stint_window_in_laps,
+        'final_stint_window_open': final_stint_window_open,
+        'final_stint_window_reachable': final_stint_window_reachable,
+        # Never claim a traffic-safe rejoin without live traffic evidence.
+        'traffic_rejoin_check_required': bool(
+            splash_candidate and final_stint_window_reachable),
         'avoid_splash_save_l_per_lap': round(save_per_lap, 3),
         'avoid_splash_save_fraction': round(save_fraction, 4),
         'avoid_splash_feasible': bool(

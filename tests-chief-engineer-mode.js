@@ -48,13 +48,15 @@ if (fnSrc) {
     trigger:'chief_engineer_handoff',
     packet:{available:true,next_driver:'まーぼーさん',selected_plan:'B',
       next_pit_lap:31,fuel_set_l:72,finish_margin_l:1.4,damage_observed:false,
-      tire_report:{summary:'右フロントの最小残量78.0%。次スティントは負担を確認。'}}
+      tire_report:{summary:'右フロントの最小残量78.0%。次スティントは負担を確認。'},
+      endurance_splash:{projected_final_service_l:8.4,final_stint_window_in_laps:11}}
   }, true);
   check('次担当・Plan・次pit・給油・余裕を含む',
     /まーぼーさんへ/.test(spoken) && /Plan B/.test(spoken) &&
     /31周/.test(spoken) && /72L/.test(spoken) && /1\.4L/.test(spoken));
   check('引き継ぎ無線は短い', spoken.length <= 90);
   check('ピット実測タイヤを次ドライバーへ含める', /タイヤ.*右フロント/.test(spoken), spoken);
+  check('終盤スプラッシュの計画窓を次ドライバーへ含める', /終盤スプラッシュ8\.4L.*あと11周/.test(spoken), spoken);
 }
 
 check('グリーン後のサイドコールはstart rushで抑止しない',

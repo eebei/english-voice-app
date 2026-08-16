@@ -1541,6 +1541,20 @@ function cleanChiefPacket(raw) {
     ? raw.tire_report : null;
   const tireSummary = rawTire && str(rawTire.summary, 180);
   const tireMeasuredAt = rawTire && finite(rawTire.measured_at_session_s);
+  const rawSplash = raw.endurance_splash && typeof raw.endurance_splash === 'object' && !Array.isArray(raw.endurance_splash)
+    ? raw.endurance_splash : null;
+  const splashStops = rawSplash && int(rawSplash.future_stop_count);
+  const splashLitres = rawSplash && finite(rawSplash.projected_final_service_l);
+  const splashWindow = rawSplash && int(rawSplash.final_stint_window_in_laps);
+  const enduranceSplash = (rawSplash && splashStops !== null && splashLitres !== null && splashWindow !== null
+    && splashLitres >= 0 && splashLitres <= 200)
+    ? {
+      future_stop_count: splashStops,
+      projected_final_service_l: splashLitres,
+      final_stint_window_in_laps: splashWindow,
+      final_stint_window_open: rawSplash.final_stint_window_open === true,
+      traffic_rejoin_check_required: rawSplash.traffic_rejoin_check_required === true,
+    } : null;
   return {
     handoff_id: handoffId,
     roster,
@@ -1558,6 +1572,7 @@ function cleanChiefPacket(raw) {
       summary: tireSummary,
       measured_at_session_s: tireMeasuredAt,
     } : null,
+    endurance_splash: enduranceSplash,
     current_driver: str(raw.current_driver, 30),
     next_driver: roster[nextIndex],
     next_driver_index: nextIndex,

@@ -2315,6 +2315,7 @@ def poll_iracing():
     strategy_options_dispatch = None
     strategy_options_decision_sent = False
     strategy_options_box_call_sent = False
+    latest_endurance_plan = None
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -2664,6 +2665,7 @@ def poll_iracing():
                         _fuel_dev_episode = _sig_reset['_fuel_dev_episode']
                         _pace_dev_episode = _sig_reset['_pace_dev_episode']
                         last_tire_report = _sig_reset['last_tire_report']
+                        latest_endurance_plan = None
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
                         last_session_num = _authority_session_num
@@ -2831,6 +2833,7 @@ def poll_iracing():
             strategy_options_dispatch = None
             strategy_options_decision_sent = False
             strategy_options_box_call_sent = False
+            latest_endurance_plan = None
             pit_enter_lap = None
             # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
             _pending_summary = _reset['_pending_summary']
@@ -2976,7 +2979,8 @@ def poll_iracing():
                     gap_ahead_s=nearest_ahead_gap,
                     roster=chief_engineer_config.get('roster'),
                     current_index=chief_engineer_config.get('current_index', 0),
-                    tire_report=last_tire_report)
+                    tire_report=last_tire_report,
+                    endurance_plan=latest_endurance_plan)
                 broadcast({'type': 'chief_engineer_handoff',
                            'packet': _handoff_packet})
                 log('CHIEF ENGINEER HANDOFF: %s' % json.dumps(
@@ -3870,6 +3874,7 @@ def poll_iracing():
                     effective_capacity_l=session_effective_fuel_capacity_l,
                     reserve_l=fuel_strategy.get('reserve_l', 0.5),
                     race_progress_fraction=_race_progress_fraction)
+                latest_endurance_plan = _endurance_plan
                 if _endurance_plan.get('available'):
                     fuel_strategy['endurance_plan'] = _endurance_plan
                     if _endurance_plan.get('multi_stop'):
@@ -5716,10 +5721,12 @@ def poll_iracing():
                     crossings_to_finish=_option_crossings,
                     reserve_l=_fuel_strategy_live.get('reserve_l', 0.5),
                     effective_capacity_l=session_effective_fuel_capacity_l)
-                # ★Plan B定義の判断：B は条件付きなので、ブリーフィング時点では
-                #   available=False が正常。燃料ウインドウが開いていることを条件にする。
-                if (_candidate_options.get('available')
-                        and ((_candidate_options.get('plan_b') or {}).get('fuel_window_open'))):
+                # Plan A is useful from the first three clean laps.  Plan B
+                # remains unavailable until its fuel window opens, but do not
+                # withhold the team baseline / future splash horizon until
+                # then: a three-hour Chief plan must exist before the first
+                # driver change.
+                if _candidate_options.get('available'):
                     strategy_options = _candidate_options
                     log('STRATEGY OPTIONS ready: ' + json.dumps(
                         strategy_options, ensure_ascii=False, separators=(',', ':')))

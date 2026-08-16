@@ -38,6 +38,11 @@ def run():
     check('multiple services projected', plan['future_stop_count'] >= 4, plan)
     check('first half withholds splash forecast',
           plan['splash_forecast']['available'] is False, plan)
+    check('first half still exposes a handoff/briefing splash plan',
+          plan['splash_forecast']['planning_available'] is True
+          and plan['splash_forecast']['final_stint_window_in_laps'] > 0, plan)
+    check('early horizon does not pretend traffic-safe final service',
+          plan['splash_forecast']['traffic_rejoin_check_required'] is False, plan)
 
     verdict = pfa.evaluate(
         {'band': 'critical'}, None, current_lap=5, fuel_level_l=92.0,
@@ -77,6 +82,9 @@ def run():
           not second_half['box_this_lap'], second_half)
     check('save target is numeric',
           isinstance(splash['avoid_splash_save_l_per_lap'], float), splash)
+    check('final-stint window is deterministic',
+          isinstance(splash['final_stint_window_in_laps'], int)
+          and isinstance(splash['final_stint_capacity_laps'], int), splash)
 
     invalid = ef.evaluate(
         fuel_level_l=92.0, avg_fuel_per_lap_l=4.12,

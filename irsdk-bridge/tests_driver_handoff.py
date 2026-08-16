@@ -735,6 +735,16 @@ def test_chief_engineer_packet_and_race_only_wiring():
         tire_report={'summary':'右フロント最小78.0%。負担確認。', 'measured_at_session_s':321.4})
     check('ピット実測タイヤだけをhandoffへ渡す',
           measured['tire_report']=={'summary':'右フロント最小78.0%。負担確認。', 'measured_at_session_s':321.4})
+    endurance = chief.build_packet(
+        state, roster=['八木さん','まーぼーさん'], current_index=0,
+        endurance_plan={'available': True, 'future_stop_count': 2,
+          'splash_forecast': {'planning_available': True, 'splash_candidate': True,
+            'projected_final_service_l': 8.4, 'final_stint_window_in_laps': 11,
+            'final_stint_window_open': False, 'traffic_rejoin_check_required': False}})
+    check('前半でも終盤スプラッシュ計画をhandoffへ渡す',
+          endurance['endurance_splash']=={'future_stop_count': 2,
+            'projected_final_service_l': 8.4, 'final_stint_window_in_laps': 11,
+            'final_stint_window_open': False, 'traffic_rejoin_check_required': False})
     packet2=chief.build_packet(state,roster=['八木さん','まーぼーさん','ダートさん'],current_index=2)
     check('最終ドライバー後は先頭へ循環', packet2['next_driver']=='八木さん' and packet2['next_driver_index']==0)
     missing=chief.build_packet({},roster=['八木さん','まーぼーさん'],current_index=0)

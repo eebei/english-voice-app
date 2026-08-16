@@ -20,7 +20,7 @@ def should_emit(config, *, previous_activity, new_activity, is_race):
 
 
 def build_packet(state, *, current_lap=None, class_position=None, gap_ahead_s=None,
-                 roster=None, current_index=0, tire_report=None):
+                 roster=None, current_index=0, tire_report=None, endurance_plan=None):
     """Build a concise, evidence-only packet for the next stint/driver.
 
     Missing evidence remains None; callers must not turn it into a claim.
@@ -37,6 +37,19 @@ def build_packet(state, *, current_lap=None, class_position=None, gap_ahead_s=No
     tire_report = tire_report if isinstance(tire_report, dict) else {}
     tire_summary = str(tire_report.get('summary') or '').strip()[:180] or None
     tire_measured_at = tire_report.get('measured_at_session_s')
+    endurance_plan = endurance_plan if isinstance(endurance_plan, dict) else {}
+    splash = endurance_plan.get('splash_forecast') or {}
+    splash_summary = None
+    if (endurance_plan.get('available') is True
+            and splash.get('planning_available') is True
+            and splash.get('splash_candidate') is True):
+        splash_summary = {
+            'future_stop_count': endurance_plan.get('future_stop_count'),
+            'projected_final_service_l': splash.get('projected_final_service_l'),
+            'final_stint_window_in_laps': splash.get('final_stint_window_in_laps'),
+            'final_stint_window_open': splash.get('final_stint_window_open') is True,
+            'traffic_rejoin_check_required': splash.get('traffic_rejoin_check_required') is True,
+        }
     return {
         'available': bool(selected and isinstance(plan, dict) and plan),
         'selected_plan': selected,
@@ -56,6 +69,9 @@ def build_packet(state, *, current_lap=None, class_position=None, gap_ahead_s=No
             'measured_at_session_s': round(tire_measured_at, 1)
             if _num(tire_measured_at) else None,
         } if tire_summary else None),
+        # Compact team horizon: it is a proposed final-service window, never
+        # an immediate pit order.  The next driver revalidates it locally.
+        'endurance_splash': splash_summary,
         'current_driver': names[idx] if names else None,
         'next_driver': names[next_idx] if next_idx is not None else None,
         'next_driver_index': next_idx,

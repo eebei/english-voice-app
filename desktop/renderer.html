@@ -2183,6 +2183,17 @@ function telemetryTruthFallback(live, userText, isJP){
   }
   if(/燃料|給油|足りる|リットル|リッター|fuel|lit(?:er|re)|make it/i.test(asked)){
     const endurance=fs.endurance_plan||live?.endurance_fuel_plan||{};
+    const splash=endurance.splash_forecast||{};
+    if(/スプラッシュ|splash/i.test(asked) && splash.planning_available===true){
+      const add=Number(splash.projected_final_service_l);
+      const window=Number(splash.final_stint_window_in_laps);
+      if(splash.splash_candidate===true && Number.isFinite(add)&&Number.isFinite(window)){
+        return isJP
+          ? `暫定では終盤スプラッシュ約${add.toFixed(1)}リットル。最終給油ウインドーはあと${Math.trunc(window)}周。交通と復帰位置が揃えば前倒し候補。`
+          : `Provisional final splash: ${add.toFixed(1)} litres. The final-fuel window opens in ${Math.trunc(window)} laps; traffic and rejoin must support any early move.`;
+      }
+      if(splash.splash_candidate===false) return isJP?'暫定では終盤スプラッシュは不要。':'Provisionally, no final splash is projected.';
+    }
     if(endurance.available===true&&endurance.multi_stop===true){
       const next=Number(endurance.next_fuel_stop_in_laps), stops=Number(endurance.future_stop_count);
       return isJP
@@ -3447,8 +3458,18 @@ function oishiRadio(d, forSpeech=false){
       const fuel=Number.isFinite(Number(p.fuel_set_l))?`給油${Math.trunc(Number(p.fuel_set_l))}L。`:'';
       const margin=Number.isFinite(Number(p.finish_margin_l))?`余裕${Number(p.finish_margin_l).toFixed(1)}L。`:'';
       const damage=p.damage_observed?'損傷確認あり。':'';
-      const tyre=(p.tire_report&&typeof p.tire_report.summary==='string')?`タイヤ、${p.tire_report.summary}`:'';
-      return `${who}Plan ${p.selected_plan}。${pit}${fuel}${margin}${damage}${tyre}`;
+      const rawTyre=(p.tire_report&&typeof p.tire_report.summary==='string')?p.tire_report.summary:'';
+      // Handoff carries the full pit measurement in the packet, but the radio
+      // must remain a one-breath briefing.  Speak only the worst corner and
+      // its minimum remaining wear; the UI/log retains the detailed source.
+      const tyreCorner=(rawTyre.match(/(左フロント|右フロント|左リア|右リア)/)||[])[1];
+      const tyreWear=(rawTyre.match(/最小(?:残量)?\s*(\d+(?:\.\d+)?)\s*%/)||[])[1];
+      const tyre=(tyreCorner&&tyreWear)?`タイヤ${tyreCorner}${tyreWear}%。`:'';
+      const splash=p.endurance_splash||{};
+      const splashAdd=Number(splash.projected_final_service_l), splashWindow=Number(splash.final_stint_window_in_laps);
+      const splashLine=(Number.isFinite(splashAdd)&&Number.isFinite(splashWindow))
+        ?`終盤スプラッシュ${splashAdd.toFixed(1)}L、最終給油窓あと${Math.trunc(splashWindow)}周。`:'';
+      return `${who}Plan ${p.selected_plan}。${pit}${fuel}${margin}${splashLine}${damage}${tyre}`;
     }
     // ★Build 266 Codex差戻し#5：strategy_recalculation の日本語ケース。
     //   これが無いと injectRadio が bridge の英語 driver_message をそのまま
