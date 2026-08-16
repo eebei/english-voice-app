@@ -47,6 +47,16 @@ const LIVE = { weather: { track_temp_c: 50.6, air_temp_c: 30.7 }, session_type: 
   check('次に比べる観測項目を1つ指定する', /次の走行では/.test(reply));
   check('車種固有の数値を断定しない', /断定できない/.test(reply) && !/\d+\s*(?:クリック|ノッチ|psi|bar)/i.test(reply));
 
+  // 8/16 St Petersburg 実走: 「リアの踏ん張りが欲しい。スプリングの
+  // セッティングで何かおすすめある？」に、温度の復唱や速度域の聞き返しで
+  // 終わらず、指定された部品の最初の一手を短く返す。
+  const rearGrip = cards.route('リアの踏ん張りが欲しい。スプリングのセッティングで何かおすすめある？', LIVE, 'ja');
+  check('リアの踏ん張り＋スプリング相談をセットアップ相談に分類',
+    rearGrip.card && rearGrip.card.topic === 'handling_setup_advice', rearGrip.card && rearGrip.card.topic);
+  check('リアスプリングの最初の一手を短く返す',
+    /リアスプリングを1段柔らかく/.test(rearGrip.reply) && rearGrip.reply.length <= 70, rearGrip.reply);
+  check('同じ条件で3周比較する観測を指定する', /低速出口を3周だけ比べて/.test(rearGrip.reply), rearGrip.reply);
+
   // 温度そのものの質問は従来どおり weather のまま
   ['路面温度は？', '今の気温教えて', '雨降ってきた？'].forEach(text => {
     check('温度・天候の質問は weather_status のまま: ' + text,

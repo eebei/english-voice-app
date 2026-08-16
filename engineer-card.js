@@ -33,6 +33,10 @@ const OPERATIONAL_RE = /燃料|給油|リットル|リッター|ピット|ボッ
 
 function handlingSymptomName(text) {
   const t = String(text || '');
+  // 「リアの踏ん張りが欲しい」は、ドライバーが求めるセットアップの方向を
+  // 既に指定している相談。オーバーステアの発生報告とは分け、聞き返さずに
+  // 最初の一手を返す。
+  if (/リア.{0,12}(?:踏ん張り|グリップ).{0,8}(?:欲しい|ほしい|足りない|不足)|(?:rear).{0,12}(?:grip|traction).{0,12}(?:need|want|lack)/i.test(t)) return 'rear_grip';
   if (/オーバー(?:ステア)?|oversteer|loose|リア.{0,4}(?:出る|流れる)/i.test(t)) return 'oversteer';
   if (/アンダー(?:ステア)?|understeer|push|曲がらない/i.test(t)) return 'understeer';
   if (/タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ)|グリップ.{0,6}(?:ない|落ち|不足)/i.test(t)) return 'tyre_degradation';
@@ -119,7 +123,7 @@ function classify(text, options = {}) {
   const setupNoun = /セッ?ト\s*ア(?:ッ|ツ)?プ|セッティング|set-?up/i.test(t);
   // 「方向」「変えたい」「意見」等は単独では弱いので、症状と組み合わせて判定する。
   const setupIntent = /方向性|方向|変えたい|変更したい|振り|アドバイス|意見|どうすれば|balance/i.test(t);
-  const handlingSymptom = /アンダー(?:ステア)?|オーバー(?:ステア)?|タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ|厳しい|きつい)|グリップ.{0,6}(?:ない|落ち|不足)|曲がらない|滑る|リア.{0,4}(?:出る|流れる)|understeer|oversteer|grip|slide|loose|push/i.test(t);
+  const handlingSymptom = /アンダー(?:ステア)?|オーバー(?:ステア)?|タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ|厳しい|きつい)|グリップ.{0,6}(?:ない|落ち|不足)|曲がらない|滑る|リア.{0,12}(?:出る|流れる|踏ん張り|グリップ).{0,8}(?:欲しい|ほしい|ない|不足)?|understeer|oversteer|grip|traction|slide|loose|push/i.test(t);
   if (setupNoun || (setupIntent && handlingSymptom)
       || (handlingSymptom && /どう|なに|何|対策|解決|直|なおし|改善|what should|how do i|any (?:advice|ideas?|suggestions?)|fix|help/i.test(t))) {
     return { topic: TOPIC.HANDLING_SETUP_ADVICE,
@@ -743,6 +747,10 @@ function buildTrafficStatus(live, lang) {
 //     4. 次の走行で比較する観測項目を一つ指定する
 //   数値は live テレメトリにある実測だけを使う。無ければ触れない（捏造しない）。
 const SETUP_DIRECTIONS = {
+  rear_grip: {
+    ja: ['リアスプリングを1段柔らかく', 'リアのアンチロールバーを1段柔らかく'],
+    en: ['soften the rear spring one step', 'soften the rear anti-roll bar one step'],
+  },
   understeer: {
     ja: ['フロントのアンチロールバーを1段柔らかく', 'リアの車高をわずかに上げる'],
     en: ['soften the front anti-roll bar one step', 'raise the rear ride height slightly'],
@@ -768,9 +776,9 @@ function buildHandlingSetupAdvice(live, lang, card) {
   const track = finite(w.track_temp_c);
   const air = finite(w.air_temp_c);
   const symptom = (card && card.symptom) || 'unspecified';
-  const symptomJP = { understeer: 'アンダー', oversteer: 'オーバー',
+  const symptomJP = { rear_grip: 'リアの踏ん張り不足', understeer: 'アンダー', oversteer: 'オーバー',
                       tyre_degradation: 'タイヤの垂れ', unspecified: '症状' }[symptom];
-  const symptomEN = { understeer: 'understeer', oversteer: 'oversteer',
+  const symptomEN = { rear_grip: 'rear-grip loss', understeer: 'understeer', oversteer: 'oversteer',
                       tyre_degradation: 'tyre degradation', unspecified: 'the symptom' }[symptom];
 
   // 1. 実測の環境値（取れているものだけ）
@@ -784,6 +792,13 @@ function buildHandlingSetupAdvice(live, lang, card) {
   // 3. 方向は最大二つ。車種固有の数値は断定しない。
   const directions = (SETUP_DIRECTIONS[symptom] || SETUP_DIRECTIONS.unspecified)[isJa ? 'ja' : 'en']
     .slice(0, 2);
+
+  // 部品と狙いまで明示された練習相談では、環境値の復唱や速度域の聞き返しを
+  // 先に置かない。最初の一手を一つだけ出し、同じ条件での短い比較を求める。
+  if (symptom === 'rear_grip') {
+    if (isJa) return `リアの踏ん張りなら、まず${directions[0]}。低速出口を3周だけ比べて。まだ流れるなら次は${directions[1]}。`;
+    return `For rear grip, first ${directions[0]}. Compare three low-speed exits only; if it still rotates, then ${directions[1]}.`;
+  }
 
   if (isJa) {
     return `${envText}${symptomJP}は低速・中速・高速のどこが強い？`

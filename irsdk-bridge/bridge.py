@@ -51,7 +51,7 @@ import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 275 (tyre handoff and green-flag safety)"
+BUILD_VERSION = "Build 276 (practice setup advice and endurance splash planning)"
 PORT = 8765
 connected_clients = set()
 loop = None
