@@ -51,7 +51,7 @@ import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 272 candidate (Endurance fuel horizon and radio truth)"
+BUILD_VERSION = "Build 273 (V3 local race intent router)"
 PORT = 8765
 connected_clients = set()
 loop = None
