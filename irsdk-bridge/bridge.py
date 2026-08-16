@@ -51,7 +51,7 @@ import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 274 (cross-PC Chief Engineer handoff)"
+BUILD_VERSION = "Build 275 (tyre handoff and green-flag safety)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -861,6 +861,8 @@ def _session_scoped_reset_values():
         'clean_lap_time_hist': [],
         '_fuel_dev_episode': 0,
         '_pace_dev_episode': 0,
+        # Handoff must never carry a tyre measurement across a new session.
+        'last_tire_report': None,
     }
 
 
@@ -2411,6 +2413,10 @@ def poll_iracing():
     sector_entry_time = None
     lap_sector_times = []
     best_sectors = []
+    # Latest *measured* pit/garage tyre state.  Driver handoff can happen
+    # after the car has left the box, so carry this evidence forward instead
+    # of attempting to read unavailable live wear at the handoff instant.
+    last_tire_report = None
     prev = {
         'pos': None, 'class_pos': None, 'fuel': None, 'lap': None,
         'lapsTot': None, 'onPit': None, 'tempLap': None,
@@ -2657,6 +2663,7 @@ def poll_iracing():
                         clean_lap_time_hist = _sig_reset['clean_lap_time_hist']
                         _fuel_dev_episode = _sig_reset['_fuel_dev_episode']
                         _pace_dev_episode = _sig_reset['_pace_dev_episode']
+                        last_tire_report = _sig_reset['last_tire_report']
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
                         last_session_num = _authority_session_num
@@ -2848,6 +2855,7 @@ def poll_iracing():
             clean_lap_time_hist = _reset['clean_lap_time_hist']
             _fuel_dev_episode = _reset['_fuel_dev_episode']
             _pace_dev_episode = _reset['_pace_dev_episode']
+            last_tire_report = _reset['last_tire_report']
             if _transition_summary is not None:
                 _pending_non_race_summary = _transition_summary
                 log("Non-race summary pending at SessionNum transition: %d laps"
@@ -2967,7 +2975,8 @@ def poll_iracing():
                     # 前フレームまでのBridge権威値（次のgap走査で更新）を使う。
                     gap_ahead_s=nearest_ahead_gap,
                     roster=chief_engineer_config.get('roster'),
-                    current_index=chief_engineer_config.get('current_index', 0))
+                    current_index=chief_engineer_config.get('current_index', 0),
+                    tire_report=last_tire_report)
                 broadcast({'type': 'chief_engineer_handoff',
                            'packet': _handoff_packet})
                 log('CHIEF ENGINEER HANDOFF: %s' % json.dumps(
@@ -3187,6 +3196,7 @@ def poll_iracing():
         steering_angle = reader.read_float('SteeringWheelAngle')
         car_left_right = reader.read_int('CarLeftRight')
         brake_val = reader.read_float('Brake')
+        throttle_val = reader.read_float('Throttle')
 
         # ── 発話「間合い」窓の判定（Version A・毎サイクル）──
         # ほぼ直進(舵角小)かつブレーキ踏んでない＝プロアクティブ無線を"開始"して良い窓。
@@ -3208,7 +3218,10 @@ def poll_iracing():
             and (_speech_speed is None or _speech_speed >= 5.0))
         _set_speak_gate(speak_window_ok, _speech_gate_active)
         flush_radio()
-        if steering_angle is not None and is_race_session and not in_start_rush:
+        # Start-rush suppression is for strategic/battle chatter only.  A
+        # CarLeftRight safety warning is most valuable at the first corner,
+        # so arm the side-by-side detector as soon as green racing begins.
+        if steering_angle is not None and is_race_session and session_racing_started:
             _sa = abs(steering_angle)
             if _sa > CORNER_ENTRY_RAD:
                 corner_over_count += 1
@@ -3301,6 +3314,21 @@ def poll_iracing():
             w = [round(x*100,1) if x is not None and _tire_measurement_available else None for x in w]
             return {'t': t, 'w': w}
         tires = {'lf': _tire('LF'), 'rf': _tire('RF'), 'lr': _tire('LR'), 'rr': _tire('RR')}
+        if _tire_measurement_available:
+            _wear_points = []
+            for _corner, _detail in tires.items():
+                for _wear in _detail.get('w', []):
+                    if isinstance(_wear, (int, float)):
+                        _wear_points.append((_wear, _corner))
+            if _wear_points:
+                _worst_wear, _worst_corner = min(_wear_points, key=lambda item: item[0])
+                _corner_name = {'lf': '左フロント', 'rf': '右フロント',
+                                'lr': '左リア', 'rr': '右リア'}[_worst_corner]
+                last_tire_report = {
+                    'summary': '%s最小%.1f%%。負担確認。' % (
+                        _corner_name, _worst_wear),
+                    'measured_at_session_s': _tire_measurement_session_time,
+                }
         repair_mand = reader.read_float('PitRepairLeft')      # 義務修理の残り秒（>0=要修理の損傷あり）
         repair_opt  = reader.read_float('PitOptRepairLeft')   # 任意修理の残り秒
         damage_s = round((repair_mand or 0) + (repair_opt or 0), 1)
@@ -3314,6 +3342,7 @@ def poll_iracing():
         car_dist_all = reader.read_float_array('CarIdxLapDistPct', 64)
         car_on_pitroad_all = reader.read_int_array('CarIdxOnPitRoad', 64)
         car_surface_all = reader.read_int_array('CarIdxTrackSurface', 64)
+        car_last_laps_all = reader.read_float_array('CarIdxLastLapTime', 64)
         # Final Lap authorityは総合順位1位のみ。クラス順位や
         # max(CarIdxLap)フォールバックを混ぜると時間制混走で1周早くなる。
         overall_leader_idx = None
@@ -5391,6 +5420,14 @@ def poll_iracing():
                                 'class_pos': _spos,
                                 # Positive=behind the player; negative=ahead.
                                 'gap_s': round(_f2_arr[_si] - _player_f2, 1),
+                                # iRacing exposes a completed lap for rivals,
+                                # not their controls.  This supports a pace
+                                # comparison but must never be narrated as a
+                                # claim about their braking or steering.
+                                'last_lap_s': round(car_last_laps_all[_si], 3)
+                                if (car_last_laps_all and _si < len(car_last_laps_all)
+                                    and isinstance(car_last_laps_all[_si], (int, float))
+                                    and 20 < car_last_laps_all[_si] < 600) else None,
                             })
 
                     # ── レース中の前後ギャップは F2Time（iRacingダッシュボードと同じリーダー相対）で
@@ -6091,6 +6128,18 @@ def poll_iracing():
                     else None,
                 },
                 'damage_s': damage_s,
+                'driving_controls': {
+                    # Raw live values are evidence-only.  Coach logic must
+                    # aggregate clean laps/corners before drawing conclusions.
+                    'speed_mps': round(_speech_speed, 2)
+                    if isinstance(_speech_speed, (int, float)) else None,
+                    'steering_angle_rad': round(steering_angle, 4)
+                    if isinstance(steering_angle, (int, float)) else None,
+                    'brake': round(brake_val, 4)
+                    if isinstance(brake_val, (int, float)) else None,
+                    'throttle': round(throttle_val, 4)
+                    if isinstance(throttle_val, (int, float)) else None,
+                },
                 'weather': weather,
                 'standings_gaps': standings_gaps,
                 'competitors': competitor_status,

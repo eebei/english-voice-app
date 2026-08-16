@@ -20,7 +20,7 @@ def should_emit(config, *, previous_activity, new_activity, is_race):
 
 
 def build_packet(state, *, current_lap=None, class_position=None, gap_ahead_s=None,
-                 roster=None, current_index=0):
+                 roster=None, current_index=0, tire_report=None):
     """Build a concise, evidence-only packet for the next stint/driver.
 
     Missing evidence remains None; callers must not turn it into a claim.
@@ -34,6 +34,9 @@ def build_packet(state, *, current_lap=None, class_position=None, gap_ahead_s=No
     names = [str(x).strip() for x in (roster or []) if str(x).strip()][:3]
     idx = current_index if isinstance(current_index, int) and 0 <= current_index < len(names) else 0
     next_idx = (idx + 1) % len(names) if names else None
+    tire_report = tire_report if isinstance(tire_report, dict) else {}
+    tire_summary = str(tire_report.get('summary') or '').strip()[:180] or None
+    tire_measured_at = tire_report.get('measured_at_session_s')
     return {
         'available': bool(selected and isinstance(plan, dict) and plan),
         'selected_plan': selected,
@@ -46,6 +49,13 @@ def build_packet(state, *, current_lap=None, class_position=None, gap_ahead_s=No
         'strategy_reason': options.get('decision_reason') or recalc.get('reason'),
         'damage_observed': bool(damage),
         'damage_seconds': damage.get('damage_s') if isinstance(damage, dict) else None,
+        # A pit/garage measurement is evidence for the next driver.  Never
+        # send a live estimate as if it were measured tyre wear.
+        'tire_report': ({
+            'summary': tire_summary,
+            'measured_at_session_s': round(tire_measured_at, 1)
+            if _num(tire_measured_at) else None,
+        } if tire_summary else None),
         'current_driver': names[idx] if names else None,
         'next_driver': names[next_idx] if next_idx is not None else None,
         'next_driver_index': next_idx,

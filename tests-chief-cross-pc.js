@@ -17,6 +17,7 @@ check('Receiver de-duplicates a delivered handoff', renderer.includes('chiefLast
 check('Receiver polls the team relay', renderer.includes('setInterval(()=>pollChiefTeamHandoff(false),10000)'));
 check('Team code is stored only as a SHA-256 key', auth.includes("crypto.createHash('sha256').update('pitwall-chief-team:v1:' + code)"));
 check('Team handoff payload is compact and schema-checked', auth.includes('function cleanChiefPacket(raw)'));
+check('Measured tyre handoff is schema-checked', auth.includes('tire_report: tireSummary'));
 check('Relay requires existing PITWALL entitlement', server.includes("app.post('/api/chief/handoff', chiefShareLimiter, express.json(), requirePitwallEntitlement"));
 check('Relay read requires existing PITWALL entitlement', server.includes("app.get('/api/chief/handoff', chiefShareLimiter, requirePitwallEntitlement"));
 check('No team code column is persisted', !auth.includes('team_code TEXT'));

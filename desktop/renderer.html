@@ -2228,14 +2228,15 @@ function telemetryTruthFallback(live, userText, isJP){
   if(isJP){
     if(live && live.on_pit_road===true) return 'ピットレーン内。';
     if(pitIntent) return sel==='LunaJP' ? 'うん、ボックス準備。' : 'ボックス準備。';
-    // ★Build 266 Codex 差戻し⑤：質問と無関係な定型文("次のS/Fで燃料、残り、前後GAPを更新する")を
-    //   出さない。ブロックされたのはテレメトリ未確認の断定claimなので、それ自体を否定するだけに
-    //   留め、無関係な"次のS/F約束"を付け足さない。
-    return '今の発言は実測で確認できていない。断定はしない。';
+    // 真偽gateは「事実を捏造しない」ためのもの。ドライバーの目標や
+    // フィーリングまで否定する定型文にはしない（8/16実走フィードバック）。
+    if(/完走|finish|チェッカー|checkered/i.test(String(userText||''))) return 'うん、完走しよう。インシデントゼロでいこう。';
+    if(/フロント.*(?:食わ|入ら|ない)|曲がら|アンダー|オーバー|ステア|grip|understeer|oversteer/i.test(String(userText||''))) return '了解。無理に押さず、次の確認でフロントの状態を見よう。';
+    return '了解。いまは数値が揃った時だけコールする。';
   }
   if(live && live.on_pit_road===true) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
-  return 'That is not confirmed by current telemetry; I will not state it as fact.';
+  return 'Understood. I will call it when the numbers are confirmed.';
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -3441,12 +3442,13 @@ function oishiRadio(d, forSpeech=false){
     case 'chief_engineer_handoff': {
       const p=d.packet||{};
       if(!p.available) return `引き継ぎ。戦略は次の計測で確認する。`;
-      const who=p.next_driver?`${p.next_driver}へ引き継ぎ。`:`引き継ぎ。`;
-      const pit=Number.isFinite(Number(p.next_pit_lap))?`次のピットは${Math.trunc(Number(p.next_pit_lap))}周目目安。`:'';
-      const fuel=Number.isFinite(Number(p.fuel_set_l))?`給油設定${Math.trunc(Number(p.fuel_set_l))}リットル。`:'';
-      const margin=Number.isFinite(Number(p.finish_margin_l))?`チェッカー予測余裕${Number(p.finish_margin_l).toFixed(1)}リットル。`:'';
+      const who=p.next_driver?`${p.next_driver}へ。`:`引き継ぎ。`;
+      const pit=Number.isFinite(Number(p.next_pit_lap))?`次ピット${Math.trunc(Number(p.next_pit_lap))}周。`:'';
+      const fuel=Number.isFinite(Number(p.fuel_set_l))?`給油${Math.trunc(Number(p.fuel_set_l))}L。`:'';
+      const margin=Number.isFinite(Number(p.finish_margin_l))?`余裕${Number(p.finish_margin_l).toFixed(1)}L。`:'';
       const damage=p.damage_observed?'損傷確認あり。':'';
-      return `${who}Plan ${p.selected_plan}継続。${pit}${fuel}${margin}${damage}`;
+      const tyre=(p.tire_report&&typeof p.tire_report.summary==='string')?`タイヤ、${p.tire_report.summary}`:'';
+      return `${who}Plan ${p.selected_plan}。${pit}${fuel}${margin}${damage}${tyre}`;
     }
     // ★Build 266 Codex差戻し#5：strategy_recalculation の日本語ケース。
     //   これが無いと injectRadio が bridge の英語 driver_message をそのまま

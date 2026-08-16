@@ -47,13 +47,20 @@ if (fnSrc) {
   const spoken = context.oishiRadio({
     trigger:'chief_engineer_handoff',
     packet:{available:true,next_driver:'まーぼーさん',selected_plan:'B',
-      next_pit_lap:31,fuel_set_l:72,finish_margin_l:1.4,damage_observed:false}
+      next_pit_lap:31,fuel_set_l:72,finish_margin_l:1.4,damage_observed:false,
+      tire_report:{summary:'右フロントの最小残量78.0%。次スティントは負担を確認。'}}
   }, true);
   check('次担当・Plan・次pit・給油・余裕を含む',
-    /まーぼーさんへ引き継ぎ/.test(spoken) && /Plan B/.test(spoken) &&
-    /31周目/.test(spoken) && /72リットル/.test(spoken) && /1\.4リットル/.test(spoken));
+    /まーぼーさんへ/.test(spoken) && /Plan B/.test(spoken) &&
+    /31周/.test(spoken) && /72L/.test(spoken) && /1\.4L/.test(spoken));
   check('引き継ぎ無線は短い', spoken.length <= 90);
+  check('ピット実測タイヤを次ドライバーへ含める', /タイヤ.*右フロント/.test(spoken), spoken);
 }
+
+check('グリーン後のサイドコールはstart rushで抑止しない',
+  /if steering_angle is not None and is_race_session and session_racing_started:/.test(bridge));
+check('戦略バトルだけはstart rushで抑止を維持',
+  /is_race_session and idx in _same_class_main and not in_start_rush/.test(bridge));
 
 check('Fuel Windowの一周前に戦略決定',
   /int\(lap\) >= max\(0, _decision_target - 1\)/.test(bridge));

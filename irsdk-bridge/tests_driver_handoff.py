@@ -730,6 +730,11 @@ def test_chief_engineer_packet_and_race_only_wiring():
         roster=['八木さん','まーぼーさん','ダートさん'],current_index=0)
     check('Plan/次pit/給油/余裕を保持', packet['selected_plan']=='A' and packet['next_pit_lap']==12 and packet['fuel_set_l']==21 and packet['finish_margin_l']==1.1)
     check('次ドライバーとindexを決定', packet['current_driver']=='八木さん' and packet['next_driver']=='まーぼーさん' and packet['next_driver_index']==1)
+    measured = chief.build_packet(
+        state, roster=['八木さん','まーぼーさん'], current_index=0,
+        tire_report={'summary':'右フロント最小78.0%。負担確認。', 'measured_at_session_s':321.4})
+    check('ピット実測タイヤだけをhandoffへ渡す',
+          measured['tire_report']=={'summary':'右フロント最小78.0%。負担確認。', 'measured_at_session_s':321.4})
     packet2=chief.build_packet(state,roster=['八木さん','まーぼーさん','ダートさん'],current_index=2)
     check('最終ドライバー後は先頭へ循環', packet2['next_driver']=='八木さん' and packet2['next_driver_index']==0)
     missing=chief.build_packet({},roster=['八木さん','まーぼーさん'],current_index=0)

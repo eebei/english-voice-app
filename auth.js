@@ -1537,6 +1537,10 @@ function cleanChiefPacket(raw) {
   if (nextIndex === null || nextIndex >= roster.length) return null;
   const handoffId = str(raw.handoff_id, 80);
   if (!handoffId || !/^[A-Za-z0-9_-]{8,80}$/.test(handoffId)) return null;
+  const rawTire = raw.tire_report && typeof raw.tire_report === 'object' && !Array.isArray(raw.tire_report)
+    ? raw.tire_report : null;
+  const tireSummary = rawTire && str(rawTire.summary, 180);
+  const tireMeasuredAt = rawTire && finite(rawTire.measured_at_session_s);
   return {
     handoff_id: handoffId,
     roster,
@@ -1550,6 +1554,10 @@ function cleanChiefPacket(raw) {
     strategy_reason: str(raw.strategy_reason, 180),
     damage_observed: raw.damage_observed === true,
     damage_seconds: finite(raw.damage_seconds),
+    tire_report: tireSummary ? {
+      summary: tireSummary,
+      measured_at_session_s: tireMeasuredAt,
+    } : null,
     current_driver: str(raw.current_driver, 30),
     next_driver: roster[nextIndex],
     next_driver_index: nextIndex,

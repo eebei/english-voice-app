@@ -60,6 +60,10 @@ if(truthFallbackFn){
   },'2リッター 足りないってこと？',true);
   check('遮断後は最新値で不足量と給油設定を言い直す',
     /2リットル不足という意味ではない.*現在12\.8リットル.*13\.6リットル必要.*0\.8リットル不足.*1リットル/.test(reply));
+  check('完走目標をtruth-gateが否定しない',
+    context.telemetryTruthFallback({}, '無事完走を目指す。', true)==='うん、完走しよう。インシデントゼロでいこう。');
+  check('フロントのフィーリングをtruth-gateが否定しない',
+    context.telemetryTruthFallback({}, 'フロントが食わないな。', true)==='了解。無理に押さず、次の確認でフロントの状態を見よう。');
 }
 
 const lapFn = renderer.match(/function lapTimeSpeechJP\(value\)\{[\s\S]*?\n\}/);
@@ -147,9 +151,10 @@ for(const character of ['James','Luna','Hajime','Kanbe','Oishi','HajimeJP','Luna
 check('truth-gateデフォルト分岐から無関係な定型文が消えている',
   !renderer.includes('今は確認できる数値だけで答える。次のS/Fで燃料、残り、前後GAPを更新する。')
   && !renderer.includes('I will use only confirmed values and update fuel, remaining distance and gaps at the next S/F crossing.'));
-check('truth-gateデフォルト分岐はブロックされたclaim自体の否定に留める',
-  renderer.includes('今の発言は実測で確認できていない。断定はしない。')
-  && renderer.includes('That is not confirmed by current telemetry; I will not state it as fact.'));
+check('truth-gateはドライバーの目標やフィーリングを否定しない',
+  renderer.includes('うん、完走しよう。インシデントゼロでいこう。')
+  && renderer.includes('了解。無理に押さず、次の確認でフロントの状態を見よう。')
+  && renderer.includes('了解。いまは数値が揃った時だけコールする。'));
 
 console.log(`\nTelemetry Truth Gate: ${pass}/${pass + fail}`);
 if(fail) process.exit(1);
