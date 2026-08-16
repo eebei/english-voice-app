@@ -94,6 +94,8 @@ if node tests-engineer-card.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 
 echo "── 8/15八木さん12h：PACE誤配線・同一スティント反復抑止"
 if node tests-live-pace-repetition.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-live-pace-repetition.js; fail=1; fi
+echo "[V3 Local Intent Router]"
+if node tests-local-intent-router.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-local-intent-router.js; fail=1; fi
 
 echo "── レース形式→Plan A/B/C事前戦略・ライブ切替（次期Build）"
 if node tests-strategy-playbook.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-playbook.js 2>&1|tail -15; fail=1; fi

@@ -703,6 +703,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="strategy-playbook.js"></script>
 <script src="fuel-plan-guard.js"></script>
 <script src="cost-meter.js"></script>
+<script src="local-intent-router.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -2069,6 +2070,27 @@ async function sendMsg(inputSource){
   if(isManualReviewCommand(text)){
     usageCount(inputSource==='ptt'?'ptt':'typed');
     startManualRunReview();
+    return;
+  }
+  // OMO-PW V3: current telemetry facts do not need a Railway/LLM round trip.
+  // Keep this deliberately narrow.  A strategy choice, a pit decision, or an
+  // ambiguous instruction is not a "local answer" and must still reach Luna.
+  // This runs before memory work so a one-word acknowledgement never becomes
+  // a memory candidate or an Anthropic request.
+  const localIntent = (selMode==='race' && iracingLive && lastTelemetry
+    && window.PitwallLocalIntentRouter)
+    ? window.PitwallLocalIntentRouter.route({
+      text,
+      lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
+      live:lastTelemetry
+    }) : null;
+  if(localIntent && localIntent.handled){
+    const reply=localIntent.reply;
+    diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=bridge_local`);
+    addMsg('ai',reply);
+    pushMsg({role:'assistant',content:reply});
+    speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'local_'+localIntent.intent,
+      dedupeKey:'local|'+localIntent.intent+'|'+reply});
     return;
   }
   const explicitMemoryRequest = isExplicitMemoryRequest(text);
