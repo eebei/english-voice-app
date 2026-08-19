@@ -746,6 +746,15 @@ function buildTrafficStatus(live, lang) {
 //     3. 車種固有の未検証な数値を断定せず、試す方向を最大二つ提案する
 //     4. 次の走行で比較する観測項目を一つ指定する
 //   数値は live テレメトリにある実測だけを使う。無ければ触れない（捏造しない）。
+// 症状ごとに「次の走行で何を見るか」。無線を短く保つため一つだけ指定する。
+const SETUP_OBSERVATION = {
+  rear_grip:        { ja: '低速出口を3周だけ比べて。', en: 'Compare three low-speed exits.' },
+  understeer:       { ja: '低速進入を3周比べて。',     en: 'Compare three slow entries.' },
+  oversteer:        { ja: '低速出口を3周比べて。',     en: 'Compare three low-speed exits.' },
+  tyre_degradation: { ja: '3周後のタイム落ちを見て。', en: 'Watch the drop-off after three laps.' },
+  unspecified:      { ja: 'アンダーとオーバー、どっちが強い？', en: 'Which is stronger, understeer or oversteer?' },
+};
+
 const SETUP_DIRECTIONS = {
   rear_grip: {
     ja: ['リアスプリングを1段柔らかく', 'リアのアンチロールバーを1段柔らかく'],
@@ -764,50 +773,36 @@ const SETUP_DIRECTIONS = {
     en: ['drop tyre pressures slightly to limit heat build-up',
          'move brake bias marginally rearward'],
   },
+  // 症状が特定できていない時だけは聞き返してよい。どこを直すか決まらないため。
   unspecified: {
-    ja: ['まず1周、同じラインで基準を取る'],
-    en: ['run one reference lap on a consistent line first'],
+    ja: ['1周、同じラインで基準を取る'],
+    en: ['take one reference lap on a consistent line'],
   },
 };
 
 function buildHandlingSetupAdvice(live, lang, card) {
   const isJa = ja(lang);
-  const w = (live && live.weather) || {};
-  const track = finite(w.track_temp_c);
-  const air = finite(w.air_temp_c);
   const symptom = (card && card.symptom) || 'unspecified';
-  const symptomJP = { rear_grip: 'リアの踏ん張り不足', understeer: 'アンダー', oversteer: 'オーバー',
-                      tyre_degradation: 'タイヤの垂れ', unspecified: '症状' }[symptom];
-  const symptomEN = { rear_grip: 'rear-grip loss', understeer: 'understeer', oversteer: 'oversteer',
-                      tyre_degradation: 'tyre degradation', unspecified: 'the symptom' }[symptom];
+  const directions = (SETUP_DIRECTIONS[symptom] || SETUP_DIRECTIONS.unspecified)[isJa ? 'ja' : 'en'];
+  const observe = (SETUP_OBSERVATION[symptom] || SETUP_OBSERVATION.unspecified)[isJa ? 'ja' : 'en'];
+  const followUp = !!(card && card.inherited);
 
-  // 1. 実測の環境値（取れているものだけ）
-  const env = [];
-  if (track != null) env.push(isJa ? `路面${track.toFixed(1)}℃` : `track ${track.toFixed(1)}C`);
-  if (air != null) env.push(isJa ? `気温${air.toFixed(1)}℃` : `air ${air.toFixed(1)}C`);
-  const envText = env.length
-    ? (isJa ? `${env.join('、')}。` : `${env.join(', ')}. `)
-    : '';
-
-  // 3. 方向は最大二つ。車種固有の数値は断定しない。
-  const directions = (SETUP_DIRECTIONS[symptom] || SETUP_DIRECTIONS.unspecified)[isJa ? 'ja' : 'en']
-    .slice(0, 2);
-
-  // 部品と狙いまで明示された練習相談では、環境値の復唱や速度域の聞き返しを
-  // 先に置かない。最初の一手を一つだけ出し、同じ条件での短い比較を求める。
-  if (symptom === 'rear_grip') {
-    if (isJa) return `リアの踏ん張りなら、まず${directions[0]}。低速出口を3周だけ比べて。まだ流れるなら次は${directions[1]}。`;
-    return `For rear grip, first ${directions[0]}. Compare three low-speed exits only; if it still rotates, then ${directions[1]}.`;
-  }
-
-  if (isJa) {
-    return `${envText}${symptomJP}は低速・中速・高速のどこが強い？`
-         + `車種ごとの正解値は断定できないから、試すなら${directions.join('か、')}。`
-         + `次の走行では、コーナー脱出のスロットル開け始めの位置だけ比べて教えて。`;
-  }
-  return `${envText}Where is ${symptomEN} strongest — slow, medium or fast corners? `
-       + `I will not guess car-specific numbers, but you could ${directions.join(', or ')}. `
-       + `Next run, compare only where you can pick up the throttle on corner exit.`;
+  // ★8/18 St Petersburg 実走（Build 276 → 277）：
+  //   アンダー相談の回答が129文字あり、TTSが4分割されて全部言い終わるまで24秒かかった
+  //   （22:44:42 質問 → 22:45:06 完了）。最初の声は665msで出ていたので、問題は長さそのもの。
+  //   実測レートは約7文字/秒（chars=35 のチャンクが5秒）。Yuji判断で許容は3〜5秒＝21〜35文字。
+  //
+  //   したがって無線は「最初の一手」＋「何を見るか」だけにする。
+  //     - 環境値の復唱をしない（聞かれていない数字を読み上げない）
+  //     - 速度域を聞き返さない（一往復増えるとその分だけ遅くなる）
+  //     - 症状名を復唱しない（直前に本人が言っている）
+  //   二手目は、続けて聞かれた時（文脈引き継ぎ）に出す。同じ答えを繰り返さない。
+  //   部品名は略さず正式名称で言う（Yuji指示・8/19）。
+  const move = followUp && directions[1] ? directions[1] : directions[0];
+  const lead = isJa ? (followUp && directions[1] ? '次は' : 'まず')
+                    : (followUp && directions[1] ? 'Then ' : 'First ');
+  if (isJa) return `${lead}${move}。${observe}`;
+  return `${lead}${move}. ${observe}`;
 }
 
 function buildUnresolved(lang) {

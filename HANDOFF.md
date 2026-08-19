@@ -1,10 +1,38 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-15 JST
+最終更新: 2026-08-19 JST
 
-## Build 272 公開完了
+## Build 277 — セットアップ無線の間合い・SessionInfo警告ゲート（Codex承認済み・公開待ち）
 
-- 8/15 Yuji Monza 20 と八木さん12時間耐久の報告を同じ燃料権威へ統合した。
+- 八木さん 8/18 実走（Build 276 / St Petersburg / Audi R8 LMS GT3）で、アンダー相談の回答が129文字・TTS4分割で**24秒**かかった。最初の声は665msで出ており、原因は遅延ではなく長さ。実測レート約7文字/秒、Yuji判断で許容は3〜5秒＝21〜35文字。
+- `buildHandlingSetupAdvice()` を書き直し、5症状すべてを「最初の一手＋観測ひとつ」へ統一（understeer 18.4秒→4.9秒 / rear_grip 9.7→4.3 / oversteer 18.0→4.6 / tyre_degradation 18.7→4.7 / unspecified 15.4→4.9）。症状が特定できている時は聞き返さず、`unspecified` の時だけ絞る質問を1つ返す。部品名は略さない（「バー」→「アンチロールバー」）。
+- `SESSION INFO DIAG` 警告が1セッション602回鳴っていた件：`si_len` は iRacing のバッファサイズ（524288固定）で実データ長ではなく、cap と比べれば常に真だった。**金銭コストはゼロ**（`log()` はstdoutとローカルファイルのみ）。判定を `cap_verdict == 'truncated_at_cap'` へ変更し、verdict変化時のみ記録。7/21 Monza・7/24 Road America から持ち越していた「切り詰めが起きているのでは」という疑問は、**起きていなかった**と確定。
+- `tests-five-day-access.js` の既存失敗（HEAD時点で既発）を解決。原因は `applyPitwallAccess()` の**呼び出し回数が7**という壊れやすい検査で、実装が10に育ってズレていた。課金API fetch 9箇所はすべて認証済みで**実害なし**。回数比較を廃し、性質そのものを走査する検査へ書き換えた。
+- **出荷ゲートの穴を塞いだ**：`tests-yagi-log-regressions.js` と `tests-five-day-access.js` は `preflight.sh` から呼ばれておらず、発話が18秒に戻る変更も認証が抜ける変更も素通りしていた。両方を preflight に追加。
+- Codexレビュー: **P1修正後に承認**。P1（新設テストがリポジトリ直下実行で `FileNotFoundError`）は `__file__` 基準へ修正済み。P2（静的走査の限界・ブロックコメントや別記法）はBuildを止めず、**ASTベースまたは明示的経路表への強化を残タスク**として記録。
+- 機械検証: `./preflight.sh` ✅ 出荷可 / JS 54 suites・Python 36 suites 全緑 / 変異試験11件すべて検出。外部AI APIは呼んでいない。
+- レビュー文書: `review/BUILD277_SETUP_BREVITY_AND_AUTH_TEST_FOR_CODEX.md`
+- **実走で残る確認**: 短縮後の発話が実際に3〜5秒で終わるか（現状は7文字/秒の**推定**で、TTS実測ではない）。他の決定論カード（燃料・順位・ピット等）の長さは未点検。
+
+## Build 275 公開完了 / 次の耐久Chief候補は未公開
+
+- Build 275 (`534b455`) は公開済み。交代時にピット実測タイヤを次担当PCへ渡し、グリーン後の左右安全コールを復帰。Build 275公開workflow `31944915278` 成功。公開installerは 100,605,844 bytes、SHA-256 `13d85a5165450c32d1c33af634cd72739fc338c010b88df01e39596d57d27e7e`。
+- **現在の作業ツリー（未commit・未公開）:** クリーン3周後、3時間GT耐久の終盤スプラッシュ候補・最終給油ウインドーを前半から内部計画に持ち、Chief handoffへ共有する。最終スティントに入れる燃料量とウインドーだけを渡し、交通／復帰位置が実測されるまで前倒しピットを命令しない。Plan AもPlan BのFuel Window前から確立して共有する。
+- 機械検証: endurance fuel 20、Plan Fuel Authority 17、Driver Handoff 156、Chief UI 20、cross-PC relay 13、endurance radio 10、fuel authority JS 24、strategy playbook 34、Python compile／JS syntax／`git diff --check` 合格。外部AI APIは呼んでいない。
+- 次の実走確認: 3宅3PCで、(1) 3クリーン周後にPlan Aと終盤スプラッシュ候補が引き継がれる、(2) fuel window直前にのみ交通・復帰位置を使った判断になる、(3) 総必要燃料を即ピット根拠にしない、を確認する。
+
+## Build 274 公開完了
+
+- Chief Engineer Mode を同一PC限定のv0から、別PC・別宅の耐久チーム用 relay に拡張した。全員が同じ `Team Link Code`、同じ走行順、このPCの担当を設定する。交代したPCだけが確定済みの Plan／次ピット／給油量／燃料余裕／損傷根拠を共有し、指定された次ドライバーのPCだけが受信する。
+- Team Link CodeはSHA-256 digestだけを保存し、共有データは最新1件・6時間で失効。各PCのライブ燃料を混ぜず、handoff packetの根拠付きスナップショットだけを渡す。
+- 実装コミット: `2a27523`（cross-PC relay）、製品番号: `728ecf4`（Build 274）。GitHub Actions workflow `31930387769` 成功。
+- Release: **OMORAY PITWALL Desktop — Build 274**。公開installer `OMORAY-PITWALL-Setup-latest.exe` は 100,604,106 bytes、SHA-256 `58d6ee0e607d598d4cd725c3619b3d5d6c4bafd4118b4fcbb2948981b6f9ff5e`。GitHubから実取得して照合済み。
+- 機械検証: `tests-chief-cross-pc.js` 11/11、既存Chief 16/16、Driver Handoff 154/154、`./preflight.sh` 全合格（外部AI API呼び出しなし）。
+- 実走で残る必須確認: 3宅・3PCで送信側の交代 → サーバーrelay → 次担当PCの一回だけの受信、同一handoff再生なし、誤った担当PCは受信しないこと。
+
+## Build 273 公開完了
+
+- Build 272の耐久燃料・無線修正を維持した上で、V3最初のLocal Intent Routerを追加した。Race中の燃料、レース形式、残時間/残周回、首位GAP、現在順位、短いACKは、最新Bridge telemetryがある時だけPC内で回答し、Anthropic往復を回避する。アンダーカット、ピット判断、自由相談はローカルで断定せずLunaへ残す。
 - 長時間レースの総必要燃料（例: 約429L）は内部計画値として保持するが、それ自体を「この周Box」の根拠にしない。現在スティントの燃料レンジだけが即時ピット判断を所有する。
 - 現在スティントのFuel Window T-1で「次周ボックス。通常給油。」、対象周で「この周ボックス。通常給油。」を一度だけ発話する。
 - レース後半は、終盤スプラッシュ見込みと、回避可能な場合の1周あたりセーブ量を一度だけ提示する。レース前半はスプラッシュ判断を出さない。
@@ -27,10 +55,10 @@
 
 ### 公開証拠
 
-- 実装コミット: `94fe328`（`Build 272 harden endurance fuel and radio calls`）。
-- GitHub Actions: push build `31874909906` 成功、公開workflow `31875015398` 成功。
-- Release: `desktop-latest` は **OMORAY PITWALL Desktop — Build 272** を表示。
-- 公開installer: `OMORAY-PITWALL-Setup-latest.exe` 100,602,321 bytes、SHA-256 `eb0b9f60806a3e44ceaeb8b0e156ce428bc68eed98eadb784f3f51b284be9b13`。GitHub Releaseから取得して照合済み。
+- 実装コミット: `402da66`（`Add V3 local race intent router`）、製品番号: `2f96eab`（`Bump desktop product build to 273`）。
+- GitHub Actions公開workflow `31926883086` 成功。
+- Release: `desktop-latest` は **OMORAY PITWALL Desktop — Build 273** を表示。
+- 公開installer: `OMORAY-PITWALL-Setup-latest.exe` 100,604,097 bytes、SHA-256 `7a41ddea2b17a2c33e3e28db833d4cf2d479c23be7c048632aeaf04426d03ec8`。GitHub Releaseから取得して照合済み。
 
 ### Build後の実走確認
 
@@ -59,10 +87,10 @@
 ## 公開済みの基準点
 
 - リポジトリ: `eebei/english-voice-app` / ブランチ: `main`
-- 公開済みビルド: **272** — コミット `94fe328`（`Build 272 harden endurance fuel and radio calls`）
+- 公開済みビルド: **273** — コミット `402da66` / `2f96eab`（V3 Local Intent Router / 製品番号273）
 - 公開インストーラー: `https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe`
-- GitHub Actions の公開Windowsビルド: `31875015398` 成功。
-- 公開後の URL 取得を確認済み: 100,602,321 bytes、SHA-256 `eb0b9f60806a3e44ceaeb8b0e156ce428bc68eed98eadb784f3f51b284be9b13`。
+- GitHub Actions の公開Windowsビルド: `31926883086` 成功。
+- 公開後の URL 取得を確認済み: 100,604,097 bytes、SHA-256 `7a41ddea2b17a2c33e3e28db833d4cf2d479c23be7c048632aeaf04426d03ec8`。
 
 Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加入力・ピットサイクル中順位コールの修正を含む。その上で、デブリーフ継続質問、質問数の圧縮、発話診断、利用者向けの秘匿情報を伏せた診断ログを追加する。
 
@@ -124,6 +152,29 @@ Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加
 
 ## 次の作業
 
-1. Windows 実機で、旧ビルドからの更新、表示 Build 番号、Bridge 自動開始を確認する。
-2. iRacing 実走で、無線診断・デブリーフ継続質問を確認する。
-3. 本当の無操作自動更新とストリーミング TTS は、別の安全確認付き設計として進める。
+1. V3の最初の実装スライスとして、Race中の **燃料・レース形式・残時間/残周回・首位GAP・現在順位・短いACK** をPC内 `Local Intent Router` で回答するようにした。曖昧なピット指示、アンダーカット等の作戦選択、自由相談はローカルで断定せず、従来どおりLunaへ渡す。これはAnthropicの往復を避けるが、通常音声はまだ既存TTS経路を使う。
+2. `node tests-local-intent-router.js` — 14/14。燃料・形式・残時間/残周回・GAP・順位・ACKの権威値、未確定のfail-closed、作戦判断をLunaへ残すこと、rendererの実接続を確認。外部APIは呼ばない。
+3. 次に、Windows/iRacing実走でローカル回答が数値・タイミングとも自然か、そして作戦相談が誤ってローカル化されずLunaへ渡ることを確認する。
+4. 本当の無操作自動更新とストリーミング TTS は、別の安全確認付き設計として進める。
+
+## V3: 2027年1月の公開判断へ向けた確定方針（2026-08-16）
+
+- 2027年1月は「開発完了日」ではなく、日本市場への段階公開を判断できる水準に到達するゲートとする。8月末に仕様と評価基準、9月末にRace中体験、10月末にデブリーフ継続性、11月末にローカル機能、12月にクローズド実走・免責・料金・失効導線の検証を終える。
+- **Race中の無線:** 長い説明を禁止する。`状況 → 短い提案 → Driverの短い回答 → 実行/確認` を基本単位とし、必要性・優先度・割込み可否を判定してから発話する。
+- **デブリーフ:** 感想文を出さない。良かった一点は短く伝え、根拠のある弱点と次回試す一点を示す。Driverの反論・補足を記録し、同じ車・コース・条件で次回の問いと助言に反映する。
+- **ドライバータグ:** RaceLabから採る最初の機能候補。公開の危険人物判定ではなく、Driver個人のローカル注意メモとして開始する。自動断定・他利用者への共有・評判スコア化はしない。
+- **セッション自動認識・同時起動:** iRacing起動/セッション参加に合わせ、PITWALLと必要なBridgeを起動・準備する方向で設計する。RaceLab型のツール管理を参考にするが、複数アプリを制御する大型ランチャーを製品の中心にはしない。
+- **RaceLabから採るもの:** セッション自動認識、レース前の注意事項、個人タグ、繰り返し処理のローカル化。採らないものは、情報量を増やすための大型ダッシュボードと常時クラウド分析。ドライバーの画面を増やさず、音声による判断支援を商品中心に保つ。
+- **モデル最適化:** V3はモデル全交換を決めていない。Race中はHaiku 4.5を基準に、Grok 4.3（reasoning none）等と、実走ログの正確性・短さ・人格・遅延・実費で比較する。Brief/DebriefはSonnet 4.5を基準にGrok 4.3/4.5等を比較する。提供終了済みのGrok Fast系を単価比較や実装候補に使わない。料金・提供可否は必ず各社公式情報を確認する。
+- **無線研究:** SFgoの日本語チーム無線を、状況・指示・復唱・次判断という会話構造の手本として観察する。契約コンテンツの録音、文字起こしの転載、固有表現・音声の流用、学習データ化はしない。
+- **V3の評価軸:** 各機能は、レース前・中・後のどこでDriverの判断を良くするかを説明できる場合だけ採用する。毎月、実装量ではなく実走で判定できる成果物を残す。
+
+### 2026-08-28 原価削減・V3方向性ゲート
+
+- 8月28日までに、V3を完成させるのではなく、V2実測から「ローカルへ移す処理」「AIを残す双方向判断」「用途別モデル候補」「利用者1人・1レース・1時間あたりの原価」を比較し、実装方向を確定する。
+- 対象証拠はYuji、八木さん、まーぼー、ダート君の既存・追加実走データ。テスターには新しい管理作業を求めず、可能な範囲で診断ログ一式と、長い/遅い/役立った/不要だった発話の短い所感だけを受け取る。
+- 8/18〜20: V2のAPI・TTS/STT・サーバー原価と発話回数を利用者/セッション別に再集計し、未計測部分を特定する。
+- 8/21〜23: DRE/RaceLab型のローカル化候補を処理単位で分類し、ローカル判定・キャッシュ・クラウドAIの境界案を作る。
+- 8/24〜26: 保存ログを使って候補モデルとローカル処理のリプレイ比較を行う。正確性、短さ、人格、遅延、実費を同じ入力で測り、外部有料APIの無断テストはしない。
+- 8/27: 実走所感と計測を統合し、品質を落とさず削減できる範囲、残る不確実性、9月実装順をまとめる。
+- 8/28: Owner判断用に、V2実測、V3想定、削減率レンジ、品質リスク、採用/不採用案を一つの比較表で提示する。料金変更やモデル全交換は、このゲート前に行わない。

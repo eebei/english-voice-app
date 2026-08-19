@@ -208,6 +208,12 @@ if python3 irsdk-bridge/tests_startup_liveness.py >/dev/null 2>&1 && node tests-
 echo "── Build 245 上位クラス実接近・簡潔ラップ発話"
 if python3 irsdk-bridge/tests_multiclass_approach.py >/dev/null 2>&1 && node tests-build245-radio.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_multiclass_approach.py; node tests-build245-radio.js; fail=1; fi
 
+echo "── Build 277 セットアップ無線の間合い・八木さんログ由来5項目（2026-08-19）"
+if node tests-yagi-log-regressions.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-yagi-log-regressions.js 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── 課金API全経路の認証・5日アクセス期限（2026-08-19 恒久ゲート）"
+if node tests-five-day-access.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-five-day-access.js 2>&1|tail -6; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

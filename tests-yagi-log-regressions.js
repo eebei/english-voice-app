@@ -38,14 +38,17 @@ const LIVE = { weather: { track_temp_c: 50.6, air_temp_c: 30.7 }, session_type: 
       card && card.topic === 'handling_setup_advice', card && card.topic);
   });
 
+  // ★8/19 契約変更：ここは以前「根拠を述べ・速度域を聞き返し・2案出し・
+  //   次の観測を指定する」長文契約だった。八木さん 8/18 実走で24秒かかった
+  //   ため、Yuji判断で「最初の一手＋観測1つを3〜5秒で」へ**仕様を変えた**。
+  //   実装に合わせて緩めたのではなく、契約側を意図的に置き換えている。
+  //   長さ・症状別の網羅検証は下の SETUP_CASES ループが担う。
   const reply = cards.route(asked[0], LIVE, 'ja').reply;
-  check('温度の読み上げだけで終わらない', reply.length > 40 && !/^路面[\d.]+℃、気温[\d.]+℃。$/.test(reply));
-  check('実測の環境値を根拠として述べる', /50\.6/.test(reply) && /30\.7/.test(reply));
-  check('低速・中速・高速のどこかを確認する', /低速|中速|高速/.test(reply));
-  check('試す方向を提案する', /試すなら/.test(reply));
-  check('提案は最大2つ', (reply.match(/か、/g) || []).length <= 1);
-  check('次に比べる観測項目を1つ指定する', /次の走行では/.test(reply));
-  check('車種固有の数値を断定しない', /断定できない/.test(reply) && !/\d+\s*(?:クリック|ノッチ|psi|bar)/i.test(reply));
+  check('温度の読み上げだけで終わらない', !/^路面[\d.]+℃、気温[\d.]+℃。$/.test(reply), reply);
+  check('温度を復唱しない（読み上げは無線の無駄）', !/[0-9]+\.[0-9]℃/.test(reply), reply);
+  check('最初の一手を1つだけ出す', /^まず/.test(reply) && !/か、/.test(reply), reply);
+  check('次に比べる観測を1つ指定する', /3周/.test(reply), reply);
+  check('車種固有の数値を断定しない', !/\d+\s*(?:クリック|ノッチ|psi|bar)/i.test(reply), reply);
 
   // 8/16 St Petersburg 実走: 「リアの踏ん張りが欲しい。スプリングの
   // セッティングで何かおすすめある？」に、温度の復唱や速度域の聞き返しで
@@ -56,6 +59,60 @@ const LIVE = { weather: { track_temp_c: 50.6, air_temp_c: 30.7 }, session_type: 
   check('リアスプリングの最初の一手を短く返す',
     /リアスプリングを1段柔らかく/.test(rearGrip.reply) && rearGrip.reply.length <= 70, rearGrip.reply);
   check('同じ条件で3周比較する観測を指定する', /低速出口を3周だけ比べて/.test(rearGrip.reply), rearGrip.reply);
+
+  // ── 8/18 St Petersburg 実走（Build 276 → 277）─────────────────────
+  // アンダー相談の回答が129文字あり、TTSが4分割されて全部言い終わるまで24秒
+  // かかった（22:44:42 質問 → 22:45:06 完了）。最初の声は665msで出ていたので、
+  // 問題は長さそのもの。実測レートは約7文字/秒（chars=35 のチャンクが5秒）。
+  // Yuji判断：許容できる間合いは3〜5秒＝21〜35文字。全症状に適用する。
+  const SPEECH_CHARS_PER_SEC = 7.0;
+  const SETUP_MAX_SEC = 5.0;
+  const SETUP_CASES = [
+    ['rear_grip',        'リアの踏ん張りが欲しい。スプリングのセッティングで何かおすすめある？'],
+    ['understeer',       'アンダーステアがひどい。何か解決策ある？'],
+    ['oversteer',        'オーバーステアで怖い、どうしたらいい？'],
+    ['tyre_degradation', '路面温度が高すぎてタイヤが持たない。セットアップの方向、何かある？'],
+    ['unspecified',      'セットアップの方向、何かある？'],
+  ];
+  SETUP_CASES.forEach(([sym, q]) => {
+    const r = cards.route(q, LIVE, 'ja');
+    const sec = r.reply.length / SPEECH_CHARS_PER_SEC;
+    check(`${sym}: ${SETUP_MAX_SEC}秒以内（${r.reply.length}字 ≈ ${sec.toFixed(1)}秒）`,
+      sec <= SETUP_MAX_SEC, r.reply);
+    check(`${sym}: 温度を復唱しない`, !/[0-9]+\.[0-9]℃/.test(r.reply), r.reply);
+    check(`${sym}: 終端記号で終わる`, /[。？！]$/.test(r.reply), r.reply);
+    check(`${sym}: 助詞で途切れていない`,
+      !/(?:で|に|を|が|は|の|へ|と)$/.test(r.reply.replace(/[。？！]$/, '')), r.reply);
+  });
+
+  // 症状が特定できている時は聞き返さない（一往復増やさない）。
+  ['rear_grip', 'understeer', 'oversteer', 'tyre_degradation'].forEach(sym => {
+    const q = SETUP_CASES.find(c => c[0] === sym)[1];
+    const r = cards.route(q, LIVE, 'ja');
+    check(`${sym}: 速度域を聞き返さない`, !/どこが強い/.test(r.reply), r.reply);
+    check(`${sym}: 最初の一手を出す`, /^まず/.test(r.reply), r.reply);
+  });
+  // 症状が分からない時だけは聞き返してよい（どこを直すか決められないため）。
+  check('unspecified: 症状を絞る質問をする',
+    /どっちが強い/.test(cards.route(SETUP_CASES[4][1], LIVE, 'ja').reply));
+
+  // 部品名は略さず正式名称で言う（Yuji指示・8/19）。
+  const underReply = cards.route(SETUP_CASES[1][1], LIVE, 'ja').reply;
+  check('部品名を正式名称で伝える（「バー」と略さない）',
+    /アンチロールバー/.test(underReply) && !/フロントのバー/.test(underReply), underReply);
+
+  // 続けて聞かれた時は、同じ答えを繰り返さず次の一手へ進む。
+  const underAgain = cards.route('ほかに何かある？', LIVE, 'ja',
+    { recentText: SETUP_CASES[1][1] });
+  check('追撃質問で同じ回答を繰り返さない', underAgain.reply !== underReply, underAgain.reply);
+  check('追撃回答は二手目を出す', /^次は/.test(underAgain.reply), underAgain.reply);
+  // 「次は」の枕だけ替えて中身が一手目のままだと、ドライバーには同じ指示に
+  // 聞こえる。手そのもの（枕を剥いだ本文）が変わっていることを見る。
+  const strip = t => t.replace(/^(?:まず|次は)/, '');
+  check('追撃回答は一手目と別の手を出す（枕だけの差し替えを禁止）',
+    strip(underAgain.reply) !== strip(underReply), underAgain.reply);
+  check('追撃回答も5秒以内',
+    (underAgain.reply.length / SPEECH_CHARS_PER_SEC) <= SETUP_MAX_SEC, underAgain.reply);
 
   // 温度そのものの質問は従来どおり weather のまま
   ['路面温度は？', '今の気温教えて', '雨降ってきた？'].forEach(text => {

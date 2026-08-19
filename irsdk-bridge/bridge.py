@@ -51,7 +51,7 @@ import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 276 (practice setup advice and endurance splash planning)"
+BUILD_VERSION = "Build 277 (setup radio brevity and session info warning gate)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1257,6 +1257,8 @@ class IRacingReader:
         #   クラス属性だと再接続時に前回セッションの署名が残り、新規セッションで初回診断が抑止される。
         #   __init__ で必ずNone初期化し、Reader インスタンス生成の度に再診断できる契約を明示する。
         self._diag_last_signature = None
+        self._diag_last_cap_verdict = None
+        self._si_truncation_warned = None
 
     def is_open(self):
         return self._ptr is not None
@@ -1280,6 +1282,8 @@ class IRacingReader:
         # ★2026-07-24 Codex差戻し対応 P1：再接続時の診断状態初期化。
         #   close() で dedup 署名をリセット→次回接続で初回診断ログが必ず出る（契約）。
         self._diag_last_signature = None
+        self._diag_last_cap_verdict = None
+        self._si_truncation_warned = None
 
     def _bytes(self, offset, size):
         return ctypes.string_at(self._ptr + offset, size)
@@ -1447,8 +1451,14 @@ class IRacingReader:
             #   2026-07-21のMonza AIレース(約40台)でbridgeログが"drivers:1 / class空"を報告した。
             #   原因を推測せず、次回実走で①si_lenが200000キャップに達している(＝末尾切り詰めの疑い)
             #   ②実際にDrivers:ブロック内で何件parseできたかを突き合わせられるよう、生の長さを記録する。
-            if si_len >= _cap:
-                log("SESSION INFO DIAG: si_len=%d >= cap(%d) — 末尾が切り詰められている可能性がある" % (si_len, _cap))
+            # ★8/18 St Petersburg 実走で、この警告が1セッション602回鳴った。
+            #   原因：si_len は iRacing の **バッファサイズ**（524288固定）であって
+            #   実データ長ではない。cap と比べれば常に真になる。
+            #   同じログの extent 診断が答えを出していた：
+            #     first_nul=13094 content_ends=13094 verdict=padded_after_cap
+            #   ＝実データは13KBで終わっており、切り詰めは起きていない。
+            #   7/21 Monza・7/24 Road America から持ち越した疑問はこれで決着。
+            #   判定は「実データが cap に達したか」へ移す（下の extent 診断が確定させる）。
             self._last_si_len = si_len
 
             # ★2026-07-24 Unit 0（Codex指示・診断計装）：
@@ -1460,6 +1470,14 @@ class IRacingReader:
             #   ①先頭NUL位置 ②必須キーの実バイト位置 ③cap内外どちらに落ちてるかを判定して吐く。
             #   probe結果が変化した時だけログ（毎フレームspamさせない）。
             self._diag_session_info_extent(si_offset, si_len, _cap)
+
+            # 実データが cap に届いている時だけ警告する（＝本当に末尾が失われる時）。
+            # verdict が変わった時だけ鳴らし、毎フレームのspamにしない。
+            _verdict = self._diag_last_cap_verdict
+            if _verdict == 'truncated_at_cap' and self._si_truncation_warned != _verdict:
+                log("SESSION INFO DIAG: 実データが cap(%d) へ到達 — 末尾が切り詰められている "
+                    "(si_len=%d verdict=%s)" % (_cap, si_len, _verdict))
+            self._si_truncation_warned = _verdict
 
             return raw.decode('utf-8', errors='ignore')
         except Exception:
@@ -1511,6 +1529,7 @@ class IRacingReader:
             if sig == self._diag_last_signature:
                 return
             self._diag_last_signature = sig
+            self._diag_last_cap_verdict = report['cap_verdict']
             log("SESSION INFO EXTENT DIAG: si_len=%d probe=%d first_nul=%s content_ends=%s cap=%d verdict=%s" % (
                 si_len, probe_size,
                 str(report['first_nul_pos']), str(report['content_ends_at']),

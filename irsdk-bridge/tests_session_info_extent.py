@@ -658,6 +658,27 @@ def test_dyn_diag_survives_bytes_exception():
         check('_bytes 例外時も _diag は例外を出さない', False, f'raised={e}')
 
 
+
+def test_bridge_warning_gated_on_real_truncation():
+    """★8/18 St Petersburg 実走で SESSION INFO 警告が1セッション602回鳴った。
+    si_len は iRacing のバッファサイズ(524288固定)であって実データ長ではないので、
+    cap と比べる条件は常に真になっていた。実データが cap に到達した時
+    (cap_verdict == 'truncated_at_cap') だけ鳴らす配線になっていることを確認する。"""
+    print('\n══ bridge: 警告は実truncation時だけ ══')
+    # 実行ディレクトリに依存させない（preflight はリポジトリ直下から呼ぶ）。
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bridge.py'),
+              'r', encoding='utf-8') as fh:
+        src = fh.read()
+    check('警告は cap_verdict で門番される',
+          "_verdict == 'truncated_at_cap'" in src, 'gate missing')
+    check('si_len を cap と直接比べる旧条件が残っていない',
+          'si_len >= _cap' not in src and 'si_len > _cap' not in src, 'old condition remains')
+    check('同じ判定では鳴り続けない（変化検出）',
+          '_si_truncation_warned != _verdict' in src, 'dedupe missing')
+    check('判定は診断関数の結果から取る（推測しない）',
+          "_diag_last_cap_verdict = report['cap_verdict']" in src, 'verdict not sourced')
+
+
 def run_all():
     print('══ Unit 0（SessionInfo cap 診断計装・Codex差戻し対応版）テスト ══')
     # 純粋関数
@@ -714,6 +735,7 @@ def run_all():
     test_dyn_diag_probe_max_caps_large_si_len()
     test_dyn_diag_normal_uses_min_of_all_bounds()
     test_dyn_diag_survives_bytes_exception()
+    test_bridge_warning_gated_on_real_truncation()
     print(f"\n[session info extent] 合格 {pass_n} / 不合格 {fail_n}")
     return fail_n == 0
 
