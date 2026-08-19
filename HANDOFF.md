@@ -23,7 +23,16 @@ push した後、サーバー側に変更が含まれるなら必ず実行する
 背景：Build 277 の発話短縮は `engineer-card.js`＝サーバー側にしか無く、Railway が反映していなければ exe を更新しても何も直らない。
 それまで反映を確認する手段が存在せず、「push したから反映されているはず」だけで運用していた。
 
-## Build 277 — セットアップ無線の間合い・SessionInfo警告ゲート（Codex承認済み・公開待ち）
+## Build 277 公開完了（2026-08-19）
+
+- 実装コミット: `e108ba4`（Build 277）、デプロイ検証: `adf6efc`。
+- サーバー側（発話短縮＝`engineer-card.js`）: **本番反映を実測確認**。`./verify-deploy.sh` で本番SHA `adf6efc` とHEADが一致。起動 `2026-08-19T02:14:23Z`。Railway障害の影響で反映まで約8分かかったが、失敗はしていなかった。
+- exe側: GitHub Actions `32214106754` 成功（`publish=true`）。Bridge build `32202314408` 成功。
+- 公開installer: `OMORAY-PITWALL-Setup-latest.exe` = **100,606,442 bytes** / SHA-256 `ca9f59a286143eb4afca60c024969d6ac9ddec6173841021aa6180c21255fbf8`。
+  GitHubから実取得して照合済み。日付版 `OMORAY-PITWALL-Setup-20260819-0400.exe` と**ハッシュ一致**（latestが古い版を指したままでないことを確認）。
+- **実走で残る確認**: 短縮後の発話が実際に3〜5秒で終わるか（7文字/秒の**推定**であり、TTS実測ではない）。他の決定論カード（燃料・順位・ピット等）の長さは未点検。
+
+## Build 277 の中身
 
 - 八木さん 8/18 実走（Build 276 / St Petersburg / Audi R8 LMS GT3）で、アンダー相談の回答が129文字・TTS4分割で**24秒**かかった。最初の声は665msで出ており、原因は遅延ではなく長さ。実測レート約7文字/秒、Yuji判断で許容は3〜5秒＝21〜35文字。
 - `buildHandlingSetupAdvice()` を書き直し、5症状すべてを「最初の一手＋観測ひとつ」へ統一（understeer 18.4秒→4.9秒 / rear_grip 9.7→4.3 / oversteer 18.0→4.6 / tyre_degradation 18.7→4.7 / unspecified 15.4→4.9）。症状が特定できている時は聞き返さず、`unspecified` の時だけ絞る質問を1つ返す。部品名は略さない（「バー」→「アンチロールバー」）。
