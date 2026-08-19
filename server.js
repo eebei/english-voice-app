@@ -12,6 +12,8 @@ const { buildSystem } = require('./prompts');
 const auth = require('./auth');
 
 const app = express();
+// プロセス起動時刻。/api/version で「いつ入れ替わったか」を見るために使う。
+const SERVER_STARTED_AT = new Date().toISOString();
 const PORT = process.env.PORT || 3000;
 
 // Verify API key is set
@@ -208,6 +210,22 @@ app.use((req, res, next) => {
 // 旧RaceVoiceページでなくPITWALLが出る。RaceVoiceは /index.html で引き続きアクセス可。
 app.get('/', (_req, res) => res.redirect(302, '/pitwall.html'));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ── 本番が今どのコミットで動いているか（デプロイ反映の確認用） ──
+// ★8/19：Build 277 の発話短縮は engineer-card.js＝サーバー側にしか無く、exe を
+//   更新しても Railway が反映していなければ何も直らない。にもかかわらず「push した
+//   から反映されているはず」で運用しており、反映を確認する手段が存在しなかった。
+//   GitHub Actions が緑でも Railway が落ちていれば、見た目だけ新しい状態になる。
+//   Railway が注入する commit SHA をそのまま返す。認証不要・読み取り専用で、
+//   秘密は一切出さない（SHAは公開リポジトリのcommit識別子）。
+app.get('/api/version', (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    branch: process.env.RAILWAY_GIT_BRANCH || null,
+    startedAt: SERVER_STARTED_AT,   // このプロセスが立った時刻＝実際に入れ替わった時刻
+  });
+});
 
 // Founding 枠の残り（サイトの「参加」ボタンの出し分けに使う）
 app.get('/api/founding/status', async (_req, res) => {

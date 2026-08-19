@@ -2,6 +2,27 @@
 
 最終更新: 2026-08-19 JST
 
+## デプロイ確認の手順（毎回やること・2026-08-19 新設）
+
+PITWALL の更新は**2系統**あり、片方だけ確認していると「installer は新しいのに中身は古い」状態になる。
+
+| 系統 | 中身 | 経路 | 確認方法 |
+|---|---|---|---|
+| exe側 | `bridge.py` / `desktop/**` | GitHub Actions → installer | workflow の成否・installer の bytes / SHA-256 |
+| サーバー側 | `server.js` / `prompts.js` / `engineer-card.js` / `auth.js` | Railway 自動デプロイ | **`./verify-deploy.sh`** |
+
+push した後、サーバー側に変更が含まれるなら必ず実行する：
+
+```bash
+./verify-deploy.sh
+```
+
+本番の `/api/version` が返す commit SHA とローカル HEAD を突合し、不一致なら失敗（exit≠0）する。
+不一致だった場合は Railway の Deployments で最新デプロイの成否を見ること。**GitHub Actions が緑でも Railway は落ちうる。**
+
+背景：Build 277 の発話短縮は `engineer-card.js`＝サーバー側にしか無く、Railway が反映していなければ exe を更新しても何も直らない。
+それまで反映を確認する手段が存在せず、「push したから反映されているはず」だけで運用していた。
+
 ## Build 277 — セットアップ無線の間合い・SessionInfo警告ゲート（Codex承認済み・公開待ち）
 
 - 八木さん 8/18 実走（Build 276 / St Petersburg / Audi R8 LMS GT3）で、アンダー相談の回答が129文字・TTS4分割で**24秒**かかった。最初の声は665msで出ており、原因は遅延ではなく長さ。実測レート約7文字/秒、Yuji判断で許容は3〜5秒＝21〜35文字。
