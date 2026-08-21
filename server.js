@@ -348,6 +348,21 @@ app.post('/api/starter/checkout', express.json(), async (req, res) => {
   }
 });
 
+// The public button uses a normal top-level navigation, rather than browser
+// fetch, so restrictive browser/privacy settings cannot block Checkout.
+app.get('/api/starter/checkout', async (req, res) => {
+  try {
+    const r = await auth.createStarterCheckout({
+      anon_id: typeof req.query.anon_id === 'string' ? req.query.anon_id.slice(0, 120) : '',
+      lang: typeof req.query.lang === 'string' ? req.query.lang.slice(0, 12) : '',
+    });
+    res.redirect(303, r.url);
+  } catch (err) {
+    console.error('[starter] checkout redirect failed:', err.message);
+    res.redirect(303, '/pitwall.html#pricing');
+  }
+});
+
 // The desktop polls this after member login to display remaining included use.
 // It requires the authenticated user; no account identifier comes from client input.
 app.get('/api/starter/status', async (req, res) => {

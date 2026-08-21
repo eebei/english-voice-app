@@ -789,7 +789,7 @@ if (document.readyState === 'loading') {
           <li>GT3 and endurance first; other categories only when validated</li>
         </ul>
         <p style="font-size:12.5px;color:var(--muted);line-height:1.6;margin:18px 0 0">Five races is a guide, not a guarantee. Heavier-than-expected use can mean fewer sessions within the included use.</p>
-        <a class="btn-primary starter-checkout-btn" href="#" data-cta-location="starter-pricing" style="display:block;text-align:center;margin-top:24px;text-decoration:none">Get Starter Pass — $9.99 →</a>
+        <a class="btn-primary starter-checkout-btn" href="/api/starter/checkout" data-cta-location="starter-pricing" style="display:block;text-align:center;margin-top:24px;text-decoration:none">Get Starter Pass — $9.99 →</a>
       </div>
     </div>
   </div>
@@ -811,7 +811,7 @@ if (document.readyState === 'loading') {
           <li>まずGT3と耐久レース。ほかのカテゴリーは検証後に展開</li>
         </ul>
         <p style="font-size:12.5px;color:var(--muted);line-height:1.6;margin:18px 0 0">5レースは目安であり、保証ではありません。想定より利用量が多い場合は、含まれる利用量の範囲で走行回数がこれを下回ることがあります。</p>
-        <a class="btn-primary starter-checkout-btn" href="#" data-cta-location="starter-pricing" style="display:block;text-align:center;margin-top:24px;text-decoration:none">Starter Passを入手 — $9.99 →</a>
+        <a class="btn-primary starter-checkout-btn" href="/api/starter/checkout" data-cta-location="starter-pricing" style="display:block;text-align:center;margin-top:24px;text-decoration:none">Starter Passを入手 — $9.99 →</a>
       </div>
     </div>
   </div>
@@ -1722,13 +1722,8 @@ function toggleAllEngineers(btn){
       var ctaLocation = btn.dataset.ctaLocation || 'unknown';
       btn.style.opacity='0.5'; btn.style.pointerEvents='none';
       window._funnel('primary_cta_click', {extra:{cta_location:ctaLocation}});
-      fetch('/api/starter/checkout', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({anon_id:aid, lang:document.documentElement.lang||'en'})
-      }).then(function(r){return r.json()}).then(function(d){
-        if (d.ok && d.url) { navigator.sendBeacon('/api/funnel/event', new Blob([JSON.stringify({event:'checkout_started', anon_id:aid, lang:document.documentElement.lang||'en', extra:{cta_location:ctaLocation}})],{type:'application/json'})); location.href = d.url; }
-        else { btn.style.opacity='1'; btn.style.pointerEvents='auto'; alert(d.error==='starter_price_not_configured'?'Checkout is being set up. Please try again shortly.':'Could not start checkout. Please try again.'); }
-      }).catch(function(){ btn.style.opacity='1'; btn.style.pointerEvents='auto'; alert('Connection error. Please try again.'); });
+      navigator.sendBeacon('/api/funnel/event', new Blob([JSON.stringify({event:'checkout_started', anon_id:aid, lang:document.documentElement.lang||'en', extra:{cta_location:ctaLocation}})],{type:'application/json'}));
+      location.assign('/api/starter/checkout?anon_id='+encodeURIComponent(aid)+'&lang='+encodeURIComponent(document.documentElement.lang||'en'));
     });
   });
 })();

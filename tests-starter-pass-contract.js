@@ -22,6 +22,9 @@ check('Starter Checkoutにtrial_period_daysを持たない',
   !/async function createStarterCheckout[\s\S]{0,900}trial_period_days/.test(auth));
 check('クライアントが価格IDや期間を渡せない',
   /app\.post\('\/api\/starter\/checkout'[\s\S]{0,500}const \{ anon_id, lang \}/.test(server));
+check('公開CTAはfetchではなく通常遷移でStripeへ転送する',
+  /app\.get\('\/api\/starter\/checkout'/.test(server) &&
+  /res\.redirect\(303, r\.url\)/.test(server));
 check('webhookはpayment成功かつstarter metadataだけをStarterとして扱う',
   /s\.mode === 'payment' && s\.payment_status === 'paid'[\s\S]{0,180}s\.metadata\.product === 'starter'/.test(server));
 check('webhookはcheckout sessionを冪等キーにしてStarter権利を付与する',
