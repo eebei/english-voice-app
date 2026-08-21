@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('pitwall', {
   settingsSet: (key, value) => ipcRenderer.send('settings:set', key, value),
   // 問題報告用。送信はしない。伏せ字化済みの診断ファイルをDesktopへ作るだけ。
   exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
+  importPracticeProfile: () => ipcRenderer.invoke('practice-profile:import'),
   // ── main → 窓（設定値の受信。overlay.html / renderer.html 両方が使う）──
   onOverlayConfig: (cb) => ipcRenderer.on('overlay:config', (_e, cfg) => cb(cfg)),
   onOverlayData:   (cb) => ipcRenderer.on('overlay:data',   (_e, line) => cb(line)),

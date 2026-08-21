@@ -17,6 +17,7 @@ import struct
 import time
 import math
 import random
+import hashlib
 from datetime import datetime
 import threading
 import websockets
@@ -49,9 +50,10 @@ import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
+import practice_profile
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 277 (setup radio brevity and session info warning gate)"
+BUILD_VERSION = "Build 278 (local iRacing Practice Profile import)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1712,6 +1714,22 @@ def parse_session_info(yaml_str):
     if not yaml_str:
         return result
     try:
+        # Private setup evidence: expose only a stable hash, never raw values.
+        _setup_lines, _in_setup = [], False
+        for _line in yaml_str.split('\n'):
+            if _line.strip().startswith('CarSetup:'):
+                _in_setup = True
+            if _in_setup:
+                if (_line and not _line[0].isspace() and ':' in _line
+                        and not _line.strip().startswith('CarSetup:')):
+                    break
+                _setup_lines.append(_line.rstrip())
+        if len(_setup_lines) > 1:
+            _setup_payload = '\n'.join(_setup_lines).encode('utf-8', 'replace')
+            result['setup_fingerprint'] = hashlib.sha256(_setup_payload).hexdigest()[:16]
+            result['setup_available'] = True
+        else:
+            result['setup_available'] = False
         # Track name
         for line in yaml_str.split('\n'):
             line = line.strip()
@@ -6569,4 +6587,6 @@ async def main():
             poll_watchdog.cancel()
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == '--practice-profile-json':
+        sys.exit(practice_profile.main(['--json'] + sys.argv[2:]))
     asyncio.run(main())

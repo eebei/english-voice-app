@@ -2,12 +2,12 @@
 // 最重要設定：backgroundThrottling:false
 //   → iRacingがフルスクリーンで前面に来てウィンドウが裏に回っても、
 //     タイマー・音声・JSが絞られず動き続ける（=ブラウザの「裏で死ぬ」問題の解決）
-const { app, BrowserWindow, session, shell, ipcMain, screen, globalShortcut, Menu } = require('electron');
+const { app, BrowserWindow, session, shell, ipcMain, screen, globalShortcut, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const https = require('https');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const LATEST_EXE_URL = 'https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe';
 const RELEASE_API_URL = 'https://api.github.com/repos/eebei/english-voice-app/releases/tags/desktop-latest';
@@ -116,6 +116,26 @@ function ipcDiagnosticsSetup() {
       log('diagnostic package export failed: ' + e.message);
       return { ok: false, reason: 'export_failed' };
     }
+  });
+}
+
+function ipcPracticeProfileSetup() {
+  ipcMain.handle('practice-profile:import', async () => {
+    const ibt = await dialog.showOpenDialog(win, { title: 'Select your iRacing practice telemetry', properties: ['openFile'], filters: [{ name: 'iRacing telemetry', extensions: ['ibt'] }] });
+    if (ibt.canceled || !ibt.filePaths[0]) return { ok: false, reason: 'cancelled' };
+    const setup = await dialog.showOpenDialog(win, { title: 'Optional: select the matching iRacing setup', properties: ['openFile'], filters: [{ name: 'iRacing setup', extensions: ['sto'] }] });
+    const setupPath = (!setup.canceled && setup.filePaths[0]) ? setup.filePaths[0] : '';
+    const bridgeExe = [path.join(process.resourcesPath || '', 'OMORAY-PITWALL-Bridge.exe'), path.join(__dirname, 'OMORAY-PITWALL-Bridge.exe'), path.join(__dirname, 'bridge', 'OMORAY-PITWALL-Bridge.exe')].find(p => p && fs.existsSync(p));
+    const command = (process.platform === 'win32' && bridgeExe) ? bridgeExe : 'python3';
+    const args = (process.platform === 'win32' && bridgeExe)
+      ? ['--practice-profile-json', ibt.filePaths[0]]
+      : [path.join(__dirname, '..', '..', 'irsdk-bridge', 'practice_profile.py'), '--json', ibt.filePaths[0]];
+    if (setupPath) args.push('--setup', setupPath);
+    return await new Promise(resolve => execFile(command, args, { timeout: 20000, maxBuffer: 256 * 1024 }, (error, stdout) => {
+      try { const parsed = JSON.parse(String(stdout || '').trim()); if (typeof parsed.ok === 'boolean') return resolve(parsed); } catch (_) {}
+      log('practice profile import failed: ' + (error && error.message || 'invalid importer response'));
+      resolve({ ok: false, reason: 'import_failed' });
+    }));
   });
 }
 
@@ -512,6 +532,7 @@ app.whenReady().then(() => {
   loadDesktopSettings(); // installer更新後も保持される本体設定
   ipcDesktopSettingsSetup();
   ipcDiagnosticsSetup();
+  ipcPracticeProfileSetup();
   loadOvlCfg();       // オーバーレイの保存済み設定を読む
   ipcOverlaySetup();  // オーバーレイ制御IPCを登録
   startBridge();      // アプリ起動と同時にテレメトリbridgeも起動

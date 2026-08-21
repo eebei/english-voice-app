@@ -541,6 +541,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       <div class="setup-hint" data-i18n="chief_engineer_mode_hint">全PCで同じTeam Link Codeと走行順を設定。このPCの担当へ、交代時のPlan・次のピット・給油量・燃料余裕を共有します。</div>
       <div id="chief-share-status" class="setup-hint" style="margin-top:4px"></div>
 
+      <div class="field-label" style="margin-top:18px">Practice Profile</div>
+      <button class="voice-tog" onclick="importPracticeProfile()">Import my iRacing practice data (.ibt)</button>
+      <div class="setup-hint" id="practice-profile-status">本人の練習ログだけを、このPC内で要約して保存します。VRSログインやアップロードはしません。</div>
+
       <button class="start-btn" id="btn-setup-next" data-i18n="next_btn" disabled onclick="goToModeStep()" style="margin-top:20px">次へ →</button>
       <button class="start-btn" id="btn-return-session" onclick="returnToSession()" style="display:none;margin-top:12px">会話へ戻る →</button>
     </div>
@@ -738,6 +742,40 @@ function hydratePersistentSettings(){
       }
     });
   }catch(_){}
+}
+
+const PRACTICE_PROFILE_KEY='pw_practice_profiles_v1';
+function canonicalPracticeValue(value){ return String(value||'').trim().toLowerCase().replace(/\s+/g,' '); }
+function loadPracticeProfiles(){ try{return JSON.parse(localStorage.getItem(PRACTICE_PROFILE_KEY)||'[]');}catch(_){return [];} }
+function savePracticeProfiles(rows){ localStorage.setItem(PRACTICE_PROFILE_KEY,JSON.stringify(rows.slice(-30))); }
+async function importPracticeProfile(){
+  if(!window.pitwall?.importPracticeProfile){ setHint('Practice import is available in the Windows app.'); return; }
+  const status=document.getElementById('practice-profile-status'); if(status) status.textContent='Reading your local practice file…';
+  const result=await window.pitwall.importPracticeProfile();
+  if(!result?.ok){ if(status) status.textContent=result?.reason==='cancelled'?'Import cancelled.':'Could not read that practice file.'; return; }
+  const profile=result.profile;
+  if(!profile?.identity?.track||!profile?.identity?.car_model){ if(status) status.textContent='Track or car identity was unavailable; nothing saved.'; return; }
+  const rows=loadPracticeProfiles().filter(row=>!(canonicalPracticeValue(row.identity?.track)===canonicalPracticeValue(profile.identity.track)
+    &&canonicalPracticeValue(row.identity?.car_model)===canonicalPracticeValue(profile.identity.car_model)
+    &&row.identity?.setup_fingerprint===profile.identity?.setup_fingerprint));
+  profile.imported_at=new Date().toISOString(); rows.push(profile); savePracticeProfiles(rows);
+  const temp=profile.practice_track_temp_c?.available?`${profile.practice_track_temp_c.median.toFixed(1)}°C`:'temperature unavailable';
+  if(status) status.textContent=`Saved: ${profile.identity.track} / ${profile.identity.car_model} / practice track ${temp}.`;
+}
+function buildPracticeProfileNote(){
+  try{
+    const track=canonicalPracticeValue(lastTrack), car=canonicalPracticeValue(lastCarModel||lastCarClass);
+    if(!track||!car) return '';
+    const candidates=loadPracticeProfiles().filter(p=>canonicalPracticeValue(p.identity?.track)===track&&canonicalPracticeValue(p.identity?.car_model)===car);
+    if(!candidates.length) return '';
+    const p=candidates[candidates.length-1], liveTemp=Number(lastTelemetry?.weather?.track_temp_c);
+    const temp=p.practice_track_temp_c||{}, lap=p.practice_lap_time_s||{};
+    const setupMatch=(p.identity?.setup_fingerprint&&lastSessionAuthority?.setup_fingerprint&&lastSessionAuthority.setup_fingerprint!=='unknown')
+      ? (p.identity.setup_fingerprint===lastSessionAuthority.setup_fingerprint?'matched':'mismatch'):'unknown';
+    const tempText=temp.available?`practice_track_temp_median_c=${temp.median}; practice_track_temp_range_c=${temp.min}-${temp.max}`:'practice_track_temp=unavailable';
+    const lapText=lap.available?`practice_lap_best_s=${lap.min}; practice_lap_median_s=${lap.median}`:'practice_lap_band=unavailable';
+    return `\n\n━━ USER-IMPORTED PRACTICE PROFILE — LOCAL EVIDENCE ━━\ntrack=${p.identity.track}; car=${p.identity.car_model}; setup_match=${setupMatch}; ${tempText}; current_track_temp_c=${Number.isFinite(liveTemp)?liveTemp:'unavailable'}; ${lapText}\nThis is the driver's own imported practice evidence, not a reference lap or a command. Use it only when asked about current pace, conditions, or a comparison. If setup_match is mismatch or unknown, say the old run is reference-only. Never claim a driving cause from this summary alone, and never proactively interrupt critical, spotter, or strategy calls.`;
+  }catch(_){return '';}
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2258,7 +2296,7 @@ async function callAPI(inputSource, memoryStatus=''){
   const profile = hydrateLegacyStrategyObjective()||loadProfile()||{};
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
-  const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildFuelAuthorityNote(_isJP_pre)
+  const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildPracticeProfileNote() + buildFuelAuthorityNote(_isJP_pre)
     + buildWeekendAuthorityNote(_isJP_pre) + buildSessionEvidenceNote()
     + buildContractNote(_isJP_pre) + buildActiveRaceFactsNote(_isJP_pre)
     + buildMemoryStatusNote(_isJP_pre, memoryStatus);

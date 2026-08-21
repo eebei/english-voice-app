@@ -178,6 +178,9 @@ if python3 irsdk-bridge/tests_pit_loss_calibrator.py >/dev/null 2>&1 && python3 
 echo "── Phase C ピット復帰順位・blend shadow forecast（2026-07-30）"
 if python3 irsdk-bridge/tests_pit_exit_forecaster.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_pit_cycle_tracker.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_pit_exit_forecaster.py; python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py; python3 irsdk-bridge/tests_pit_cycle_tracker.py; fail=1; fi
 
+echo "── Phase P 本人Practice Profile（IBT/設定指紋・ローカル限定）"
+if python3 irsdk-bridge/tests_practice_profile.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_practice_profile.py; fail=1; fi
+
 echo "── Strategy Plan所有・Pit Loss配線（Build 255）"
 if python3 irsdk-bridge/tests_strategy_plan_wiring.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_strategy_options.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_strategy_plan_wiring.py; python3 irsdk-bridge/tests_strategy_options.py; fail=1; fi
 

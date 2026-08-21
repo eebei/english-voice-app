@@ -44,8 +44,15 @@ const evidenceNote=renderer.slice(
 check('memory selection has no Luna-only capability gate',
   !evidenceNote.includes("sel==='LunaJP'")&&!evidenceNote.includes("sel === 'LunaJP'"));
 check('all characters use the same evidence-memory injection',
-  renderer.includes('buildProfileNote(profile) + buildCarTrackMemory() + buildFuelAuthorityNote(_isJP_pre)') &&
+  renderer.includes('buildProfileNote(profile) + buildCarTrackMemory() + buildPracticeProfileNote() + buildFuelAuthorityNote(_isJP_pre)') &&
   renderer.includes('+ buildSessionEvidenceNote()'));
+const practiceProfileNote=renderer.slice(
+  renderer.indexOf('function buildPracticeProfileNote(){'),
+  renderer.indexOf('// ══════════════════════════════════════════════════════════════',renderer.indexOf('function buildPracticeProfileNote(){')));
+check('practice profile is character-independent and exact-match only',
+  !practiceProfileNote.includes("sel==='LunaJP'")&&!practiceProfileNote.includes("sel === 'LunaJP'")&&
+  practiceProfileNote.includes('canonicalPracticeValue(p.identity?.track)===track')&&
+  practiceProfileNote.includes('canonicalPracticeValue(p.identity?.car_model)===car'));
 check('driver/track/car fail-close is shared',
   evidenceNote.includes("if(!userName || !track || !car) return '';"));
 check('90-day expiry is shared',
