@@ -343,6 +343,17 @@ Build 266 は `388abb7 Build 266 adaptive race intelligence` として既に com
 - 確認：リポジトリ直下 124/124 ／ `irsdk-bridge` 直下 124/124 ／ `./preflight.sh` ✅ 出荷可。
 - P2（認証静的テストの限界：ブロックコメント・将来の別記法）は今回のBuildを止めない扱いでCodex判断。**ASTベースまたは明示的経路表への強化は未実施の残タスク**。
 
+### 2026-08-20 Claude Code — Codexの質問への回答：Bridge exe のビルド手順
+
+回答本文: [BRIDGE_EXE_BUILD_PROCEDURE_FOR_CODEX.md](BRIDGE_EXE_BUILD_PROCEDURE_FOR_CODEX.md)
+
+- `desktop/bridge/OMORAY-PITWALL-Bridge.exe` が Git に無いのは**設計どおり**。CI が毎回生成して同梱し、成果物だけ出して捨てる。チェックアウト直後に空なのが正常。
+- 生成は `windows-latest` / Python 3.12 / PyInstaller。**`.spec` は存在せず**、引数のみ（`--onefile --console --name OMORAY-PITWALL-Bridge`）。
+- **2系統あり依存が違う**。Electron同梱用（`build-desktop.yml`）は `pygame` `pyaudio` を入れ `--hidden-import pygame` を付ける。Bridge単体用（`build-bridge.yml`）は付けない。**取り違えるとPTTが欠けたexeになる**。
+- **PyInstallerはクロスコンパイル不可。Yujiの作業機はdarwinなので手元ビルドは不可能。** exe実物が要る時は `gh workflow run build-desktop.yml -f publish=false` でartifactを取る（配布物と完全同一）。
+- 罠：`bridge.py` だけの変更では `build-desktop.yml` が**発火しない**（pushトリガーは `desktop/**` のみ）。`build-bridge.yml` だけ走るので**Actionsが緑でもElectron側は古いbridgeのまま**。Build 277でも実際に踏み、手動dispatchで解消。
+- 罠：製品Build番号の出所は `irsdk-bridge/bridge.py:54` の `BUILD_VERSION` ただ一箇所。GitHubのrun番号ではない。
+
 ## Codexレビュー結果
 
 - 2026-08-12: Build 266初回候補を差戻し。上記「Build 266候補のCodex差戻し」7項目が未解決。
