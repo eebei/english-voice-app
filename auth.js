@@ -77,6 +77,21 @@ async function init() {
   // 既存DBへの追加カラム（テーブルは既に存在するため IF NOT EXISTS の CREATE TABLE では追加されない）
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS exe_code TEXT UNIQUE;`);
+  // One-time Starter Passes must expire server-side.  A client clock, reinstall,
+  // or stale JWT must never extend the 30-day entitlement.
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS starter_expires_at TIMESTAMPTZ;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS starter_passes (
+      checkout_session_id TEXT PRIMARY KEY,
+      payment_intent_id   TEXT UNIQUE,
+      user_id             BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      stripe_customer_id  TEXT,
+      purchased_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at          TIMESTAMPTZ NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','expired','refunded'))
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_starter_passes_user_expiry ON starter_passes (user_id, expires_at DESC);`);
   // 誰の紹介で来たか（紹介者のREFコード）。決済時のカスタムフィールド入力から記録（2026-07-19 Grow the Grid自動化）
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT;`);
   // 紹介の"実課金転換"を1人1回だけ数えるための台帳。PRIMARY KEYが冪等性の要
@@ -485,7 +500,14 @@ async function getUserFromToken(bearer) {
   if (!ready || !bearer) return null;
   try {
     const payload = jwt.verify(bearer, JWT_SECRET);
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [payload.uid]);
+    const { rows } = await pool.query(
+      `SELECT u.*,
+         CASE WHEN u.plan = 'starter' THEN EXISTS(
+           SELECT 1 FROM starter_passes s
+            WHERE s.user_id = u.id AND s.status = 'active' AND s.expires_at > now()
+         ) ELSE u.is_member END AS access_active
+       FROM users u WHERE u.id = $1`, [payload.uid]
+    );
     return rows[0] || null;
   } catch {
     return null;
@@ -496,9 +518,10 @@ function publicUser(u) {
   if (!u) return null;
   return {
     email: u.email,
-    isMember: u.is_member,
+    isMember: typeof u.access_active === 'boolean' ? u.access_active : u.is_member,
     plan: u.plan || null,
     subscriptionStatus: u.subscription_status || null,
+    starterExpiresAt: u.plan === 'starter' ? (u.starter_expires_at || null) : null,
     displayName: u.display_name || null,
     leaderboardOptIn: u.leaderboard_opt_in || false,
   };
@@ -552,6 +575,113 @@ async function setMemberByEmail(rawEmail, { plan, stripeCustomerId, subscription
     await pool.query('UPDATE beta_tokens SET active = true WHERE code = $1', [exeCode]);
   }
   return { ...rows[0], justActivated: !wasMember };
+}
+
+const STARTER_PASS_DAYS = 30;
+const STARTER_PASS_CREDITS = 30;
+
+// A paid one-time Starter Pass is intentionally separate from a recurring
+// Founding subscription.  Stripe retries webhooks, so checkout_session_id is
+// the durable idempotency key for both access and the credit grant.
+async function grantStarterPass({ rawEmail, stripeCustomerId, checkoutSessionId, paymentIntentId, displayName } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const email = normalizeEmail(rawEmail);
+  if (!email) throw new Error('no_email');
+  if (!/^cs_/.test(String(checkoutSessionId || ''))) throw new Error('invalid_checkout_session');
+
+  const prior = await pool.query(
+    'SELECT u.id, u.is_member, u.plan, s.checkout_session_id AS existing_session FROM users u LEFT JOIN starter_passes s ON s.checkout_session_id = $2 WHERE u.email = $1',
+    [email, checkoutSessionId]
+  );
+  if (prior.rows[0] && prior.rows[0].existing_session) {
+    return { alreadyGranted: true, userId: prior.rows[0].id, plan: prior.rows[0].plan };
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO users (email, is_member, plan, stripe_customer_id, subscription_status, display_name, starter_expires_at)
+     VALUES ($1, true, 'starter', $2, 'active', $3, now() + ($4::int * interval '1 day'))
+     ON CONFLICT (email) DO UPDATE SET
+       is_member = true,
+       plan = CASE WHEN users.plan = 'founding' THEN users.plan ELSE 'starter' END,
+       stripe_customer_id = COALESCE($2, users.stripe_customer_id),
+       subscription_status = CASE WHEN users.plan = 'founding' THEN users.subscription_status ELSE 'active' END,
+       display_name = COALESCE(users.display_name, $3),
+       starter_expires_at = GREATEST(COALESCE(users.starter_expires_at, now()), now()) + ($4::int * interval '1 day')
+     RETURNING *`,
+    [email, stripeCustomerId || null, displayName || null, STARTER_PASS_DAYS]
+  );
+  const user = rows[0];
+  const expiresAt = user.starter_expires_at;
+  await pool.query(
+    `INSERT INTO starter_passes (checkout_session_id, payment_intent_id, user_id, stripe_customer_id, expires_at)
+     VALUES ($1,$2,$3,$4,$5)`,
+    [checkoutSessionId, paymentIntentId || null, user.id, stripeCustomerId || null, expiresAt]
+  );
+  await enrollEnforcedCreditAccount({ userId: user.id, displayName: user.display_name });
+  await recordCreditLedgerEvent({
+    userId: user.id,
+    eventKey: `starter-pass-grant:${checkoutSessionId}`,
+    eventType: 'grant',
+    creditsDelta: STARTER_PASS_CREDITS,
+    source: 'stripe',
+    note: '$9.99 Starter Pass included-use allocation',
+  });
+  log('Starter Pass granted: ' + email + ' expires=' + new Date(expiresAt).toISOString());
+  return { ...user, alreadyGranted: false, expiresAt, plan: user.plan };
+}
+
+async function hasActiveStarterPass(userId) {
+  if (!ready || !userId) return false;
+  const { rows } = await pool.query(
+    `SELECT EXISTS(
+       SELECT 1 FROM starter_passes
+        WHERE user_id = $1 AND status = 'active' AND expires_at > now()
+     ) AS active`, [userId]
+  );
+  return !!(rows[0] && rows[0].active);
+}
+
+async function hasStarterCredits(userId) {
+  if (!ready || !userId) return false;
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM(l.credits_delta), 0)::numeric AS balance
+       FROM credit_accounts a
+       LEFT JOIN credit_ledger l ON l.account_id = a.id
+      WHERE a.user_id = $1 AND a.mode = 'enforced'
+      GROUP BY a.id`, [userId]
+  );
+  return rows.some((row) => Number(row.balance) > 0);
+}
+
+// Customer-safe status for the desktop usage indicator. It exposes no cost
+// model or other account data: only the pass expiry and the current allowance.
+async function getStarterPassStatus(userId) {
+  if (!ready || !userId) return null;
+  const { rows } = await pool.query(
+    `SELECT s.expires_at,
+            COALESCE(SUM(l.credits_delta), 0)::numeric AS credits_remaining
+       FROM starter_passes s
+       LEFT JOIN credit_accounts a ON a.user_id = s.user_id AND a.mode = 'enforced'
+       LEFT JOIN credit_ledger l ON l.account_id = a.id
+      WHERE s.user_id = $1 AND s.status = 'active' AND s.expires_at > now()
+      GROUP BY s.expires_at
+      ORDER BY s.expires_at DESC
+      LIMIT 1`, [userId]
+  );
+  if (!rows[0]) return { active: false, expiresAt: null, creditsRemaining: 0, creditsIncluded: STARTER_PASS_CREDITS };
+  return {
+    active: true,
+    expiresAt: rows[0].expires_at,
+    creditsRemaining: Math.max(0, Number(rows[0].credits_remaining)),
+    creditsIncluded: STARTER_PASS_CREDITS,
+  };
+}
+
+async function hasPitwallEntitlement(user) {
+  if (!user || !user.is_member) return false;
+  // Recurring Founding members retain their existing entitlement path.
+  if (user.plan !== 'starter') return true;
+  return (await hasActiveStarterPass(user.id)) && (await hasStarterCredits(user.id));
 }
 
 // Founding会員だけの個人紹介コード（例: REF-A1B2C3）を発行する。
@@ -899,6 +1029,7 @@ async function restoreMemberByCustomer(stripeCustomerId, status = 'active') {
 
 // Founding Checkout Session作成（LP CTAから直接Stripe Checkoutへ。匿名IDをmetadataに載せてファネル接続）。
 const STRIPE_FOUNDING_PRICE_ID = process.env.STRIPE_FOUNDING_PRICE_ID || null;
+const STRIPE_STARTER_PRICE_ID = process.env.STRIPE_STARTER_PRICE_ID || null;
 // customer: テスト専用。Test Clockに紐付けた顧客IDを渡すとトライアル進行を早送りできる。
 //   本番の /api/founding/checkout ルートはこの引数を絶対にクライアント入力から渡さない
 //   （渡してしまうと他人のStripe顧客IDへ本番決済をなりすませる脆弱性になる）。
@@ -919,6 +1050,22 @@ async function createFoundingCheckout({ anon_id, lang, referral_code, customer }
   };
   if (customer) params.customer = customer;
   const session = await stripe.checkout.sessions.create(params);
+  return { url: session.url, session_id: session.id };
+}
+
+// $9.99 Starter Pass: one payment only.  This route must never set
+// subscription_data or a trial period; the 30-day validity is granted by the
+// verified checkout webhook, not by a client-side timer.
+async function createStarterCheckout({ anon_id, lang } = {}) {
+  if (!stripe) throw new Error('stripe_unavailable');
+  if (!STRIPE_STARTER_PRICE_ID) throw new Error('starter_price_not_configured');
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [{ price: STRIPE_STARTER_PRICE_ID, quantity: 1 }],
+    success_url: `${BASE_URL}/welcome.html?checkout=starter-success`,
+    cancel_url: `${BASE_URL}/pitwall.html#pricing`,
+    metadata: { product: 'starter', anon_id: anon_id || '', lang: lang || '' },
+  });
   return { url: session.url, session_id: session.id };
 }
 
@@ -1281,6 +1428,24 @@ async function enrollShadowCreditAccount({ userId, betaTokenHash, displayName, m
   return rows[0] || null;
 }
 
+// Paid Starter Passes use the same append-only cost ledger as shadow accounts,
+// but are marked enforced so later route gates can stop at the included-use
+// boundary.  It is keyed to the authenticated user, never to an access code.
+async function enrollEnforcedCreditAccount({ userId, displayName, memoryTier = 'session' }) {
+  if (!ready || !userId) throw new Error('invalid_credit_identity');
+  const safeMemoryTier = ['session','rolling','full','team'].includes(memoryTier) ? memoryTier : 'session';
+  const { rows } = await pool.query(
+    `INSERT INTO credit_accounts (user_id,display_name,mode,memory_tier)
+     VALUES ($1,$2,'enforced',$3)
+     ON CONFLICT (user_id) WHERE user_id IS NOT NULL DO UPDATE SET
+       display_name=COALESCE(EXCLUDED.display_name,credit_accounts.display_name),
+       mode='enforced',memory_tier=EXCLUDED.memory_tier,updated_at=now()
+     RETURNING id,mode,memory_tier`,
+    [userId,String(displayName || '').slice(0,80) || null,safeMemoryTier]
+  );
+  return rows[0] || null;
+}
+
 async function recordCreditLedgerEvent({ userId, betaTokenHash, eventKey, eventType = 'debit', creditsDelta, vendorCostUsd, vendor, source, sessionId, note }) {
   if (!ready) return null;
   const identity = normalizeCreditIdentity({ userId, betaTokenHash });
@@ -1633,16 +1798,16 @@ module.exports = {
   init, isConfigured, isReady: () => ready,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
-  setMemberByEmail, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, restoreMemberByCustomer, foundingStatus,
+  setMemberByEmail, grantStarterPass, hasActiveStarterPass, getStarterPassStatus, hasPitwallEntitlement, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, restoreMemberByCustomer, foundingStatus,
   recordReferralAttribution, countReferralConversion,
-  createFoundingCheckout,
+  createFoundingCheckout, createStarterCheckout,
   createBillingPortalSession,
   verifyBetaToken, createBetaToken, listBetaTokens, setBetaActive, expireBetaToken,
   queueMemoryImportSeed, getPendingMemoryImportSeeds, acknowledgeMemoryImportSeeds,
   createFoundingApplication, listFoundingApplications,
   recordFunnelEvent, getFunnelStats, getFunnelStatsByCtaLocation,
   recordApiUsage, getApiUsageStats, recordGoogleUsage, recordUsageSessionCheckpoint, getUsageSessionStats,
-  enrollShadowCreditAccount, recordCreditLedgerEvent, recordAnthropicCreditDebit, recordGoogleCreditDebit, reconcileCreditLedger, getCreditAccountStats,
+  enrollShadowCreditAccount, enrollEnforcedCreditAccount, recordCreditLedgerEvent, recordAnthropicCreditDebit, recordGoogleCreditDebit, reconcileCreditLedger, getCreditAccountStats,
   publishChiefTeamHandoff, getChiefTeamHandoff,
   FOUNDING_CAP,
   _pool: () => pool,

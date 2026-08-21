@@ -29,8 +29,9 @@ check('all cost APIs share one entitlement middleware',
   server.includes("app.use(['/api/chat', '/api/translate', '/api/tts', '/api/stt'], requirePitwallEntitlement)"));
 check('client product flag cannot bypass the gate',
   !server.includes("if (product !== 'pitwall') return next()"));
-check('member and tester are the only accepted identities',
-  server.includes('req.user && req.user.is_member') &&
+check('member, paid Starter Pass, and tester are the only accepted identities',
+  server.includes('req.user && await auth.hasPitwallEntitlement(req.user)') &&
+  auth.includes('async function hasPitwallEntitlement') &&
   server.includes("req.headers['x-pitwall-access-code']") &&
   server.includes('auth.verifyBetaToken(code, deviceId)'));
 // ★8/19 書き換え：ここは applyPitwallAccess() の呼び出し**回数が7**であることを

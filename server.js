@@ -131,28 +131,35 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
       const s = event.data.object;
       const email = (s.customer_details && s.customer_details.email) || s.customer_email;
       const displayName = s.customer_details && s.customer_details.name;
-      const result = await auth.setMemberByEmail(email, {
-        plan: 'founding',
-        stripeCustomerId: s.customer,
-        subscriptionStatus: 'active',
-        displayName,
-      });
-      console.log('[stripe] checkout completed → member:', email, 'justActivated:', result.justActivated);
+      const isStarter = s.mode === 'payment' && s.payment_status === 'paid'
+        && s.metadata && s.metadata.product === 'starter';
+      const result = isStarter
+        ? await auth.grantStarterPass({
+          rawEmail: email, stripeCustomerId: s.customer, checkoutSessionId: s.id,
+          paymentIntentId: s.payment_intent, displayName,
+        })
+        : await auth.setMemberByEmail(email, {
+          plan: 'founding', stripeCustomerId: s.customer,
+          subscriptionStatus: 'active', displayName,
+        });
+      console.log('[stripe] checkout completed → ' + (isStarter ? 'Starter Pass' : 'member') + ':', email, 'alreadyGranted:', !!result.alreadyGranted);
       const anonId = (s.metadata && s.metadata.anon_id) || '';
       const isTest = !event.livemode;
       try {
         await auth.recordFunnelEvent({ event: 'checkout_completed', anon_id: anonId, extra: { stripe_customer: s.customer }, idempotency_key: 'checkout_' + s.id, is_test: isTest });
-        if (result.justActivated) {
+        if (!isStarter && result.justActivated) {
           await auth.recordFunnelEvent({ event: 'trial_started', anon_id: anonId, extra: { stripe_customer: s.customer }, idempotency_key: 'trial_' + s.id, is_test: isTest });
         }
       } catch (e) { console.error('[stripe] funnel event failed:', e.message); }
-      if (result.justActivated) {
+      if (isStarter || result.justActivated) {
         auth.sendWelcomeEmail(email, result.plan).catch((e) => console.error('[stripe] welcome email failed:', e.message));
       }
-      try {
-        const cf = Array.isArray(s.custom_fields) ? s.custom_fields.find(f => f.text && f.text.value) : null;
-        if (cf) await auth.recordReferralAttribution(email, cf.text.value);
-      } catch (e) { console.error('[stripe] referral attribution failed:', e.message); }
+      if (!isStarter) {
+        try {
+          const cf = Array.isArray(s.custom_fields) ? s.custom_fields.find(f => f.text && f.text.value) : null;
+          if (cf) await auth.recordReferralAttribution(email, cf.text.value);
+        } catch (e) { console.error('[stripe] referral attribution failed:', e.message); }
+      }
     } else if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
       // Grow the Grid：友達の"初回実課金"（トライアル明けの最初の支払い）で紹介カウント＋クーポン適用。
       // amount_paid > 0 が実課金の証（トライアル開始時の$0請求は billing_reason=subscription_create かつ 0円）。
@@ -328,6 +335,30 @@ app.post('/api/founding/checkout', express.json(), async (req, res) => {
   }
 });
 
+// Public Starter checkout deliberately has no client-supplied price, customer,
+// duration, or entitlement fields.  Those are server/Stripe-owned facts.
+app.post('/api/starter/checkout', express.json(), async (req, res) => {
+  try {
+    const { anon_id, lang } = req.body || {};
+    const r = await auth.createStarterCheckout({ anon_id, lang });
+    res.json({ ok: true, url: r.url });
+  } catch (err) {
+    console.error('[starter] checkout creation failed:', err.message);
+    res.status(503).json({ ok: false, error: err.message === 'starter_price_not_configured' ? 'starter_price_not_configured' : 'unavailable' });
+  }
+});
+
+// The desktop polls this after member login to display remaining included use.
+// It requires the authenticated user; no account identifier comes from client input.
+app.get('/api/starter/status', async (req, res) => {
+  if (!req.user || req.user.plan !== 'starter') return res.status(403).json({ ok: false, error: 'starter_required' });
+  try {
+    res.json({ ok: true, ...(await auth.getStarterPassStatus(req.user.id)) });
+  } catch (err) {
+    res.status(503).json({ ok: false, error: 'unavailable' });
+  }
+});
+
 // ── テスター応募（Super Formula / IndyCar / GTP / 言語開発など、選考が必要なプログラム専用） ──
 const applyLimiter = rateLimit({ windowMs: 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
 const VALID_DISCIPLINES = ['road', 'oval', 'dirt_road', 'dirt_oval'];
@@ -478,7 +509,7 @@ async function requirePitwallEntitlement(req, res, next) {
     // Deliberately do not trust body.product or any other client-controlled flag:
     // omitting such a flag must never turn a paid endpoint into a public one.
     if (!auth.isReady()) return res.status(503).json({ error: 'auth_unavailable' });
-    if (req.user && req.user.is_member) return next();
+    if (req.user && await auth.hasPitwallEntitlement(req.user)) return next();
 
     const code = req.headers['x-pitwall-access-code'];
     const deviceId = req.headers['x-pitwall-device-id'];

@@ -552,6 +552,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
     <!-- SCREEN ④: Select Engineer（楽しみは最後） -->
     <div id="screen-select" class="app-screen">
       <div id="profile-banner" class="profile-banner" style="display:none;margin-bottom:16px"></div>
+      <div id="starter-pass-banner" class="profile-banner" style="display:none;margin-bottom:16px"></div>
       <div class="field-label" data-i18n="select_title">エンジニアを選ぶ</div>
       <div class="eng-select-grid">
         <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
@@ -1677,10 +1678,31 @@ async function verifyAndEnterWithToken(token){
     if(!data.user.isMember) return {ok:false, reason:t('err_not_member')};
     persistentSet('pw_auth_token', token);
     persistentSet('pw_auth_user', JSON.stringify(data.user));
+    refreshStarterPassStatus();
     hideBetaGate();
     if(!data.user.displayName){ showNicknameGate(); }
     return {ok:true};
   }catch(e){ return {ok:false, reason:t('err_no_server')}; }
+}
+
+// Starter Pass is enforced server-side. This is intentionally only a calm
+// indicator: access decisions remain in the server middleware.
+async function refreshStarterPassStatus(){
+  const banner=document.getElementById('starter-pass-banner');
+  const token=localStorage.getItem('pw_auth_token');
+  if(!banner || !token) return;
+  try{
+    const r=await fetch(API_BASE+'/api/starter/status',{headers:{'Authorization':'Bearer '+token}});
+    const d=await r.json();
+    if(!r.ok || !d.ok || !d.active){ banner.style.display='none'; return; }
+    const included=Math.max(1,Number(d.creditsIncluded)||1);
+    const remaining=Math.max(0,Number(d.creditsRemaining)||0);
+    const pct=Math.max(0,Math.min(100,Math.round(remaining/included*100)));
+    const expiry=new Date(d.expiresAt);
+    const date=Number.isNaN(expiry.getTime())?'—':expiry.toLocaleDateString();
+    banner.style.display='block';
+    banner.innerHTML=`<b>Starter Pass</b> · ${pct}% included use remaining · active until ${date}<div style="height:5px;background:#20233a;border-radius:99px;margin-top:8px;overflow:hidden"><div style="height:100%;width:${pct}%;background:#9D4EDD"></div></div>`;
+  }catch(_){ banner.style.display='none'; }
 }
 
 function showNicknameGate(){ document.getElementById('nickname-gate').style.display='flex'; }

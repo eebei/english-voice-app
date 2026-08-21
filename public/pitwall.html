@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OMORAY PITWALL — AI Race Engineer for iRacing</title>
-<meta name="description" content="Your AI race engineer in your ear. Lap times, strategy, debrief — all session long. For iRacing drivers worldwide.">
+  <meta name="description" content="OMORAY PITWALL is an AI race engineer for iRacing GT3 and endurance racing: measured fuel strategy, concise radio, and post-race debrief.">
 <meta property="og:title" content="OMORAY PITWALL — AI Race Engineer for iRacing">
 <meta property="og:description" content="Your AI race engineer in your ear. Lap times, strategy, debrief — all session long. For iRacing drivers worldwide.">
 <meta property="og:image" content="https://www.omoraypitwall.com/PITWALL_logo_mark.png">
@@ -66,6 +66,9 @@ nav{position:sticky;top:0;z-index:100;background:rgba(7,8,15,.9);backdrop-filter
 .demo-tab{font-family:'Oxanium';font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:10px 18px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer}
 .demo-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
 .radio-demo{margin:16px auto 0;max-width:540px;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;text-align:left;box-shadow:0 40px 80px rgba(0,0,0,.6)}
+.video-demo{aspect-ratio:9/16;max-height:560px;margin:0 auto;border-radius:10px;overflow:hidden;background:#090a0d}
+.video-demo iframe{width:100%;height:100%;border:0;display:block}
+.video-demo-note{font-size:12px;color:var(--muted);text-align:center;line-height:1.5;margin:12px 0 0}
 .radio-hd{display:flex;align-items:center;gap:10px;font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--red);text-transform:uppercase;margin-bottom:16px}
 .radio-dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:pulse 1.4s infinite}
 @keyframes pulse{50%{opacity:.25}}
@@ -275,20 +278,21 @@ if (document.readyState === 'loading') {
 <section class="hero">
   <div class="wrap" data-lang="en">
     <div class="tag">for iRacing · AI Race Engineer</div>
-    <h1>Not just a spotter.<br><span class="blue">A race engineer you can talk to.</span></h1>
-    <p class="sub">PITWALL is an AI race engineer for iRacing.<br>It explains what is happening on track in clear language—and responds when you speak to it.</p>
+    <h1>Your race engineer for<br><span class="blue">the moments that decide the race.</span></h1>
+    <p class="sub">Build a plan before green. Get concise radio when the situation changes.<br>Review the race while the details are still fresh.</p>
     <div class="cta-row">
-      <a href="#" class="btn-primary founding-checkout-btn" data-cta-location="hero" style="text-decoration:none">Start Your 5-Day Free Trial →</a>
+      <a href="#testing" class="btn-primary" style="text-decoration:none">See what PITWALL does today →</a>
       <a href="#engineers" class="btn-ghost">Meet the Engineers</a>
     </div>
-    <p style="font-size:13px;color:var(--muted);margin:14px 0 0">Free for 5 days, then $29.99/month. Cancel anytime during your trial.</p>
+    <p style="font-size:13px;color:var(--muted);margin:14px 0 0">Built and validated first for GT3 and endurance racing in iRacing.</p>
     <div class="demo-tabs">
-      <button class="demo-tab active" id="tab-strategy" onclick="showDemo('strategy')">Strategy</button>
+      <button class="demo-tab" id="tab-strategy" onclick="showDemo('strategy')">Strategy</button>
       <button class="demo-tab" id="tab-race" onclick="showDemo('race')">Race</button>
       <button class="demo-tab" id="tab-debrief" onclick="showDemo('debrief')">Debrief</button>
+      <button class="demo-tab active" id="tab-live" onclick="showDemo('live')">Live Race</button>
     </div>
     <div class="radio-demo">
-      <div id="demo-strategy">
+      <div id="demo-strategy" style="display:none">
         <div class="radio-hd"><span class="radio-dot"></span> PRE-RACE — STRATEGY MODE</div>
         <div class="rline eng"><span class="who">JAMES</span><span class="msg">GT3 Sprint at Spa. Thirty minutes. You're starting P12. What's the priority?</span></div>
         <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Clean start. I want a top-ten finish.</span></div>
@@ -310,24 +314,32 @@ if (document.readyState === 'loading') {
         <div class="rline drv"><span class="who">DRIVER</span><span class="msg">Front end went light in the last stint.</span></div>
         <div class="rline eng"><span class="who">JAMES</span><span class="msg">Noted. We'll check pressures before the next session. Good drive today — same time tomorrow?</span></div>
       </div>
+      <div id="demo-live">
+        <div class="radio-hd"><span class="radio-dot"></span> REAL SESSION — PITWALL IN USE</div>
+        <div class="video-demo">
+          <iframe data-src="https://www.youtube-nocookie.com/embed/_sIfAD6cyGI?rel=0" title="OMORAY PITWALL in a live iRacing session" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+        </div>
+        <p class="video-demo-note">A real iRacing session. Video hosted by YouTube.</p>
+      </div>
     </div>
   </div>
   <div class="wrap" data-lang="jp" style="display:none">
     <div class="tag">iRacing向け · AIレースエンジニア</div>
-    <h1 class="jp-h1">スポッターではない。<br><span class="blue">話せるレースエンジニアだ。</span></h1>
-    <p class="sub">PITWALLは、走行中の状況を言葉で伝え、<br>あなたからの質問にも音声で答える、<br>iRacing用AIレースエンジニアです。</p>
+    <h1 class="jp-h1">勝負どころで判断を返す、<br><span class="blue">あなたのレースエンジニア。</span></h1>
+    <p class="sub">スタート前にプランを組む。状況が変われば簡潔な無線を受ける。<br>レース直後に、記憶が新しいうちに振り返る。</p>
     <div class="cta-row">
-      <a href="#" class="btn-primary founding-checkout-btn" data-cta-location="hero" style="text-decoration:none">5日間無料でPITWALLを試す →</a>
+      <a href="#testing" class="btn-primary" style="text-decoration:none">現在できることを見る →</a>
       <a href="#engineers" class="btn-ghost">エンジニアを見る</a>
     </div>
-    <p style="font-size:13px;color:var(--muted);margin:14px 0 0">5日間無料。その後は月額$29.99。トライアル中はいつでも解約できます。</p>
+    <p style="font-size:13px;color:var(--muted);margin:14px 0 0">まずGT3／耐久レースを中心に、iRacing実走で検証・改善しています。</p>
     <div class="demo-tabs">
-      <button class="demo-tab active" id="tab-strategy-jp" onclick="showDemo('strategy','-jp')">戦略</button>
+      <button class="demo-tab" id="tab-strategy-jp" onclick="showDemo('strategy','-jp')">戦略</button>
       <button class="demo-tab" id="tab-race-jp" onclick="showDemo('race','-jp')">レース</button>
       <button class="demo-tab" id="tab-debrief-jp" onclick="showDemo('debrief','-jp')">デブリーフ</button>
+      <button class="demo-tab active" id="tab-live-jp" onclick="showDemo('live','-jp')">実走</button>
     </div>
     <div class="radio-demo">
-      <div id="demo-strategy-jp">
+      <div id="demo-strategy-jp" style="display:none">
         <div class="radio-hd"><span class="radio-dot"></span> レース前 — 戦略モード</div>
         <div class="rline eng"><span class="who">JAMES</span><span class="msg">スパでのGT3スプリント。30分。予選P12スタートだ。優先順位は？</span></div>
         <div class="rline drv"><span class="who">DRIVER</span><span class="msg">クリーンなスタートを。トップ10でフィニッシュしたい。</span></div>
@@ -349,6 +361,13 @@ if (document.readyState === 'loading') {
         <div class="rline drv"><span class="who">DRIVER</span><span class="msg">最終スティントでフロントが軽くなっていた。</span></div>
         <div class="rline eng"><span class="who">JAMES</span><span class="msg">記録しておく。次のセッション前に空気圧を確認しよう。今日は良い走りだった——明日も同じ時間で？</span></div>
       </div>
+      <div id="demo-live-jp">
+        <div class="radio-hd"><span class="radio-dot"></span> 実走セッション — PITWALL使用例</div>
+        <div class="video-demo">
+          <iframe data-src="https://www.youtube-nocookie.com/embed/_sIfAD6cyGI?rel=0" title="OMORAY PITWALLのiRacing実走セッション" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+        </div>
+        <p class="video-demo-note">実際のiRacingセッション映像です。動画はYouTubeで再生されます。</p>
+      </div>
     </div>
   </div>
 </section>
@@ -366,10 +385,7 @@ if (document.readyState === 'loading') {
       <p style="margin-bottom:18px">Founding Drivers are not paying to wait for a finished product.</p>
       <p style="margin-bottom:0">They use PITWALL as it exists today while helping us shape how this race engineer should think, speak, and remember.</p>
     </div>
-    <p style="text-align:center;font-size:14px;color:var(--silver);margin:28px 0 0">Free for 5 days, then $29.99/month.<br>Your Founding price stays locked for as long as your membership remains active.</p>
-    <div style="text-align:center;margin-top:24px">
-      <a href="#" class="btn-primary founding-checkout-btn" data-cta-location="manifesto" style="text-decoration:none">Start Your 5-Day Founding Trial →</a>
-    </div>
+    <p style="text-align:center;font-size:14px;color:var(--silver);margin:28px 0 0">We publish what has been measured, keep the radio concise, and keep improving from real sessions.</p>
   </div>
 
   <div class="wrap-lg" data-lang="jp" style="display:none">
@@ -383,10 +399,7 @@ if (document.readyState === 'loading') {
       <p style="margin-bottom:18px">Founding Driversは、完成品を待つための会員ではありません。</p>
       <p style="margin-bottom:0">今あるPITWALLを使いながら、このレースエンジニアがどう考え、どう話し、何を覚えるべきかを、私たちと一緒に形にしていく最初のドライバーです。</p>
     </div>
-    <p style="text-align:center;font-size:14px;color:var(--silver);margin:28px 0 0">5日間無料。その後は月額$29.99。<br>Founding価格は、継続している限り永久固定です。</p>
-    <div style="text-align:center;margin-top:24px">
-      <a href="#" class="btn-primary founding-checkout-btn" data-cta-location="manifesto" style="text-decoration:none">Founding Driverとして5日間試す →</a>
-    </div>
+    <p style="text-align:center;font-size:14px;color:var(--silver);margin:28px 0 0">実測できたことを公開し、無線は短く、実走から改善を続けます。</p>
   </div>
 </section>
 
@@ -395,12 +408,25 @@ if (document.readyState === 'loading') {
 // suffix(''またはJP版のID)ごとに独立してactive状態を管理する。
 function showDemo(mode, suffix){
   suffix = suffix || '';
-  ['strategy','race','debrief'].forEach(function(m){
+  ['strategy','race','debrief','live'].forEach(function(m){
     const panel = document.getElementById('demo-'+m+suffix);
     const tab = document.getElementById('tab-'+m+suffix);
     if(panel) panel.style.display = (m===mode) ? 'block' : 'none';
     if(tab) tab.classList.toggle('active', m===mode);
+    if(m === mode && m === 'live' && panel){
+      const video = panel.querySelector('iframe[data-src]');
+      if(video && !video.getAttribute('src')) video.setAttribute('src', video.dataset.src);
+    }
   });
+}
+// 実走動画を標準表示にする。言語確定後、表示中の一方だけを読み込む。
+function initDefaultLiveDemo(){
+  showDemo('live', document.documentElement.lang === 'ja' ? '-jp' : '');
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initDefaultLiveDemo);
+} else {
+  initDefaultLiveDemo();
 }
 </script>
 
@@ -617,22 +643,22 @@ function showDemo(mode, suffix){
 <section class="section" id="testing">
   <div class="wrap-lg" data-lang="en">
     <div class="eyebrow">Now Testing</div>
-    <h2 class="sec-title">Built first for GT3 race strategy.</h2>
-    <p class="sec-lead">PITWALL is being developed and field-tested first with GT3 and road-course racing. We publish what has been measured, improve from real sessions, and do not present unverified class-specific advice as finished.</p>
+    <h2 class="sec-title">Built first for GT3 and endurance racing.</h2>
+    <p class="sec-lead">PITWALL is developed and field-tested first in GT3 road racing and endurance. We publish what has been measured, improve from real sessions, and do not present unverified class-specific advice as finished.</p>
     <div class="price-grid two-by-two">
       <div class="price-card">
-        <div class="plan">What PITWALL does today</div>
-        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Live iRacing telemetry supports safety calls, measured fuel tracking, pit timing, race-format context, concise radio, and post-session review.</p>
+        <div class="plan">Three race moments</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Before green, PITWALL builds a measured baseline. In the race, it keeps the radio concise when fuel, traffic, or pit timing changes. After the checker, it captures the evidence for the next run.</p>
         <ul style="list-style:none;padding:0;margin:0 0 16px;font-size:14px;color:#cfd3da">
-          <li style="padding:8px 0;border-top:1px solid var(--border)">GT3 fuel and pit strategy from measured laps</li>
-          <li style="padding:8px 0;border-top:1px solid var(--border)">Stopped-car and adjacent-car safety calls</li>
-          <li style="padding:8px 0;border-top:1px solid var(--border)">Debrief evidence and driver-reported memory</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)">Baseline plans from race format and measured fuel</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)">Fuel, pit-window, traffic, rejoin, and safety calls</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)">Debrief evidence and driver-reported context</li>
         </ul>
       </div>
       <div class="price-card">
-        <div class="plan">What we are not claiming yet</div>
-        <p style="font-size:14px;color:#cfd3da;margin:14px 0">Prototype, open-wheel, oval, dirt, and deep vehicle-setup guidance are future development areas. They are not presented as a current product promise.</p>
-        <p style="font-size:13px;color:var(--silver);margin:0">The race engineer should make a measured call when the data supports it — and say less when it does not.</p>
+        <div class="plan">What is being validated now</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">GT3 fuel strategy, planned pit calls, physical rejoin context, concise radio profiles, and endurance handoff are under real-session validation.</p>
+        <p style="font-size:13px;color:var(--silver);margin:0">Prototype, open-wheel, oval, dirt, and deep setup guidance are future areas—not a current promise. The engineer should make a measured call when the data supports it, and say less when it does not.</p>
       </div>
     </div>
     <p style="max-width:640px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--silver);line-height:1.75"><strong style="color:var(--text)">Real-session feedback matters.</strong> If a call helped, arrived late, or got in the way, share the log and context through <a href="https://discord.gg/3R3ssGmhdm" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">Discord</a>. It becomes a concrete test, not an ignored comment.</p>
@@ -640,22 +666,22 @@ function showDemo(mode, suffix){
 
   <div class="wrap-lg" data-lang="jp" style="display:none">
     <div class="eyebrow">Now Testing</div>
-    <h2 class="sec-title">まずGT3のレース戦略から。</h2>
-    <p class="sec-lead">PITWALLは、GT3とロードコースレースを中心に開発・実走検証しています。実測できたことを公開し、実走から改善し、検証していないクラス固有の助言を完成機能として見せません。</p>
+    <h2 class="sec-title">まずGT3と耐久レースから。</h2>
+    <p class="sec-lead">PITWALLは、GT3ロードレースと耐久レースを中心に開発・実走検証しています。実測できたことを公開し、実走から改善し、検証していないクラス固有の助言を完成機能として見せません。</p>
     <div class="price-grid two-by-two">
       <div class="price-card">
-        <div class="plan">現在できること</div>
-        <p style="font-size:14px;color:#cfd3da;margin:14px 0">ライブiRacingテレメトリで、安全コール、実測燃費、ピットタイミング、レース形式、短い無線、レース後の振り返りを支えます。</p>
+        <div class="plan">レースの3つの瞬間</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">スタート前に実測にもとづく基準プランを組む。レース中は燃料・トラフィック・ピットタイミングの変化を短く無線で伝える。チェッカー後は次回に残すべき証拠を振り返る。</p>
         <ul style="list-style:none;padding:0;margin:0 0 16px;font-size:14px;color:#cfd3da">
-          <li style="padding:8px 0;border-top:1px solid var(--border)">実測周回にもとづくGT3の燃料・ピット戦略</li>
-          <li style="padding:8px 0;border-top:1px solid var(--border)">停止車両・左右車両の安全コール</li>
-          <li style="padding:8px 0;border-top:1px solid var(--border)">デブリーフ証拠とドライバー申告記憶</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)">レース形式と実測燃費から組む基準プラン</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)">燃料・ピットウインドー・トラフィック・復帰・安全コール</li>
+          <li style="padding:8px 0;border-top:1px solid var(--border)">デブリーフ証拠とドライバー申告の文脈</li>
         </ul>
       </div>
       <div class="price-card">
-        <div class="plan">まだ完成扱いにしないこと</div>
-        <p style="font-size:14px;color:#cfd3da;margin:14px 0">プロトタイプ、オープンホイール、オーバル、ダート、深い車両セットアップ助言は今後の開発領域です。現行の製品約束には含めません。</p>
-        <p style="font-size:13px;color:var(--silver);margin:0">データが揃った時だけ判断を出し、揃っていない時は余計なことを言わない。これがPITWALLの基準です。</p>
+        <div class="plan">現在、実走で検証していること</div>
+        <p style="font-size:14px;color:#cfd3da;margin:14px 0">GT3の燃料戦略、予定ピットコール、物理的な復帰文脈、簡潔な無線プロファイル、耐久レースの引き継ぎを実走で検証しています。</p>
+        <p style="font-size:13px;color:var(--silver);margin:0">プロトタイプ、オープンホイール、オーバル、ダート、深いセットアップ助言は今後の領域であり、現行の約束には含めません。データが揃った時だけ判断を出し、揃っていない時は余計なことを言わない。これがPITWALLの基準です。</p>
       </div>
     </div>
     <p style="max-width:640px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--silver);line-height:1.75"><strong style="color:var(--text)">実走の声が重要です。</strong>役に立った、遅れた、邪魔だった——どれでも状況とログを<a href="https://discord.gg/3R3ssGmhdm" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">Discord</a>で送ってください。感想で終わらせず、次の具体テストにします。</p>
@@ -733,8 +759,56 @@ function showDemo(mode, suffix){
   </div>
 </section>
 
-<!-- ═══ PRICING ═══ -->
+<!-- ═══ ACCESS ═══ -->
 <section class="section" id="pricing">
+  <div class="wrap-lg" data-lang="en">
+    <div class="eyebrow">Starter Pass</div>
+    <h2 class="sec-title">One clear way to start.</h2>
+    <p class="sec-lead">PITWALL starts with one paid Starter Pass—no free-trial maze and no automatic monthly renewal. One pass gives you 30 days to use PITWALL across roughly five races, with a little room for practice and follow-up.</p>
+    <div class="price-grid single">
+      <div class="price-card featured">
+        <div class="plan">Starter Pass <span class="price-tag">ONE PLAN</span></div>
+        <div class="price">$9<span>.99</span></div>
+        <div class="desc">30 days · roughly 5 races, plus a little room</div>
+        <ul>
+          <li>One entry plan, rather than competing subscriptions</li>
+          <li>No automatic recurring charge</li>
+          <li>Valid for 30 days from activation</li>
+          <li>Approximately five race sessions, with extra room for practice and follow-up</li>
+          <li>A visible usage indicator before you reach the included-use limit</li>
+          <li>GT3 and endurance first; other categories only when validated</li>
+        </ul>
+        <p style="font-size:12.5px;color:var(--muted);line-height:1.6;margin:18px 0 0">Five races is a guide, not a guarantee. Heavier-than-expected use can mean fewer sessions within the included use.</p>
+        <a class="btn-primary starter-checkout-btn" href="#" data-cta-location="starter-pricing" style="display:block;text-align:center;margin-top:24px;text-decoration:none">Get Starter Pass — $9.99 →</a>
+      </div>
+    </div>
+  </div>
+  <div class="wrap-lg" data-lang="jp" style="display:none">
+    <div class="eyebrow">Starter Pass</div>
+    <h2 class="sec-title">始め方は、ひとつに絞る。</h2>
+    <p class="sec-lead">PITWALLは、有料Starter Pass一本から始めます。無料トライアルの迷路も、知らないうちの月額更新もありません。1つのPassで30日間、5レース前後と練習・振り返りの少しの余裕を使えます。</p>
+    <div class="price-grid single">
+      <div class="price-card featured">
+        <div class="plan">Starter Pass <span class="price-tag">ONE PLAN</span></div>
+        <div class="price">$9<span>.99</span></div>
+        <div class="desc">30日間 · 5レース前後＋少しの余裕</div>
+        <ul>
+          <li>複数のサブスクではなく、最初は一つの入口だけ</li>
+          <li>自動の月額課金なし</li>
+          <li>利用開始から30日間有効</li>
+          <li>レース5本前後に、練習・振り返りのための少しの余裕</li>
+          <li>使い切り前に見える利用インジケーター</li>
+          <li>まずGT3と耐久レース。ほかのカテゴリーは検証後に展開</li>
+        </ul>
+        <p style="font-size:12.5px;color:var(--muted);line-height:1.6;margin:18px 0 0">5レースは目安であり、保証ではありません。想定より利用量が多い場合は、含まれる利用量の範囲で走行回数がこれを下回ることがあります。</p>
+        <a class="btn-primary starter-checkout-btn" href="#" data-cta-location="starter-pricing" style="display:block;text-align:center;margin-top:24px;text-decoration:none">Starter Passを入手 — $9.99 →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ LEGACY PRICING (hidden until the new commercial flow is implemented) ═══ -->
+<section class="section" id="legacy-pricing" style="display:none">
   <div class="wrap-lg" data-lang="en">
     <div class="eyebrow">Founding Season</div>
     <h2 class="sec-title">Be a Founding Driver</h2>
@@ -1632,18 +1706,18 @@ function toggleAllEngineers(btn){
     }).catch(function(){}); } catch(e){}
   };
   window._funnel('lp_view');
-  document.querySelectorAll('.founding-checkout-btn').forEach(function(btn){
+  document.querySelectorAll('.starter-checkout-btn').forEach(function(btn){
     btn.addEventListener('click', function(e){
       e.preventDefault();
       var ctaLocation = btn.dataset.ctaLocation || 'unknown';
       btn.style.opacity='0.5'; btn.style.pointerEvents='none';
       window._funnel('primary_cta_click', {extra:{cta_location:ctaLocation}});
-      fetch('/api/founding/checkout', {
+      fetch('/api/starter/checkout', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({anon_id:aid, lang:document.documentElement.lang||'en'})
       }).then(function(r){return r.json()}).then(function(d){
         if (d.ok && d.url) { navigator.sendBeacon('/api/funnel/event', new Blob([JSON.stringify({event:'checkout_started', anon_id:aid, lang:document.documentElement.lang||'en', extra:{cta_location:ctaLocation}})],{type:'application/json'})); location.href = d.url; }
-        else { btn.style.opacity='1'; btn.style.pointerEvents='auto'; alert(d.error==='price_not_configured'?'Checkout is being set up. Please try again shortly.':'Could not start checkout. Please try again.'); }
+        else { btn.style.opacity='1'; btn.style.pointerEvents='auto'; alert(d.error==='starter_price_not_configured'?'Checkout is being set up. Please try again shortly.':'Could not start checkout. Please try again.'); }
       }).catch(function(){ btn.style.opacity='1'; btn.style.pointerEvents='auto'; alert('Connection error. Please try again.'); });
     });
   });

@@ -1,6 +1,15 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-19 JST
+最終更新: 2026-08-21 JST
+
+## Starter Pass 商用導線（出荷候補・未公開）
+
+- Stripe商品: `OMORAY PITWALL — Starter Pass`、一回払い **US$9.99**。Stripe Price ID は本番環境変数 `STRIPE_STARTER_PRICE_ID` に設定する予定。外部設定・公開は未実施。
+- サーバー実装: `/api/starter/checkout` はサーバー固定の `mode: payment` だけを作る。決済成功Webhookはcheckout sessionを冪等キーに、30日権利とStarter専用のenforced利用量台帳をDBへ付与する。期限または利用量が尽きれば、既存の有料API認可で停止する。旧Founding会員の認可経路は変更しない。
+- `/api/starter/status` は認証済みStarter本人だけに、失効日時と残利用量を返す。desktopはログイン後に残利用率・有効期限を表示する。権利判定は常にサーバー側。
+- 公開ページのStarter Pass説明、welcome、terms、help、share、legacy subscription manageを一回払い／30日／自動更新なしへ更新。旧Founding価格セクションは非表示のレガシーHTMLとして残るが、イベントハンドラ対象外であり、Starter CTAは`/api/starter/checkout`だけを呼ぶ。
+- 機械検証（外部AI／Stripe／Railway呼び出しなし）: `node tests-starter-pass-contract.js` 16/16、`node tests-five-day-access.js` 12/12、`node tests-stripe-entitlement-stop.js` 5/5、`node --check auth.js/server.js`、HTML parser、`git diff --check` 合格。
+- 公開前に必要: Railwayに`STRIPE_STARTER_PRICE_ID`を設定、Stripe sandbox/liveでCheckout→Webhook→ログイン→期限／利用量停止を確認、Windows実機確認。commit/push/build/releaseはYujiの明示GO済み。
 
 ## デプロイ確認の手順（毎回やること・2026-08-19 新設）
 

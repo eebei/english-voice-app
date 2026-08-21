@@ -115,6 +115,9 @@ if node tests-require-admin.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── Stripe支払い失敗→即時利用停止・再請求成功時の復帰"
 if node tests-stripe-entitlement-stop.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-stripe-entitlement-stop.js; fail=1; fi
 
+echo "── \$9.99 Starter Pass：一回払い・30日失効・利用量権利"
+if node tests-starter-pass-contract.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-starter-pass-contract.js; fail=1; fi
+
 echo "── iRSDK共有メモリヘッダー定数（合成メモリ・P0-2再発防止）"
 if python3 irsdk-bridge/tests_irsdk_mem.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_irsdk_mem.py 2>&1|grep "❌"|head -5; fail=1; fi
 

@@ -56,14 +56,14 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
 </div></nav>
 
 <header class="h"><div class="wrap">
-  <div class="eyebrow">Founding-Only Perk</div>
-  <h1>Grow the Grid, Ride Free</h1>
-  <p>Bring 3 paid drivers to the grid. Your next month is on us.</p>
+  <div class="eyebrow">Share PITWALL</div>
+  <h1>Show your race.</h1>
+  <p>Share the calls, strategy, and moments that helped your race.</p>
 </div></header>
 
 <div class="wrap">
   <div class="codes" id="codes-box">
-    <div class="code-pill"><span class="lbl">Referral code</span><b id="ref-code">—</b></div>
+    <div class="code-pill"><span class="lbl">Current offer</span><b>Starter Pass · US$9.99</b></div>
   </div>
 
   <div style="background:var(--panel);border:1px solid var(--blue);border-radius:14px;padding:18px 22px;margin-top:8px;text-align:center">
@@ -108,10 +108,10 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
     <p class="lead">TikTok is video-first — record a clip of a PITWALL session (radio call, debrief, a good lap) and use this caption.</p>
     <div class="tmpl" id="tmpl-tiktok"></div>
     <div class="copy-row"><button class="btn btn-primary" onclick="copyText('tmpl-tiktok')">Copy Caption</button></div>
-    <p class="lead" style="margin-top:18px"><strong style="color:var(--silver)">Video ideas:</strong> your engineer's radio call after a good lap · a race debrief clip · "day in the life of a Founding driver" · reacting to a crash save.</p>
+    <p class="lead" style="margin-top:18px"><strong style="color:var(--silver)">Video ideas:</strong> your engineer's radio call after a good lap · a race debrief clip · a strategy decision · reacting to a crash save.</p>
   </div>
 
-  <div class="note">Your referral code is Founding-only and yours to keep. Give it to friends when they join (5-day free trial, same as any new driver) — they enter it in the <strong>“Referral code”</strong> field at checkout (not the promotion-code box). Once their trial converts to a paid month, you get 33% off your next month per friend (100% off at 3). Don't give out your personal app access code — it only works on one device at a time, so if someone else uses it, you get locked out.</div>
+  <div class="note">The current Starter Pass is a one-time purchase. Referral credits are paused while the launch offer is active. Do not share a personal app access code — it is for one driver and one device at a time.</div>
 </div>
 
 <footer><div class="wrap">OMORAY <span style="color:var(--blue)">PITWALL</span> · <a href="/pitwall.html">Home</a> · <a href="/help.html">Help</a></div></footer>
@@ -120,21 +120,18 @@ footer{border-top:1px solid var(--border);padding:30px 0;color:var(--muted);font
 
 <script>
 const params = new URLSearchParams(location.search);
-const ref = params.get('ref') || 'YOUR-REF-CODE';
-const siteUrl = 'https://buy.stripe.com/3cI3cvc6k1WIbSUcbo97G00'; // referral Payment Link (5-day trial — since 7/19 all trials are 5 days; direct applicants get their link on approval)
-
-document.getElementById('ref-code').textContent = ref;
+const siteUrl = 'https://www.omoraypitwall.com/pitwall.html#pricing';
 
 const templatesByLang = {
   en: {
-    x: `Your race engineer. Before. During. After. 🏁\nStrategy, live radio, debrief — and it remembers every lap.\n\nFounding Season, 5-day free trial. Join via my link, code ${ref}:\n${siteUrl}`,
-    ig: `Your race engineer. Before. During. After. 🎙️🏁\n\nStrategy, live radio, debrief — and a memory that keeps growing. Every result, every lap, every piece of advice adds up to an engineer who actually knows you.\n\nFounding Season — 5-day free trial. Join through my link, code ${ref}.\nLink in bio: ${siteUrl}\n\n#iRacing #simracing #PITWALL`,
-    tiktok: `POV: your race engineer actually talks back — before, during, and after the race 🎙️🏁 5-day free trial, join through my link (code ${ref}) — link in bio\n#iRacing #simracing #PITWALL #racingengineer`,
+    x: `Your race engineer. Before. During. After. 🏁\nStrategy, live radio, and debrief for iRacing GT3 and endurance racing.\n\nOMORAY PITWALL Starter Pass — US$9.99, one-time, up to 30 days:\n${siteUrl}`,
+    ig: `Your race engineer. Before. During. After. 🎙️🏁\n\nStrategy, live radio, and debrief for iRacing GT3 and endurance racing.\n\nOMORAY PITWALL Starter Pass — US$9.99, one-time, up to 30 days.\n${siteUrl}\n\n#iRacing #simracing #PITWALL`,
+    tiktok: `POV: your race engineer actually talks back — before, during, and after the race 🎙️🏁 OMORAY PITWALL Starter Pass: US$9.99, one-time, up to 30 days\n${siteUrl}\n#iRacing #simracing #PITWALL #racingengineer`,
   },
   jp: {
-    x: `あなたのレースエンジニア。レース前も、走行中も、レース後も。🏁\n戦略・ライブ無線・デブリーフ、走るたびに育っていく。\n\nFounding Season・5日間無料トライアル。このリンクから参加、コード${ref}:\n${siteUrl}`,
-    ig: `あなたのレースエンジニア。レース前も、走行中も、レース後も。🎙️🏁\n\n戦略・ライブ無線・デブリーフ、そして積み上がっていく記憶。結果もラップもアドバイスも、走るたびにあなた専属のエンジニアへと育っていく。\n\nFounding Season — 5日間無料トライアル。このリンクから参加、コード${ref}。\nリンクはプロフィールへ: ${siteUrl}\n\n#iRacing #シムレーシング #PITWALL`,
-    tiktok: `レースエンジニアが本当に喋ってくる、レース前も走行中もレース後も🎙️🏁 5日間無料トライアル、このリンクから参加(コード${ref}) — リンクはプロフィールへ\n#iRacing #シムレーシング #PITWALL`,
+    x: `レース前も、走行中も、レース後も。あなたのレースエンジニア。🏁\niRacingのGT3・耐久レース向け戦略、ライブ無線、デブリーフ。\n\nOMORAY PITWALL Starter Pass — US$9.99、一回払い、最大30日間:\n${siteUrl}`,
+    ig: `レース前も、走行中も、レース後も。あなたのレースエンジニア。🎙️🏁\n\niRacingのGT3・耐久レース向け戦略、ライブ無線、デブリーフ。\n\nOMORAY PITWALL Starter Pass — US$9.99、一回払い、最大30日間。\n${siteUrl}\n\n#iRacing #シムレーシング #PITWALL`,
+    tiktok: `レースエンジニアが本当に喋ってくる、レース前も走行中もレース後も🎙️🏁 OMORAY PITWALL Starter Pass：US$9.99、一回払い、最大30日間\n${siteUrl}\n#iRacing #シムレーシング #PITWALL`,
   },
 };
 
