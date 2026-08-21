@@ -68,6 +68,10 @@ nav{position:sticky;top:0;z-index:100;background:rgba(7,8,15,.9);backdrop-filter
 .radio-demo{margin:16px auto 0;max-width:540px;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;text-align:left;box-shadow:0 40px 80px rgba(0,0,0,.6)}
 .video-demo{aspect-ratio:9/16;max-height:560px;margin:0 auto;border-radius:10px;overflow:hidden;background:#090a0d}
 .video-demo iframe{width:100%;height:100%;border:0;display:block}
+.video-demo-link{position:relative;display:block;width:100%;height:100%;color:#fff;text-decoration:none;background:#090a0d}
+.video-demo-link img{width:100%;height:100%;object-fit:cover;display:block;opacity:.88}
+.video-demo-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:10px;padding:13px 18px;border-radius:999px;background:rgba(7,8,15,.88);border:1px solid rgba(255,255,255,.3);font-family:'Oxanium';font-size:13px;font-weight:700;letter-spacing:.6px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.video-demo-play::before{content:'▶';color:var(--red);font-size:16px}
 .video-demo-note{font-size:12px;color:var(--muted);text-align:center;line-height:1.5;margin:12px 0 0}
 .radio-hd{display:flex;align-items:center;gap:10px;font-family:'Oxanium';font-size:11px;letter-spacing:2px;color:var(--red);text-transform:uppercase;margin-bottom:16px}
 .radio-dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:pulse 1.4s infinite}
@@ -317,9 +321,12 @@ if (document.readyState === 'loading') {
       <div id="demo-live">
         <div class="radio-hd"><span class="radio-dot"></span> REAL SESSION — PITWALL IN USE</div>
         <div class="video-demo">
-          <iframe data-src="https://www.youtube-nocookie.com/embed/_sIfAD6cyGI?rel=0" title="OMORAY PITWALL in a live iRacing session" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+          <a class="video-demo-link" href="https://www.youtube.com/shorts/_sIfAD6cyGI" target="_blank" rel="noopener" aria-label="Watch the OMORAY PITWALL session on YouTube">
+            <img src="https://i.ytimg.com/vi/_sIfAD6cyGI/hqdefault.jpg" alt="OMORAY PITWALL in an iRacing session">
+            <span class="video-demo-play">Watch on YouTube</span>
+          </a>
         </div>
-        <p class="video-demo-note">A real iRacing session. Video hosted by YouTube.</p>
+        <p class="video-demo-note">A real iRacing session. Opens on YouTube so playback always works.</p>
       </div>
     </div>
   </div>
@@ -364,9 +371,12 @@ if (document.readyState === 'loading') {
       <div id="demo-live-jp">
         <div class="radio-hd"><span class="radio-dot"></span> 実走セッション — PITWALL使用例</div>
         <div class="video-demo">
-          <iframe data-src="https://www.youtube-nocookie.com/embed/_sIfAD6cyGI?rel=0" title="OMORAY PITWALLのiRacing実走セッション" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+          <a class="video-demo-link" href="https://www.youtube.com/shorts/_sIfAD6cyGI" target="_blank" rel="noopener" aria-label="YouTubeでOMORAY PITWALLの実走セッションを見る">
+            <img src="https://i.ytimg.com/vi/_sIfAD6cyGI/hqdefault.jpg" alt="OMORAY PITWALLのiRacing実走セッション">
+            <span class="video-demo-play">YouTubeで見る</span>
+          </a>
         </div>
-        <p class="video-demo-note">実際のiRacingセッション映像です。動画はYouTubeで再生されます。</p>
+        <p class="video-demo-note">実際のiRacingセッション映像です。再生は確実なYouTube側で開きます。</p>
       </div>
     </div>
   </div>
