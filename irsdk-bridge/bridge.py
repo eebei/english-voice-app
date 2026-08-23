@@ -51,9 +51,10 @@ import pit_cycle_tracker as pit_cycle_tracker_mod
 import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
 import practice_profile
+import gap_call_policy as gap_call_policy_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 278 (local iRacing Practice Profile import)"
+BUILD_VERSION = "Build 279 (gap answers and gated trend calls)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -526,7 +527,7 @@ PRIORITY = {
     'strategy_recalculation': 3,
     # P4 情報
     'time_loss': 4, 'pace_check': 4, 'position_up': 4, 'position_down': 4,
-    'rolling_gap': 4, 'lap_time': 4,
+    'rolling_gap': 4, 'gap_trend': 4, 'lap_time': 4,
 }
 DEFAULT_PRIORITY = 5                  # 未知は雑談扱い＝最も抑制される（安全側に倒れる）
 DUCK_WINDOW = {3: 6.0, 4: 10.0, 5: 12.0}   # 上位が喋った直後、この秒数は下位を出さない
@@ -1195,7 +1196,7 @@ def broadcast(event):
 # 安全直結(隣接車/クラッシュ/損傷等)や非radioイベントはゲート対象外＝常に即。窓状態はループが毎サイクル更新。
 GATEABLE_TRIGGERS = frozenset({
     'personal_best', 'first_lap', 'session_best', 'lap_consistent', 'lap_time', 'lap_slow',
-    'rolling_gap',
+    'rolling_gap', 'gap_trend',
 })
 _gate_state = {'pending': None, 'since': 0.0}
 _gate_window_ok = True
@@ -2269,6 +2270,7 @@ def poll_iracing():
     prev_session_state = 0      # previous SessionState value
     race_start_time = None      # wall time when Racing state began
     rolling_gap_warned_time = 0 # last rolling-start gap call time
+    gap_call_policy = gap_call_policy_mod.GapCallPolicy()
     last_telem_ts = 0.0         # ライブテレメトリ・スナップショットの最終送信時刻
     # Build 244 startup authority.  These values exist before the first lap and
     # are reset at every session boundary; telemetry_live may run immediately.
@@ -5021,6 +5023,18 @@ def poll_iracing():
                             nearest_ahead_gap = -_gd
                         elif _gd > 0 and _gd < 30 and (nearest_behind_gap is None or _gd < nearest_behind_gap):
                             nearest_behind_gap = _gd
+
+            # Gap reports are information, not a battle instruction.  The
+            # policy emits only material percentage changes; broadcast then
+            # applies the shared steering/brake speech gate and P4 budget.
+            if (is_race_session and session_racing_started and onTrack and not onPit
+                    and not in_formation
+                    and (nearest_ahead_gap is not None or nearest_behind_gap is not None)):
+                _gap_event = gap_call_policy.observe(
+                    (cur_snum, session_track, session_car_model), time.time(),
+                    ahead_s=nearest_ahead_gap, behind_s=nearest_behind_gap)
+                if _gap_event is not None:
+                    broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
 
             # ── 停止/クラッシュ車両検知（コース上・オフトラックで動きが止まってる車）──
             # 1秒おきにLapDistPctの変化をサンプリングし、ほぼ動いてなければ「停止」とみなす。

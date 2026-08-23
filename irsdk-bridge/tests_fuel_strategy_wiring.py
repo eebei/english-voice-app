@@ -38,8 +38,8 @@ def contracts(bridge, renderer, prompts):
         'priority_p0': (
             "'fuel_warning': 0, 'fuel_strategy_warning': 0" in bridge),
         'not_gateable': (
-            "'rolling_gap',\n})" in bridge
-            and "'rolling_gap', 'fuel_strategy_warning'" not in bridge),
+            "'rolling_gap', 'gap_trend',\n})" in bridge
+            and "'fuel_strategy_warning'" not in bridge[bridge.index('GATEABLE_TRIGGERS'):bridge.index('_gate_state', bridge.index('GATEABLE_TRIGGERS'))]),
         'band_reset_source': "'fuel_warning_band': None" in bridge,
         'band_reset_sig': (
             "fuel_warning_band = _sig_reset['fuel_warning_band']"

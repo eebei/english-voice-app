@@ -93,6 +93,25 @@
       const remaining = finite(live.session_time_remaining_s);
       if (remaining !== null) return answer('time_remaining', isJP(lang) ? `残り${formatDuration(remaining, lang)}。` : `${formatDuration(remaining, lang)} remaining.`);
     }
+    // Nearest-car gaps are distinct from the class-leader gap.  This must be
+    // evaluated first: a driver asking "後ろとの差" must never fall through
+    // to an LLM/no-data template while the Bridge already has gap_behind.
+    if (/(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)/i.test(text)) {
+      const wantsBoth = /前後|both/i.test(text) || (!/前|ahead/i.test(text) && /後ろ|後方|behind/i.test(text) && /前|ahead/i.test(text));
+      const wantsAhead = wantsBoth || /前|ahead/i.test(text);
+      const wantsBehind = wantsBoth || /後ろ|後方|behind/i.test(text);
+      const ahead = finite(live.gap_ahead);
+      const behind = finite(live.gap_behind);
+      const parts = [];
+      if (wantsAhead && ahead !== null) parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
+      if (wantsBehind && behind !== null) parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
+      if (parts.length) return answer('nearest_gap', isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`);
+      const requested = wantsAhead && wantsBehind ? (isJP(lang) ? '前後のGAP' : 'The nearest gaps')
+        : wantsAhead ? (isJP(lang) ? '前のGAP' : 'Gap ahead') : (isJP(lang) ? '後ろのGAP' : 'Gap behind');
+      return answer('nearest_gap_unavailable', isJP(lang)
+        ? `${requested}はまだ取れていない。`
+        : `${requested} is not available yet.`);
+    }
     if (/トップ|首位|P1|何秒|ギャップ|差|leader|gap/i.test(text)) {
       const wantsOverall = /総合|GTP|gdp|overall/i.test(text);
       const leader = wantsOverall ? live.leaders && live.leaders.overall : live.leaders && live.leaders.player_class;

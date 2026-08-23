@@ -39,6 +39,10 @@ check('閉窓中は開始可能な即時発話だけをキューから選ぶ',
   && renderer.includes('speakQueue.splice(nextIndex,1)[0]'));
 check('安全窓が開いたら保留キューを再開',
   renderer.includes('if(!speakGateActive || speakWindowOk) drainQueue();'));
+check('能動GAPはP4情報として安全窓ゲートを通る',
+  bridge.includes("'rolling_gap': 4, 'gap_trend': 4")
+  && bridge.includes("'rolling_gap', 'gap_trend',")
+  && renderer.includes("case 'gap_trend':"));
 
 const fn = renderer.match(/function speechMayStart\(item\)\{[\s\S]*?\n\}/);
 check('speechMayStart本番関数を抽出できる', !!fn);

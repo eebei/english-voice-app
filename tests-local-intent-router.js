@@ -18,6 +18,8 @@ const live = {
   session_time_remaining_s: 465 * 60,
   finish_crossings_authority: 4,
   leaders: { player_class: { gap_s: 12.8 }, overall: { gap_s: 44.1 } },
+  gap_ahead: 4.6,
+  gap_behind: 5.8,
   race_plan: { kind:'timed', configured_duration_s: 7200 },
   fuel_strategy: { avg_fuel_per_lap:2.53, required_fuel_l:10.6, margin_l:4.4, estimated_crossings_to_finish:4 },
 };
@@ -31,6 +33,14 @@ r = route('残り時間は？', live);
 check('long remaining time is spoken in hours and minutes', r.handled && r.reply==='残り7時間45分。');
 r = route('トップとの差は？', live);
 check('class leader gap is not substituted with a nearest-car gap', r.handled && r.reply==='クラス首位まで12.8秒。');
+r = route('後ろとの差は？', live);
+check('behind gap is answered locally from the current Bridge snapshot', r.handled && r.intent==='nearest_gap' && r.reply==='後ろ5.8秒。');
+r = route('パンで後ろとの差。', live);
+check('a noisy transcript that still contains rear-gap words does not fall through to no-data', r.handled && r.reply==='後ろ5.8秒。');
+r = route('前後のギャップは？', live);
+check('an explicitly paired gap request returns both authoritative nearest gaps', r.handled && r.reply==='前4.6秒、後ろ5.8秒。');
+r = route('後ろとの差は？', { gap_ahead:4.6 });
+check('missing rear-gap evidence names the unavailable fact instead of generic refusal', r.handled && r.intent==='nearest_gap_unavailable' && r.reply==='後ろのGAPはまだ取れていない。');
 r = route('今ポジション何位？', live);
 check('current class position is answered locally', r.handled && r.reply==='現在P8。');
 r = route('了解', live);
@@ -51,5 +61,6 @@ const localRoute = renderer.indexOf("diagnosticLog('LOCAL_INTENT_ROUTE'");
 const cloudRoute = renderer.indexOf("await callAPI(inputSource==='ptt'?'ptt':'typed', memoryStatus);");
 check('renderer loads the tested router before its inline runtime', routerScript >= 0 && runtimeScript > routerScript);
 check('local route returns before the cloud conversation route', localRoute >= 0 && cloudRoute > localRoute && /speak\(reply,[\s\S]{0,350}?return;/.test(renderer.slice(localRoute, cloudRoute)));
+check('Bridge gap-trend event has a Japanese radio template', renderer.includes("case 'gap_trend':") && renderer.includes("const side=d.direction==='behind' ? '後ろ' : '前';"));
 console.log(`\nLocal Intent Router: ${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);

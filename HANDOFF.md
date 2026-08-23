@@ -41,6 +41,13 @@ push した後、サーバー側に変更が含まれるなら必ず実行する
   GitHubから実取得して照合済み。日付版 `OMORAY-PITWALL-Setup-20260819-0400.exe` と**ハッシュ一致**（latestが古い版を指したままでないことを確認）。
 - **実走で残る確認**: 短縮後の発話が実際に3〜5秒で終わるか（7文字/秒の**推定**であり、TTS実測ではない）。他の決定論カード（燃料・順位・ピット等）の長さは未点検。
 
+## Build 279 出荷候補: 前後GAP即答・条件付き能動GAP（未公開）
+
+- 八木さんの8/22 St. Petersburgログで、`後ろとの差`の問い合わせ時にBridgeの`gapBehind=5.8`が存在したにもかかわらず、会話が`今、ここでは伝えられない。`へ落ちた。`desktop/local-intent-router.js`へ前・後ろ・前後GAPの決定論的回答を追加し、同じ音声認識揺れを含む`パンで後ろとの差。`も`後ろ5.8秒。`へ到達するテストを追加した。本当に無い時だけ、対象を明示して`後ろのGAPはまだ取れていない。`と返す。
+- `irsdk-bridge/gap_call_policy.py`を新設。レース中の前後GAPが3秒以上隔たった二つの観測間で、25%以上かつ1.5秒以上変化し、0.8〜12秒の範囲にある場合だけ`gap_trend`候補を作る。Bridgeの既存舵角・ブレーキ発話ゲート、P4予算、4秒の鮮度破棄を必ず通すため、コーナー／ブレーキング中に新たに話し始めず、古くなった候補は捨てる。
+- 機械検証: `node tests-local-intent-router.js` 19/19、`python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_trend_wiring.py` 8/8、`python3 irsdk-bridge/tests_phase_ab_integration.py` 28/28、`python3 irsdk-bridge/tests_fuel_strategy_wiring.py` 25/25、Python compile、`git diff --check` 合格。外部API呼び出しなし。
+- 未確認: Windows/iRacing実走で、質問の即答が低負荷区間まで保留されること、能動GAPが短いストリートコースで過剰にならず、変化した時だけ有用に聞こえること。
+
 ## Build 277 の中身
 
 - 八木さん 8/18 実走（Build 276 / St Petersburg / Audi R8 LMS GT3）で、アンダー相談の回答が129文字・TTS4分割で**24秒**かかった。最初の声は665msで出ており、原因は遅延ではなく長さ。実測レート約7文字/秒、Yuji判断で許容は3〜5秒＝21〜35文字。

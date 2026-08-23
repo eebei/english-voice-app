@@ -3563,6 +3563,11 @@ function oishiRadio(d, forSpeech=false){
     case 'pit_exit':       return ``;
     case 'limiter_off':    return `リミッターオフ。アウトラップ、ペースキープ。`;
     case 'rolling_gap':    return `前と${d.gap}秒。詰めていこう。`;
+    case 'gap_trend': {
+      const side=d.direction==='behind' ? '後ろ' : '前';
+      const trend=d.trend==='closing' ? '縮んだ' : '開いた';
+      return `${side}${d.gap_s}秒。${d.change_s}秒${trend}。`;
+    }
     case 'pit_box_countdown': return `${d.meters}メートル。`;
     // ★2026-07-21 実走ログで発覚：ここにケースが無いとinjectRadioがbridge.pyの英語
     //   フォールバック("Box here. Slow." 等)をそのまま喋ってしまう(LunaJP実走で確認)。
