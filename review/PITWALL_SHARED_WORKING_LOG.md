@@ -354,6 +354,21 @@ Build 266 は `388abb7 Build 266 adaptive race intelligence` として既に com
 - 罠：`bridge.py` だけの変更では `build-desktop.yml` が**発火しない**（pushトリガーは `desktop/**` のみ）。`build-bridge.yml` だけ走るので**Actionsが緑でもElectron側は古いbridgeのまま**。Build 277でも実際に踏み、手動dispatchで解消。
 - 罠：製品Build番号の出所は `irsdk-bridge/bridge.py:54` の `BUILD_VERSION` ただ一箇所。GitHubのrun番号ではない。
 
+### 2026-08-24 Claude Code — Build 281 レビュー結果：**差戻し**
+
+結果本文: [BUILD281_CLAUDE_REVIEW_RESULT.md](BUILD281_CLAUDE_REVIEW_RESULT.md)
+対象: [BUILD281_GAP_FUEL_DEBRIEF_HAZARD_REVIEW_REQUEST.md](BUILD281_GAP_FUEL_DEBRIEF_HAZARD_REVIEW_REQUEST.md)
+
+方向性は正しく、GAP経路の順序入れ替え（#1）とハザード優先度（#4）には問題を見つけられなかった。ただし**燃料P0ガードに、実行不可能な補正でP0を握り潰す経路が残っている**。
+
+- **P1-1** `plan_fuel_authority.py:223` — 小口補正が `fuel_at_stop + corrected_add <= capacity` を検査していない。満タンで頭打ちの計画では推奨給油を増やしても搭載量が1滴も増えず、**補正が物理的に無効なままP0を抑止する**。`evaluate()` を実データ形状で直接呼んで再現済み（容量50L/給油前残1.5L/計画49L → 補正後の余裕は -0.1L のまま変化なし）。`capacity_fits` は `planned_add <= capacity` しか見ていない。
+- **P1-2** `bridge.py:2953` / `2764` — `pit_events` のリセットが**片系統だけ**。`session_laps` は `_reset` と `_sig_reset` の両方で消えるのに `pit_events` は `_reset` のみ。前セッションのピット記録が生き残ると `buildCurrentSessionFactNote()` が「今回レースのBridge確定ピット記録・この記録だけを事実として使え」としてLLMへ注入する＝**捏造を止める仕組みが古い事実を今回の事実として断言させる**。`_session_scoped_reset_values()` へ入れて両系統から取るべき。
+- **P2-1** `SMALL_SERVICE_CORRECTION_L` を 0.5→5.0（10倍）に緩めても **Python 261テストが全部通る**。本物の緊急を握り潰す唯一のレバーなのに境界テストが無い。
+- **P2-2** `test_bridge_persists_small_top_up_into_the_later_box_plan` が `assertIn` の文字列一致のみで、書き戻しが実際に起きるかを検証していない。Build 277 で踏んだ失敗（`exit 1` の存在だけを見ていた）と同型。
+- 追加（Buildは止めない）：GAP再構築ロジックが `local-intent-router.js:139` と `renderer.html:2253` に重複。router 側の `wantsBoth` 第2項が `!A && B && A` で**恒偽**の死んだ条件。
+- 検証：`tests-local-intent-router.js` ✅ / `tests-telemetry-truth-gate.js` ✅ / Python **261 passed**（依頼文書の主張と一致）。変異試験2件はどちらも**検出されず**。
+- commit / push / installer build / 公開はしていない。
+
 ## Codexレビュー結果
 
 - 2026-08-12: Build 266初回候補を差戻し。上記「Build 266候補のCodex差戻し」7項目が未解決。
