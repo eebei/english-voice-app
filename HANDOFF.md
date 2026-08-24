@@ -48,14 +48,18 @@ push した後、サーバー側に変更が含まれるなら必ず実行する
 - 機械検証: `node tests-local-intent-router.js` 19/19、`python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_trend_wiring.py` 8/8、`python3 irsdk-bridge/tests_phase_ab_integration.py` 28/28、`python3 irsdk-bridge/tests_fuel_strategy_wiring.py` 25/25、Python compile、`git diff --check` 合格。外部API呼び出しなし。
 - 未確認: Windows/iRacing実走で、質問の即答が低負荷区間まで保留されること、能動GAPが短いストリートコースで過剰にならず、変化した時だけ有用に聞こえること。
 
-## Build 280出荷中: 8/23アホ回答・古いGAPの再発防止
+## Build 280 公開完了: 8/23アホ回答・古いGAPの再発防止
 
 - Build 279実走で失敗した発話を、文言だけでなく経路で修正。Fuel Window将来コールはPC内の一回監視へ、`次のしゅ ピット`はピット判断へ、`ドライブする ペナルティ`は申告ACKへ接続した。完走目標、荒れたレースへの感想、ピット位置報告も古い会話履歴へ流さない。
 - `今、ここでは伝えられない。`を製品handlerから撤去。未確認時は対象を明示し、Truth Gateの最後に聞かれていない燃料／GAP説明を加えない。
 - 能動GAPは隣接`CarIdx`、incident、順位epoch、現在GAPを保有し、相手交代・接触・2順位以上の急変・停止車警告・発話直前の数値変化で破棄する。保留GAPは同一pollの最新スナップショット更新後にだけ再生判定する。
 - 原価: 今回ローカル化したACK／Fuel Window経路はAnthropic会話APIを呼ばない。TTSは従来経路なので総原価ゼロとは扱わない。
 - 機械検証: 8/23失敗固定再生10/10、Local Router 29/29、Engineer Card 110/110、Truth Gate 55/55、GAP 20/20、Python discovery 259/259、JavaScript全57 suite、HTTP 54/54、`./preflight.sh`出荷可、compile／`git diff --check`合格。
-- 残るのはWindows実機・実iRacing・実音声の間合い。2026-08-24にYujiからBuild 280のcommit / push / build / 公開GOあり。公開証拠は完了後にこの節へ追記する。
+- 実装コミット: `70ea15d`（`Build 280 fix conversation routing and stale gap calls`）。Railway本番は`./verify-deploy.sh`でSHA `70ea15dc95cd28212db0e17e4096efdb63bc23e1`との一致を実測確認。
+- GitHub Actions: Bridge公開workflow `32678561560`、Desktop公開workflow `32678563106`、いずれも同一実装SHAで成功。
+- Release: `desktop-latest`は **OMORAY PITWALL Desktop — Build 280**。公開`OMORAY-PITWALL-Setup-latest.exe`を実取得し、**100,622,528 bytes**、SHA-256 `7a1c3a04096947f07ec9205c7fdd5854d273d2b18155785c2d3bc0b57f5a1382`でRelease資産と一致。日付版・旧互換版も同一ハッシュ。
+- Bridge release: `OMORAY-PITWALL-Bridge-20260824.exe` 10,369,074 bytes / SHA-256 `cea0586adf10ad159bf6b429ba109d099d42eb5cd881c49efc3813f45e3d9e88`。
+- 残るのはWindows起動後のBuild 280表示、実iRacingテレメトリ、Fuel Window一回コール、事故直後の古いGAP抑止、実音声の間合い。これらは公開済みと混同せず実走で確認する。
 
 ## Build 277 の中身
 
