@@ -92,6 +92,10 @@ const localRoute = renderer.indexOf("diagnosticLog('LOCAL_INTENT_ROUTE'");
 const cloudRoute = renderer.indexOf("await callAPI(inputSource==='ptt'?'ptt':'typed', memoryStatus);");
 check('renderer loads the tested router before its inline runtime', routerScript >= 0 && runtimeScript > routerScript);
 check('local route returns before the cloud conversation route', localRoute >= 0 && cloudRoute > localRoute && /speak\(reply,[\s\S]{0,350}?return;/.test(renderer.slice(localRoute, cloudRoute)));
+const debriefGate = renderer.indexOf('if(evidenceDebrief && evidenceDebrief.active){');
+check('8/24 GAP replay: live local facts run before an active debrief can intercept PTT',
+  localRoute >= 0 && debriefGate > localRoute
+  && renderer.includes("diagnosticLog('LOCAL_INTENT_BYPASS'"));
 check('renderer arms and delivers the one-shot fuel-window monitor from telemetry',
   renderer.includes("type==='arm_fuel_window_watch'")
   && renderer.includes('maybeDeliverFuelWindowWatch(lastTelemetry)')

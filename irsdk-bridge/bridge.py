@@ -54,7 +54,7 @@ import practice_profile
 import gap_call_policy as gap_call_policy_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 280 (conversation routing and gap delivery guard)"
+BUILD_VERSION = "Build 281 (gap, fuel-plan, debrief and hazard guard)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -500,7 +500,9 @@ PRIORITY = {
     # P1 安全・文脈（Yuji仕様：GT3は最も遅いクラス＝速い車の接近は危険。必ず報告する）
     'multiclass': 1, 'multi_car_straight': 1, 'pit_box_here': 1,   # pit_box_hereは期限が極端に短い
     # ↓Codex提案で格下げ：低SR/iRは物理的な即時危険ではない
-    'danger': 3,
+    # A known dangerous driver ahead is not as immediate as a stopped car,
+    # but it must never be ducked by a PB/lap-time call.
+    'danger': 1,
     # P2 手順（タイミングが命）
     'pit_entry': 2, 'pit_exit': 2, 'pit_box_stop': 2, 'limiter_off': 2, 'pit_box_countdown': 2,
     # ★2026-07-24 Codex P0：post_contact_okはcrash_check(P0)発火の5秒後に必ず届かせたい"安否確認の第二声"。
@@ -822,6 +824,9 @@ def _session_scoped_reset_values():
         'checkered_pending': False,
         'session_racing_started': False,
         'session_laps': [],
+        # Pit facts are session-scoped debrief evidence.  Keeping them in
+        # this shared reset source clears both SessionNum and signature paths.
+        'pit_events': [],
         # ★2026-07-23 Codex再指摘 P1：予選で予算満杯のままレース開始→最初の警告が通らない
         #   事故を防ぐ。SessionNum変更時に候補予算をリセット（judge_llm_call_timesは他の
         #   セッション限定状態と同じくセッション毎に独立させる）。
@@ -867,6 +872,28 @@ def _session_scoped_reset_values():
         # Handoff must never carry a tyre measurement across a new session.
         'last_tire_report': None,
     }
+
+
+def apply_recommended_plan_fuel(plan_owners, plan_id, recommended_add, recommended_set):
+    """Persist an authority-approved top-up in every live copy of one plan.
+
+    Returns True only if a selected-plan dictionary was actually changed.
+    The poll loop uses this pure helper so tests exercise the write path rather
+    than merely searching for an assignment string in this source file.
+    """
+    if (not isinstance(plan_id, str) or not isinstance(recommended_set, int)
+            or not isinstance(recommended_add, (int, float))):
+        return False
+    changed = False
+    for owner in plan_owners:
+        if not isinstance(owner, dict):
+            continue
+        plan = owner.get('plan_' + plan_id.lower())
+        if isinstance(plan, dict):
+            plan['add_fuel_l'] = round(float(recommended_add), 3)
+            plan['set_fuel_l'] = int(recommended_set)
+            changed = True
+    return changed
 
 
 def derive_pit_phase(lifecycle_state, on_pit_road, lap, pit_exit_lap):
@@ -2438,6 +2465,9 @@ def poll_iracing():
     pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
     last_pit_cycle_outcome = None
     last_pit_service = None  # latest exact IN-limit-line -> OUT-limit-line sample
+    # Exact pit facts are owned by the Bridge and follow the race into the
+    # session summary.  Debrief must never infer a pit lap from Plan A/B.
+    pit_events = []
     strategy_plan = None     # owned plan: changes only when its truth signature changes
     strategy_plan_signature = None
     strategy_plan_revision = 0
@@ -2757,6 +2787,7 @@ def poll_iracing():
                         checkered_pending = _sig_reset['checkered_pending']
                         session_racing_started = _sig_reset['session_racing_started']
                         session_laps = _sig_reset['session_laps']
+                        pit_events = _sig_reset['pit_events']
                         # ★2026-07-23 Codex再指摘 P1(2回目)：SessionNum経路と同じくsig経路でも
                         #   LLM候補予算をリセットしないと、trackやevent_typeが変わった瞬間に
                         #   前セッションの予算満杯を持ち越して最初のcallが通らない事故になる。
@@ -2913,6 +2944,7 @@ def poll_iracing():
                             if fuel_per_lap_hist else None),
                         'incidents': prev_incidents or 0,
                         'laps': list(session_laps),
+                        'pit_events': list(pit_events),
                     }
                     _transition_summary = _old_summary
             checker_out_notice_sent = _reset['checker_out_notice_sent']
@@ -2944,6 +2976,7 @@ def poll_iracing():
             checkered_pending = _reset['checkered_pending']
             session_racing_started = _reset['session_racing_started']
             session_laps = _reset['session_laps']
+            pit_events = _reset['pit_events']
             judge_llm_call_times = _reset['judge_llm_call_times']
             judge_llm_skip_log_last = _reset['judge_llm_skip_log_last']
             # ★2026-07-24 Codex P1：接触監視もSessionNum変更で捨てる
@@ -3236,6 +3269,7 @@ def poll_iracing():
                         'pace_last_half': _pace_last,
                         'incidents': prev_incidents or 0,
                         'laps': session_laps,
+                        'pit_events': list(pit_events),
                     }
                     _official_rows = latest_session_results.get(cur_snum, [])
                     _official_player = next((r for r in _official_rows
@@ -4082,6 +4116,23 @@ def poll_iracing():
                         effective_capacity_l=session_effective_fuel_capacity_l,
                         safety_override=False,
                         endurance_plan=_endurance_plan)
+                    # A small post-stop miss is corrected at the selected
+                    # service, not converted into an early P0.  Persist that
+                    # correction into every live copy of the selected plan so
+                    # the later box call and the driver's dashboard agree.
+                    _recommended_set = _plan_authority_verdict.get('recommended_set_fuel_l')
+                    _recommended_add = _plan_authority_verdict.get('recommended_add_l')
+                    _recommended_plan_id = _plan_authority_verdict.get('plan_id')
+                    if (isinstance(_recommended_plan_id, str)
+                            and isinstance(_recommended_set, int)
+                            and isinstance(_recommended_add, (int, float))):
+                        _top_up_applied = apply_recommended_plan_fuel(
+                            (strategy_options, _plan_options_for_authority,
+                             _session_race_state.get('active_plan_snapshot')),
+                            _recommended_plan_id, _recommended_add, _recommended_set)
+                        log('PLAN FUEL TOP-UP: plan=%s add=%.3f set=%s applied=%s'
+                            % (_recommended_plan_id, _recommended_add, _recommended_set,
+                               _top_up_applied))
                     log('PLAN FUEL AUTHORITY: '
                         + json.dumps(_plan_authority_verdict, ensure_ascii=False,
                                      separators=(',', ':')))
@@ -4950,6 +5001,18 @@ def poll_iracing():
                     'fuel_added_l': _fuel_added,
                     'session_num': cur_snum,
                 }
+                _pit_event = {
+                    'entry_lap': pit_enter_lap,
+                    'exit_lap': pit_exit_lap,
+                    'entry_class_position': pit_enter_pos,
+                    'exit_class_position': class_pos,
+                    'fuel_added_l': _fuel_added,
+                    'lane_total_s': pit_lane_sec,
+                    'stall_s': round(pit_stall_total_s, 2),
+                }
+                pit_events.append(_pit_event)
+                log('PIT EVENT FACT: ' + json.dumps(_pit_event, ensure_ascii=False,
+                                                     separators=(',', ':')))
                 _pit_exit_score = pit_exit_forecaster_mod.score_actual(
                     pit_exit_forecast_shadow, class_pos)
                 _strategy_option_score = strategy_options_mod.score_execution(

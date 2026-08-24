@@ -2,6 +2,13 @@
 
 最終更新: 2026-08-24 JST
 
+## Build 281 出荷実行中（2026-08-24、公開前最終ゲート）
+
+- 対象はBuild 280の8/24実走で再発した、GAP即答の不成立、微小燃料差による予定外P0ピット、デブリーフのピット周回創作、危険候補の優先度逆転。
+- `review/BUILD281_GAP_FUEL_DEBRIEF_HAZARD_REVIEW_REQUEST.md` をレビュー正本とする。実走ログの事実、再生条件、反証すべき安全条件をそこへ固定した。
+- 修正は、ライブRace PTTのローカルGAP回答をデブリーフより先に通すこと、Truth Gateで最新GAPを再構成すること、0.5L以内の予定ピット後不足を予定外P0にしないこと、実ピット事実だけをデブリーフへ渡すこと、危険候補をPBより優先すること。
+- Claudeの初回差戻し（満タン補正／pit_events reset／境界／実書き戻し）へ対応済み。Yujiの明示GOにより、現在は出荷前最終ゲートとBuild実行へ進む。Memory Action v1はこのBuildに混ぜず次Buildへ分離する。
+
 ## Starter Pass 商用導線（出荷候補・未公開）
 
 - Stripe商品: `OMORAY PITWALL — Starter Pass`、一回払い **US$9.99**。Stripe Price ID は本番環境変数 `STRIPE_STARTER_PRICE_ID` に設定する予定。外部設定・公開は未実施。

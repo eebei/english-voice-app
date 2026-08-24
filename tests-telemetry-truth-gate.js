@@ -64,6 +64,9 @@ if(truthFallbackFn){
     context.telemetryTruthFallback({}, '無事完走を目指す。', true)==='うん、完走しよう。インシデントゼロでいこう。');
   check('フロントのフィーリングをtruth-gateが否定しない',
     context.telemetryTruthFallback({}, 'フロントが食わないな。', true)==='了解。無理に押さず、次の確認でフロントの状態を見よう。');
+  const gapReply=context.telemetryTruthFallback({gap_ahead:0.2,gap_behind:1.7}, '後ろとギャップはどう？', true);
+  check('8/24 GAP replay: Truth Gate replaces a blocked LLM gap with current Bridge gap',
+    gapReply==='後ろ1.7秒。');
 }
 
 const lapFn = renderer.match(/function lapTimeSpeechJP\(value\)\{[\s\S]*?\n\}/);

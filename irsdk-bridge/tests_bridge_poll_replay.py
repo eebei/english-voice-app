@@ -72,7 +72,8 @@ class PollLoopReplayWorks(unittest.TestCase):
     def test_no_external_api_is_reachable_from_the_replay(self):
         """原価ゲート：この再生は外部APIを一切呼べない。"""
         import replay_harness
-        source = open(replay_harness.__file__, encoding='utf-8').read()
+        with open(replay_harness.__file__, encoding='utf-8') as harness_file:
+            source = harness_file.read()
         for forbidden in ('requests', 'urllib', 'http.client', 'socket',
                           'anthropic', 'texttospeech'):
             self.assertNotIn('import %s' % forbidden, source)

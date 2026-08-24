@@ -20,6 +20,11 @@ planned service cannot finish, other P0 safety condition) always passes.
 import math
 
 RESERVE_L = 0.5
+# A sub-half-litre post-stop miss is not evidence that the car must pit ten
+# laps early.  It is normally a stale burn snapshot / whole-litre pit-setting
+# rounding issue.  Keep the selected window, request a deterministic top-up,
+# and reserve P0 for the only true emergency: cannot physically reach it.
+SMALL_SERVICE_CORRECTION_L = 0.5
 
 
 def _finite(value):
@@ -215,6 +220,29 @@ def evaluate(fuel_eval, strategy_options, *, current_lap, fuel_level_l,
                              max(0.0, plan.get('fuel_at_stop_l') or 0.0) + float(planned_add))
         finish_margin = target_onboard - float(avg_fuel_per_lap_l) * remaining_after - RESERVE_L
         if finish_margin < 0:
+            if finish_margin >= -SMALL_SERVICE_CORRECTION_L:
+                corrected_add = float(planned_add) + abs(finish_margin)
+                fuel_at_stop = max(0.0, plan.get('fuel_at_stop_l') or 0.0)
+                corrected_onboard = min(float(effective_capacity_l),
+                                        fuel_at_stop + corrected_add)
+                corrected_finish_margin = (corrected_onboard
+                                           - float(avg_fuel_per_lap_l) * remaining_after
+                                           - RESERVE_L)
+                # A tank already capped at capacity cannot be fixed by asking
+                # for more fuel.  Suppress P0 only when the correction really
+                # removes the post-stop deficit in the physical fuel model.
+                if corrected_finish_margin >= -1e-6:
+                    return {**base, 'plan_id': plan_id, 'next_pit_lap': pit_lap,
+                            'laps_to_pit': laps_to_pit,
+                            'reach_pit_margin_l': round(reach_margin, 3),
+                            'planned_add_l': planned_add,
+                            'recommended_add_l': round(corrected_add, 3),
+                            'recommended_set_fuel_l': int(math.ceil(corrected_add)),
+                            'capacity_fits_plan': capacity_fits,
+                            'finish_margin_after_stop_l': round(finish_margin, 3),
+                            'corrected_finish_margin_after_stop_l': round(corrected_finish_margin, 3),
+                            'allow_p0_pit_now': False,
+                            'suppression_reason': 'planned_service_small_top_up_required'}
             return {**base, 'plan_id': plan_id, 'next_pit_lap': pit_lap,
                     'laps_to_pit': laps_to_pit,
                     'reach_pit_margin_l': round(reach_margin, 3),
@@ -222,7 +250,7 @@ def evaluate(fuel_eval, strategy_options, *, current_lap, fuel_level_l,
                     'capacity_fits_plan': capacity_fits,
                     'finish_margin_after_stop_l': round(finish_margin, 3),
                     'allow_p0_pit_now': True,
-                    'override_reason': 'planned_service_cannot_finish'}
+                    'override_reason': 'planned_service_correction_cannot_finish'}
 
     # The plan reaches its window and its service finishes.  The total-race
     # deficit is exactly the planned fuel add — a P0 "box this lap" would

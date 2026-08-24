@@ -137,7 +137,7 @@
     // evaluated first: a driver asking "後ろとの差" must never fall through
     // to an LLM/no-data template while the Bridge already has gap_behind.
     if (/(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)/i.test(text)) {
-      const wantsBoth = /前後|both/i.test(text) || (!/前|ahead/i.test(text) && /後ろ|後方|behind/i.test(text) && /前|ahead/i.test(text));
+      const wantsBoth = /前後|both/i.test(text);
       const wantsAhead = wantsBoth || /前|ahead/i.test(text);
       const wantsBehind = wantsBoth || /後ろ|後方|behind/i.test(text);
       const ahead = finite(live.gap_ahead);

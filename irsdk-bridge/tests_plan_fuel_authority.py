@@ -24,6 +24,7 @@ sys.path.insert(0, HERE)
 import fuel_strategy as fuel_strategy_mod
 import plan_fuel_authority as plan_fuel_authority_mod
 import strategy_options as strategy_options_mod
+import bridge as bridge_mod
 
 
 BRIDGE_PATH = os.path.join(HERE, 'bridge.py')
@@ -208,6 +209,91 @@ class Monza35EventOrder(unittest.TestCase):
         self.assertEqual(verdict['override_reason'],
                          'cannot_reach_selected_pit_window')
         self.assertLess(verdict['reach_pit_margin_l'], 0)
+
+    def test_small_post_stop_rounding_miss_does_not_force_an_early_pit(self):
+        """8/24 Build 280 replay: -0.025L after the planned service is a
+        top-up/set-fuel correction, not a Lap-6 emergency when the selected
+        Lap-16 window is physically reachable."""
+        options = {
+            'available': True, 'selected_plan': 'A',
+            'plan_a': {
+                'available': True, 'target_lap': 16,
+                'fuel_at_stop_l': 2.5, 'add_fuel_l': 14.148,
+                'remaining_crossings_after_stop': 5,
+            },
+        }
+        fuel_eval = {'band': fuel_strategy_mod.CRITICAL, 'should_warn': True,
+                     'margin_l': -13.722, 'reason': 'warning_candidate',
+                     'previous_band': None}
+        verdict = plan_fuel_authority_mod.evaluate(
+            fuel_eval, options, current_lap=6, fuel_level_l=34.8,
+            avg_fuel_per_lap_l=3.235, effective_capacity_l=53)
+        self.assertFalse(verdict['allow_p0_pit_now'])
+        self.assertEqual(verdict['suppression_reason'],
+                         'planned_service_small_top_up_required')
+        self.assertEqual(verdict['next_pit_lap'], 16)
+        self.assertEqual(verdict['recommended_set_fuel_l'], 15)
+
+    def test_small_top_up_requires_a_physical_post_stop_margin(self):
+        """A capped tank must not pretend a larger add fixes a fuel deficit."""
+        options = {
+            'available': True, 'selected_plan': 'A',
+            'plan_a': {
+                'available': True, 'target_lap': 10,
+                'fuel_at_stop_l': 1.5, 'add_fuel_l': 49.0,
+                'remaining_crossings_after_stop': 20,
+            },
+        }
+        verdict = plan_fuel_authority_mod.evaluate(
+            {'band': fuel_strategy_mod.CRITICAL}, options,
+            current_lap=5, fuel_level_l=20.0, avg_fuel_per_lap_l=2.48,
+            effective_capacity_l=50.0)
+        self.assertTrue(verdict['allow_p0_pit_now'])
+        self.assertEqual(verdict['override_reason'],
+                         'planned_service_correction_cannot_finish')
+        self.assertNotIn('recommended_add_l', verdict)
+
+    def test_small_top_up_threshold_is_exactly_half_a_litre(self):
+        options = {
+            'available': True, 'selected_plan': 'A',
+            'plan_a': {
+                'available': True, 'target_lap': 10,
+                'fuel_at_stop_l': 2.0, 'add_fuel_l': 10.0,
+                'remaining_crossings_after_stop': 4,
+            },
+        }
+        at_limit = plan_fuel_authority_mod.evaluate(
+            {'band': fuel_strategy_mod.CRITICAL}, options,
+            current_lap=5, fuel_level_l=20.0, avg_fuel_per_lap_l=3.0,
+            effective_capacity_l=50.0)
+        self.assertFalse(at_limit['allow_p0_pit_now'])
+        self.assertEqual(at_limit['suppression_reason'],
+                         'planned_service_small_top_up_required')
+
+        past_limit = plan_fuel_authority_mod.evaluate(
+            {'band': fuel_strategy_mod.CRITICAL}, options,
+            current_lap=5, fuel_level_l=20.0, avg_fuel_per_lap_l=3.0025,
+            effective_capacity_l=50.0)
+        self.assertTrue(past_limit['allow_p0_pit_now'])
+        self.assertEqual(past_limit['override_reason'],
+                         'planned_service_correction_cannot_finish')
+
+    def test_bridge_persists_small_top_up_into_the_later_box_plan(self):
+        options = {'plan_a': {'available': True, 'add_fuel_l': 14.148}}
+        snapshot = {'plan_a': {'available': True, 'add_fuel_l': 14.148}}
+        applied = bridge_mod.apply_recommended_plan_fuel(
+            (options, snapshot, None), 'A', 14.173, 15)
+        self.assertTrue(applied)
+        self.assertEqual(options['plan_a']['add_fuel_l'], 14.173)
+        self.assertEqual(options['plan_a']['set_fuel_l'], 15)
+        self.assertEqual(snapshot['plan_a']['add_fuel_l'], 14.173)
+        self.assertEqual(snapshot['plan_a']['set_fuel_l'], 15)
+
+    def test_pit_events_are_fresh_in_the_shared_session_reset(self):
+        first = bridge_mod._session_scoped_reset_values()
+        first['pit_events'].append({'entry_lap': 6})
+        second = bridge_mod._session_scoped_reset_values()
+        self.assertEqual(second['pit_events'], [])
 
 
 class Monza35FullTimeline(unittest.TestCase):

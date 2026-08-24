@@ -2122,28 +2122,10 @@ async function sendMsg(inputSource){
     addMsg('ai',reply);pushMsg({role:'assistant',content:reply});speak(reply,true);
     return;
   }
-  if(evidenceDebrief && evidenceDebrief.active){
-    // Guided review stays active, but a question to the engineer must not be consumed
-    // as the next evidence answer. Let the normal debrief LLM answer it.
-    if(isDebriefAnalysisQuestion(text)){
-      await callAPI(inputSource==='ptt'?'ptt':'typed');
-      return;
-    }
-    usageCount(inputSource==='ptt'?'ptt':'typed');
-    const evidenceResult=recordEvidenceAnswer(text);
-    if(evidenceResult==='not_answer') await callAPI(inputSource==='ptt'?'ptt':'typed');
-    return;
-  }
-  if(isManualReviewCommand(text)){
-    usageCount(inputSource==='ptt'?'ptt':'typed');
-    startManualRunReview();
-    return;
-  }
-  // OMO-PW V3: current telemetry facts do not need a Railway/LLM round trip.
-  // Keep this deliberately narrow.  A strategy choice, a pit decision, or an
-  // ambiguous instruction is not a "local answer" and must still reach Luna.
-  // This runs before memory work so a one-word acknowledgement never becomes
-  // a memory candidate or an Anthropic request.
+  // Live-race facts have priority over every conversational state, including
+  // a debrief panel left open from a prior session.  A driver asking for the
+  // gap must never be routed to an LLM/no-data template while the Bridge has
+  // the value.  Keep this before evidenceDebrief deliberately.
   const localIntent = (selMode==='race' && iracingLive && lastTelemetry
     && window.PitwallLocalIntentRouter)
     ? window.PitwallLocalIntentRouter.route({
@@ -2162,6 +2144,26 @@ async function sendMsg(inputSource){
     pushMsg({role:'assistant',content:reply});
     speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'local_'+localIntent.intent,
       dedupeKey:'local|'+localIntent.intent+'|'+reply});
+    return;
+  }
+  if(selMode==='race' && iracingLive){
+    diagnosticLog('LOCAL_INTENT_BYPASS',`reason=${lastTelemetry?'unhandled':'no_telemetry'} debrief=${!!(evidenceDebrief&&evidenceDebrief.active)}`);
+  }
+  if(evidenceDebrief && evidenceDebrief.active){
+    // Guided review stays active, but a question to the engineer must not be consumed
+    // as the next evidence answer. Let the normal debrief LLM answer it.
+    if(isDebriefAnalysisQuestion(text)){
+      await callAPI(inputSource==='ptt'?'ptt':'typed');
+      return;
+    }
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    const evidenceResult=recordEvidenceAnswer(text);
+    if(evidenceResult==='not_answer') await callAPI(inputSource==='ptt'?'ptt':'typed');
+    return;
+  }
+  if(isManualReviewCommand(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    startManualRunReview();
     return;
   }
   const explicitMemoryRequest = isExplicitMemoryRequest(text);
@@ -2247,6 +2249,22 @@ function telemetryTruthFallback(live, userText, isJP){
       ? (isJP ? `残り${fmtDuration(Math.max(0,sec),true)}。残り周回はまだ確定できない。` : `${fmtDuration(Math.max(0,sec),false)} remain; finish crossings are not confirmed.`)
       : (isJP ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.');
   }
+  // A numeric nearest-car gap produced by the LLM was correctly blocked by
+  // the truth gate in Build 280, but then degraded to "了解。".  Rebuild the
+  // exact requested fact from this same Bridge snapshot instead.
+  if(/(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)/i.test(asked)){
+    const wantsBoth=/前後|both/i.test(asked);
+    const wantsAhead=wantsBoth||/前|ahead/i.test(asked);
+    const wantsBehind=wantsBoth||/後ろ|後方|behind/i.test(asked);
+    const ahead=Number(live?.gap_ahead), behind=Number(live?.gap_behind);
+    const parts=[];
+    if(wantsAhead&&Number.isFinite(ahead)) parts.push(isJP?`前${ahead.toFixed(1)}秒`:`${ahead.toFixed(1)} seconds ahead`);
+    if(wantsBehind&&Number.isFinite(behind)) parts.push(isJP?`後ろ${behind.toFixed(1)}秒`:`${behind.toFixed(1)} seconds behind`);
+    if(parts.length) return isJP?`${parts.join('、')}。`:`${parts.join(', ')}.`;
+    const requested=wantsAhead&&wantsBehind?(isJP?'前後のGAP':'The nearest gaps')
+      :wantsAhead?(isJP?'前のGAP':'Gap ahead'):(isJP?'後ろのGAP':'Gap behind');
+    return isJP?`${requested}はまだ取れていない。`:`${requested} is not available yet.`;
+  }
   if(/燃料|給油|足りる|リットル|リッター|fuel|lit(?:er|re)|make it/i.test(asked)){
     const endurance=fs.endurance_plan||live?.endurance_fuel_plan||{};
     const splash=endurance.splash_forecast||{};
@@ -2325,7 +2343,7 @@ async function callAPI(inputSource, memoryStatus=''){
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
   // ★契約ノートを1階記憶と一緒にLLMへ（未契約=最小限モード宣言 / 契約済=守るべき約束を明示）
   const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildPracticeProfileNote() + buildFuelAuthorityNote(_isJP_pre)
-    + buildWeekendAuthorityNote(_isJP_pre) + buildSessionEvidenceNote()
+    + buildWeekendAuthorityNote(_isJP_pre) + buildCurrentSessionFactNote(_isJP_pre) + buildSessionEvidenceNote()
     + buildContractNote(_isJP_pre) + buildActiveRaceFactsNote(_isJP_pre)
     + buildMemoryStatusNote(_isJP_pre, memoryStatus);
   const raceHistory = buildRaceHistoryContext();
@@ -5963,6 +5981,15 @@ function buildRaceHistoryContext(){
     });
     return rows.join('\n');
   }catch{return '';}
+}
+function buildCurrentSessionFactNote(isJP){
+  const summary=lastSessionSummary&&lastSessionSummary.is_race===true?lastSessionSummary:null;
+  if(!summary) return '';
+  const events=Array.isArray(summary.pit_events)?summary.pit_events.filter(e=>e&&Number.isInteger(Number(e.entry_lap))):[];
+  const facts=events.map(e=>`entry_lap=${Number(e.entry_lap)}, exit_lap=${Number(e.exit_lap)||'unknown'}, fuel_added_l=${Number.isFinite(Number(e.fuel_added_l))?Number(e.fuel_added_l).toFixed(2):'unknown'}`).join(' | ')||'none_recorded';
+  return isJP
+    ? `\n\n━━ 今回レースのBridge確定ピット記録 ━━\n${facts}\nピット周・給油量・復帰順位はこの記録だけを事実として使え。記録がない時は周回数を推測・補完・訂正するな。ドライバーがアンダーカットを褒めても、相手の実ピット周期が未記録なら成功を断定せず、早めのピット後の結果として短く受け止めろ。`
+    : `\n\n━━ CURRENT RACE — BRIDGE PIT FACTS ━━\n${facts}\nUse only these facts for pit laps, fuel and rejoin. With no record, never infer or correct a lap number. If the driver praises an undercut but rival pit cycles are not recorded, acknowledge the outcome without claiming a confirmed undercut success.`;
 }
 function buildSessionEvidenceNote(){
   try{
