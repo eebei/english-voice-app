@@ -2,12 +2,17 @@
 
 最終更新: 2026-08-24 JST
 
-## Build 281 出荷実行中（2026-08-24、公開前最終ゲート）
+## Build 281 公開完了（2026-08-24、GAP・燃料・デブリーフ・危険車両ガード）
 
 - 対象はBuild 280の8/24実走で再発した、GAP即答の不成立、微小燃料差による予定外P0ピット、デブリーフのピット周回創作、危険候補の優先度逆転。
 - `review/BUILD281_GAP_FUEL_DEBRIEF_HAZARD_REVIEW_REQUEST.md` をレビュー正本とする。実走ログの事実、再生条件、反証すべき安全条件をそこへ固定した。
 - 修正は、ライブRace PTTのローカルGAP回答をデブリーフより先に通すこと、Truth Gateで最新GAPを再構成すること、0.5L以内の予定ピット後不足を予定外P0にしないこと、実ピット事実だけをデブリーフへ渡すこと、危険候補をPBより優先すること。
-- Claudeの初回差戻し（満タン補正／pit_events reset／境界／実書き戻し）へ対応済み。Yujiの明示GOにより、現在は出荷前最終ゲートとBuild実行へ進む。Memory Action v1はこのBuildに混ぜず次Buildへ分離する。
+- Claudeの初回差戻し（満タン補正／pit_events reset／境界／実書き戻し）へ対応済み。Memory Action v1はこのBuildに混ぜず次Buildへ分離した。
+- 実装コミット: `de8980b`（`Build 281 harden gap fuel and debrief guards`）。GitHub `main` は同一SHA `de8980bfaef1ecaa20048eae82092eeb679c3007`。
+- GitHub Actions: Desktop公開workflow `32708923554`、Bridge公開workflow `32708926810` はいずれも成功し、同一SHAを使用した。
+- Desktop Release: `desktop-latest` の `OMORAY-PITWALL-Setup-latest.exe` を公開URLから実取得し、**100,623,735 bytes**、SHA-256 `393afb2474ebc6845eacb553ce6b3e8d469a6dc252adfcac19a76226791c22c7`でRelease資産と一致。
+- Bridge Release: `bridge-latest` に `OMORAY-PITWALL-Bridge-20260824.exe`（10,372,811 bytes、SHA-256 `55341bb29e41e6cd32091fa7a063644838facab76f8b09073f686c84c37b811f`）およびSetup資産を公開。
+- 残る実走確認: WindowsでBuild 281表示・自動更新取得、Race PTTの後方GAP即答、満タン容量時の小差燃料不足で予定外P0へ正しく移ること、停止車／危険車両がPBより優先されること。公開・機械試験とは混同しない。
 
 ## Starter Pass 商用導線（出荷候補・未公開）
 
