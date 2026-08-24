@@ -1245,6 +1245,7 @@ let strategyPlaybookRefreshKey = '';
 let strategyPlaybookDecisionKeys = new Set();
 let enduranceForecastAnnouncedKey = '';
 let enduranceFuelWindowAnnouncedKey = '';
+let fuelWindowWatch = {armed:false,sessionKey:'',announced:false};
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
@@ -1273,6 +1274,7 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   strategyPlaybookDecisionKeys=new Set();
   enduranceForecastAnnouncedKey='';
   enduranceFuelWindowAnnouncedKey='';
+  fuelWindowWatch={armed:false,sessionKey:String(nextSessionNum??lastSessionNum??''),announced:false};
   // Session boundary is also a hard pace-evaluation boundary.  Do not let a
   // direction evaluated in Practice/Qualifying mute the first Race judgement.
   try{
@@ -2152,6 +2154,10 @@ async function sendMsg(inputSource){
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;
     diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=bridge_local`);
+    if(localIntent.action&&localIntent.action.type==='arm_fuel_window_watch'){
+      fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
+      diagnosticLog('FUEL_WINDOW_WATCH','armed session='+fuelWindowWatch.sessionKey);
+    }
     addMsg('ai',reply);
     pushMsg({role:'assistant',content:reply});
     speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'local_'+localIntent.intent,
@@ -2303,11 +2309,11 @@ function telemetryTruthFallback(live, userText, isJP){
     // フィーリングまで否定する定型文にはしない（8/16実走フィードバック）。
     if(/完走|finish|チェッカー|checkered/i.test(String(userText||''))) return 'うん、完走しよう。インシデントゼロでいこう。';
     if(/フロント.*(?:食わ|入ら|ない)|曲がら|アンダー|オーバー|ステア|grip|understeer|oversteer/i.test(String(userText||''))) return '了解。無理に押さず、次の確認でフロントの状態を見よう。';
-    return '了解。いまは数値が揃った時だけコールする。';
+    return '了解。';
   }
   if(live && live.on_pit_road===true) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
-  return 'Understood. I will call it when the numbers are confirmed.';
+  return 'Copy.';
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -3282,6 +3288,7 @@ function connectBridge(){
         updateStrategyPlaybookFromLive(lastTelemetry);
         if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         evaluateLiveStrategySwitch(lastTelemetry);
+        maybeDeliverFuelWindowWatch(lastTelemetry);
         maybeAnnounceEnduranceFuelForecast(lastTelemetry);
         updatePracticeRun(data);
         announceActiveStrategyObjective(lastTelemetry);
@@ -5799,6 +5806,27 @@ function evaluateLiveStrategySwitch(live){
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
   speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'strategy_playbook_switch',dedupeKey:decision.decision_id});
   diagnosticLog('STRATEGY_PLAYBOOK_DECISION',JSON.stringify(decision));
+}
+function maybeDeliverFuelWindowWatch(live){
+  if(!fuelWindowWatch.armed||fuelWindowWatch.announced||isSessionEndingLifecycle()) return;
+  const currentSession=String(lastSessionNum??'');
+  if(fuelWindowWatch.sessionKey!==currentSession){
+    fuelWindowWatch={armed:false,sessionKey:currentSession,announced:false};
+    diagnosticLog('FUEL_WINDOW_WATCH','expired reason=session_changed');
+    return;
+  }
+  const router=window.PitwallLocalIntentRouter;
+  if(!router||typeof router.fuelWindowStatus!=='function') return;
+  const lang=isJapaneseEngineer()?'ja':'en';
+  const status=router.fuelWindowStatus(live||{},lang);
+  if(!status||status.state!=='open') return;
+  fuelWindowWatch.announced=true;
+  fuelWindowWatch.armed=false;
+  const msg=lang==='ja'?'ウィンドウ開いた。今周から入れる。':'Fuel window open. We can stop from this lap.';
+  const key=['fuel_window_watch',currentSession,Number(live?.lap)||0].join('|');
+  addMsg('ai',msg);pushMsg({role:'assistant',content:msg});
+  speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'fuel_window_watch',dedupeKey:key});
+  diagnosticLog('FUEL_WINDOW_WATCH','delivered key='+key);
 }
 function maybeAnnounceEnduranceFuelForecast(live){
   if(!/race/i.test(String(lastSessionType||live?.session_type||''))||isSessionEndingLifecycle()) return;

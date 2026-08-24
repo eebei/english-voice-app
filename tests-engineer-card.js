@@ -231,9 +231,26 @@ routed = cards.route('タイヤ摩耗は？', {
 check('running tyre-wear query waits for pit return',
   routed.card.tyreQuery === 'wear' && /ピット帰還後/.test(routed.reply) && !/100\.0%/.test(routed.reply), routed.reply);
 const unknownRoute = cards.route('ピットの魔法を使える？', build255Live, 'ja', { race:true });
-check('unhandled operational request uses the short confidential no-data reply',
+check('unhandled operational request names the subject without an internal stock phrase',
   unknownRoute && unknownRoute.card.topic===cards.TOPIC.UNRESOLVED_OPERATIONAL
-  && unknownRoute.status==='deferred' && unknownRoute.reply==='今、ここでは伝えられない。');
+  && unknownRoute.status==='deferred' && unknownRoute.reply==='そのピット操作は確認できない。'
+  && !/今、ここでは伝えられない/.test(unknownRoute.reply), unknownRoute&&unknownRoute.reply);
+for(const utterance of ['次の周ピット入ろうかな？','次のしゅ ピット 入ろうかな？']){
+  routed = cards.route(utterance, build255Live, 'ja', {race:true});
+  check(`8/23 next-lap pit question reaches the pit decision: ${utterance}`,
+    routed && routed.card.topic===cards.TOPIC.PIT_DECISION
+    && routed.reply!=='今、ここでは伝えられない。', routed&&routed.reply);
+}
+for(const utterance of ['ドライブスルーペナルティだった。','ドライブする ペナルティ だったよ。']){
+  routed = cards.route(utterance, build255Live, 'ja', {race:true});
+  check(`8/23 drive-through report receives a human acknowledgement: ${utterance}`,
+    routed && routed.card.topic===cards.TOPIC.PENALTY_REPORT
+    && routed.reply==='了解。ドライブスルーだったな。', routed&&routed.reply);
+}
+routed = cards.route('フロントが食わないな。', build255Live, 'ja', {race:true});
+check('plain handling report is acknowledged without an unasked setup monologue',
+  routed && routed.card.topic===cards.TOPIC.HANDLING_REPORT
+  && /フロントの反応を比べよう/.test(routed.reply), routed&&routed.reply);
 card = cards.classify('燃料 0になってるけど。', {race:true});
 reply = cards.build(card, {...build255Live, fuel:0}, 'ja');
 check('fuel-zero wording routes to an immediate measured emergency handler',

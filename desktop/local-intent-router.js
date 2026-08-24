@@ -27,7 +27,32 @@
     if (m) return isJP(lang) ? `${m}分${s}秒` : `${m}m ${s}s`;
     return isJP(lang) ? `${s}秒` : `${s}s`;
   };
-  const answer = (intent, reply) => reply ? { handled:true, intent, reply } : { handled:false };
+  const answer = (intent, reply, action) => reply
+    ? { handled:true, intent, reply, ...(action ? { action } : {}) }
+    : { handled:false };
+
+  function fuelWindowStatus(live, lang) {
+    const options = live && live.strategy_options && typeof live.strategy_options === 'object'
+      ? live.strategy_options : {};
+    const planB = options.plan_b && typeof options.plan_b === 'object' ? options.plan_b : {};
+    const inLaps = integer(options.fuel_window_open_in_laps ?? planB.target_in_laps);
+    if (planB.fuel_window_open === true) return {
+      state:'open',
+      reply:isJP(lang) ? 'ウィンドウは開いている。今周から入れる。'
+        : 'The fuel window is open. We can stop from this lap.'
+    };
+    if (inLaps !== null && inLaps > 0) return {
+      state:'waiting',
+      inLaps,
+      reply:isJP(lang) ? `まだ。あと${inLaps}周。`
+        : `Not yet. ${inLaps} lap${inLaps === 1 ? '' : 's'} to the fuel window.`
+    };
+    return {
+      state:'measuring',
+      reply:isJP(lang) ? 'まだ。燃費と完走距離を確認中。'
+        : 'Not yet. I am still confirming fuel burn and the finish distance.'
+    };
+  }
 
   function fuelReply(live, lang) {
     const fs = live && live.fuel_strategy && typeof live.fuel_strategy === 'object'
@@ -65,6 +90,21 @@
 
     if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
       return answer('acknowledgement', isJP(lang) ? '了解。' : 'Copy.');
+    }
+    // A future fuel-window instruction is a monitor command, not a request
+    // for the current generic fuel total.  Build 279 sent this through
+    // fuelReply(), then lost the promised follow-up entirely.  Arm a local
+    // one-shot monitor; renderer delivers it from the authoritative Plan B
+    // window without an LLM or Railway round trip.
+    if (/(?:フューエル|燃料|給油).{0,10}(?:ウ[ィイ]?ンドウ|ウインド|window).{0,14}(?:(?:開)?いたら|開けば|オープンしたら).{0,14}(?:教えて|言って|コール|入る|入ろう|よろしく)|(?:tell|call|let me know).{0,16}(?:fuel )?window.{0,8}(?:open|opens)/i.test(text)) {
+      return answer('fuel_window_watch', isJP(lang)
+        ? '了解。ウィンドウが開いたら短くコールする。'
+        : 'Copy. I will call it briefly when the fuel window opens.',
+      { type:'arm_fuel_window_watch' });
+    }
+    if (/(?:フューエル|燃料|給油).{0,10}(?:ウ[ィイ]?ンドウ|ウインド|window)|(?:fuel )?window/i.test(text)) {
+      const status = fuelWindowStatus(live, lang);
+      return answer('fuel_window_status', status.reply);
     }
     if (/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
       return answer('fuel_status', fuelReply(live, lang));
@@ -126,8 +166,21 @@
         ? (isJP(lang) ? `現在P${position}。` : `Currently P${position}.`)
         : (isJP(lang) ? '現在順位の権威データがない。' : 'Authoritative current position is unavailable.'));
     }
+    if (!/[?？]/.test(text) && /(?:俺たち|うち|自分).{0,8}ピット.{0,12}出口.{0,8}近|our pit.{0,12}(?:near|close to).{0,8}(?:the )?exit/i.test(text)) {
+      return answer('pit_location_ack', isJP(lang) ? '了解。ボックスは出口寄りだな。' : 'Copy. Our box is near pit exit.');
+    }
+    // Narrow race-side acknowledgements keep an ordinary driver comment out
+    // of a long conversation history, where Build 279 replayed an unrelated
+    // old Turn-1 briefing.  Questions and operational requests still fall
+    // through to the deterministic cards / conversational engineer.
+    if (!/[?？]/.test(text) && /(?:無事.{0,6}完走|完走.{0,6}目指|インシデント.{0,6}ゼロ|bring it home|finish clean)/i.test(text)) {
+      return answer('race_goal_ack', isJP(lang) ? '了解。完走を優先しよう。' : 'Copy. Let us prioritise bringing it home.');
+    }
+    if (!/[?？]/.test(text) && /(?:全く|ひどい|荒れて|めちゃくちゃ|ばっか|祭り|危なすぎ|what a mess|this is chaos)/i.test(text)) {
+      return answer('race_comment_ack', isJP(lang) ? '了解。落ち着いていこう。' : 'Copy. Stay calm and keep it clean.');
+    }
     return { handled:false };
   }
 
-  return { route, formatDuration };
+  return { route, formatDuration, fuelWindowStatus };
 }));

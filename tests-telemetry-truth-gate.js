@@ -154,7 +154,10 @@ check('truth-gateデフォルト分岐から無関係な定型文が消えてい
 check('truth-gateはドライバーの目標やフィーリングを否定しない',
   renderer.includes('うん、完走しよう。インシデントゼロでいこう。')
   && renderer.includes('了解。無理に押さず、次の確認でフロントの状態を見よう。')
-  && renderer.includes('了解。いまは数値が揃った時だけコールする。'));
+  && renderer.includes("return '了解。';"));
+check('truth-gateの最終fallbackは無関係な燃料/GAP説明を足さない',
+  !renderer.includes('了解。いまは数値が揃った時だけコールする。')
+  && renderer.includes("return 'Copy.';"));
 
 console.log(`\nTelemetry Truth Gate: ${pass}/${pass + fail}`);
 if(fail) process.exit(1);

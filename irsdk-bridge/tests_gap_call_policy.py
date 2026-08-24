@@ -44,6 +44,38 @@ class GapCallPolicyTests(unittest.TestCase):
         self.p.observe('race-1', 6, ahead_s=4.0)
         self.assertIsNone(self.p.observe('race-1', 9, ahead_s=0.5))
 
+    def test_adjacent_car_change_restarts_the_baseline(self):
+        self.assertIsNone(self.p.observe('race-1', 0, ahead_s=8.0, ahead_car_idx=10))
+        self.assertIsNone(self.p.observe('race-1', 3, ahead_s=5.0, ahead_car_idx=11))
+        event = self.p.observe('race-1', 6, ahead_s=3.0, ahead_car_idx=11)
+        self.assertIsNotNone(event)
+        self.assertEqual(event['car_idx'], 11)
+        self.assertEqual(event['gap_s'], 3.0)
+
+    def test_incident_change_discards_old_gap_and_waits_for_settle(self):
+        self.p.observe('race-1', 0, behind_s=8.0, behind_car_idx=21,
+                       player_position=8, incident_count=0)
+        self.assertIsNone(self.p.observe('race-1', 3, behind_s=5.0, behind_car_idx=21,
+                                         player_position=8, incident_count=1))
+        self.assertIsNone(self.p.observe('race-1', 10, behind_s=4.5, behind_car_idx=21,
+                                         player_position=8, incident_count=1))
+        self.assertIsNone(self.p.observe('race-1', 12, behind_s=4.0, behind_car_idx=21,
+                                         player_position=8, incident_count=1))
+        event = self.p.observe('race-1', 15, behind_s=2.5, behind_car_idx=21,
+                               player_position=8, incident_count=1)
+        self.assertIsNotNone(event)
+
+    def test_multi_position_jump_discards_old_comparison(self):
+        self.p.observe('race-1', 0, ahead_s=8.0, ahead_car_idx=10,
+                       player_position=10, incident_count=0)
+        self.assertIsNone(self.p.observe('race-1', 3, ahead_s=5.0, ahead_car_idx=10,
+                                         player_position=7, incident_count=0))
+        self.assertIsNone(self.p.observe('race-1', 9, ahead_s=5.0, ahead_car_idx=10,
+                                         player_position=7, incident_count=0))
+        event = self.p.observe('race-1', 12, ahead_s=3.0, ahead_car_idx=10,
+                               player_position=7, incident_count=0)
+        self.assertIsNotNone(event)
+
 
 if __name__ == '__main__':
     unittest.main()

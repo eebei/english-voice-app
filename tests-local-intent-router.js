@@ -21,6 +21,8 @@ const live = {
   gap_ahead: 4.6,
   gap_behind: 5.8,
   race_plan: { kind:'timed', configured_duration_s: 7200 },
+  strategy_options: { available:true, fuel_window_open_in_laps:2,
+    plan_b:{ fuel_window_open:false, target_in_laps:2 } },
   fuel_strategy: { avg_fuel_per_lap:2.53, required_fuel_l:10.6, margin_l:4.4, estimated_crossings_to_finish:4 },
 };
 let r = route('燃料は？', live);
@@ -45,6 +47,35 @@ r = route('今ポジション何位？', live);
 check('current class position is answered locally', r.handled && r.reply==='現在P8。');
 r = route('了解', live);
 check('acknowledgement bypasses cloud', r.handled && r.intent==='acknowledgement' && r.reply==='了解。');
+r = route('フューエルウィンドウが開いたら言って', live);
+check('future fuel-window instruction arms a local monitor instead of reading generic fuel',
+  r.handled && r.intent==='fuel_window_watch'
+  && r.action?.type==='arm_fuel_window_watch' && !/15\.0|10\.6/.test(r.reply));
+for(const utterance of [
+  'フューエル ウィンドウ 開いたら言ってピット 入るわ。',
+  'フューエル ウィンドウがいたら教えてくれっっつーの？',
+  'フューエル ウィンドウがいたらすぐ入るかもしんないよ。よろしく。台数多いからね。',
+]){
+  r=route(utterance,live);
+  check(`8/23 STT replay arms fuel-window monitor: ${utterance}`,
+    r.handled&&r.intent==='fuel_window_watch'&&r.action?.type==='arm_fuel_window_watch');
+}
+r = route('フューエルウィンドウ空いてない？まだ', live);
+check('fuel-window status names the authoritative remaining laps',
+  r.handled && r.intent==='fuel_window_status' && r.reply==='まだ。あと2周。');
+r = route('フューエルウィンドウ空いてる？', {...live,
+  strategy_options:{available:true,plan_b:{fuel_window_open:true,target_in_laps:0}}});
+check('open fuel window is answered from Plan B authority',
+  r.handled && r.reply==='ウィンドウは開いている。今周から入れる。');
+r = route('全くそうなやつばっかだな。', live);
+check('race frustration gets a current short acknowledgement, never an old briefing',
+  r.handled && r.intent==='race_comment_ack' && r.reply==='了解。落ち着いていこう。');
+r = route('無事完走を目指す。', live);
+check('race goal gets a considerate local acknowledgement',
+  r.handled && r.intent==='race_goal_ack' && r.reply==='了解。完走を優先しよう。');
+r = route('俺たちのピットはピットロード 出口に近いところだから。', live);
+check('8/23 pit-location report gets a relevant acknowledgement rather than a refusal',
+  r.handled&&r.intent==='pit_location_ack'&&/出口寄り/.test(r.reply));
 r = route('アンダーカットする？', live);
 check('strategy judgement remains with Luna, not local router', !r.handled);
 r = route('ピット入る？', live);
@@ -61,6 +92,10 @@ const localRoute = renderer.indexOf("diagnosticLog('LOCAL_INTENT_ROUTE'");
 const cloudRoute = renderer.indexOf("await callAPI(inputSource==='ptt'?'ptt':'typed', memoryStatus);");
 check('renderer loads the tested router before its inline runtime', routerScript >= 0 && runtimeScript > routerScript);
 check('local route returns before the cloud conversation route', localRoute >= 0 && cloudRoute > localRoute && /speak\(reply,[\s\S]{0,350}?return;/.test(renderer.slice(localRoute, cloudRoute)));
+check('renderer arms and delivers the one-shot fuel-window monitor from telemetry',
+  renderer.includes("type==='arm_fuel_window_watch'")
+  && renderer.includes('maybeDeliverFuelWindowWatch(lastTelemetry)')
+  && renderer.includes('ウィンドウ開いた。今周から入れる。'));
 check('Bridge gap-trend event has a Japanese radio template', renderer.includes("case 'gap_trend':") && renderer.includes("const side=d.direction==='behind' ? '後ろ' : '前';"));
 console.log(`\nLocal Intent Router: ${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);

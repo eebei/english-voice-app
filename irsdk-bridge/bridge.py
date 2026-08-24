@@ -54,7 +54,7 @@ import practice_profile
 import gap_call_policy as gap_call_policy_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 279 (gap answers and gated trend calls)"
+BUILD_VERSION = "Build 280 (conversation routing and gap delivery guard)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1202,6 +1202,92 @@ _gate_state = {'pending': None, 'since': 0.0}
 _gate_window_ok = True
 _gate_active = False        # ゲートを効かせる状況か（＝オントラック走行中。ピット/ガレージでは効かせない）
 
+# A gap sentence can wait behind the steering/brake gate for up to four
+# seconds.  During that wait the adjacent car can change, a contact can occur,
+# or the current raw gap can move materially.  Build 279 replayed the old
+# candidate after exactly those boundaries.  Keep the latest physical context
+# next to the queue and revalidate at delivery, not only at generation.
+_gap_live_context = {
+    'generation': 0, 'session_key': None, 'updated_at': 0.0,
+    'ahead_car_idx': None, 'behind_car_idx': None,
+    'ahead_gap_s': None, 'behind_gap_s': None,
+    'player_position': None, 'incident_count': None,
+}
+
+def _drop_pending_gap(reason):
+    pending = _gate_state.get('pending')
+    if pending and pending.get('trigger') == 'gap_trend':
+        _gate_state['pending'] = None
+        log('GAP_CANDIDATE_DISCARDED reason=%s' % reason)
+
+def _update_gap_live_context(session_key, now, ahead_car_idx, behind_car_idx,
+                             ahead_gap_s, behind_gap_s, player_position,
+                             incident_count):
+    previous = dict(_gap_live_context)
+    boundary = None
+    if previous.get('session_key') != session_key:
+        boundary = 'session_changed'
+    elif previous.get('ahead_car_idx') != ahead_car_idx:
+        boundary = 'ahead_identity_changed'
+    elif previous.get('behind_car_idx') != behind_car_idx:
+        boundary = 'behind_identity_changed'
+    elif (previous.get('incident_count') is not None and incident_count is not None
+          and previous.get('incident_count') != incident_count):
+        boundary = 'incident_changed'
+    else:
+        try:
+            if (previous.get('player_position') is not None and player_position is not None
+                    and abs(int(previous['player_position']) - int(player_position)) >= 2):
+                boundary = 'position_jump'
+        except (TypeError, ValueError):
+            pass
+    if boundary:
+        _gap_live_context['generation'] = int(previous.get('generation') or 0) + 1
+        _drop_pending_gap(boundary)
+    _gap_live_context.update({
+        'session_key': session_key, 'updated_at': float(now),
+        'ahead_car_idx': ahead_car_idx, 'behind_car_idx': behind_car_idx,
+        'ahead_gap_s': ahead_gap_s, 'behind_gap_s': behind_gap_s,
+        'player_position': player_position, 'incident_count': incident_count,
+    })
+    return _gap_live_context['generation']
+
+def _invalidate_gap_live_context(reason):
+    _gap_live_context['generation'] = int(_gap_live_context.get('generation') or 0) + 1
+    _gap_live_context['updated_at'] = time.time()
+    _gap_live_context['ahead_car_idx'] = None
+    _gap_live_context['behind_car_idx'] = None
+    _gap_live_context['ahead_gap_s'] = None
+    _gap_live_context['behind_gap_s'] = None
+    _drop_pending_gap(reason)
+
+def _gap_candidate_is_fresh(event, now=None):
+    if not event or event.get('trigger') != 'gap_trend':
+        return True, 'not_gap_trend'
+    now = time.time() if now is None else float(now)
+    try:
+        observed_at = float(event.get('observed_at'))
+    except (TypeError, ValueError):
+        return False, 'missing_observed_at'
+    if now - observed_at > SPEAK_HOLD_MAX + 0.25:
+        return False, 'candidate_expired'
+    if event.get('context_generation') != _gap_live_context.get('generation'):
+        return False, 'context_generation_changed'
+    direction = event.get('direction')
+    if direction not in ('ahead', 'behind'):
+        return False, 'invalid_direction'
+    if event.get('car_idx') != _gap_live_context.get(direction + '_car_idx'):
+        return False, 'adjacent_identity_changed'
+    try:
+        spoken_gap = float(event.get('gap_s'))
+        current_gap = float(_gap_live_context.get(direction + '_gap_s'))
+    except (TypeError, ValueError):
+        return False, 'current_gap_unavailable'
+    tolerance = max(1.0, abs(spoken_gap) * 0.25)
+    if abs(current_gap - spoken_gap) > tolerance:
+        return False, 'gap_changed_before_delivery'
+    return True, 'fresh'
+
 def _set_speak_gate(window_ok, active):
     global _gate_window_ok, _gate_active
     changed = (window_ok != _gate_window_ok or active != _gate_active)
@@ -1223,6 +1309,11 @@ def flush_radio():
     if not p:
         return
     if _gate_window_ok:
+        fresh, reason = _gap_candidate_is_fresh(p)
+        if not fresh:
+            log('GAP_CANDIDATE_DISCARDED reason=%s' % reason)
+            _gate_state['pending'] = None
+            return
         _gate_state['pending'] = None
         broadcast(p)                     # 通過済み扱い・戻り値は現状使わず
     elif time.time() - _gate_state.get('since', 0.0) > SPEAK_HOLD_MAX:
@@ -3260,7 +3351,20 @@ def poll_iracing():
             driver_state == 'track'
             and (_speech_speed is None or _speech_speed >= 5.0))
         _set_speak_gate(speak_window_ok, _speech_gate_active)
-        flush_radio()
+        # A held GAP sentence must not be released against the previous poll's
+        # adjacent-car snapshot.  The current poll refreshes that snapshot in
+        # the GAP block below, then calls flush_radio().  Non-GAP radio does
+        # not depend on that snapshot and can still leave immediately.
+        _pending_radio = _gate_state.get('pending')
+        _pending_is_gap = bool(
+            isinstance(_pending_radio, dict)
+            and _pending_radio.get('trigger') == 'gap_trend')
+        if _pending_is_gap and (
+                not onTrack or onPit or in_formation or is_qualifying_session):
+            _invalidate_gap_live_context('gap_delivery_context_unavailable')
+            flush_radio()
+        elif not _pending_is_gap:
+            flush_radio()
         # Start-rush suppression is for strategic/battle chatter only.  A
         # CarLeftRight safety warning is most valuable at the first corner,
         # so arm the side-by-side detector as soon as green racing begins.
@@ -4990,6 +5094,8 @@ def poll_iracing():
         # CarIdxF2Time = iRacingダッシュボードと同じ相対タイム（EstTimeより正確）
         nearest_ahead_gap = None    # 毎ループ更新（前後の最近接ギャップ）
         nearest_behind_gap = None
+        nearest_ahead_idx = None
+        nearest_behind_idx = None
         _same_class_main = set()
         if (player_car_idx >= 0 and onTrack and not onPit and not in_formation
                 and not is_qualifying_session):
@@ -5021,20 +5127,10 @@ def poll_iracing():
                         _gd = _et - p_et  # 負=前方(est_timeが小さい), 正=後方
                         if _gd < 0 and -_gd < 30 and (nearest_ahead_gap is None or -_gd < nearest_ahead_gap):
                             nearest_ahead_gap = -_gd
+                            nearest_ahead_idx = _ei
                         elif _gd > 0 and _gd < 30 and (nearest_behind_gap is None or _gd < nearest_behind_gap):
                             nearest_behind_gap = _gd
-
-            # Gap reports are information, not a battle instruction.  The
-            # policy emits only material percentage changes; broadcast then
-            # applies the shared steering/brake speech gate and P4 budget.
-            if (is_race_session and session_racing_started and onTrack and not onPit
-                    and not in_formation
-                    and (nearest_ahead_gap is not None or nearest_behind_gap is not None)):
-                _gap_event = gap_call_policy.observe(
-                    (cur_snum, session_track, session_car_model), time.time(),
-                    ahead_s=nearest_ahead_gap, behind_s=nearest_behind_gap)
-                if _gap_event is not None:
-                    broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
+                            nearest_behind_idx = _ei
 
             # ── 停止/クラッシュ車両検知（コース上・オフトラックで動きが止まってる車）──
             # 1秒おきにLapDistPctの変化をサンプリングし、ほぼ動いてなければ「停止」とみなす。
@@ -5115,6 +5211,13 @@ def poll_iracing():
                         elif ((_has_lap_time and _sdist <= 5.0) or _startup_close) and (stopped_armed.get(idx, False) or idx not in stopped_warned):
                             _lastw = stopped_warned.get(idx, 0)
                             if _now2 - _lastw > 20:
+                                # P0 hazard invalidates any older P4 gap sentence
+                                # waiting behind the workload gate.  Warm the
+                                # gap baseline again only after the field has
+                                # settled; do not follow "stopped car" with a
+                                # now-irrelevant number.
+                                gap_call_policy.suppress(_now2, 8.0)
+                                _invalidate_gap_live_context('stopped_ahead')
                                 broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
                                     'delta': round(_sdist, 1) if _has_lap_time else None,
                                     'message': ('Stopped car ahead, ' + _fmt_gap(_sdist) + '.'
@@ -5122,6 +5225,34 @@ def poll_iracing():
                                 stopped_armed[idx] = False
                                 stopped_warned[idx] = _now2
                                 last_battle_global = _now2
+
+            # Gap reports are information, not a battle instruction.  The
+            # physical adjacent-car identity and incident/position epoch are
+            # part of the candidate.  A held sentence is revalidated again by
+            # flush_radio() immediately before delivery.
+            _gap_now = time.time()
+            _gap_session_key = (cur_snum, session_track, session_car_model)
+            _gap_generation = _update_gap_live_context(
+                _gap_session_key, _gap_now,
+                nearest_ahead_idx, nearest_behind_idx,
+                nearest_ahead_gap, nearest_behind_gap,
+                class_pos, incidents)
+            # Revalidate and deliver an older held GAP only after this poll's
+            # physical neighbour IDs, raw gaps, position and incident epoch
+            # have replaced the previous snapshot.
+            flush_radio()
+            if (is_race_session and session_racing_started and onTrack and not onPit
+                    and not in_formation
+                    and (nearest_ahead_gap is not None or nearest_behind_gap is not None)):
+                _gap_event = gap_call_policy.observe(
+                    _gap_session_key, _gap_now,
+                    ahead_s=nearest_ahead_gap, behind_s=nearest_behind_gap,
+                    ahead_car_idx=nearest_ahead_idx,
+                    behind_car_idx=nearest_behind_idx,
+                    player_position=class_pos, incident_count=incidents)
+                if _gap_event is not None:
+                    _gap_event['context_generation'] = _gap_generation
+                    broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
 
             _same_class_main = set()  # ★R2：下のstandings_gapsブロックからも参照するため、分岐の外で既定値を持つ
             if car_f2_times and player_car_idx < len(car_f2_times):

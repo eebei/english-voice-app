@@ -22,6 +22,8 @@ const TOPIC = Object.freeze({
   DAMAGE_STATUS: 'damage_status',
   WEATHER_STATUS: 'weather_status',
   HANDLING_SETUP_ADVICE: 'handling_setup_advice',
+  HANDLING_REPORT: 'handling_report',
+  PENALTY_REPORT: 'penalty_report',
   TRAFFIC_STATUS: 'traffic_status',
   PLAN_STATUS: 'plan_status',
   SESSION_FORMAT: 'session_format',
@@ -29,7 +31,16 @@ const TOPIC = Object.freeze({
   UNRESOLVED_OPERATIONAL: 'unresolved_operational',
 });
 
-const OPERATIONAL_RE = /燃料|給油|リットル|リッター|ピット|ボックス|順位|何番手|ギャップ|差|ペース|タイヤ|摩耗|ダメージ|修理|天候|気温|路面|雨|残り(?:周|時間)|レース時間|戦略|プラン|アンダー\s*カット|オーバー\s*カット|トラフィック|前の車|後ろの車|fuel|pit|box|position|gap|pace|tyre|tire|damage|repair|weather|rain|laps? left|race time|strategy|plan|traffic|undercut|overcut/i;
+const OPERATIONAL_RE = /燃料|給油|リットル|リッター|ピット|ボックス|順位|何番手|ギャップ|差|ペース|タイヤ|摩耗|ダメージ|修理|天候|気温|路面|雨|残り(?:周|時間)|レース時間|戦略|プラン|アンダー\s*カット|オーバー\s*カット|トラフィック|前の車|後ろの車|ペナルティ|ドライブスルー|fuel|pit|box|position|gap|pace|tyre|tire|damage|repair|weather|rain|laps? left|race time|strategy|plan|traffic|undercut|overcut|penalt|drive.?through/i;
+
+function unresolvedSubject(text) {
+  const t = String(text || '');
+  if (/ギャップ|前|後ろ|後方|gap|ahead|behind/i.test(t)) return 'gap';
+  if (/ピット|ボックス|pit|box/i.test(t)) return 'pit';
+  if (/燃料|給油|リットル|リッター|fuel|lit(?:er|re)/i.test(t)) return 'fuel';
+  if (/ペナルティ|ドライブスルー|penalt|drive.?through/i.test(t)) return 'penalty';
+  return 'operation';
+}
 
 function handlingSymptomName(text) {
   const t = String(text || '');
@@ -38,7 +49,7 @@ function handlingSymptomName(text) {
   // 最初の一手を返す。
   if (/リア.{0,12}(?:踏ん張り|グリップ).{0,8}(?:欲しい|ほしい|足りない|不足)|(?:rear).{0,12}(?:grip|traction).{0,12}(?:need|want|lack)/i.test(t)) return 'rear_grip';
   if (/オーバー(?:ステア)?|oversteer|loose|リア.{0,4}(?:出る|流れる)/i.test(t)) return 'oversteer';
-  if (/アンダー(?:ステア)?|understeer|push|曲がらない/i.test(t)) return 'understeer';
+  if (/アンダー(?:ステア)?|understeer|push|曲がらない|フロント.{0,6}(?:食わない|入らない)/i.test(t)) return 'understeer';
   if (/タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ)|グリップ.{0,6}(?:ない|落ち|不足)/i.test(t)) return 'tyre_degradation';
   return 'unspecified';
 }
@@ -48,7 +59,9 @@ function classify(text, options = {}) {
   // Japanese STT frequently turns ピット into ビット.  Normalize only when
   // the following word proves a race-operation context; ordinary "bit" talk
   // remains untouched.
-  const t = raw.replace(/ビット(?=\s*(?:イン|タイミング|戦略|作戦|レーン|ロード|ウインドウ|給油))/g, 'ピット');
+  const t = raw
+    .replace(/ビット(?=\s*(?:イン|タイミング|戦略|作戦|レーン|ロード|ウインドウ|給油))/g, 'ピット')
+    .replace(/次のしゅ(?=\s*(?:ピット|ボックス))/g, '次の周');
   if (!t) return null;
 
   if (/ピット(?:レーン)?(?:ロス|タイム|時間)|IN.{0,8}OUT|制限ライン.{0,8}(?:秒|時間)|直近.{0,8}ピット.{0,8}(?:秒|時間)|pit loss|pit lane time|in.{0,8}out/i.test(t)) return { topic: TOPIC.PIT_LOSS, confidence: 0.99 };
@@ -88,13 +101,16 @@ function classify(text, options = {}) {
   if (/今.{0,8}\d+(?:\.\d+)?\s*[lL]/.test(t)) return { topic: TOPIC.CURRENT_FUEL, confidence: 0.94 };
 
   if (/(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|レース.{0,10}(?:距離|時間)|何分\s*(?:制|製)(?:の)?(?:レース)?|予選(?:あり|なし)|このセッション.{0,8}(?:何|なん|どれ)|セッション.{0,8}(?:何|なん|どれ|練習|予選|決勝)|練習.{0,8}予選.{0,8}(?:決勝|レース)|session format|race format|qualifying/i.test(t)) return { topic: TOPIC.SESSION_FORMAT, confidence: 0.99 };
+  if (/(?:ドライブ\s*(?:スルー|する)|ドライブスルー|drive.?through).{0,12}(?:ペナルティ|だった|受けた|来た|penalt)|(?:ペナルティ|penalt).{0,12}(?:ドライブ\s*(?:スルー|する)|ドライブスルー|drive.?through)/i.test(t)) {
+    return { topic: TOPIC.PENALTY_REPORT, confidence: 0.99 };
+  }
   if (/残り.{0,8}(?:何[周週]|周回|時間)|あと.{0,8}(?:何[周週]|何分)|レース.{0,8}(?:何[周週]|何分|時間)|チェッカー|ホワイトフラッグ|race distance|laps? left|time remaining|white flag/i.test(t)) return { topic: TOPIC.RACE_DISTANCE, confidence: 0.98 };
   if (/(?:アンダー\s*カット|オーバー\s*カット).*(?:どう思う|どうする|あり|狙|判断|いけ)|(?:どう思う|どうする|判断).*(?:アンダー\s*カット|オーバー\s*カット)/i.test(t)) return {
     topic: TOPIC.STRATEGY_SWITCH,
     requestedPlan: /オーバー\s*カット|overcut/i.test(t) ? 'C' : 'B',
     confidence: 0.99,
   };
-  if (/^(?:ボックス|box)[。.!！?？]*$|次のピット.{0,6}(?:タイミング|いつ|何周)|ピット.{0,6}(?:タイミング|いつ)|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
+  if (/^(?:ボックス|box)[。.!！?？]*$|次のピット.{0,6}(?:タイミング|いつ|何周)|(?:次|この)(?:の)?(?:周|ラップ).{0,8}(?:ピット|ボックス)|ピット.{0,8}(?:入ろう|入るかな|タイミング|いつ)|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).*(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|暫定.{0,12}(?:何位|何番手|順位|ポジション)|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABCＡＢＣ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[abc]/i.test(t)) {
     const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
@@ -123,11 +139,15 @@ function classify(text, options = {}) {
   const setupNoun = /セッ?ト\s*ア(?:ッ|ツ)?プ|セッティング|set-?up/i.test(t);
   // 「方向」「変えたい」「意見」等は単独では弱いので、症状と組み合わせて判定する。
   const setupIntent = /方向性|方向|変えたい|変更したい|振り|アドバイス|意見|どうすれば|balance/i.test(t);
-  const handlingSymptom = /アンダー(?:ステア)?|オーバー(?:ステア)?|タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ|厳しい|きつい)|グリップ.{0,6}(?:ない|落ち|不足)|曲がらない|滑る|リア.{0,12}(?:出る|流れる|踏ん張り|グリップ).{0,8}(?:欲しい|ほしい|ない|不足)?|understeer|oversteer|grip|traction|slide|loose|push/i.test(t);
+  const handlingSymptom = /アンダー(?:ステア)?|オーバー(?:ステア)?|タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ|厳しい|きつい)|グリップ.{0,6}(?:ない|落ち|不足)|曲がらない|滑る|フロント.{0,6}(?:食わない|入らない)|リア.{0,12}(?:出る|流れる|踏ん張り|グリップ).{0,8}(?:欲しい|ほしい|ない|不足)?|understeer|oversteer|grip|traction|slide|loose|push/i.test(t);
   if (setupNoun || (setupIntent && handlingSymptom)
       || (handlingSymptom && /どう|なに|何|対策|解決|直|なおし|改善|what should|how do i|any (?:advice|ideas?|suggestions?)|fix|help/i.test(t))) {
     return { topic: TOPIC.HANDLING_SETUP_ADVICE,
              confidence: setupNoun ? 0.99 : 0.97,
+             symptom: handlingSymptomName(t) };
+  }
+  if (handlingSymptom && !/[?？]|どう|なに|何|対策|改善|help|advice/i.test(t)) {
+    return { topic: TOPIC.HANDLING_REPORT, confidence: 0.95,
              symptom: handlingSymptomName(t) };
   }
   // Weather must win before the generic tyre vocabulary.  Previously
@@ -177,7 +197,10 @@ function classify(text, options = {}) {
   if (/^(?:はい[、,\s]*)?(?:ピットイン|ボックスへ入る|ピットへ入る)[。.!！?？]*$/i.test(t)) {
     return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1, pitEntryReport: true };
   }
-  if (options.race === true && OPERATIONAL_RE.test(t)) return { topic: TOPIC.UNRESOLVED_OPERATIONAL, confidence: 0 };
+  if (options.race === true && OPERATIONAL_RE.test(t)) return {
+    topic: TOPIC.UNRESOLVED_OPERATIONAL, confidence: 0,
+    subject: unresolvedSubject(t),
+  };
   if (/^(?:了解|了解です|分かった|わかった|なるほど|OK|オーケー|ありがとう|ナイス)[。.!！?？]*$/i.test(t)) {
     return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1 };
   }
@@ -805,9 +828,35 @@ function buildHandlingSetupAdvice(live, lang, card) {
   return `${lead}${move}. ${observe}`;
 }
 
-function buildUnresolved(lang) {
-  return ja(lang) ? '今、ここでは伝えられない。'
-    : 'I cannot share that here.';
+function buildHandlingReport(live, lang, card) {
+  const symptom = String(card && card.symptom || 'unspecified');
+  if (!ja(lang)) return symptom === 'understeer'
+    ? 'Copy. Let us compare the front response on the next clean lap.'
+    : 'Copy. Let us compare the change on the next clean lap.';
+  return symptom === 'understeer'
+    ? '了解。次の有効周でフロントの反応を比べよう。'
+    : '了解。次の有効周で変化を比べよう。';
+}
+
+function buildPenaltyReport(live, lang) {
+  return ja(lang) ? '了解。ドライブスルーだったな。'
+    : 'Copy. That was a drive-through penalty.';
+}
+
+function buildUnresolved(lang, card = {}) {
+  const subject = String(card.subject || 'operation');
+  if (!ja(lang)) {
+    if (subject === 'gap') return 'I cannot verify that gap.';
+    if (subject === 'pit') return 'I cannot verify that pit operation.';
+    if (subject === 'fuel') return 'I cannot verify that fuel condition.';
+    if (subject === 'penalty') return 'I cannot verify that penalty state.';
+    return 'Say the key point again.';
+  }
+  if (subject === 'gap') return 'そのGAPは確認できない。';
+  if (subject === 'pit') return 'そのピット操作は確認できない。';
+  if (subject === 'fuel') return 'その燃料条件は確認できない。';
+  if (subject === 'penalty') return 'そのペナルティ状態は確認できない。';
+  return 'もう一度、要点だけ言って。';
 }
 
 function buildSessionFormat(live, lang) {
@@ -841,6 +890,8 @@ function build(card, live, lang = 'en') {
     [TOPIC.LEADER_GAP]: buildLeaderGap, [TOPIC.TYRE_STATUS]: buildTyreStatus,
     [TOPIC.DAMAGE_STATUS]: buildDamageStatus, [TOPIC.WEATHER_STATUS]: buildWeatherStatus,
     [TOPIC.HANDLING_SETUP_ADVICE]: (l, lg) => buildHandlingSetupAdvice(l, lg, card),
+    [TOPIC.HANDLING_REPORT]: (l, lg) => buildHandlingReport(l, lg, card),
+    [TOPIC.PENALTY_REPORT]: buildPenaltyReport,
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
     [TOPIC.SESSION_FORMAT]: buildSessionFormat,
   };
@@ -857,7 +908,7 @@ function build(card, live, lang = 'en') {
   }
   if (card.topic === TOPIC.FUEL_PLAN) return buildFuelPlan(live || {}, lang, card);
   if (card.topic === TOPIC.POSITION_GAP) return buildPositionGap(live || {}, card.targetPosition, lang);
-  if (card.topic === TOPIC.UNRESOLVED_OPERATIONAL) return buildUnresolved(lang);
+  if (card.topic === TOPIC.UNRESOLVED_OPERATIONAL) return buildUnresolved(lang, card);
   const handler = handlers[card.topic];
   return handler ? handler(live || {}, lang, card) : null;
 }

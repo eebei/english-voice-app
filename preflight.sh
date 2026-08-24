@@ -98,8 +98,11 @@ echo "[V3 Local Intent Router]"
 if node tests-local-intent-router.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-local-intent-router.js; fail=1; fi
 
 echo "── Build 279 前後GAP即答・変化時だけの能動GAP（2026-08-23）"
-if python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_trend_wiring.py >/dev/null 2>&1 \
-  && node tests-speech-window.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_trend_wiring.py; node tests-speech-window.js; fail=1; fi
+if python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_delivery_guard.py irsdk-bridge/tests_gap_trend_wiring.py >/dev/null 2>&1 \
+  && node tests-speech-window.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_delivery_guard.py irsdk-bridge/tests_gap_trend_wiring.py; node tests-speech-window.js; fail=1; fi
+
+echo "── 8/23 Build 279アホ回答・古いGAP実走失敗の固定再生（Build 280）"
+if node tests-build280-20260823-replay.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build280-20260823-replay.js; fail=1; fi
 
 echo "── レース形式→Plan A/B/C事前戦略・ライブ切替（次期Build）"
 if node tests-strategy-playbook.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-playbook.js 2>&1|tail -15; fail=1; fi

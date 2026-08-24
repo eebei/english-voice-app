@@ -1,6 +1,6 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-21 JST
+最終更新: 2026-08-24 JST
 
 ## Starter Pass 商用導線（出荷候補・未公開）
 
@@ -47,6 +47,15 @@ push した後、サーバー側に変更が含まれるなら必ず実行する
 - `irsdk-bridge/gap_call_policy.py`を新設。レース中の前後GAPが3秒以上隔たった二つの観測間で、25%以上かつ1.5秒以上変化し、0.8〜12秒の範囲にある場合だけ`gap_trend`候補を作る。Bridgeの既存舵角・ブレーキ発話ゲート、P4予算、4秒の鮮度破棄を必ず通すため、コーナー／ブレーキング中に新たに話し始めず、古くなった候補は捨てる。
 - 機械検証: `node tests-local-intent-router.js` 19/19、`python3 -m unittest irsdk-bridge/tests_gap_call_policy.py irsdk-bridge/tests_gap_trend_wiring.py` 8/8、`python3 irsdk-bridge/tests_phase_ab_integration.py` 28/28、`python3 irsdk-bridge/tests_fuel_strategy_wiring.py` 25/25、Python compile、`git diff --check` 合格。外部API呼び出しなし。
 - 未確認: Windows/iRacing実走で、質問の即答が低負荷区間まで保留されること、能動GAPが短いストリートコースで過剰にならず、変化した時だけ有用に聞こえること。
+
+## Build 280出荷中: 8/23アホ回答・古いGAPの再発防止
+
+- Build 279実走で失敗した発話を、文言だけでなく経路で修正。Fuel Window将来コールはPC内の一回監視へ、`次のしゅ ピット`はピット判断へ、`ドライブする ペナルティ`は申告ACKへ接続した。完走目標、荒れたレースへの感想、ピット位置報告も古い会話履歴へ流さない。
+- `今、ここでは伝えられない。`を製品handlerから撤去。未確認時は対象を明示し、Truth Gateの最後に聞かれていない燃料／GAP説明を加えない。
+- 能動GAPは隣接`CarIdx`、incident、順位epoch、現在GAPを保有し、相手交代・接触・2順位以上の急変・停止車警告・発話直前の数値変化で破棄する。保留GAPは同一pollの最新スナップショット更新後にだけ再生判定する。
+- 原価: 今回ローカル化したACK／Fuel Window経路はAnthropic会話APIを呼ばない。TTSは従来経路なので総原価ゼロとは扱わない。
+- 機械検証: 8/23失敗固定再生10/10、Local Router 29/29、Engineer Card 110/110、Truth Gate 55/55、GAP 20/20、Python discovery 259/259、JavaScript全57 suite、HTTP 54/54、`./preflight.sh`出荷可、compile／`git diff --check`合格。
+- 残るのはWindows実機・実iRacing・実音声の間合い。2026-08-24にYujiからBuild 280のcommit / push / build / 公開GOあり。公開証拠は完了後にこの節へ追記する。
 
 ## Build 277 の中身
 

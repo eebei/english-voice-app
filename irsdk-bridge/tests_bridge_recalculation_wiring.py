@@ -595,7 +595,7 @@ class StartSafetyAndFinalLapWiring(unittest.TestCase):
     def test_startup_stopped_car_has_conservative_no_last_lap_path(self):
         src = bridge_src()
         i = src.index("_startup_close = (not _has_lap_time")
-        window = src[i - 500:i + 1800]
+        window = src[i - 500:i + 2400]
         self.assertIn("pct_diff <= 0.0015", window)
         self.assertIn("_speech_speed >= 5.0", window)
         self.assertIn("Stopped car ahead. Caution.", window)
