@@ -20,8 +20,19 @@ checks = {
         "pit_cycle_position_used" in Path(__file__).with_name("strategy_options.py").read_text(encoding="utf-8"),
     "Plan B has a mandatory next-lap box trigger":
         "'trigger': 'strategy_plan_box_call'" in SOURCE,
+    # ★スライス2（2026-08-25）：リテラル一致から性質検査へ。
+    #   守りたいのは「決定が id で追える」ことで、その id を保持する変数名ではない。
+    #   さらに、broadcast した id と後段（pit exit / blend / session終了）へ
+    #   引き継ぐ id が **同一である** ことまで見る＝以前より強い検査。
     "Plan A/B decision is traced by decision id":
-        "'decision_id': _option_decision.get('decision_id')" in SOURCE,
+        "active_decision_id = _option_decision.get('decision_id')" in SOURCE
+        and "'decision_id': active_decision_id" in SOURCE,
+    "decision id is carried to the outcome stages":
+        SOURCE.count("'decision_id': active_decision_id") >= 2
+        and SOURCE.count("'active_decision_id': active_decision_id") >= 2,
+    "decision id is cleared on both session reset paths":
+        "active_decision_id = _sig_reset['active_decision_id']" in SOURCE
+        and "active_decision_id = _reset['active_decision_id']" in SOURCE,
     "options are exposed to telemetry": "'strategy_options': strategy_options" in SOURCE,
     "pit exit scores announced options": "strategy_options_mod.score_execution(" in SOURCE,
     "option outcome is traceable": "STRATEGY OPTIONS outcome:" in SOURCE,

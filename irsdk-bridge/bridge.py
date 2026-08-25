@@ -831,6 +831,12 @@ def _session_scoped_reset_values():
         # ★スライス1：セッションを跨いで持ち越すと、前回の条件を今回の事実として喋る。
         #   pit_events と同じ扱いにして、両リセット経路から同じ値を取る。
         'race_start_class_pos': None,
+        # ★スライス2（2026-08-25）Decision ID の結合キー。
+        #   提案 → pit exit → blend安定 → session終了 は既に別々に broadcast されて
+        #   いたが、どれも同じ判断の話だと分かる鍵を持っていなかったため、採点結果が
+        #   毎回捨てられていた。ここに置いて両リセット経路から同じ値を取る。
+        'active_decision_id': None,
+        'active_decision_plan': None,
         'gap_authority_records': {},
         'session_setup_fingerprint': '',
         'session_series_id': None,
@@ -2461,6 +2467,8 @@ def poll_iracing():
     session_setup_fingerprint = ''   # SessionInfo 由来・同一setupの前後比較キー
     session_series_id = None         # 同一シリーズ判定キー
     race_start_class_pos = None      # ★スタート順位。捕捉できるのは Racing 遷移の一度だけ
+    active_decision_id = None        # ★スライス2：提案→pit exit→blend→終了 を貫く結合キー
+    active_decision_plan = None      # 同上。提案時点の Plan 根拠（採点の相手）
     last_weather = None              # 直近の実測天候。summary へ「その日の条件」として残す
     session_effective_fuel_capacity_l = None
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
@@ -2806,6 +2814,8 @@ def poll_iracing():
                         session_laps = _sig_reset['session_laps']
                         pit_events = _sig_reset['pit_events']
                         race_start_class_pos = _sig_reset['race_start_class_pos']
+                        active_decision_id = _sig_reset['active_decision_id']
+                        active_decision_plan = _sig_reset['active_decision_plan']
                         gap_authority_records = _sig_reset['gap_authority_records']
                         session_setup_fingerprint = _sig_reset['session_setup_fingerprint']
                         session_series_id = _sig_reset['session_series_id']
@@ -2971,6 +2981,11 @@ def poll_iracing():
                         'setup_fingerprint': session_setup_fingerprint or None,
                         'series_id': session_series_id,
                         'start_class_position': race_start_class_pos,
+                        # ★スライス2：session が終わった事実も同じ判断へ追記する。
+                        #   DNF・切断・途中終了でも判断材料を失わないため、完走時だけ
+                        #   ではなくここでも必ず結合キーを載せる。
+                        'active_decision_id': active_decision_id,
+                        'active_decision_plan': active_decision_plan,
                         'weather': dict(last_weather) if isinstance(last_weather, dict) else None,
                     }
                     _transition_summary = _old_summary
@@ -3005,6 +3020,8 @@ def poll_iracing():
             session_laps = _reset['session_laps']
             pit_events = _reset['pit_events']
             race_start_class_pos = _reset['race_start_class_pos']
+            active_decision_id = _reset['active_decision_id']
+            active_decision_plan = _reset['active_decision_plan']
             gap_authority_records = _reset['gap_authority_records']
             session_setup_fingerprint = _reset['session_setup_fingerprint']
             session_series_id = _reset['session_series_id']
@@ -3310,6 +3327,11 @@ def poll_iracing():
                         'setup_fingerprint': session_setup_fingerprint or None,
                         'series_id': session_series_id,
                         'start_class_position': race_start_class_pos,
+                        # ★スライス2：session が終わった事実も同じ判断へ追記する。
+                        #   DNF・切断・途中終了でも判断材料を失わないため、完走時だけ
+                        #   ではなくここでも必ず結合キーを載せる。
+                        'active_decision_id': active_decision_id,
+                        'active_decision_plan': active_decision_plan,
                         'weather': dict(last_weather) if isinstance(last_weather, dict) else None,
                     }
                     _official_rows = latest_session_results.get(cur_snum, [])
@@ -5068,6 +5090,10 @@ def poll_iracing():
                 broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
                            'car_model': session_car_model,
+                           # ★スライス2：どの判断を実行した結果なのかを結合キーで示す。
+                           #   これが無いと採点しても次回に使えない（＝捨てていた）。
+                           'decision_id': active_decision_id,
+                           'decision_plan': active_decision_plan,
                            'pos_in': pit_enter_pos, 'pos_out': class_pos,
                            'sample': _pit_sample, 'calibration': _pit_loss_summary,
                            'pit_exit_forecast_shadow': pit_exit_forecast_shadow,
@@ -5895,7 +5921,10 @@ def poll_iracing():
                     cars=_pit_now_cars, session_finished=(cur_ss >= 5))
                 if _pit_cycle_outcome:
                     last_pit_cycle_outcome = _pit_cycle_outcome
+                    # ★スライス2：blend が落ち着いた時点の順位こそが「その判断は
+                    #   効いたのか」の答え。pit exit 直後の一時的な順位で終えない。
                     broadcast({'type': 'pit_cycle_outcome',
+                               'decision_id': active_decision_id,
                                'outcome': _pit_cycle_outcome})
                     log('PIT CYCLE outcome: ' + json.dumps(
                         _pit_cycle_outcome, ensure_ascii=False, separators=(',', ':')))
@@ -6136,12 +6165,37 @@ def poll_iracing():
                     strategy_options['decision_evidence'] = _option_decision
                     _selected_plan = strategy_options.get(
                         'plan_' + _selected_option.lower()) or _decision_a
+                    # ★スライス2：提案時点の根拠をここで確定させる。以降の pit exit /
+                    #   blend / session終了 はこの id へ追記するだけで、後から
+                    #   「何を根拠に選んだのか」を作り直さない（＝捏造しない）。
+                    active_decision_id = _option_decision.get('decision_id')
+                    active_decision_plan = {
+                        'decision_id': active_decision_id,
+                        'selected_plan': _selected_option,
+                        'reason': strategy_options['decision_reason'],
+                        'decided_at_lap': int(lap) if isinstance(lap, (int, float)) else None,
+                        'entry_class_position': class_pos if isinstance(class_pos, int) else None,
+                        'target_lap': _selected_plan.get('target_lap'),
+                        'add_fuel_l': _selected_plan.get('add_fuel_l'),
+                        'set_fuel_l': _selected_plan.get('set_fuel_l'),
+                        'session_num': cur_snum,
+                        'conditions': {
+                            'fuel_window_open': (strategy_options.get('plan_b') or {}).get('fuel_window_open'),
+                            'relative_pace_advantage_s': (
+                                (_battle_context or {}).get('player_pace_advantage_s')),
+                            'rejoin_not_worse': (_option_decision.get('plan_b_evidence') or {}).get('rejoin_not_worse')
+                            if isinstance(_option_decision.get('plan_b_evidence'), dict) else None,
+                        },
+                    }
+                    log('DECISION opened: ' + json.dumps(
+                        active_decision_plan, ensure_ascii=False, separators=(',', ':')))
                     _decision_dispatch = broadcast({
                         'type': 'radio',
                         'trigger': 'strategy_plan_decision',
                         'selected_plan': _selected_option,
                         'reason': strategy_options['decision_reason'],
-                        'decision_id': _option_decision.get('decision_id'),
+                        'decision_id': active_decision_id,
+                        'decision_plan': active_decision_plan,
                         'strategy_options': strategy_options,
                         'message': (('Undercut window next lap. Hold pace this lap; set %s liters.'
                                      % _selected_plan.get('set_fuel_l'))

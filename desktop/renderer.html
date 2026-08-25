@@ -715,6 +715,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="cost-meter.js"></script>
 <script src="local-intent-router.js"></script>
 <script src="session-memory.js"></script>
+<script src="decision-memory.js"></script>
 <script src="gap-freshness.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
@@ -2168,6 +2169,37 @@ async function sendMsg(inputSource){
         ?localIntent.gapIdentities:null});
     return;
   }
+  // ★スライス2の出口③：「それ違う」は会話ではなく**記録への操作**。
+  //   LLMへ落とすと記憶は止まらないまま謝るだけになるので、先に台帳を止める。
+  //   一度だけ読み返して本人合意を取り、合意まで訂正を有効化しない。
+  {
+    const _isJPnow=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+    const _lang=_isJPnow?'ja':'en';
+    if(pendingDecisionDispute&&/^(?:はい|そう|そうです|合ってる|それでいい|yes|correct|right)[。.!！]?$/i.test(text)){
+      const _rec=confirmDecisionCorrection({},_lang);
+      const _reply=_rec
+        ?(_isJPnow?'了解。その記録は訂正済みとして扱う。':'Copy. That record is marked corrected.')
+        :(_isJPnow?'訂正を適用できなかった。記録は止めたままにする。':'I could not apply the correction. The record stays suspended.');
+      usageCount(inputSource==='ptt'?'ptt':'typed');
+      addMsg('ai',_reply);pushMsg({role:'assistant',content:_reply});
+      speak(_reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'decision_correction_confirmed',
+        dedupeKey:'decision_correction|'+_reply});
+      return;
+    }
+    if(/(?:それ|そこ|さっきの).{0,4}(?:違う|ちがう|間違い)|(?:記憶|記録).{0,6}(?:違う|間違)|that(?:'s| is) (?:wrong|not right)|(?:wrong|incorrect) (?:memory|record)/i.test(text)){
+      const _d=disputeLatestDecision(_lang);
+      const _reply=_d&&_d.readback
+        ? _d.readback
+        : (_isJPnow?'どの記録のことか特定できない。推測で直さない。どのレースのどの判断か教えて。'
+                   : 'I cannot identify which record you mean, and I will not guess. Which race and which call?');
+      usageCount(inputSource==='ptt'?'ptt':'typed');
+      addMsg('ai',_reply);pushMsg({role:'assistant',content:_reply});
+      speak(_reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'decision_disputed',
+        dedupeKey:'decision_disputed|'+String((_d&&_d.decisionId)||'none')});
+      diagnosticLog('DECISION_MEMORY','stage=dispute_reply spoken='+(_d?'readback':'unidentified'));
+      return;
+    }
+  }
   // ★スライス1の出口①：過去天候はモードを問わず事実照会なので、
   //   LLMへ落とす前に保存記録から決定論的に答える。記録が無ければ「無い」と言う。
   {
@@ -3367,6 +3399,10 @@ function connectBridge(){
         injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet:data.packet||{}});
         return;
       }
+      // ★スライス2：提案の保存は発話の可否と独立させる。injectRadio は
+      //   selMode!=='race' で早期 return するため、その中に置くと「無線は出なかったが
+      //   判断はした」ケースの記録ごと落ちる。台帳は Bridge の事実だけで決まる。
+      if(data.type==='radio'&&data.trigger==='strategy_plan_decision') recordDecisionStage('proposal',data);
       if(data.type==='radio') injectRadio(data);
       if(data.type==='speak_gate'){
         speakWindowOk = data.window_ok !== false;
@@ -3441,6 +3477,9 @@ function connectBridge(){
         data=sanitizeSessionEvidence(data);
         lastSessionSummary=data;
         saveSessionSummary(data);
+        // ★スライス2：完走時だけでなく、途中終了・DNF でも同じ判断へ追記する。
+        //   ここを落とすと「実行されなかった」と「事故で終わった」が区別できない。
+        recordDecisionStage('closure',data);
         reconcileEvidenceSummary(data);
         if(data.is_race) scheduleAutoDebrief(data);
         else if(sessionPurpose==='practice') handlePracticeSessionSummary(data);
@@ -3448,7 +3487,11 @@ function connectBridge(){
       }
       if(data.type==='pit_timing'){
         savePitTiming(data); recordStrategyForecastOutcome(data); recordStrategyOptionOutcome(data);
+        recordDecisionStage('execution',data);
       }
+      // ★スライス2：pit exit 直後の一時的な順位では終えない。前後関係が
+      //   落ち着いた blend 後の順位が「その判断は効いたのか」の答えになる。
+      if(data.type==='pit_cycle_outcome') recordDecisionStage('blend',data);
       if(data.type==='pace_check') checkPaceJudgment(data);
       if(data.type==='judge_call') judgeAndSpeak(data);   // ★2026-07-19 LLM判断コール（catchup/defend）
       // ── マイク選択＋レベルメーター（bridge側デバイスの受け皿）──
@@ -4338,12 +4381,40 @@ async function scheduleAutoBriefing(){
         dedupeKey:'memory_strategy_briefing|'+String(memoryFacts.date||'')+'|'+String(memoryFacts.track||'')});
       diagnosticLog('MEMORY_BRIEFING','queue=queued kind=memory_strategy_briefing');
     }
+    // ★スライス2の出口：前回の**戦略判断とその結果**を自発的に述べ、
+    //   今日の条件が揃った時だけ Plan の根拠へ接続する。
+    //   成功例と失敗例の両方を使う。失敗は「勧めない理由」として出す。
+    //   条件が揃っていなければ過去の成功を今日の保証として話さない。
+    const _decLang=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en';
+    const _decSel=decisionBriefingSelection();
+    const _decLine=(window.PitwallDecisionMemory
+      &&typeof window.PitwallDecisionMemory.briefingLine==='function')
+      ? window.PitwallDecisionMemory.briefingLine(_decSel,_decLang) : '';
+    const _decAdvice=decisionPlanAdvice(_decSel,_decLang);
+    diagnosticLog('DECISION_BRIEFING','available='+(_decSel.available?'yes':'no')
+      +' reason='+(_decSel.reason||'-')
+      +' outcome='+String((_decSel.record&&_decSel.record.outcome)||'-')
+      +' fate='+(_decLine?'spoken':(_decSel.available?'missing_required_evidence':(_decSel.reason||'no_matching_record')))
+      +' advice='+_decAdvice.action+' advice_fate='+_decAdvice.fate);
+    if(_decLine){
+      addMsg('ai',_decLine);
+      speak(_decLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'decision_strategy_briefing',
+        dedupeKey:'decision_strategy_briefing|'+String(_decSel.record.decision_id)});
+      diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_strategy_briefing');
+    }
+    if(_decAdvice.reply){
+      addMsg('ai',_decAdvice.reply);
+      speak(_decAdvice.reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'decision_plan_advice',
+        dedupeKey:'decision_plan_advice|'+String(_decSel.record&&_decSel.record.decision_id)});
+      diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_plan_advice action='+_decAdvice.action);
+    }
     const body = {
       messages:[{role:'user', content:`[BRIEFING_KICKOFF] iRacingに接続した。現在の権威データを踏まえ、短い戦略ブリーフィングを始めよ。
 「レースかテストか」は状況に関係なく質問するな。現在のSession種別をこちらから宣言し、未知なら接続待ちとして数字や種別を作るな。
 SOF・iRating・SRと、下記の直近同条件レースを自然に使え。良い根拠がある時は、レーサーが誇れる具体的成果を一言だけ先に褒めろ。根拠がない美辞麗句は禁止。
 ${previousRaceBriefing}
 ${memoryLine?`前回同条件の確定事実は決定論radioで既に伝達済み。数字を言い直さず、現在の戦略だけを続けよ。参照用事実: ${memoryLine}`:'前回同条件の確定事実なし。過去の数字を作るな。'}
+${_decLine?`前回の戦略判断とその結果も決定論radioで既に伝達済み。周回・順位・Plan名を言い直すな。参照用: ${_decLine}`:'前回の戦略判断の採点結果なし。過去の戦略の成否を作るな。'}
 最後の質問は、今日の目標などテレメトリで分からない主観を一つだけ聞け。マークダウン禁止。`}],
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
@@ -6220,6 +6291,121 @@ function answerHistoricalWeatherLocally(text, lang){
 function loadRaceHistory(){
   try{ const h=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]'); return Array.isArray(h)?h:[]; }
   catch{ return []; }
+}
+// ══════════════════════════════════════════════════════════════════
+// ★スライス2（2026-08-25）Decision ID の一生。
+//
+// Bridge は提案・pit exit・blend安定・session終了を既に別々に broadcast して
+// いたが、結合キーが無いため採点しても毎回捨てていた。ここが台帳の入口で、
+// 数字と採点を持つのは `decision-memory.js` だけ。LLM は record も outcome も
+// 採用戦略も選ばない。
+//
+// localStorage は offline cache。サーバー正本との同期は syncDecisionsToServer()。
+// ══════════════════════════════════════════════════════════════════
+const DECISION_STORE_KEY='pw_decisions';
+function decisionModule(){
+  const m=window.PitwallDecisionMemory;
+  if(!m||typeof m.appendProposal!=='function'){
+    diagnosticLog('DECISION_MEMORY','reason=module_missing');
+    return null;
+  }
+  return m;
+}
+function loadDecisions(){
+  try{ const d=JSON.parse(localStorage.getItem(DECISION_STORE_KEY)||'[]'); return Array.isArray(d)?d:[]; }
+  catch{ return []; }
+}
+function saveDecisions(store){
+  try{ localStorage.setItem(DECISION_STORE_KEY,JSON.stringify(Array.isArray(store)?store:[])); return true; }
+  catch(e){ diagnosticLog('DECISION_MEMORY','reason=persist_failed'); return false; }
+}
+// 記憶の identity は Bridge 権威だけで作る（スライス1と同じ規約）。
+// race format を足すのは、同じコース・車でも Practice と Race で
+// 使ってよい過去が違うため。
+function currentDecisionIdentity(){
+  const base=currentMemoryIdentity();
+  base.raceFormat=(lastSessionType==='RACE'||selMode==='race')?'race':(sessionPurpose||null);
+  return base;
+}
+function recordDecisionStage(stage,data){
+  const m=decisionModule();
+  if(!m) return null;
+  const before=loadDecisions();
+  const fn=stage==='proposal'?m.appendProposal:stage==='execution'?m.appendExecution
+    :stage==='blend'?m.appendBlend:stage==='closure'?m.appendClosure:null;
+  if(!fn) return null;
+  const out=(stage==='proposal')
+    ? fn(before,data,currentDecisionIdentity(),Date.now())
+    : fn(before,data,Date.now());
+  if(out.record) saveDecisions(out.store);
+  diagnosticLog('DECISION_MEMORY','stage='+stage+' reason='+out.reason
+    +' id='+String((out.record&&out.record.decision_id)||'-')
+    +' outcome='+String((out.record&&out.record.outcome)||'-'));
+  return out.record;
+}
+// ── 出口①：次回ブリーフィングの自発発話 ──────────────────────
+// 成功例だけでなく失敗例も返す。失敗は「勧めない理由」として使う。
+function decisionBriefingSelection(){
+  const m=decisionModule();
+  if(!m) return {available:false,reason:'module_missing',record:null};
+  return m.selectForBriefing(loadDecisions(),currentDecisionIdentity(),Date.now());
+}
+// ── 出口②：今日の条件が成立した時だけ Plan の根拠へ接続する ───
+// 過去の結果を、条件が揃っていない今日の保証として話さない。
+function todayStrategyConditions(){
+  const t=(lastTelemetry&&typeof lastTelemetry==='object')?lastTelemetry:{};
+  const opts=(t.strategy_options&&typeof t.strategy_options==='object')?t.strategy_options:{};
+  const planB=(opts.plan_b&&typeof opts.plan_b==='object')?opts.plan_b:{};
+  const ev=(opts.decision_evidence&&typeof opts.decision_evidence==='object')?opts.decision_evidence:{};
+  const bEv=(ev.plan_b_evidence&&typeof ev.plan_b_evidence==='object')?ev.plan_b_evidence:{};
+  return {
+    fuelWindowOpen:planB.fuel_window_open===true,
+    relativePaceAdvantageS:(bEv.relative_pace_advantage_s!==undefined)?bEv.relative_pace_advantage_s:null,
+    rejoinNotWorse:bEv.rejoin_not_worse===true?true:(bEv.rejoin_not_worse===false?false:null),
+  };
+}
+function decisionPlanAdvice(selection,lang){
+  const m=decisionModule();
+  if(!m) return {fate:'missing_required_evidence',action:'none',reply:''};
+  return m.planAdvice(selection,todayStrategyConditions(),lang);
+}
+// ── 訂正：「それ違う」で即 disputed。本人合意まで再利用しない ───
+// 特定できない訂正は保存しない（推測して別の記録を壊さない）。
+let pendingDecisionDispute=null;
+function disputeLatestDecision(lang){
+  const m=decisionModule();
+  if(!m) return null;
+  const store=loadDecisions();
+  const sel2=m.selectForBriefing(store,currentDecisionIdentity(),Date.now());
+  const target=sel2.available?sel2.record
+    :store.filter(r=>m.usable(r,currentDecisionIdentity(),Date.now())).slice(-1)[0]||null;
+  if(!target){
+    diagnosticLog('DECISION_MEMORY','stage=dispute reason=decision_not_found');
+    return null;
+  }
+  const out=m.dispute(store,target.decision_id,null,Date.now());
+  saveDecisions(out.store);
+  pendingDecisionDispute=target.decision_id;
+  diagnosticLog('DECISION_MEMORY','stage=dispute reason='+out.reason+' id='+target.decision_id);
+  return {decisionId:target.decision_id,readback:m.readbackLine(out.record,lang)};
+}
+function confirmDecisionCorrection(correction,lang){
+  const m=decisionModule();
+  if(!m||!pendingDecisionDispute) return null;
+  const out=m.confirmCorrection(loadDecisions(),pendingDecisionDispute,correction||{},Date.now());
+  if(out.record) saveDecisions(out.store);
+  diagnosticLog('DECISION_MEMORY','stage=correction reason='+out.reason
+    +' id='+String(pendingDecisionDispute));
+  if(out.reason==='corrected') pendingDecisionDispute=null;
+  return out.record;
+}
+function deleteDecision(decisionId){
+  const m=decisionModule();
+  if(!m) return false;
+  const out=m.remove(loadDecisions(),decisionId,Date.now());
+  saveDecisions(out.store);
+  diagnosticLog('DECISION_MEMORY','stage=delete reason='+out.reason+' id='+String(decisionId));
+  return out.reason==='deleted';
 }
 function buildPreviousRaceBriefingNote(){
   try{
