@@ -38,6 +38,8 @@
   const REASON_GENERATION = 'generation_changed';
   const REASON_STALE = 'age_exceeded';
   const REASON_VALUE = 'value_changed';
+  const REASON_LIVE_STALE = 'live_snapshot_stale';   // 回答側：現在値そのものが古い
+  const REASON_DROPPED = 'direction_dropped';        // 回答側：片方向の値が消えた
 
   const finite = value => {
     if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
@@ -115,10 +117,106 @@
     return value.toFixed(1) + ' seconds ' + (direction === 'ahead' ? 'ahead' : 'behind') + '.';
   }
 
+  // ★G5（2026-08-25）PTT質問の回答も、TTS開始直前に照合する。
+  //
+  // Codex Build 284 P1：`localIntent` は `speak()` へ identity を渡しておらず、
+  // 質問時点で5秒以内でも、先行発話で queue 待ちになった後に古い数値のまま
+  // 再生され得た。回答生成時だけ 5 秒契約を満たし、出口では満たしていなかった。
+  //
+  // 自発コールと **意図的に契約を分ける**：
+  //
+  //   自発 `gap_trend`  「あの車に対して5.3秒開いた」＝特定の対象車への時間差分の主張。
+  //                     対象車が変われば主張ごと無効 → 破棄。基準は候補の sampled_at。
+  //   質問 `nearest_gap` 「今、前は何秒」＝時点の事実。対象車が入れ替わっていても、
+  //                     いま前にいる車の秒数が答え → 最新値で作り直す。
+  //                     基準は **現在 snapshot の年齢**（今の値が新しければ答えられる）。
+  //
+  // 質問側で対象車交代を破棄にすると、Build 281 の「値があるのに答えない」を再発させる。
+  //
+  // 値の出所は `live['gap_'+direction]`（router が答えに使うのと同じ値）に固定する。
+  // 別々の出所から取ると、作り直した文が「router がいま言う答え」と食い違う。
+
+  function liveGapFor(direction, live) {
+    if (!live || !direction) return null;
+    return finite(live['gap_' + direction]);
+  }
+
+  function authorityFor(direction, live) {
+    const table = live && live.gap_authority;
+    if (!table || !direction) return null;
+    const record = table[direction];
+    return (record && typeof record === 'object') ? record : null;
+  }
+
+  /**
+   * PTT 回答（1方向でも前後同時でも）の再生直前判定。
+   *
+   * @param {Array} identities 回答が述べた方向の配列（router が積んだ順）
+   * @param {Object} live      現在の telemetry snapshot
+   * @param {number} nowMs
+   * @param {Object} options   {liveAgeMs} = snapshot 自体の年齢。{maxAgeMs} 上書き用
+   * @returns {{fate:string, reason:(string|null), entries:Array}}
+   */
+  function evaluateAnswer(identities, live, nowMs, options) {
+    const maxAge = (options && finite(options.maxAgeMs) !== null) ? Number(options.maxAgeMs) : MAX_AGE_MS;
+    const list = Array.isArray(identities) ? identities.filter(i => i && typeof i === 'object' && i.direction) : [];
+    if (!list.length) return { fate: FATE_PLAY, reason: REASON_NOT_GAP, entries: [] };
+
+    // 現在値そのものが古いなら、どの方向も答えの材料にならない。
+    const liveAge = finite(options && options.liveAgeMs);
+    if (liveAge !== null && liveAge > maxAge) {
+      return { fate: FATE_DISCARD, reason: REASON_LIVE_STALE, entries: [] };
+    }
+
+    const entries = [];
+    let changed = false;
+    for (const identity of list) {
+      const record = authorityFor(identity.direction, live);
+      // セッションが変わったら何も引き継がない。片方向の話ではないので即破棄。
+      if (identity.session_key !== undefined && identity.session_key !== null
+          && record && record.session_key !== undefined
+          && String(identity.session_key) !== String(record.session_key)) {
+        return { fate: FATE_DISCARD, reason: REASON_SESSION, entries: [] };
+      }
+      const current = liveGapFor(identity.direction, live);
+      if (current === null) { changed = true; continue; }   // その方向は落とす（旧値は残さない）
+      const spoken = finite(identity.gap_s);
+      if (spoken === null || Math.abs(current - spoken) >= 0.1) changed = true;
+      if (record && Number.isInteger(identity.generation) && Number.isInteger(record.generation)
+          && identity.generation !== record.generation) changed = true;
+      if (record && identity.target_car_idx !== null && identity.target_car_idx !== undefined
+          && record.target_car_idx !== null && record.target_car_idx !== undefined
+          && identity.target_car_idx !== record.target_car_idx) changed = true;
+      entries.push({ direction: identity.direction, gapS: current });
+    }
+
+    if (!entries.length) return { fate: FATE_DISCARD, reason: REASON_NO_LIVE, entries: [] };
+    if (entries.length !== list.length) return { fate: FATE_REBUILD, reason: REASON_DROPPED, entries };
+    if (changed) return { fate: FATE_REBUILD, reason: REASON_VALUE, entries };
+    return { fate: FATE_PLAY, reason: null, entries };
+  }
+
+  /** 回答文の作り直し。router の言い回しと同じ形にする（別の文体を持ち込まない）。 */
+  function rebuildAnswerText(entries, lang) {
+    const list = Array.isArray(entries) ? entries : [];
+    const ja = String(lang || '').toLowerCase().startsWith('ja');
+    const parts = [];
+    for (const entry of list) {
+      const value = finite(entry && entry.gapS);
+      if (value === null || !entry.direction) continue;
+      parts.push(ja
+        ? (entry.direction === 'ahead' ? '前' : '後ろ') + value.toFixed(1) + '秒'
+        : value.toFixed(1) + ' seconds ' + (entry.direction === 'ahead' ? 'ahead' : 'behind'));
+    }
+    if (!parts.length) return null;
+    return ja ? parts.join('、') + '。' : parts.join(', ') + '.';
+  }
+
   return {
     MAX_AGE_MS, FATE_PLAY, FATE_REBUILD, FATE_DISCARD,
     REASON_NOT_GAP, REASON_NO_LIVE, REASON_SESSION, REASON_TARGET,
     REASON_DIRECTION, REASON_GENERATION, REASON_STALE, REASON_VALUE,
-    evaluate, rebuildText,
+    REASON_LIVE_STALE, REASON_DROPPED,
+    evaluate, rebuildText, evaluateAnswer, rebuildAnswerText,
   };
 }));

@@ -40,6 +40,32 @@
     ? { handled:true, intent, reply, ...(action ? { action } : {}) }
     : { handled:false };
 
+  // ★G5（2026-08-25）Codex Build 284 P1：GAP の回答は queue 待ちで陳腐化しうる。
+  //   回答生成時の 5 秒契約だけでは出口まで届かないので、どの方向の・どの車の・
+  //   どのセッションの値を述べたのかを一緒に返し、renderer が TTS 開始直前に
+  //   `gap-freshness.evaluateAnswer()` で照合できるようにする。
+  //   値は `live.gap_<direction>`（この関数が答えに使うのと同じ値）を出所とし、
+  //   session / generation / target は `gap_authority` から取る。
+  //   Practice など権威レコードが無い場合も、方向と値だけの identity を返す
+  //   （照合対象が減るだけで、全面沈黙にはしない）。
+  const gapIdentityFor = (live, direction, gapS) => {
+    const table = live && live.gap_authority && typeof live.gap_authority === 'object'
+      ? live.gap_authority : null;
+    const record = table && table[direction] && typeof table[direction] === 'object'
+      ? table[direction] : null;
+    const identity = { direction, gap_s: gapS };
+    if (record) {
+      identity.session_key = record.session_key === undefined ? null : record.session_key;
+      identity.generation = record.generation === undefined ? null : record.generation;
+      identity.source_kind = record.source_kind === undefined ? null : record.source_kind;
+      identity.target_car_idx = record.target_car_idx === undefined ? null : record.target_car_idx;
+    }
+    return identity;
+  };
+  const gapAnswer = (intent, reply, identities) => reply
+    ? { handled:true, intent, reply, gapIdentities:identities }
+    : { handled:false };
+
   function fuelWindowStatus(live, lang) {
     const options = live && live.strategy_options && typeof live.strategy_options === 'object'
       ? live.strategy_options : {};
@@ -197,9 +223,16 @@
       const ahead = finite(live.gap_ahead);
       const behind = finite(live.gap_behind);
       const parts = [];
-      if (wantsAhead && ahead !== null) parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
-      if (wantsBehind && behind !== null) parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
-      if (parts.length) return answer('nearest_gap', isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`);
+      const identities = [];
+      if (wantsAhead && ahead !== null) {
+        parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
+        identities.push(gapIdentityFor(live, 'ahead', ahead));
+      }
+      if (wantsBehind && behind !== null) {
+        parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
+        identities.push(gapIdentityFor(live, 'behind', behind));
+      }
+      if (parts.length) return gapAnswer('nearest_gap', isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`, identities);
       const requested = wantsAhead && wantsBehind ? (isJP(lang) ? '前後のGAP' : 'The nearest gaps')
         : wantsAhead ? (isJP(lang) ? '前のGAP' : 'Gap ahead') : (isJP(lang) ? '後ろのGAP' : 'Gap behind');
       return answer('nearest_gap_unavailable', isJP(lang)
@@ -217,11 +250,19 @@
       const ahead = finite(live.gap_ahead);
       const behind = finite(live.gap_behind);
       const parts = [];
-      if (ahead !== null) parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
-      if (behind !== null) parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
-      return answer(parts.length ? 'nearest_gap' : 'nearest_gap_unavailable', parts.length
-        ? (isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`)
-        : (isJP(lang) ? '前後のGAPはまだ取れていない。' : 'The nearest gaps are not available yet.'));
+      const identities = [];
+      if (ahead !== null) {
+        parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
+        identities.push(gapIdentityFor(live, 'ahead', ahead));
+      }
+      if (behind !== null) {
+        parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
+        identities.push(gapIdentityFor(live, 'behind', behind));
+      }
+      if (parts.length) return gapAnswer('nearest_gap',
+        isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`, identities);
+      return answer('nearest_gap_unavailable',
+        isJP(lang) ? '前後のGAPはまだ取れていない。' : 'The nearest gaps are not available yet.');
     }
     if (/トップ|首位|P1|何秒|ギャップ|差|leader|gap/i.test(text)) {
       const wantsOverall = /総合|GTP|gdp|overall/i.test(text);

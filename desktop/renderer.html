@@ -2160,8 +2160,12 @@ async function sendMsg(inputSource){
     }
     addMsg('ai',reply);
     pushMsg({role:'assistant',content:reply});
+    // ★G5：GAP の回答は queue 待ちで陳腐化する。どの方向の・どの車の値を述べたのかを
+    //   一緒に queue へ渡し、TTS 開始直前に現在値と照合する（Codex Build 284 P1）。
     speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'local_'+localIntent.intent,
-      dedupeKey:'local|'+localIntent.intent+'|'+reply});
+      dedupeKey:'local|'+localIntent.intent+'|'+reply,
+      gapIdentities:(Array.isArray(localIntent.gapIdentities)&&localIntent.gapIdentities.length)
+        ?localIntent.gapIdentities:null});
     return;
   }
   // ★スライス1の出口①：過去天候はモードを問わず事実照会なので、
@@ -2778,6 +2782,7 @@ function speak(text, opts){
   const kind = o.kind||'radio';
   const item = {text, prio, kind, ts:Date.now(), queuedAt:Date.now(), dedupeKey:o.dedupeKey||null,
                 gapIdentity:o.gapIdentity||null,
+                gapIdentities:(Array.isArray(o.gapIdentities)&&o.gapIdentities.length)?o.gapIdentities:null,
                 costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
   typeof costRecord==='function'&&costRecord('queued', {id:item.costId, kind:kind});
@@ -2919,6 +2924,41 @@ async function drainQueue(){
     } else {
       diagnosticLog('GAP_FRESHNESS','fate=play target='+_it.gapIdentity.target_car_idx
         +' dir='+_it.gapIdentity.direction);
+    }
+  }
+  // ★G5（2026-08-25）PTT質問の回答も同じ出口で照合する（Codex Build 284 P1）。
+  //   自発コールと契約を分ける：回答は時点の事実なので、対象車が入れ替わっていても
+  //   「いま前にいる車の秒数」が答え＝最新値へ作り直す。基準は候補の年齢ではなく
+  //   **現在 snapshot の年齢**。前後同時質問では、消えた方向だけを落として
+  //   残りを言い直す（片側の旧値を残さない）。
+  if(_it && typeof _it === 'object' && Array.isArray(_it.gapIdentities) && _it.gapIdentities.length){
+    const _liveAge = (lastTelemetryAt>0) ? (Date.now()-lastTelemetryAt) : null;
+    const _ans = (window.PitwallGapFreshness && typeof window.PitwallGapFreshness.evaluateAnswer==='function')
+      ? window.PitwallGapFreshness.evaluateAnswer(_it.gapIdentities, lastTelemetry, Date.now(), {liveAgeMs:_liveAge})
+      : {fate:'discard', reason:'module_missing', entries:[]};
+    if(_ans.fate === 'discard'){
+      diagnosticLog('GAP_ANSWER_FRESHNESS','fate=discard reason='+_ans.reason
+        +' dirs='+_it.gapIdentities.map(i=>i.direction).join('/')
+        +' queue_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?')
+        +' live_age_ms='+(_liveAge===null?'?':_liveAge));
+      typeof costRecord==='function'&&costRecord('discarded',{id:_it.costId, kind:_it.kind, reason:'gap_answer_'+_ans.reason});
+      if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',_it,{reason:'gap_answer_'+_ans.reason});
+      draining=false; isSpeaking=false;
+      setTimeout(drainQueue,0);
+      return;
+    }
+    if(_ans.fate === 'rebuild'){
+      const _rebuiltAns = window.PitwallGapFreshness.rebuildAnswerText(_ans.entries,
+        (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
+      if(_rebuiltAns){
+        diagnosticLog('GAP_ANSWER_FRESHNESS','fate=rebuild reason='+_ans.reason
+          +' was="'+_it.text+'" now="'+_rebuiltAns+'"'
+          +' queue_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
+        _it.text = _rebuiltAns;
+      }
+    } else {
+      diagnosticLog('GAP_ANSWER_FRESHNESS','fate=play dirs='
+        +_ans.entries.map(e=>e.direction).join('/'));
     }
   }
   const raw = (typeof _it === 'string') ? _it : _it.text;
