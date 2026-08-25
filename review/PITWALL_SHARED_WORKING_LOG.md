@@ -1726,4 +1726,122 @@ commitは変更単位ごとに可能。push / private build / deploy / 公開は
 - Gate 6 Windows、Gate 8 iRacing実走: **未実施**。
 - `physical_traffic_gap` の実GTP/GT3 fixture再生は未完。今回の「異クラスの物理的接近を正しく話す」までを合格とはしない。
 
+## 2026-08-25 Claude Code — Gate 5〜8 の前提整備（Codex独立確認を受けて）
+
+commit `8641ee5`。**push / build / deploy / 公開は未実施。**
+
+Codex の独立確認（P0/P1 なし・下記セクション）を受け、**GO 不要でできる前提整備**だけを行った。
+
+### ① Build 番号を 284 → 285 へ
+
+Build 284 の artifact は既に存在し、Codex が実物を検査して P1 差戻しを出している
+（SHA-256 `e237e0c3…`）。そこから **15ファイル / 2,984行** 変わっているため、
+同じ番号で中身の違う artifact を作ると **Build 282 で証拠を無効化した事故と同じ形**になる。
+
+`irsdk-bridge/bridge.py:58` を `Build 285 (decision memory, server ledger and gap answer freshness)` へ。
+
+### ② `verify-deploy.sh` が SHA しか見ていなかった（Gate 7 の穴）
+
+**これは今回の変更で初めて危険になった。** スライス3で `auth.init()` に
+`CREATE TABLE strategy_decisions` を足したため、**マイグレーションが失敗しても
+プロセスは起動する**。その時：
+
+```
+/api/version        → 正しい SHA を返す      → verify-deploy.sh は「✅ 一致」
+/api/memory/decisions → 503 auth_unavailable → 記憶APIは永久に死んでいる
+```
+
+**Build 281（SHAは合っていたが module が入っていなかった）と同じ型**を、
+今度はサーバー側で作るところだった。
+
+対応：未認証のまま経路を叩き、応答で状態を区別する。**認証情報は使わない。**
+
+| 応答 | 判定 |
+|---|---|
+| **401 / 403** | ✅ 経路が生きていて認証も効いている（**これが正常**） |
+| 404 | ❌ 経路が無い＝この版がまだ本番に入っていない |
+| 503 | ❌ auth/DB 未準備＝テーブル作成の失敗を疑う |
+| **200** | ❌ **認証が外れている＝重大** |
+
+SHA が一致していても経路が死んでいれば `exit 1` にした。
+
+### 契約変更で書き換えたテスト（明記）
+
+`tests-deploy-verification.js` の `一致なら成功する（exit 0）` が落ちた。
+**契約が「SHA一致で成功」から「SHA一致 かつ 経路が生きていて成功」へ変わったため**で、
+実装に合わせて緩めたのではない。スタブサーバーに経路の応答を持たせ、
+新契約へ書き換えたうえで**事故ケース3件を追加**した
+（SHA一致でも 404 / 503 / 200 なら失敗する）。
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests-deploy-verification.js` | **28/28**（19 → +9） |
+| JS 全スイープ | ✅ 全緑 |
+| Python | ✅ 305 passed |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+
+**変異試験 5件すべて検出**：SHA一致で即成功に戻す（経路確認を飛ばす）／404を正常扱い／
+503(DB未準備)を正常扱い／認証が外れた200を正常扱い／記憶APIを確認対象から外す。
+
+### 残る Gate と、それぞれに必要な GO
+
+| Gate | 状態 | 必要なもの |
+|---|---|---|
+| 0〜4 | ✅ Codex 独立確認済（P0/P1 0件） | — |
+| 5 artifact | ⏸ | **push GO → build GO**（現HEADから再生成し、`decision-memory.js` の同梱を実物で確認） |
+| 6 Windows | ⏸ | Yuji の取得・ACK |
+| 7 server | ⏸ | **deploy GO**（`auth.js` / `server.js` 変更あり）→ `./verify-deploy.sh` |
+| 8 iRacing実走 | ⏸ | Yuji の実走 |
+| 9 公開 | ⏸ | 別GO |
+
+**Gate 7 は今回から `strategy_decisions` の DB マイグレーションを含む。**
+deploy 後の `./verify-deploy.sh` は必須で、SHA一致だけでは合格にならない。
+
+### Codex の記述で1点確認したいこと
+
+独立確認セクションの最終行に
+「**だが上記P1を残したままBuild 284を利用者テスト候補・出荷可とは扱わない**」とあるが、
+同セクションに P1 の記載は無く、判定は「入口→出口は接続済み」となっている。
+**前セクション（Build 284 の P1差戻し）からの残り文と思われる。**
+こちらでは Codex の記述を書き換えないので、意図を確認したい。
+現時点では「Build 284 の P1 は G5（`86abb16`）で解消済み、現HEADに未解決 P1 は無い」と読んでいる。
+
+## 2026-08-25 JST — Codex独立確認（現行HEAD `2bee942`）
+
+Yujiの「mdを確認。GO」に基づき、Claude実装後の現行HEADを独立再検査した。
+
+### 実行証拠
+
+| 検査 | 結果 |
+|---|---|
+| `./preflight.sh` | **✅ 全ケース合格（出荷可表示）** |
+| Decision Memory tunnel | **74/74** |
+| Decision Memory server正本 | **54/54** |
+| Session Memory tunnel（setup/pit/fuel/訂正/削除を含む） | **118/118** |
+| GAP answer queue（PTT→queue→TTS直前再検証） | **44/44** |
+| `/api/chat` HTTP統合 | **54/54** |
+| requireAdmin | **9/9** |
+| Python GAP/bridge関連 | **67 passed** |
+| `git diff --check` | **✅** |
+| 外部有料API呼出 | **0件** |
+
+### 逆向きに確認できた出口
+
+- `strategy_plan_decision` → Decision ID → pit/blend/checker（または途中終了）→ outcome採点 → 次回briefingの決定論的発話／条件付きPlan根拠。
+- 成功だけでなく `traffic_failure`、`fuel_failure`、`not_executed`、`incident_or_disconnect`、`unknown` を同じDecision IDで扱うfixtureがある。
+- setup変更、pit/fuel、過去天候、driver申告、訂正／disputed／削除の経路をsession-memory/decision-memoryのテストで確認。
+- PTT `nearest_gap` は対象車・方向・session・generation・sampled_atをqueueへ運び、TTS開始直前に旧値を破棄または最新値へ再構成する。前後同時質問もfixtureに含む。
+
+### まだ出荷証拠ではないもの
+
+- 現行HEADは `origin/main` に未到達。**push / private Build / deploy / 公開は未実施**。
+- 現行HEADから再生成したartifactのGate 5検査が必要。
+- Gate 6（Windows取得・ACK）、Gate 7（本番 `/api/version` 反映）、Gate 8（実iRacing走行）は未実施。
+- 実走でのGAP数値一致、停止／コースアウト車両の適切な発話、翌日自発Memory発話はfixture合格だけでは断定しない。
+
+**判定：ソース／ローカル統合の入口→出口は今回の実装で接続済み。出荷可否はartifact再生成後のGate 5〜8を通してから確定する。**
+
 G1/G2の自発GAP経路そのもの（同一frame authority、EstTime残留抑止、queue直前再確認）の設計と単体再生は確認できた。だが上記P1を残したままBuild 284を利用者テスト候補・出荷可とは扱わない。
