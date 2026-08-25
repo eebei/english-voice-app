@@ -1726,6 +1726,99 @@ commitは変更単位ごとに可能。push / private build / deploy / 公開は
 - Gate 6 Windows、Gate 8 iRacing実走: **未実施**。
 - `physical_traffic_gap` の実GTP/GT3 fixture再生は未完。今回の「異クラスの物理的接近を正しく話す」までを合格とはしない。
 
+## 2026-08-26 Claude Code — Build 285 private artifact **生成・実物検査完了**（署名は Codex 待ち）
+
+証拠本文: [BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md](BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md)
+
+### 所在
+
+| 項目 | 値 |
+|---|---|
+| target_sha | `c6db9f4a1ae2cc22828408b456da3a2b1c9dd190` |
+| run | [32858968763](https://github.com/eebei/english-voice-app/actions/runs/32858968763)（`workflow_dispatch` / `publish=false` / success） |
+| run の headSha | `c6db9f4…`（**target_sha と一致**） |
+| artifact | `OMORAY-PITWALL-Desktop-Build-285-20260825-1422`（301,985,895 bytes） |
+| ref | `build/285` |
+
+**`origin/main` は動かしていない（`828ca13` のまま）。**
+CI は GitHub 上の ref しかビルドできないため push は必須だったが、指示書の
+「`origin/main` へ push を独断で行わない」に従い、**Yuji の選択（ブランチ方式）で
+`build/285` だけを push** した。ビルド後にブランチを消せば完全に戻せる。
+
+### 実物検査（すべて Claude Code が自分で計算した値）
+
+```
+installer  100,659,008 bytes  sha256 c55f7f7b12cc17c8…   3本すべて同一ハッシュ ✅
+app.asar     4,252,147 bytes  sha256 e550a9379ff72946…
+Bridge.exe  17,013,753 bytes  sha256 19cfd0c6c3272fb0…
+build-info  {"buildNum": 285}
+```
+
+CI 同梱の `BUILD-285-GATE5-MANIFEST.json` は**runner の自己申告なので証拠に採らず**、
+独立に計算して突合した → **3件とも一致**。
+
+**app.asar 内の JS 全件（実物を展開して列挙）**
+
+```
+cost-meter.js  decision-memory.js ← Build 284 には無かったもの
+fuel-plan-guard.js  gap-freshness.js  local-intent-router.js
+main.js  memory-action-layer.js  preload.js
+session-memory.js  strategy-playbook.js
+```
+
+renderer の `<script src>` から派生した検査（ファイル名をハードコードしない）で
+**8/8 欠落なし**。
+
+### 途中で出た「不一致」を、慌てず原因特定した
+
+同梱 JS を HEAD と突き合わせたところ **9ファイル全部が不一致**になった。
+原因は Windows runner のチェックアウトによる **CRLF**（`decision-memory.js` で CR 421個 対 0個）。
+改行を正規化して再比較し、**9ファイルすべてバイト単位で一致**を確認した。
+
+### Bridge 実行体：`strings` で出ないことを「入っていない」と読まなかった
+
+`strings` では `Build 285` が出ない。PyInstaller がバイトコードを zlib 圧縮するためである。
+推測で済ませず、**埋め込まれた zlib ストリーム 416本を実際に展開**して確認した。
+
+| 探した文字列 | 結果 |
+|---|---|
+| `Build 285` | **✅ 実在**（`Build 284` は無し） |
+| `active_decision_id` / `decision_plan` / `strategy_plan_decision` | **✅ 実在** |
+| `pygame` 52件 / `pyaudio` 2件 | ✅ **Electron同梱用の正しい系統**（PTT が欠ける取り違えなし） |
+
+### Publish がスキップされた証拠
+
+| 確認 | 結果 |
+|---|---|
+| `Publish to Release` ステップ | **skipped** |
+| 公開 Release `desktop-latest` | **2026-06-30T10:37:33Z / assets 242 のまま** |
+| push トリガーで併走した run `32858953256` | `Publish to Release` → **skipped** |
+
+**公開・latest URL 更新・利用者配布はいずれも行っていない。**
+
+### target_sha での再実行
+
+Decision tunnel **74/74** ／ server **54/54** ／ Session memory **118/118** ／
+GAP answer queue **44/44** ／ deploy verification **28/28** ／ `./preflight.sh` **出荷可** ／
+Python **305 passed** ／ `git diff --check` ✅ ／ 外部有料API **0件**。
+
+### ★署名は埋めていない
+
+`PITWALL_RELEASE_GATE.md`「同じAIが作業と確認を兼任した場合は独立確認済みとしない」。
+スライス2/3/4 と G5 は Claude Code が実装したので、上記は**作業者の自己検査**である。
+**Codex の独立確認を依頼する**（逆引き5点は証拠本文 §8）。
+
+### これで言えないこと
+
+- **Gate 6 Windows 未実施。** installer を実行していない。
+- **Gate 7 server 未反映。** `/api/memory/decisions` は本番に存在しない。
+  deploy 後の `./verify-deploy.sh` は必須で、**SHA一致だけでは合格にならない**
+  （`strategy_decisions` のマイグレーション失敗を経路の応答で検出する）。
+- **Gate 8 実走 未実施。** Decision ID の4段が実走で同じ id へ揃うか、
+  翌日の自発 Memory 発話が出るかは実データでしか確認できない。
+- 本検査は **artifact が target_sha の中身を含むことの証拠**であって、
+  **実走で正しく動くことの証拠ではない。**
+
 ## 2026-08-25 Claude Code — Gate 5〜8 の前提整備（Codex独立確認を受けて）
 
 commit `8641ee5`。**push / build / deploy / 公開は未実施。**
