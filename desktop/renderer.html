@@ -1975,6 +1975,17 @@ function diagnosticLog(tag, text){
     }
   }catch(e){}
 }
+function reportRuntimeModuleStatus(){
+  const modules={
+    memory_action_layer:!!window.PitwallMemoryActionLayer,
+    strategy_playbook:!!window.PitwallStrategyPlaybook,
+    fuel_plan_guard:!!window.PitwallFuelPlanGuard,
+    cost_meter:!!window.PitwallCostMeter,
+    local_intent_router:!!window.PitwallLocalIntentRouter
+  };
+  const missing=Object.keys(modules).filter(name=>!modules[name]);
+  diagnosticLog('RUNTIME_MODULE_STATUS',JSON.stringify({modules,missing,status:missing.length?'missing':'loaded'}));
+}
 
 // 利用者がファイル名・Build番号・起動時刻を探さなくても、現セッションの証拠を作れる。
 // この操作は端末外へ送信しない。送付先を選ぶのはドライバー本人。
@@ -2126,8 +2137,10 @@ async function sendMsg(inputSource){
   // a debrief panel left open from a prior session.  A driver asking for the
   // gap must never be routed to an LLM/no-data template while the Bridge has
   // the value.  Keep this before evidenceDebrief deliberately.
+  const localRouterAvailable=!!(window.PitwallLocalIntentRouter
+    && typeof window.PitwallLocalIntentRouter.route==='function');
   const localIntent = (selMode==='race' && iracingLive && lastTelemetry
-    && window.PitwallLocalIntentRouter)
+    && localRouterAvailable)
     ? window.PitwallLocalIntentRouter.route({
       text,
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
@@ -2147,7 +2160,8 @@ async function sendMsg(inputSource){
     return;
   }
   if(selMode==='race' && iracingLive){
-    diagnosticLog('LOCAL_INTENT_BYPASS',`reason=${lastTelemetry?'unhandled':'no_telemetry'} debrief=${!!(evidenceDebrief&&evidenceDebrief.active)}`);
+    const bypassReason=!lastTelemetry?'no_telemetry':(!localRouterAvailable?'router_missing':'unhandled');
+    diagnosticLog('LOCAL_INTENT_BYPASS',`reason=${bypassReason} debrief=${!!(evidenceDebrief&&evidenceDebrief.active)}`);
   }
   if(evidenceDebrief && evidenceDebrief.active){
     // Guided review stays active, but a question to the engineer must not be consumed
@@ -3197,6 +3211,7 @@ function connectBridge(){
     updateBridgeStatus();
     irBridge.onopen=()=>{
       bridgeConnected=true; updateBridgeStatus(); bridgeVoice('bridge_up');
+      reportRuntimeModuleStatus();
       // Bridge接続時点で既にrenderer側に発行済みのsession_idがあれば渡す
       // （iRacing接続前でもPTTは使われうるため、iracing_connectedを待たない）。
       try{ irBridge.send(JSON.stringify({cmd:'usage_session', session_id:usageSessionId})); }catch(e){}

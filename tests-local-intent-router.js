@@ -24,6 +24,7 @@ const live = {
   strategy_options: { available:true, fuel_window_open_in_laps:2,
     plan_b:{ fuel_window_open:false, target_in_laps:2 } },
   fuel_strategy: { avg_fuel_per_lap:2.53, required_fuel_l:10.6, margin_l:4.4, estimated_crossings_to_finish:4 },
+  weather: { track_temp_c:23.3, air_temp_c:22.5, humidity:92, track_wetness_code:1 },
 };
 let r = route('燃料は？', live);
 check('fuel is answered locally from exact live facts', r.handled && r.intent==='fuel_status' && r.reply.includes('必要10.6L'));
@@ -41,12 +42,30 @@ r = route('パンで後ろとの差。', live);
 check('a noisy transcript that still contains rear-gap words does not fall through to no-data', r.handled && r.reply==='後ろ5.8秒。');
 r = route('前後のギャップは？', live);
 check('an explicitly paired gap request returns both authoritative nearest gaps', r.handled && r.reply==='前4.6秒、後ろ5.8秒。');
+r = route('後ろとのギャップはどう？', live);
+check('8/24 exact rear-gap field phrase returns the live rear value', r.handled && r.reply==='後ろ5.8秒。');
+r = route('むしろ ギャップ どう？', live);
+check('8/24 directionless noisy gap question returns both nearest values', r.handled && r.reply==='前4.6秒、後ろ5.8秒。');
+r = route('出ました。前は？', live);
+check('a short follow-up asking for the front gap is still deterministic', r.handled && r.reply==='前4.6秒。');
+r = route('ちゃんとギャップ答えたよ。', live);
+check('a statement about a prior gap answer is acknowledged, not misread as a new query', r.handled && r.intent==='gap_reply_acknowledgement');
+r = route('走り始めたらギャップちゃんと教えてね。', live);
+check('a future gap-reporting request is acknowledged without a false no-data answer', r.handled && r.intent==='gap_reporting_acknowledgement');
 r = route('後ろとの差は？', { gap_ahead:4.6 });
 check('missing rear-gap evidence names the unavailable fact instead of generic refusal', r.handled && r.intent==='nearest_gap_unavailable' && r.reply==='後ろのGAPはまだ取れていない。');
 r = route('今ポジション何位？', live);
 check('current class position is answered locally', r.handled && r.reply==='現在P8。');
 r = route('了解', live);
 check('acknowledgement bypasses cloud', r.handled && r.intent==='acknowledgement' && r.reply==='了解。');
+r = route('路面温度は何度？', live);
+check('current track temperature is answered locally and briefly', r.handled && r.intent==='track_temperature' && r.reply==='路面23.3℃。');
+r = route('昨日の路面温度は？', live);
+check('historical track temperature never substitutes the current reading',
+  r.handled && r.intent==='historical_weather_unavailable' && /現在値では代用しない/.test(r.reply) && !/23\.3/.test(r.reply));
+r = route('昨日は雨だった？', live);
+check('historical rain question gets a subject-neutral answer',
+  r.handled && r.intent==='historical_weather_unavailable' && /天候記録/.test(r.reply) && !/路面温度/.test(r.reply));
 r = route('フューエルウィンドウが開いたら言って', live);
 check('future fuel-window instruction arms a local monitor instead of reading generic fuel',
   r.handled && r.intent==='fuel_window_watch'

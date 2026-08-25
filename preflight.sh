@@ -50,6 +50,9 @@ if node tests-usage-google-attribution.js >/dev/null 2>&1; then echo "   ✅ 全
 echo "── Cost Telemetry自動回収・再送・利用文脈分類（2026-07-26）"
 if node tests-cost-telemetry.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-cost-telemetry.js 2>&1|tail -15; fail=1; fi
 
+echo "── 原価ゲート全契約・Windows cost-meter同梱（恒久出荷ゲート）"
+if node tests-cost-gate.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-cost-gate.js 2>&1|tail -15; fail=1; fi
+
 echo "── Shadow PITWALL Credits台帳・原価換算・二重減算防止（2026-08-03）"
 if node tests-shadow-credits.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-shadow-credits.js 2>&1|tail -15; fail=1; fi
 

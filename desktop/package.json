@@ -11,6 +11,7 @@
   "author": "OMORAY",
   "license": "UNLICENSED",
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "electron": "^32.0.0",
     "electron-builder": "^25.0.0"
   },
@@ -21,12 +22,8 @@
       "output": "dist"
     },
     "files": [
-      "main.js",
-      "preload.js",
+      "*.js",
       "renderer.html",
-      "cost-meter.js",
-      "memory-action-layer.js",
-      "strategy-playbook.js",
       "overlay.html",
       "build-info.json",
       "*.png"

@@ -118,9 +118,12 @@ function check(label, ok, detail) {
 {
   const renderer = fs.readFileSync('desktop/renderer.html', 'utf8');
   const pkg = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
+  const packagePatterns = pkg.build && Array.isArray(pkg.build.files) ? pkg.build.files : [];
+  const packaged = file => packagePatterns.includes(file)
+    || (packagePatterns.includes('*.js') && /^[^/]+\.js$/.test(file));
   check('renderer が cost-meter を読み込む', renderer.includes('cost-meter.js'));
   check('Windows配布物に cost-meter を同梱する',
-    Array.isArray(pkg.build && pkg.build.files) && pkg.build.files.includes('cost-meter.js'));
+    packaged('cost-meter.js'));
   check('生成を計上する', /costRecord\('generated'/.test(renderer));
   check('キュー投入を計上する', /costRecord\('queued'/.test(renderer));
   check('TTS要求を計上する', /costRecord\('tts_requested'/.test(renderer));

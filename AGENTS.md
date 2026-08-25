@@ -18,6 +18,8 @@ Read in this order before starting work:
 2. `HANDOFF.md` for the current product, engineering, field-test, and cost state;
 3. the relevant code, tests, Git history, and evidence named by `HANDOFF.md`.
 
+Buildまたは公開を伴う作業では、上記に加えて`review/PITWALL_RELEASE_GATE.md`を全文読み、作業者・確認者の分離と全必須ゲートを守る。
+
 Chat history and old review documents are supporting evidence, not the current source of truth. If they conflict with current code, Git history, or `HANDOFF.md`, investigate and correct `HANDOFF.md` rather than asking Yuji to reconstruct the history.
 
 ## Authority and owner gates
@@ -40,6 +42,8 @@ For each meaningful task:
 6. For a build or release candidate, run the full release gate.
 7. Update `HANDOFF.md` with current facts, tests actually run, remaining field verification, and the next action.
 8. Commit a coherent unit when safe. Report the outcome, not a transcript of routine work.
+
+`full release gate`は`review/PITWALL_RELEASE_GATE.md`を指す。`preflight.sh`の成功だけで代用してはならない。
 
 Do not create a new planning, review-request, response, completion-evidence, or session-log Markdown file when the information belongs in Git history or `HANDOFF.md`. Add a durable document only when it will remain useful after the current task is complete.
 

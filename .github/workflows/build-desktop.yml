@@ -69,6 +69,10 @@ jobs:
           npm install
           npm run dist
 
+      - name: Verify packaged runtime modules
+        working-directory: desktop
+        run: node scripts/verify-packaged-runtime.js
+
       - name: Rename for release
         run: |
           $exe = Get-ChildItem desktop/dist/*.exe | Select-Object -First 1

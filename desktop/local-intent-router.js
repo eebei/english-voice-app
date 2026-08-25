@@ -27,6 +27,15 @@
     if (m) return isJP(lang) ? `${m}分${s}秒` : `${m}m ${s}s`;
     return isJP(lang) ? `${s}秒` : `${s}s`;
   };
+  const weatherValues = live => {
+    const weather = live && live.weather && typeof live.weather === 'object' ? live.weather : {};
+    return {
+      track: finite(weather.track_temp_c),
+      air: finite(weather.air_temp_c),
+      humidity: finite(weather.humidity),
+      wet: finite(weather.track_wetness_code),
+    };
+  };
   const answer = (intent, reply, action) => reply
     ? { handled:true, intent, reply, ...(action ? { action } : {}) }
     : { handled:false };
@@ -133,10 +142,39 @@
       const remaining = finite(live.session_time_remaining_s);
       if (remaining !== null) return answer('time_remaining', isJP(lang) ? `残り${formatDuration(remaining, lang)}。` : `${formatDuration(remaining, lang)} remaining.`);
     }
+    const weatherQuestion = /天気|天候|気温|路面(?:温度|状況)|路温|トラック温度|雨|濡れ|湿度|weather|track temp|air temp|rain|wet/i.test(text);
+    if (weatherQuestion && /昨日|前回|前の(?:レース|走行|セッション)|yesterday|last (?:race|run|session)/i.test(text)) {
+      return answer('historical_weather_unavailable', isJP(lang)
+        ? '前回の天候記録は確認できない。現在値では代用しない。'
+        : 'I cannot verify the previous weather record. I will not substitute the current value.');
+    }
+    if (weatherQuestion) {
+      const w = weatherValues(live);
+      if (/路面(?:温度)?|路温|トラック温度|track temp/i.test(text)) return answer('track_temperature', w.track !== null
+        ? (isJP(lang) ? `路面${w.track.toFixed(1)}℃。` : `Track temperature ${w.track.toFixed(1)}C.`)
+        : (isJP(lang) ? '現在の路面温度は取得できない。' : 'Current track temperature is unavailable.'));
+      const wetJP = {1:'ドライ',2:'ほぼドライ',3:'ごく薄いウェット',4:'ライトウェット',5:'ウェット',6:'かなりウェット',7:'極端なウェット'};
+      const parts = [];
+      if (w.track !== null) parts.push(isJP(lang) ? `路面${w.track.toFixed(1)}℃` : `track ${w.track.toFixed(1)}C`);
+      if (w.air !== null) parts.push(isJP(lang) ? `気温${w.air.toFixed(1)}℃` : `air ${w.air.toFixed(1)}C`);
+      if (w.humidity !== null) parts.push(isJP(lang) ? `湿度${w.humidity.toFixed(0)}%` : `humidity ${w.humidity.toFixed(0)}%`);
+      if (w.wet !== null) parts.push(isJP(lang) ? `路面${wetJP[Math.trunc(w.wet)] || '不明'}` : `surface code ${Math.trunc(w.wet)}`);
+      return answer('weather_status', parts.length
+        ? `${parts.join(isJP(lang) ? '、' : ', ')}。`
+        : (isJP(lang) ? '現在の天候テレメトリは取得できない。' : 'Current weather telemetry is unavailable.'));
+    }
+    if (/(?:ちゃんと|さっき).{0,10}(?:ギャップ|GAP).{0,10}(?:答えた|言えた|出た)/i.test(text)) {
+      return answer('gap_reply_acknowledgement', isJP(lang) ? '了解。' : 'Copy.');
+    }
+    if (/(?:走り始め|走行(?:中|開始)|グリーン).{0,12}(?:ギャップ|GAP).{0,12}(?:教えて|言って|コール)|(?:when|once).{0,12}(?:driving|green).{0,12}(?:gap|difference)/i.test(text)) {
+      return answer('gap_reporting_acknowledgement', isJP(lang)
+        ? '了解。走行中は質問に前後GAPで答える。変化が大きければこちらからもコールする。'
+        : 'Copy. I will answer with the nearest gaps and call material changes while running.');
+    }
     // Nearest-car gaps are distinct from the class-leader gap.  This must be
     // evaluated first: a driver asking "後ろとの差" must never fall through
     // to an LLM/no-data template while the Bridge already has gap_behind.
-    if (/(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)/i.test(text)) {
+    if (/(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)|^(?:出ました[。.!！\s]*)?(?:前|後ろ|後方)(?:は|どう)[。.!！?？]*$/i.test(text)) {
       const wantsBoth = /前後|both/i.test(text);
       const wantsAhead = wantsBoth || /前|ahead/i.test(text);
       const wantsBehind = wantsBoth || /後ろ|後方|behind/i.test(text);
@@ -151,6 +189,16 @@
       return answer('nearest_gap_unavailable', isJP(lang)
         ? `${requested}はまだ取れていない。`
         : `${requested} is not available yet.`);
+    }
+    if (/(?:ギャップ|GAP|gap).{0,8}(?:どう|教えて|何秒|どれくらい|どのくらい|[?？])|(?:どう|何秒).{0,8}(?:ギャップ|GAP|gap)/i.test(text)) {
+      const ahead = finite(live.gap_ahead);
+      const behind = finite(live.gap_behind);
+      const parts = [];
+      if (ahead !== null) parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
+      if (behind !== null) parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
+      return answer(parts.length ? 'nearest_gap' : 'nearest_gap_unavailable', parts.length
+        ? (isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`)
+        : (isJP(lang) ? '前後のGAPはまだ取れていない。' : 'The nearest gaps are not available yet.'));
     }
     if (/トップ|首位|P1|何秒|ギャップ|差|leader|gap/i.test(text)) {
       const wantsOverall = /総合|GTP|gdp|overall/i.test(text);

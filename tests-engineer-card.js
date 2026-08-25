@@ -218,6 +218,18 @@ let routed = cards.route('路面温度は？', {
 }, 'ja', {race:true});
 check('路面温度 routes to weather before tyre status',
   routed.card.topic === cards.TOPIC.WEATHER_STATUS && /路面33\.9℃.*気温19\.9℃/.test(routed.reply), routed.reply);
+routed = cards.route('昨日の路面温度は？', {
+  weather:{track_temp_c:33.9,air_temp_c:19.9,humidity:94,track_wetness_code:1}
+}, 'ja', {race:true});
+check('historical weather never re-labels current telemetry as yesterday',
+  routed.card.topic === cards.TOPIC.HISTORICAL_WEATHER
+  && /現在値では代用しない/.test(routed.reply) && !/33\.9/.test(routed.reply), routed.reply);
+routed = cards.route('昨日は雨だった？', {
+  weather:{track_temp_c:33.9,air_temp_c:19.9,humidity:94,track_wetness_code:1}
+}, 'ja', {race:true});
+check('historical rain uses a subject-neutral unavailable reply',
+  routed.card.topic === cards.TOPIC.HISTORICAL_WEATHER
+  && /天候記録/.test(routed.reply) && !/路面温度/.test(routed.reply), routed.reply);
 routed = cards.route('ルナ、タイヤ温度。', {
   tire_measurement:{available:false}, weather:{track_temp_c:33.9},
   tires:{lf:{w:[100,100,100],t:[34.6,34.6,34.6]}}

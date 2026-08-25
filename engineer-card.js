@@ -21,6 +21,7 @@ const TOPIC = Object.freeze({
   TYRE_STATUS: 'tyre_status',
   DAMAGE_STATUS: 'damage_status',
   WEATHER_STATUS: 'weather_status',
+  HISTORICAL_WEATHER: 'historical_weather',
   HANDLING_SETUP_ADVICE: 'handling_setup_advice',
   HANDLING_REPORT: 'handling_report',
   PENALTY_REPORT: 'penalty_report',
@@ -152,6 +153,10 @@ function classify(text, options = {}) {
   }
   // Weather must win before the generic tyre vocabulary.  Previously
   // "路面温度" matched the bare "温度" tyre rule and returned tyre wear.
+  if (/昨日|前回|前の(?:レース|走行|セッション)|yesterday|last (?:race|run|session)/i.test(t)
+      && /天気|天候|気温|路面(?:温度|状況)|路温|トラック温度|雨|濡れ|湿度|weather|track temp|air temp|rain|wet/i.test(t)) {
+    return { topic: TOPIC.HISTORICAL_WEATHER, confidence: 0.99 };
+  }
   if (/天気|天候|気温|路面(?:温度|状況)|路温|トラック温度|雨|濡れ|湿度|weather|track temp|air temp|rain|wet/i.test(t)) return { topic: TOPIC.WEATHER_STATUS, confidence: 0.99 };
   if (/タイヤ|摩耗|左前|右前|左後|右後|tyre|tire|wear/i.test(t)) {
     const tyreQuery = /(?:タイヤ|tyre|tire).{0,8}(?:温度|temp)|(?:温度|temp).{0,8}(?:タイヤ|tyre|tire)/i.test(t)
@@ -756,6 +761,12 @@ function buildWeatherStatus(live, lang) {
     : `Track ${track == null ? 'unknown' : track.toFixed(1) + 'C'}, air ${air == null ? 'unknown' : air.toFixed(1) + 'C'}, humidity ${humidity == null ? 'unknown' : humidity.toFixed(0) + '%'}, surface ${wet == null ? 'unknown' : wetEN[Math.trunc(wet)] || 'unknown'}.`;
 }
 
+function buildHistoricalWeather(_live, lang) {
+  return ja(lang)
+    ? '前回の天候記録は確認できない。現在値では代用しない。'
+    : 'I cannot verify the previous weather record. I will not substitute the current value.';
+}
+
 function buildTrafficStatus(live, lang) {
   const a = finite(live && live.gap_ahead), b = finite(live && live.gap_behind);
   if (a == null && b == null) return ja(lang) ? '現在の前後GAPは取得できない。' : 'Current verified gaps are unavailable.';
@@ -889,6 +900,7 @@ function build(card, live, lang = 'en') {
     [TOPIC.PACE]: buildPace, [TOPIC.CURRENT_POSITION]: buildCurrentPosition,
     [TOPIC.LEADER_GAP]: buildLeaderGap, [TOPIC.TYRE_STATUS]: buildTyreStatus,
     [TOPIC.DAMAGE_STATUS]: buildDamageStatus, [TOPIC.WEATHER_STATUS]: buildWeatherStatus,
+    [TOPIC.HISTORICAL_WEATHER]: buildHistoricalWeather,
     [TOPIC.HANDLING_SETUP_ADVICE]: (l, lg) => buildHandlingSetupAdvice(l, lg, card),
     [TOPIC.HANDLING_REPORT]: (l, lg) => buildHandlingReport(l, lg, card),
     [TOPIC.PENALTY_REPORT]: buildPenaltyReport,

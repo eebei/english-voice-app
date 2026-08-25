@@ -2,7 +2,29 @@
 
 最終更新: 2026-08-24 JST
 
-## Build 281 公開完了（2026-08-24、GAP・燃料・デブリーフ・危険車両ガード）
+## 2026-08-25 Memory→Strategy 製品判断
+
+- 正本は`review/MEMORY_TO_STRATEGY_SHARED_UNDERSTANDING_V1.md`。Yuji決定により、Build 282をGate 5まで先に閉じ、その後Memory Action Layer実戦版v1へ入る。
+- v1は認証ユーザー単位のサーバー正本＋ローカルcache。構造化Decision ID、条件、予測、実結果、採点、訂正履歴を保存し、生音声・会話全文・不要な生telemetryは原則保存しない。
+- 成功戦略だけでなく失敗戦略も条件付きで次回利用する。誤った記憶は`disputed`で即時利用停止し、本人との読み返し合意後だけ訂正を有効化する。
+- privacy / terms / 事前明示・オプトアウト / 表示・訂正・削除 / 保持期間を同scopeに含める。Claude Codeが作業者、Codexが独立確認者。
+
+## 恒久出荷ゲート
+
+- Build・出荷・公開の正本は`review/PITWALL_RELEASE_GATE.md`。作業者と確認者を分け、ソース、完成artifact、Windows、server、実走、公開取得物を別々に検査する。
+- `preflight.sh`合格だけで出荷可としない。完成`app.asar`と同梱Bridgeを確認しないBuildは公開不可。
+
+## Build 281 公開後実走で出荷欠陥を確認（2026-08-24）
+
+- 8/24実走では、後方GAP質問直前のBridge telemetryに`gapBehind=33.8`、次の同質問時にも`gapBehind=52.2`が存在した。それでもrendererは`LOCAL_INTENT_BYPASS reason=unhandled`となり、サーバーのno-data回答へ落ちた。Lunaがデブリーフで「直前までデータが来ていた」と述べた内容はログと一致する。
+- 根本原因は後方GAP計算ではなく、`desktop/renderer.html`が読む`local-intent-router.js`を`desktop/package.json`の`build.files`へ含めていなかったこと。公開Build 281のWindows installerにはローカル即答moduleが存在しない。さらに二重安全用の`fuel-plan-guard.js`も同じ理由で欠落していた。ソースを直接requireするテストだけではこの欠陥を検出できなかった。
+- 修正候補ではDesktop直下のruntime JSをinstallerへ同梱し、テストでrendererの全ローカルscriptがpackage対象か検査する。Windows CIは完成した`app.asar`を直接列挙し、GAP routerと燃料guardが無ければBuildを失敗させる。実行時ログも`router_missing`と通常の`unhandled`を区別する。
+- 同ログの「昨日の路面温度」は履歴値を取得しておらず、現在値23.3℃を昨日として返していた。履歴記録を確認できない時は現在値で代用しない決定論handlerへ変更する。
+- 19:26:10の停止車両は`前方に停止車両。2.6秒。注意。`と実発話しており、この一件は成功。ただし全候補を網羅した証拠ではない。
+- この修正候補は未commit・未build・未公開。次installerでは完成asarの証明とWindows実取得後の後方GAP即答を確認するまで完了扱いにしない。
+- Claude独立再確認でGate 4通過、P0/P1は0件。完成asar検査はrenderer参照から全件派生、cost gateはpreflightへ追加、asar依存は明示、起動時module状態traceと過去天候の対象非依存fail-closedを追加した。Claudeの残P2-3も、`verifyPackagedRuntime()`本体を直接呼ぶ成功／欠落停止テストへ変更し、NSIS検査14/14、更新後`./preflight.sh`全項目で合格した。旧`desktop/dist`へ新検査を当てた`missing packaged runtime modules: fuel-plan-guard.js, cost-meter.js, local-intent-router.js`は、新candidateの失敗ではなくBuild 281以前の実欠陥を正しく捕捉した証拠。Gate 5以降のprivate artifact / Windows / iRacing / server / 公開確認は未実施。
+
+## Build 281 公開時点の記録（2026-08-24、GAP・燃料・デブリーフ・危険車両ガード）
 
 - 対象はBuild 280の8/24実走で再発した、GAP即答の不成立、微小燃料差による予定外P0ピット、デブリーフのピット周回創作、危険候補の優先度逆転。
 - `review/BUILD281_GAP_FUEL_DEBRIEF_HAZARD_REVIEW_REQUEST.md` をレビュー正本とする。実走ログの事実、再生条件、反証すべき安全条件をそこへ固定した。

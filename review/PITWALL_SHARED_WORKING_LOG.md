@@ -15,6 +15,7 @@ YujiはClaudeへ長文を転記しない。次の一文だけ伝える。
 Claude Codeは作業前に必ず、この文書と次を全文確認する。
 
 - `review/PITWALL_INTERNAL_SIMULATION_TEST_POLICY.md`（内部シミュレーション・原価ゲートの正本）
+- `review/PITWALL_RELEASE_GATE.md`（Build・出荷・公開の正本。作業者と確認者を分離する）
 - 該当Buildのbrief／completion evidence
 
 Claude Codeは実装後、この文書を勝手に「完了」へ書き換えない。変更ファイル、テスト、未完了、commit/build/publicの未実施を `Claude Code 実装報告` に追記し、Codexレビューを待つ。
@@ -26,6 +27,148 @@ Claude Codeは実装後、この文書を勝手に「完了」へ書き換えな
 - LLMに燃料、残周回、損傷部位、復帰順位を推測させない。Bridgeの決定論的状態を権威とする。
 - 通常テストでAnthropic、Google STT、Google TTSの実APIを呼ばない。詳細は内部シミュレーション正本に従う。
 - 保存だけでは学習完了ではない。`申告 → 状態 → Plan → handler → 無線 → 結果保存` のtraceを要求する。
+- `preflight成功`だけでは出荷可にしない。完成installerの`app.asar`、同梱Bridge、Windows旧版更新、本番server SHA、公開取得物を`review/PITWALL_RELEASE_GATE.md`に従って別々に検査する。
+
+## 2026-08-24 Build 281実走後の最優先
+
+- Build 281では、Bridgeに`gapBehind`が届きデブリーフでも参照できた一方、Windows installerへ`local-intent-router.js`が同梱されず、ライブ後方GAP質問がno-dataへ落ちた。`fuel-plan-guard.js`も同じpackage指定漏れだった。
+- ソース直接テストと`preflight.sh`は合格していたが、完成`app.asar`を検査していなかった。これは出荷ゲートの欠陥であり、保存・計算・デブリーフ成功をライブ発話成功とみなしてはならない。
+- Codexがpackage指定、完成asar検査、runtime欠落診断、後方GAPの実走文言回帰、過去天候の現在値代用禁止を修正中。commit / build / 公開は未実施。
+- 次のBuildは`review/PITWALL_RELEASE_GATE.md`の署名欄を、作業者と別の確認者が埋めるまで出荷不可。Claude CodeはCodex実装の独立確認者として、差分だけでなくprivate candidate artifactを確認する。
+
+## 2026-08-25 記憶→戦略 共有認識 V1（Claude Code ↔ Codex 突き合わせ）
+
+正本: [MEMORY_TO_STRATEGY_SHARED_UNDERSTANDING_V1.md](MEMORY_TO_STRATEGY_SHARED_UNDERSTANDING_V1.md)
+
+Yuji が同一質問を両者へ**独立に**投げ、回答を突き合わせた記録。目的は**共有認識度を上げて開発速度を上げること**と**最終Buildでの作業漏れを無くすこと**。割れた項目は Yuji が決める。
+
+**北極星**：Luna が「昨日は8番手スタート、6周目にアンダーカット、ブレンドでP4」と**自分から言い**、それを**今日の Plan へ渡す**。
+前提の訂正：Claude Code の記憶は学習ではなく「①書く ②索引を読む ③引く ④訂正される」だけ＝**特別な技術ではなく配管**。PITWALL でも再現できる。
+
+**両者一致（事実確定・議論再開しない）**
+1. 過去レースをブリーフィングへ渡す仕組みは**存在する**（`renderer.html:4214`）
+2. 発動条件3つ：`selMode==='strategy'`（**走行中は発動しない**）／`lastTrack` 確定／同コース記録あり
+3. `pw_raceHistory` は11項目のみ（`date, track, car, carClass, bestLap, avgLap, totalLaps, incidents, finishPos, irating, sr`）
+4. **スタート順位・判断時点・戦略・予測・実際の復帰順位は1つも保存されていない**
+5. **5番（Character）より4番（Memory→Strategy）が先**という Yuji の順序認識は正しい
+
+**Codex が正確だった点**：ブリーフィングは**リクエストが出るだけ**で、過去の話が出るかは LLM 次第＝**必ず出る決定論的契約になっていない**。Claude Code はここを言い落としていた。「聞いたことがない」理由は**材料が薄い＋出る保証が無い**の合わせ技。
+
+**Claude Code しか指摘していない点（実装量の見積もりが変わる）**
+- `score_execution()`（`bridge.py:5018`）は**採点済みで捨てている**＝新規実装ではなく出口を繋ぐ話
+- `pit_loss_calibrator`（`bridge.py:5022`）は**既に学習・永続化している唯一の前例**＝4番は新発明ではない
+- `pit_events` は Build 281 で Bridge 側に実装済み＝`pw_raceHistory` へ流れていないだけ
+
+**食い違いに見えたが両方正しかった点**：キャラ差は `prompts.js` **26箇所**、`engineer-card.js` **0箇所**、`bridge.py` **0箇所**。
+＝**キャラクターは LLM が喋る時だけ効き、決定論経路（安全・GAP・燃料）は全キャラ一字一句同じ**。Codexの診断と同じものを別表現で見ていた。
+
+**Codex の提案が優れている点**：**Decision ID** で保存・採点・翌日選択を1本で貫く／条件が揃わなければ再提案せず「今回は未成立」と言う fail-closed。
+
+**合意した実装方針（Memory Action Layer 実戦版 v1）**：Codex案に上記3点を統合。既存の `pit_events` / `score_execution` を使い新規計測を作らない。`pit_loss_calibrator` の形に倣う。
+**完成条件：「保存済み」では合格にしない。翌セッションでの自発発話と根拠traceまで。**
+
+**進め方（両者一致）**：Build 282 の配布検査を通した次の最優先を v1 に絞る。Build 282 は Gate 4 通過・P0/P1 0件で、残る Gate 5〜9 は Yuji の手が必要な部分。
+
+**突き合わせ運用の作法（今回確立）**：①同一質問を独立に投げる ②事実と見解を分ける ③**事実が食い違った点だけ**をコードで再検証させる ④見解が割れたら Yuji が決める。
+理由＝先に相手の結論を読むと引きずられるため、**根拠を先に固定してから照合する**。今回 Claude Code は Codex の回答を見る前に9項目を確定させてから照合した。
+
+**2026-08-25 Codex回覧完了**：中心設計に異論なし。正本の12節へ、実装漏れ防止として次を追加した。
+
+- Decision IDは完走時だけでなく、提案→pit exit→blend安定→session終了の各段階で追記する。DNF・切断・途中終了でも判断材料を失わない。
+- 戦略事実は全キャラクター・全PCで共有する。Codex推奨は認証ユーザー単位のサーバー正本＋ローカルcache。
+- 次回の自発発話はLLMの自由選択にせず、`memory_strategy_briefing`決定論カードとqueue fate traceで保証する。
+- 保存→翌日選択→自発発話→条件成立後のPlan利用→今回結果採点を一本のfixtureで検証する。
+
+中心設計でClaude CodeとCodexの対立はない。Yuji判断待ちは、①Build 282 Gate 5を先に閉じるか、②サーバー正本をv1必須にするか、の2点。
+
+**2026-08-25 Yuji決定**：2点とも決定済み。①Build 282をGate 5まで先に閉じる。②Memory Action Layer実戦版v1は認証ユーザー単位のサーバー正本を必須とし、privacy / terms / 事前明示・オプトアウト / 表示・訂正・削除 / 保持期間を同じscopeに含める。Claude Codeが作業者、Codexが独立確認者。詳細な作業指示と受入条件は正本16節を参照する。
+
+## 2026-08-24 Claude Code — Build 282候補 **再確認：Gate 4 通過 / P0・P1 0件**
+
+結果本文: [BUILD282_CLAUDE_INDEPENDENT_VERIFICATION.md](BUILD282_CLAUDE_INDEPENDENT_VERIFICATION.md)（末尾「再確認」節）
+
+前回の P1 2件・P2 2件は**すべて解消**。症状を消すのではなく構造で直されていることを変異試験7件で個別確認した。
+
+- P1-1 → `tests-cost-gate.js` をパターン対応判定へ。**`preflight.sh:54` へ収録**。JS全スイープ全緑。
+- P1-2 → `desktop/scripts/verify-packaged-runtime.js` を新設し、**rendererの`<script src>`から検査対象を派生**。CIは呼ぶだけ。ハードコードを固定していたテストも解消され、架空の `future-runtime.js` で「新script追加＋package入れ忘れ」を検査している＝**Gateの必須反証そのもの**。
+- P2-1 → `@electron/asar` を `devDependencies` へ明示。 P2-2 → 「前回の**天候記録**は確認できない」へ対象非依存化。
+- Gate 2 未達だった起動時module診断 → `RUNTIME_MODULE_STATUS` で5module全件記録。**Gate 6 の要求を満たす**。
+- **実証**：旧 `app.asar`（8/19生成・実走障害を起こした版）に新スクリプトを当てると `missing packaged runtime modules: fuel-plan-guard.js, cost-meter.js, local-intent-router.js` で失敗する。**実際に起きた事故をそのまま検出する。**
+- 機械検証（私が独立実行）：JS **全緑** ／ Python **264 passed** ／ preflight ✅ ／ `git diff --check` ✅ ／ 有料実API呼出 **0件** ／ 変異試験 **7件中6件検出**。
+
+**残 P2-3（新規・Buildは止めない）**：`verify-packaged-runtime.js` の `throw` を `if(false)` に変えても `tests-nsis-installer.js` が通る。テストは純関数（`missingRuntimeScripts`/`extractLocalScripts`）しか呼んでおらず、**`verifyPackagedRuntime()` 本体を一度も実行していない**。「欠落を検出できる」は検査済みだが「欠落時に止める」が未検査。`options.asar` の注入口が既にあり、両方向1件ずつ足せば済む（動作確認済み）。**次のBuildまでに入れないと、ゲート自身が静かに無効化されうる。**
+
+**署名欄：Gate 4 まで合格・P0/P1 0件。ただし Gate 5〜9（private candidate artifact / Windows / iRacing / server SHA）は未実施のため「出荷可」の署名はしない。** build GO の前に `BUILD_VERSION` の更新が必要（未更新）。`engineer-card.js` を変更しているので deploy 後に `./verify-deploy.sh` が必須。
+
+## 2026-08-24 Codex — Claude残P2-3対応
+
+- `tests-nsis-installer.js`から`verifyPackagedRuntime()`本体を直接実行する二方向テストを追加した。renderer参照moduleを全件返すmock asarは成功し、1件欠落させたmock asarは`missing packaged runtime modules:`例外でBuildを停止する。
+- 検証: NSIS installer **14/14成功**、`./preflight.sh`全項目成功、`git diff --check`成功。通常sandboxではlocalhostを使うHTTP二項目が起動制限で落ちたため、localhost許可下で同じpreflightを再実行し合格を確認した。
+- Claudeが示した`missing packaged runtime modules: fuel-plan-guard.js, cost-meter.js, local-intent-router.js`は、8/19生成の旧`desktop/dist/.../app.asar`へ新検査を当てた実証結果。新しいprivate candidateはまだ生成していないため、新candidateのpackage合格証拠とは扱わない。
+- commit / push / private build / deploy / 公開は未実施。次はBuild番号更新後、Yujiの明示build GOを受けてGate 5のprivate candidateを生成・検査する。
+
+## 2026-08-24 Claude Code — Build 282候補 独立確認結果：**出荷不可・署名欄は空のまま**
+
+確認結果本文: [BUILD282_CLAUDE_INDEPENDENT_VERIFICATION.md](BUILD282_CLAUDE_INDEPENDENT_VERIFICATION.md)
+対象: `d3f3eb5` ＋ 未コミット作業ツリー（11ファイル / +136 -9）／作業者 Codex ／確認者 Claude Code
+
+package指定の修正自体は正しい。列挙をやめて `*.js` にしたのは「列挙はコードが育つと必ずズレる」型の正しい適用で、
+`tests-nsis-installer.js` が renderer の `<script src>` から**派生させて**検査しているのも筋が良い。
+Gate 1（失敗の固定）も要求を満たしている。**ただし Gate 3 の報告と実態が食い違っている。**
+
+- **P1-1 本作業が既存テストを壊し、preflight がそれを隠している。**
+  `tests-cost-gate.js` は **HEAD では合格、本作業ツリーでは失敗**（stash して両方実行し確認）。
+  `files` から `cost-meter.js` のリテラル列挙を消したため `tests-cost-gate.js:122` が落ちる。
+  実体の同梱は `*.js` で満たされるので壊れてはいないが、**cost-meter の同梱を守っていたガードが消えた**。
+  そして **`preflight.sh` に `tests-cost-gate.js` が入っていない**（grep 0件）ため `./preflight.sh` は「✅ 出荷可」と表示する。
+  Gate 3 の「対象単体テスト合格」「preflight 全項目合格」を**両方満たしたと報告できてしまう状態で回帰している**。
+  Build 281 の欠陥（ソース合格を製品合格と取り違える）と同じ構造がテスト層で再発。
+  → 対応：`tests-cost-gate.js:122` をパターン対応判定へ揃える＋**`preflight.sh` へ追加する（入っていないテストは出荷ゲートではない）**。
+
+- **P1-2 完成artifact検査が2moduleのハードコードで、Gateの必須反証を満たさない。**
+  CI新設ステップは `['local-intent-router.js','fuel-plan-guard.js']` の2本のみ。renderer は**5本**参照している。
+  手元の旧 `app.asar`（8/19生成）を列挙した実測：**5本中3本が欠落**（`local-intent-router.js` / `fuel-plan-guard.js` / **`cost-meter.js`**）。
+  `cost-meter.js` は**旧 `files` に列挙されていたのに artifact に無い**＝manifest記載と実同梱は別の事実であり、Gateの分け方が実データで裏付けられた。
+  現在のCI検査はこの欠落を**検出できない**。
+  さらに `tests-nsis-installer.js` が `workflow.includes("'local-intent-router.js','fuel-plan-guard.js'")` と書いているため、
+  **CI検査を派生型へ改善するとテストが落ちる**＝修正を妨げるテストになっている。
+  → 対応：CI の検査対象を renderer の `<script src>` から生成。テストも性質を見る形へ。
+
+- **P2-1** `@electron/asar` が未宣言依存（electron-builder経由の推移的解決のみ）。失敗方向はfail-closedだが `devDependencies` へ明示すべき。
+- **P2-2** `buildHistoricalWeather()` の日本語固定文が「前回の**路面温度**は…」で、`classify` は雨・湿度・気温も同topicへ振る。「昨日は雨だった？」に路面温度の話が返る。
+
+- **Gate 2 未達**：`router_missing` の分離は正しいが、Gate 6 が要求する「起動ログに必要moduleのloaded/missing状態が記録され全てloaded」は**未実装**（欠落を検出できるのは発話が来た時だけ）。
+- **Gate 5〜9 未実施**：private candidate が存在しない。手元の asar は8/19の旧物で今回の候補ではない。
+- 機械検証（私が独立実行）：Python **264 passed** ／ `git diff --check` OK ／ 有料実API呼出 0件 ／ JS全スイープ **1件失敗**。
+- **署名欄は空のまま。commit / push / build / deploy / 公開はしていない。**
+
+## 2026-08-24 Codex — Build 282候補 Claude差戻し対応：**再レビュー待ち**
+
+Claude CodeのP1 2件・P2 2件・Gate 2未達へ対応した。commit / push / build / deploy / 公開はしていない。
+
+- **P1-1** `tests-cost-gate.js`の同梱判定をリテラル一致からpackage pattern対応へ変更。`*.js`でも`cost-meter.js`が同梱対象であることを検査する。さらに`tests-cost-gate.js`を`preflight.sh`の恒久ゲートへ追加した。
+- **P1-2** CIの完成asar検査から2moduleのハードコードを撤去。`desktop/scripts/verify-packaged-runtime.js`が`renderer.html`のローカル`<script src>`を毎回抽出し、完成`app.asar`に全件存在するか照合する。6本目以降を追加しても自動的に検査対象になる。`tests-nsis-installer.js`も特定ファイル名ではなく、この派生契約と欠落検出を検査する。
+- **P2-1** `desktop/package.json`の`devDependencies`へ`@electron/asar ^3.4.1`を明示した。推移依存へ依存しない。
+- **P2-2** 過去天候のfail-closed文を「前回の天候記録は確認できない。現在値では代用しない。」へ変更。「昨日は雨だった？」でも路面温度の話へずれない回帰をLocal RouterとEngineer Cardの両方へ追加した。
+- **Gate 2** Bridge WebSocket接続直後に`RUNTIME_MODULE_STATUS`を診断ログへ記録する。memory / strategy / fuel guard / cost meter / local routerのloaded状態とmissing一覧を一行で確認できる。発話が来る前に欠落を判定できる。
+
+独立実行結果:
+
+- JavaScript全スイープ: **57/57 suites成功**（localhost統合3本を含む。外部有料API呼出なし）。
+- Python discovery: **264/264成功**。
+- `tests-cost-gate.js`: **36/36成功**。
+- `tests-nsis-installer.js`: **12/12成功**。
+- Local Intent Router: **38/38成功**。
+- Engineer Card: **112/112成功**。
+- `./preflight.sh`: 新設cost gateを含め全項目成功。ただしこれはGate 3までであり、artifact/Windows/実走の合格とは扱わない。
+- `git diff --check`: 成功。
+
+Claude Codeへの再レビュー依頼:
+
+1. P1/P2とGate 2の直し方を独立再確認する。
+2. 全JSスイープと`preflight.sh`が`tests-cost-gate.js`の失敗を実際に捕捉することを確認する。
+3. `verify-packaged-runtime.js`へrenderer参照を一件追加／package entryを一件欠落させる反証で失敗することを確認する。
+4. P0/P1が0件ならGate 4へ署名する。private candidateはまだ無いためGate 5以降へ署名しない。
 
 ## 現在の最優先: Build 266 / Phase E
 
