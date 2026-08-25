@@ -1978,14 +1978,29 @@ function diagnosticLog(tag, text){
     }
   }catch(e){}
 }
+// ★2026-08-26：検査対象を**自分の <script src> から派生**させる。
+//   以前は5本のハードコードで、renderer が8本を読み込むようになっても
+//   session-memory / decision-memory / gap-freshness を見ていなかった。
+//   ＝package から抜けても「全部loaded」と報告する状態だった（Build 281/282 と同型）。
+//   ここを列挙にすると、モジュールが増えるたびに必ずズレる。
+//   9本目を足しても自動で検査対象になる形にする。
+function runtimeModuleGlobalName(src){
+  // 'decision-memory.js' → 'PitwallDecisionMemory'（このリポジトリのUMD命名規約）
+  return 'Pitwall'+String(src).replace(/\.js$/,'').split('-')
+    .map(p=>p.charAt(0).toUpperCase()+p.slice(1)).join('');
+}
 function reportRuntimeModuleStatus(){
-  const modules={
-    memory_action_layer:!!window.PitwallMemoryActionLayer,
-    strategy_playbook:!!window.PitwallStrategyPlaybook,
-    fuel_plan_guard:!!window.PitwallFuelPlanGuard,
-    cost_meter:!!window.PitwallCostMeter,
-    local_intent_router:!!window.PitwallLocalIntentRouter
-  };
+  const modules={};
+  try{
+    document.querySelectorAll('script[src]').forEach(tag=>{
+      const src=String(tag.getAttribute('src')||'');
+      // ローカル同梱のruntime moduleだけを見る（CDN等の絶対URLは対象外）
+      if(!/^[a-z0-9-]+\.js$/.test(src)) return;
+      const global=runtimeModuleGlobalName(src);
+      if(global==='PitwallMain'||global==='PitwallPreload') return;
+      modules[src]=!!window[global];
+    });
+  }catch(e){}
   const missing=Object.keys(modules).filter(name=>!modules[name]);
   diagnosticLog('RUNTIME_MODULE_STATUS',JSON.stringify({modules,missing,status:missing.length?'missing':'loaded'}));
 }
