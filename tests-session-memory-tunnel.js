@@ -76,8 +76,12 @@ check('別シリーズの記録は選ばない',
   memory.selectPrevious(HISTORY, { ...IDENTITY, seriesId: 999 }, TEST_NOW) === null);
 check('認証ユーザーが違う記録は選ばない',
   memory.selectPrevious(HISTORY, { ...IDENTITY, userId: 999 }, TEST_NOW) === null);
+// car だけ空にしても carClass へフォールバックして別値になるため、
+// 「欠損」ではなく「不一致」を試すことになる。両方を空にして初めて欠損を再現できる。
 check('現在側に車種がある時、記録側の車種欠損を一致扱いにしない',
-  memory.selectPrevious([{ ...YESTERDAY, car: '' }], IDENTITY, TEST_NOW) === null);
+  memory.selectPrevious([{ ...YESTERDAY, car: '', carClass: '' }], IDENTITY, TEST_NOW) === null);
+check('  車種が不一致の記録も選ばない（欠損とは別経路）',
+  memory.selectPrevious([{ ...YESTERDAY, car: 'Ferrari 296 GT3', carClass: 'GT3' }], IDENTITY, TEST_NOW) === null);
 check('現在側にseriesがある時、記録側のseries欠損を一致扱いにしない',
   memory.selectPrevious([{ ...YESTERDAY, seriesId: null }], IDENTITY, TEST_NOW) === null);
 check('認証ユーザーが分かる時、旧recordのuserId欠損を一致扱いにしない',

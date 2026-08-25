@@ -45,6 +45,7 @@ import strategy_options as strategy_options_mod
 import plan_fuel_authority as plan_fuel_authority_mod
 import session_race_state as session_race_state_mod
 import session_authority as session_authority_mod
+import gap_authority
 import pit_loss_calibrator as pit_loss_calibrator_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
@@ -830,6 +831,7 @@ def _session_scoped_reset_values():
         # ★スライス1：セッションを跨いで持ち越すと、前回の条件を今回の事実として喋る。
         #   pit_events と同じ扱いにして、両リセット経路から同じ値を取る。
         'race_start_class_pos': None,
+        'gap_authority_records': {},
         'session_setup_fingerprint': '',
         'session_series_id': None,
         'last_weather': None,
@@ -2480,6 +2482,7 @@ def poll_iracing():
     # Exact pit facts are owned by the Bridge and follow the race into the
     # session summary.  Debrief must never infer a pit lap from Plan A/B.
     pit_events = []
+    gap_authority_records = {}   # ★G1：前後GAPの権威レコード（世代判定に使う）
     strategy_plan = None     # owned plan: changes only when its truth signature changes
     strategy_plan_signature = None
     strategy_plan_revision = 0
@@ -2803,6 +2806,7 @@ def poll_iracing():
                         session_laps = _sig_reset['session_laps']
                         pit_events = _sig_reset['pit_events']
                         race_start_class_pos = _sig_reset['race_start_class_pos']
+                        gap_authority_records = _sig_reset['gap_authority_records']
                         session_setup_fingerprint = _sig_reset['session_setup_fingerprint']
                         session_series_id = _sig_reset['session_series_id']
                         last_weather = _sig_reset['last_weather']
@@ -3001,6 +3005,7 @@ def poll_iracing():
             session_laps = _reset['session_laps']
             pit_events = _reset['pit_events']
             race_start_class_pos = _reset['race_start_class_pos']
+            gap_authority_records = _reset['gap_authority_records']
             session_setup_fingerprint = _reset['session_setup_fingerprint']
             session_series_id = _reset['session_series_id']
             last_weather = _reset['last_weather']
@@ -5674,6 +5679,7 @@ def poll_iracing():
         # 周回数が違う車同士でも(EstTimeと違って)そのまま引き算して正しいギャップになる。
         # なのでレース中のみ、クラス内の全順位について{順位: 自分とのギャップ秒}を作って毎回同送する。
         standings_gaps = None
+        standings_by_pos = {}
         competitor_status = []
         overall_leader_gap_s = None
         if is_race_session and player_car_idx >= 0:
@@ -5692,13 +5698,18 @@ def poll_iracing():
                         overall_leader_gap_s = round(
                             _f2_arr[overall_leader_idx] - _player_f2, 1)
                     standings_gaps = {}
+                    standings_by_pos = {}
                     for _si, _spos in enumerate(_cls_pos_arr):
                         # ★2026-07-21 Codex指示R2：同クラス判定はfail-closedな_same_class_mainを使う。
                         if not _spos or _spos <= 0 or _si not in _same_class_main:
                             continue
                         if _si >= len(_f2_arr) or _f2_arr[_si] is None or _f2_arr[_si] < 0:
                             continue
-                        standings_gaps[str(_spos)] = round(_f2_arr[_si] - _player_f2, 1)
+                        _signed = round(_f2_arr[_si] - _player_f2, 1)
+                        standings_gaps[str(_spos)] = _signed
+                        # ★G1：値だけでなく対象車も同じ場所で押さえる。値を後段で
+                        #   上書きしつつ idx を放置したのが 8/23 実走の誤数値の原因。
+                        standings_by_pos[_spos] = {'car_idx': _si, 'signed_gap_s': _signed}
                         if _si != player_car_idx:
                             competitor_status.append({
                                 'car_idx': _si,
@@ -5722,13 +5733,28 @@ def poll_iracing():
                     #    真後ろの車が別周回扱いで弾かれ gap_behind=None が頻発し、値もドライバーのオーバーレイと
                     #    食い違っていた（Yuji 2026-07-15 Monza実走で「0.4じゃなく1.1-1.2だろ」と指摘）。
                     #    レース中はこれで上書き。練習/予選はF2Timeが自己ベスト差になるのでEstTimeのまま。
+                    # ★G1（2026-08-25）：値だけを abs() で上書きしていたのをやめる。
+                    #   8/23実走で自発コールと質問回答が別の数字になり、対象車idxが
+                    #   EstTime時点のまま取り残されていた。値・方向・対象車を同時に
+                    #   確定し、順位と物理位置が食い違う時は喋らせない。
                     if class_pos and class_pos > 0:
-                        _adj_ahead = standings_gaps.get(str(class_pos - 1))
-                        _adj_behind = standings_gaps.get(str(class_pos + 1))
-                        if _adj_ahead is not None:
-                            nearest_ahead_gap = abs(_adj_ahead)
-                        if _adj_behind is not None:
-                            nearest_behind_gap = abs(_adj_behind)
+                        gap_authority_records, _applied, _gap_traces = (
+                            gap_authority.apply_same_class_records(
+                                session_key=str(last_session_sig),
+                                sampled_at=time.time(),
+                                standings_by_pos=standings_by_pos,
+                                player_class_position=class_pos,
+                                player_class=session_car_class,
+                                previous=gap_authority_records))
+                        for _t in _gap_traces:
+                            log('GAP AUTHORITY: %s not speakable reason=%s idx=%s'
+                                % (_t['direction'], _t['reason'], _t['target_car_idx']))
+                        if _applied['ahead_gap'] is not None:
+                            nearest_ahead_gap = _applied['ahead_gap']
+                            nearest_ahead_idx = _applied['ahead_idx']
+                        if _applied['behind_gap'] is not None:
+                            nearest_behind_gap = _applied['behind_gap']
+                            nearest_behind_idx = _applied['behind_idx']
 
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
         # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。

@@ -898,3 +898,95 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - #3bは、**既存 `lap_time_hist` を温存し、Phase E専用のクリーン周履歴を別に持つ方式を正式に承認**。既存の残り周回推定等を変えず、Phase Eのbaseline／median／逸脱だけを同一クリーン周集合で扱う。
 - Codex再実行: session state 65 tests、bridge wiring 51 tests、JP radio 28/28、Python compile、diff checkは全て通過。
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
+## 2026-08-25 Claude Code — G1（GAP数値権威）実装完了
+
+指示書 [GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md](GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md) の §2.1／§3.1／§3.2 に対応。
+§3.3（queue鮮度）は G2 として未着手。
+
+### 指示書の主張をコードで独立確認した（前提を鵜呑みにしない）
+
+| 行 | 実態 |
+|---|---|
+| `bridge.py:5229-5233` | EstTime が gap と **idx** を決める |
+| `bridge.py:5337-5349` | `gap_call_policy.observe()`（自発コール）は EstTime 値を読む |
+| `bridge.py:5729-5731` | `standings_gaps`(F2Time) が **gap 値だけ**を `abs()` で上書き |
+| 同上 | **`nearest_ahead_idx` / `nearest_behind_idx` は更新されない** |
+| その後 | telemetry snapshot（質問回答）は F2 上書き後の値を読む |
+
+**指示書の診断は正しかった。** 自発コールと質問回答が別の数字を使い、対象車IDは EstTime 時点で取り残される。
+19:11:59「後ろ3.8秒」と DATA CHECK `gapBehind:0.6` の食い違いは、この構造がそのまま出たもの。
+
+### 変更ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `irsdk-bridge/gap_authority.py` | **新規**。決定論のみ・SDK非依存。値／方向／対象車を同時確定する権威レコード |
+| `irsdk-bridge/tests_gap_authority.py` | **新規 33件** |
+| `irsdk-bridge/bridge.py` | `standings_by_pos` に car_idx を持たせ、値だけの `abs()` 上書きを廃止。両リセット経路 |
+| `preflight.sh` | 出荷ゲートへ収録 |
+
+### 契約
+
+- **値と対象車を同じ場所から取る**：`standings_by_pos[pos] = {'car_idx', 'signed_gap_s'}`
+- **`abs()` を先に取らない**：方向確定後に表示値だけ正数化。`signed_gap_s` も保持
+- **矛盾は fail-closed**：順位（class position）と物理位置（符号）が食い違えば `speakable=False` ＋ 理由を trace。値だけ使わせない
+- **generation**：対象車・方向・session が変われば進む。G2 の破棄判定の土台
+- **種別分離**：`same_class_battle_gap` と `physical_traffic_gap` を一つの変数へ混ぜない
+- **セッション境界**：`_reset` と `_sig_reset` の**両方**で破棄（Build 281 P1-2 の教訓）
+
+### 実装途中で自分の欠陥を1件直した（自己申告）
+
+初版は判断ロジックを `bridge.py` 側に置き、テストが**文字列検査**だった。
+変異 G1f（値だけ上書きへ戻す）が**すり抜けた**。Build 277／281／282 で私が指摘してきた型を自分でやっていた。
+
+判断を `gap_authority.apply_same_class_records()` へ移し、**挙動で検査**する形へ変更。
+bridge 側は結果を代入するだけになり、同じ変異が検出されるようになった。
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests_gap_authority.py` | **33/33** |
+| Python 全体 | ✅ **297 passed**（264 → +33） |
+| JS 全スイープ | ✅ 全緑 |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+| 外部有料API呼出 | **0件** |
+
+**変異試験 9件すべて検出**：方向矛盾でも喋る／`abs()` を先に取る／対象車無しで喋る／世代を進めない／
+対象車を適用しない／喋れない方向でも値を適用／trace を残さない／bridge が idx を代入しない／sig_reset で消さない。
+
+### 指示書 §4 必須再生テスト10本の進捗
+
+| # | 内容 | 状態 |
+|---|---|---|
+| 1 | 同クラス前後が安定・dashboard値と一致 | ✅ G1 |
+| 2 | 異クラス接近で class/idx/方向/数値が一致 | ✅ 種別分離まで（実データ再生は G2 以降） |
+| 3 | EstTime と順位の矛盾で誤方向を喋らない | ✅ G1 |
+| 4 | S/F 跨ぎで前後が逆転しない | ⏸ 未着手 |
+| 5 | 追越しで対象車交代→旧候補破棄 | ✅ generation まで（破棄は G2） |
+| 6 | pit/順位jump/incident/session変更で破棄 | ✅ session 変更のみ |
+| 7〜9 | queue 鮮度・14秒の旧数値・値変化後の旧値 | ⏸ **G2** |
+| 10 | PTT質問が no-data へ落ちない | ⏸ 未着手 |
+
+### 未確認
+
+- **Windows実機・iRacing実走とも未実施。** G1 は決定論層の契約であり、実走での対象車選択の妥当性は
+  実データ再生（G2 の fixture）と実走でしか確認できない。
+- `physical_traffic_gap` は定数と分離契約のみで、**異クラス接近の実データ再生は未実施**。
+
+commit のみ実施。**push / private build / deploy / 公開は未実施。**
+
+# 2026-08-25 JST — Yuji GO: GAP数値権威＋Memory出口完成
+
+Claude Codeは次の正本を全文確認し、実装担当として着手してください。
+
+- `review/GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md`
+
+今回の最優先実走欠陥は、GAPデータ有無ではなく、二重計算・対象車ID不整合・Renderer queue陳腐化による誤数値／前後逆転です。Virログの19:11:59と19:14:16〜19:14:31を再生証拠として固定しています。
+
+同じ候補で、未搭載だったDecision ID、成功・失敗採点、サーバー正本、次回の決定論的自発発話、当日Planへの条件付き採用、setup/過去天候、訂正・削除までをTunnel Completion Ruleに従って接続します。
+
+commitは変更単位ごとに可能。push / private build / deploy / 公開はYujiの別GOまで禁止です。完了後は本共有ログへ証拠を追記し、Codex独立確認へ回してください。
+
+---
