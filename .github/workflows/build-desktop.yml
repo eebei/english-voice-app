@@ -82,6 +82,27 @@ jobs:
           Copy-Item $exe.FullName "desktop/dist/OMORAY-PITWALL-Desktop-latest.exe"
         shell: pwsh
 
+      - name: Write Gate 5 artifact manifest
+        id: gate5
+        run: |
+          $installer = Get-Item "desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe"
+          $asar = Get-Item "desktop/dist/win-unpacked/resources/app.asar"
+          $bridge = Get-Item "desktop/dist/win-unpacked/resources/OMORAY-PITWALL-Bridge.exe"
+          $runtime = node desktop/scripts/verify-packaged-runtime.js
+          $manifest = [ordered]@{
+            target_sha = '${{ github.sha }}'
+            product_build = [int]'${{ steps.product.outputs.BUILD }}'
+            build_tag = '${{ steps.date.outputs.DATE }}'
+            installer = [ordered]@{ name = $installer.Name; bytes = $installer.Length; sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash }
+            app_asar = [ordered]@{ bytes = $asar.Length; sha256 = (Get-FileHash $asar.FullName -Algorithm SHA256).Hash }
+            bridge = [ordered]@{ bytes = $bridge.Length; sha256 = (Get-FileHash $bridge.FullName -Algorithm SHA256).Hash }
+            renderer_runtime_check = $runtime
+          }
+          $manifestPath = "desktop/dist/BUILD-${{ steps.product.outputs.BUILD }}-GATE5-MANIFEST.json"
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding utf8
+          Get-Content $manifestPath
+        shell: pwsh
+
       - name: Upload private build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -90,6 +111,7 @@ jobs:
             desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
             desktop/dist/OMORAY-PITWALL-Setup-latest.exe
             desktop/dist/OMORAY-PITWALL-Desktop-latest.exe
+            desktop/dist/BUILD-${{ steps.product.outputs.BUILD }}-GATE5-MANIFEST.json
 
       - name: Publish to Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}

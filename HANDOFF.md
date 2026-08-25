@@ -39,6 +39,8 @@
 
 - **2026-08-25再訂正**：スライス1がBuild 282後に入っていたため、同じ製品番号のprivate artifactは配布不可。Build番号を**283**へ上げ、Build 283としてprivate candidateを新規生成・検査する。Build 282 artifact（run `32815638686`）は実体検査済みだが、番号衝突のためGate合格証拠には使わない。
 
+- **Gate 5恒久化**：`build-desktop.yml` はprivate artifact作成時、完成installer・`app.asar`・同梱Bridgeのbytes/SHA-256、およびartifact内renderer runtime module照合を小さいmanifestとjob logへ必ず出す。巨大installer全量を毎回手で取得してから検査する待ちを出荷判定の前提にしない。
+
 ## Build 281 公開後実走で出荷欠陥を確認（2026-08-24）
 
 - 8/24実走では、後方GAP質問直前のBridge telemetryに`gapBehind=33.8`、次の同質問時にも`gapBehind=52.2`が存在した。それでもrendererは`LOCAL_INTENT_BYPASS reason=unhandled`となり、サーバーのno-data回答へ落ちた。Lunaがデブリーフで「直前までデータが来ていた」と述べた内容はログと一致する。
