@@ -898,6 +898,214 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - #3bは、**既存 `lap_time_hist` を温存し、Phase E専用のクリーン周履歴を別に持つ方式を正式に承認**。既存の残り周回推定等を変えず、Phase Eのbaseline／median／逸脱だけを同一クリーン周集合で扱う。
 - Codex再実行: session state 65 tests、bridge wiring 51 tests、JP radio 28/28、Python compile、diff checkは全て通過。
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
+## 2026-08-25 Claude Code — スライス2/3/4：Memory→Strategy v1（**全ジャンル受入マトリクス付き**）
+
+正本 [GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md](GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md) §5 / §9 / §10。
+commit `65867c0` / `8891691` / `8de7aee` / `e950661` / `02ecbb8`。
+**push / private build / deploy / 公開は未実施。**
+
+### 実測して分かった中心的な事実
+
+**足りなかったのは計測ではなく「結合キー」と「台帳」と「出口」だけだった。**
+
+| 見つけた空欄 | 実態 |
+|---|---|
+| Decision の4段が繋がらない | Bridge は提案・pit exit・blend安定・session終了を**既に全部 broadcast していた**。結合キーが提案にしか無く、`score_execution()` の採点を毎回捨てていた |
+| `record.pitEvents` | `session-memory.js` が読んでいたのに **renderer が一度も書いていなかった**＝`pitCount` が常に null の死んだ経路 |
+| setup 比較 | `setupFingerprint` も `bestLap` も **既に `pw_raceHistory` に入っていた**。突き合わせる出口だけが無かった |
+| 訂正・削除 | Decision 記録にしか無く、順位・天候・setup・pit の誤りは**止める手段が無かった** |
+
+### 全ジャンル受入マトリクス（§10・空欄を残さない）
+
+凡例：✅ 接続済 ／ ⚠ 部分 ／ ❌ 未接続
+
+| ジャンル | source | 権威 | 保存 | 取得 | 判断 | 出力 | 採点 | 訂正/削除 | 証拠 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 レース結果・順位・周回・インシデント | ✅ | ✅ | ⚠ local のみ | ✅ | ✅ | ✅ 自発発話 | ✅ `finish_pos_confirmed` | ✅ | ✅ |
+| 2 燃費・pit timing・pit loss・rejoin/blend | ✅ | ✅ | ✅ **本回で接続** | ✅ | ✅ | ✅ 自発発話 | ✅ blend順位 | ✅ | ✅ |
+| 3 Plan A/B/C・undercut・baseline | ✅ | ✅ | ✅ server正本 | ✅ | ✅ 条件付き採用 | ✅ 自発発話 | ✅ | ✅ | ✅ |
+| 3b splash（耐久最終給油） | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 4 成功/traffic失敗/fuel失敗/未実行/事故切断/不明 | ✅ | ✅ | ✅ | ✅ | ✅ 非推奨・再評価 | ✅ | ✅ 閉じたenum | ✅ | ✅ |
+| 5 過去天候 | ✅ | ✅ | ⚠ local のみ | ✅ | ✅ | ✅ 質問回答 | N/A（事実） | ✅ | ✅ |
+| 6 setup fingerprint・本人申告・valid lap | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ 比較提示 | ✅ lap差 | ✅ | ✅ |
+| 6b タイヤ/挙動評価 | ⚠ 会話のみ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 7 フィーリング・発話方針・呼称・情報量 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 8 Chief Engineer 引継ぎ | ✅ | ✅ | ✅ server | ✅ | ✅ | ✅ 無線 | ❌ | ❌ | ✅ |
+
+**❌ を残した理由（推測で埋めない）**
+
+- **ジャンル7（フィーリング・発話方針）は意図的に着手していない。** `renderer.html` の `sendFeedback()` は
+  画面の文字を書き換えるだけで何も保存していない（実測で確認）。これは
+  [LUNA_SELF_CORRECTION_MEMORY_DESIGN_V1.md](LUNA_SELF_CORRECTION_MEMORY_DESIGN_V1.md) の対象で、
+  **Yuji の判断4点（保存先／確認タイミング／閾値／2階集合知への接続可否）が未決**。
+  ここを勝手に決めて実装するのは Yuji の判断領域への越境になるため止めた。**判断待ち。**
+- **6b タイヤ/挙動評価**：SDK はピット入庫時しかタイヤ温度を出さない（[[bug_tire_temp_stale]] で確定済）。
+  走行中の評価は本人申告しか無く、申告から数値を作らない方針と両立する設計が未確定。
+- **3b splash**：`endurance_fuel` 側にあり、Decision ID の lifecycle へ載せていない。次スライス候補。
+- **8 の採点・訂正**：引継ぎは「次ドライバーへ届いたか」までは閉じているが、
+  引継ぎ内容の正否を採点する基準が無い。基準を作らずに enum を付けない。
+- **1/5 の保存が local のみ**：サーバー正本は Decision 記録だけに実装した。
+  `pw_raceHistory` の server 化は privacy 文言（下記）の確定後に同 scope で行うのが筋。
+
+### スライス2：Decision ID の一生（§5.1 / §9）
+
+Bridge に結合キーを通し、desktop に決定論の台帳を置いた。
+
+```
+提案      radio/strategy_plan_decision  → active_decision_id を開く（根拠も同時に確定）
+pit exit  pit_timing + score_execution  → 同じ id へ実行を追記
+blend安定 pit_cycle_outcome             → 同じ id へ「効いたか」を追記
+session終了 session_summary             → 同じ id へ closure（DNF・切断・途中終了も）
+```
+
+**採点は閉じた enum で、根拠が無ければ `unknown`。**
+
+- 条件付き予測は、**その条件が実際に起きた時だけ**採点する（`PitCycleTracker` の既存規律に合わせた）
+- 同順位維持は success とも failure とも証明できないので `unknown`
+- 提案したが入らなかったものは `not_executed`。**失敗として次回の非推奨材料にしない**
+- 切断・事故は `incident_or_disconnect`。実行の有無に関わらず採点材料を失っている
+
+**失敗例は捨てずに使う。ただし判決ではなく「勧めない理由」として。**
+復帰先が空いていれば `re_evaluate` へ変わる＝失敗記録で永久に封じない。
+
+### スライス3：サーバー正本（§5.2 / §5.5）
+
+- `strategy_decisions` テーブル。`owner_key`（`user:` / `beta:`）で認証主体を分離。
+- **何を預かるかはサーバーが決める。** `sanitizeDecisionRecord()` が閉じた集合だけを通す。
+  実測で確認：会話全文・raw telemetry・生音声・メールアドレス・自由文メモは**すべて落ちる**。
+  訂正の note も保存しない（時刻だけ残す）。
+- 保持期間90日。読み書きのたびに期限切れを**物理削除**。削除は tombstone を残さない。
+- 表示 / 訂正(dispute) / 削除 / 全削除 の4本を同 scope に置いた。
+- 同期の向き：サーバーが正本、localStorage は offline cache。`updatedAt` の新しい方を採る
+  （別PCで走った結果を古い cache で潰さない）。
+
+**★同期は既定 OFF（opt-in）。** 公開ページには現在
+**「Telemetry never leaves your machine」**と書いてある。この文言を Yuji が改定するまで、
+利用者データを機械の外へ出さない。実装の未完成ではなく、公開済みの約束を破らないための fail-closed。
+**Gate 7 の文言改定は Yuji の判断待ち。** 承認まで opt-in を既定 ON にしない。
+
+### スライス4：setup / pit・燃費 / 全ジャンル訂正
+
+- **setup**：同一 track/car/series で fingerprint が違う2件の `bestLap` を比較して次回提示。
+  本人申告は `source:'declared'` の**ラベルとしてのみ**持ち、**申告文から数値を作らない**
+  （「1段柔らかく」を量として解釈しない）。SDK が出さない setup 値は推測しない。
+- **pit・燃費**：`pitEvents` / `avgFuelPerLap` を `pw_raceHistory` へ保存し、死んでいた `pitCount` を生かした。
+  **記録が無い時は null のまま**（「記録なし」を「0回」と言わない）。
+- **訂正の対象特定**：直前に記憶から喋った物を1件だけ覚え、それを止める。
+  何も喋っていなければ**推測で直近を止めず聞き返す**。
+  設計V1が「未確定3点」に挙げていた「訂正の対象特定」への回答。
+
+### 一本の trace（テストが実際に出力）
+
+```
+bridge_proposal  : id=snap-1:decision-lap:6 plan=B lap=6
+bridge_pit_exit  : P8->P12 fuel_err=0.1
+bridge_blend     : P4 condition_met=true
+bridge_closure   : finish=P4 status=closed
+scored           : success
+next_retrieved   : 2026-08-24@Okayama
+next_spoken      : 前回はP8から6周目にアンダーカット、ブレンド後P4。今日も燃料ウィンドウと復帰trafficが揃えば候補にする。
+plan_adoption    : adopt (spoken)
+```
+
+失敗側も同じ trace で出る：
+
+```
+next_spoken : 前回は同じアンダーカットで復帰先のtrafficに捕まってP8からP12まで落ちた。今日も同条件なら早入りは勧めない。
+same cond   : discourage
+rejoin空き   : re_evaluate
+```
+
+### 変更ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `irsdk-bridge/bridge.py` | `active_decision_id` / `active_decision_plan`。4段すべてへ搭載。**両リセット経路** |
+| `desktop/decision-memory.js` | **新規**。決定論の台帳（採点・選択・発話・訂正を持つ唯一の場所） |
+| `desktop/session-memory.js` | setup比較、pit/燃費、disputed 除外 |
+| `desktop/renderer.html` | 4段の捕捉、ブリーフィング出口2本、setup出口、訂正の振り分け、server同期 |
+| `auth.js` | `strategy_decisions` テーブルと sanitize / 保存 / 取得 / dispute / 削除 |
+| `server.js` | `/api/memory/decisions` 4本（すべて entitlement + rate limit） |
+| `tests-decision-memory-tunnel.js` | **新規 74件** |
+| `tests-decision-memory-server.js` | **新規 54件** |
+| `tests-session-memory-tunnel.js` | 73 → **118件** |
+| `preflight.sh` | 2本を出荷ゲートへ収録 |
+| `irsdk-bridge/tests_strategy_plan_wiring.py` | 下記のとおり**性質検査へ書き換え**（緩めていない） |
+
+**新規 runtime module は `decision-memory.js` 1本。** renderer の `<script src>` は7→8本になり、
+`verify-packaged-runtime.js` が自動的に検査対象へ加えることを実測で確認した
+（現 `desktop/dist` の旧 asar に当てると `missing packaged runtime modules: ... decision-memory.js` で落ちる＝**ゲートが機能している**）。
+
+### 契約変更で書き換えたテスト（明記）
+
+`tests_strategy_plan_wiring.py` の `Plan A/B decision is traced by decision id` は
+`"'decision_id': _option_decision.get('decision_id')"` という**リテラル一致**だった。
+結合キーを変数へ持たせたため落ちた。**守りたい性質は「決定が id で追える」ことで、変数名ではない。**
+性質検査へ書き換え、さらに「broadcast した id と後段へ引き継ぐ id が同一であること」
+「両リセット経路で消えること」の2項目を追加した。**緩めたのではなく強くしている。**
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests-decision-memory-tunnel.js` | **74/74** |
+| `tests-decision-memory-server.js` | **54/54** |
+| `tests-session-memory-tunnel.js` | **118/118** |
+| JS 全スイープ | ✅ **全緑**（失敗0） |
+| Python | ✅ **305 passed** |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+| 外部有料API呼出 | **0件** |
+
+**変異試験 36件すべて検出**（スライス2で16・スライス3で11・スライス4で9）。主なもの：
+
+- 条件が起きていない予測も採点する／同順位維持を success と断定する／未実行を採点対象にする
+- disputed を使い続ける／合意なしで訂正を適用する／別ユーザーの記録を使う
+- client が送ったものをそのまま預かる（会話・音声が混入）／body の識別子を信用する（なりすまし）
+- **既定で同期を有効にする（公開済みの約束を破る）**／id 欠落を全削除と解釈する
+- sig_reset で結合キーを消さない／session終了を保存しない（DNFを失う）
+- **発話せず LLM 注入だけにする**／pit回数を発話に含めない／記録なしを「0回」と言う
+- 出所で振り分けず常にDecisionを止める／**特定できなくても推測で直近を止める**
+
+### 途中で見つけた自分の欠陥（自己申告）
+
+初版は変異2件を**見逃した**。
+
+1. **N13「発話せず LLM 注入だけにする」** — 配線検査が `renderer.html` の生文字列を見ていたため、
+   `speak()` を**コメントアウトしても検出できなかった**。Build 277 で自分が指摘した型そのもの。
+   `tests-five-day-access.js` と同じ規約で行コメントを除去してから検査する形へ修正。
+2. **S4「特定できなくても推測で直近を止める」** — `if(!target) return null;` の存在だけを見ていたため、
+   日付照合を外して直近を掴む変異が素通りした。本番の `disputeRaceRecord` を vm で**実行する**形へ修正。
+
+どちらも「文字列があること」を「性質が守られていること」と取り違えた同じ誤り。
+
+### 未確認（field evidence）
+
+- **Windows実機・iRacing実走とも未実施。** Decision の4段が実走で本当に同じ id へ揃うかは、
+  `pit_cycle_tracker` の条件成立を含めて**実データでしか確認できない**。
+- **サーバー側は未デプロイ。** `auth.js` / `server.js` を変更したので、deploy 後は
+  `./verify-deploy.sh` が必須。DB マイグレーション（`strategy_decisions`）は `init()` 内の
+  `CREATE TABLE IF NOT EXISTS` なので初回起動で作られるが、**本番での実行は未確認**。
+- **Gate 5 は取り直し。** Build 284 artifact は `decision-memory.js` を含まない。
+- 同期は既定 OFF のため、**サーバー正本の実挙動（別PC間の共有）は未検証**。
+  privacy 文言確定後の実測が必要。
+
+### Yuji の判断待ち（3点・こちらでは決めない）
+
+1. **privacy / terms の文言改定**（Gate 7）。現行「Telemetry never leaves your machine」を、
+   戦略要約をサーバーへ預ける opt-in 機能と整合させる必要がある。**承認まで同期は既定 OFF のまま。**
+2. **ジャンル7（フィーリング・発話方針の記憶）**の設計V1・判断4点。
+3. **3b splash / 6b タイヤ挙動**を次スライスに含めるか。
+
+### Codex への確認依頼（出口→入口の逆引き）
+
+1. 4段の結合キーが、**セッション跨ぎ・SessionNum変更・signature変更**で確実に切れるか
+2. `unknown` を「使わない」で正しく閉じているか（過剰に黙る経路になっていないか）
+3. サーバー sanitize を回避して会話全文や raw telemetry が保存できる経路が残っていないか
+4. opt-in が OFF の状態で、**どこか1経路でも外部送信が起きないか**
+5. 「それ違う」の対象特定が、別の記録を巻き添えにする経路を持たないか
+6. package：`decision-memory.js` が完成 asar に入ることを次 candidate の実物で確認
+
 ## 2026-08-25 Claude Code — G5：Codex Build 284 P1 対応（PTT質問GAPの出口）
 
 commit `86abb16` のみ。**push / private build / deploy / 公開は未実施。**
