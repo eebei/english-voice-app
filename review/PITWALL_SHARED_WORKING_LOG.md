@@ -65,6 +65,8 @@ Claude Codeの報告後、Codexは4本の入口→出口を出力側から逆引
 
 Build 282 artifactに関する従来の記録は証拠として無効。Gate 5は**未通過**へ戻す。過去artifact、過去SHA、過去hash、旧`desktop/dist`を次候補のpackage合格証拠として再利用しない。
 
+**2026-08-25再訂正**：スライス1が入った現HEADを同じBuild 282としてprivate buildしてしまったが、番号衝突のため配布不可。実体検査（installer展開、`app.asar`、Bridge、renderer参照module、SHA-256）は完了しているが、これはGate 5合格証拠に使わない。製品Build番号を**283**へ上げ、Build 283のprivate candidateを新規生成・検査する。
+
 次のYuji明示Build GO後だけ、現HEADから`publish=false`のprivate candidateを新規生成する。Codexは完成installer、`app.asar`のrenderer参照runtime全件（`session-memory.js`を含む）、同梱Bridge、bytes、SHA-256、workflow SHAを実物で検査する。公開・配布・Windows field testは別Gateであり、この記録だけでは行わない。
 
 - Build 281では、Bridgeに`gapBehind`が届きデブリーフでも参照できた一方、Windows installerへ`local-intent-router.js`が同梱されず、ライブ後方GAP質問がno-dataへ落ちた。`fuel-plan-guard.js`も同じpackage指定漏れだった。

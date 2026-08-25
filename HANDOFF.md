@@ -37,6 +37,8 @@
 - `preflight.sh`合格だけで出荷可としない。完成`app.asar`と同梱Bridgeを確認しないBuildは公開不可。
 - **2026-08-25訂正**：Build 282 artifactの記録は無効。Gate 5は未通過として扱い、過去artifact、過去SHA、過去hashを次候補の証拠に流用しない。次のYuji Build GO後、現HEADから`publish=false`のprivate candidateを新規生成し、完成installer / `app.asar` / 同梱Bridge / bytes / SHA-256をゼロから検査する。
 
+- **2026-08-25再訂正**：スライス1がBuild 282後に入っていたため、同じ製品番号のprivate artifactは配布不可。Build番号を**283**へ上げ、Build 283としてprivate candidateを新規生成・検査する。Build 282 artifact（run `32815638686`）は実体検査済みだが、番号衝突のためGate合格証拠には使わない。
+
 ## Build 281 公開後実走で出荷欠陥を確認（2026-08-24）
 
 - 8/24実走では、後方GAP質問直前のBridge telemetryに`gapBehind=33.8`、次の同質問時にも`gapBehind=52.2`が存在した。それでもrendererは`LOCAL_INTENT_BYPASS reason=unhandled`となり、サーバーのno-data回答へ落ちた。Lunaがデブリーフで「直前までデータが来ていた」と述べた内容はログと一致する。

@@ -54,7 +54,7 @@ import practice_profile
 import gap_call_policy as gap_call_policy_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 282 (packaged runtime verification and gap/weather guards)"
+BUILD_VERSION = "Build 283 (packaged runtime verification and deterministic session memory)"
 PORT = 8765
 connected_clients = set()
 loop = None
