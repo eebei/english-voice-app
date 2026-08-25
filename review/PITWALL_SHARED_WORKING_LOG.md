@@ -898,6 +898,71 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - #3bは、**既存 `lap_time_hist` を温存し、Phase E専用のクリーン周履歴を別に持つ方式を正式に承認**。既存の残り周回推定等を変えず、Phase Eのbaseline／median／逸脱だけを同一クリーン周集合で扱う。
 - Codex再実行: session state 65 tests、bridge wiring 51 tests、JP radio 28/28、Python compile、diff checkは全て通過。
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
+## 2026-08-25 Claude Code — Build 284 private candidate 完成（**署名は Codex 待ち**）
+
+### Build 番号を 283 → 284 へ
+
+283 の artifact は `6c17a9e` で既に検査済み。そこから **12ファイル / 1,830行**が変わっているため番号を上げた。
+同じ番号で中身が違う状態は、282 で無効化した事故と同じ形になる。
+
+### 実物検査（すべて Claude Code が自分で計算した値）
+
+```
+target_sha 828ca13 = HEAD                                ✅
+build-info {"buildNum": 284}                             ✅
+installer  100,641,922 bytes  SHA-256 e237e0c336d11643…  ✅ manifest と一致
+app.asar   4,191,225 bytes    sha256 edd7fc26ae27dd62…   ✅ manifest と一致
+Bridge.exe 17,013,169 bytes   sha256 2199c6aa23dff434…   ✅ manifest と一致
+3本の installer は同一ハッシュ（latest が古い版を指す事故なし）  ✅
+```
+
+**app.asar 内の JS 全件（実物を展開して列挙）**
+
+```
+/cost-meter.js  /fuel-plan-guard.js  /gap-freshness.js   ← G2 で新設
+/local-intent-router.js  /main.js  /memory-action-layer.js
+/preload.js  /session-memory.js     ← スライス1で新設   /strategy-playbook.js
+```
+
+検証スクリプトを実物へ適用 → **必須7本すべて欠落なし**。
+
+### Gate 進捗
+
+| Gate | 状態 |
+|---|---|
+| 0 変更範囲 | ✅ 未追跡の利用者ファイルは混ぜていない |
+| 2 package 対象 | ✅ renderer 参照7本すべて |
+| 3 機械検証 | ✅ JS全緑 / Python 300 / preflight 出荷可 / diff --check / 秘密混入なし |
+| 4 P0/P1 | ✅ 0件 |
+| 5 artifact | ✅ **実物検査完了。ただし下記の但し書き** |
+| 6 Windows | ⏸ Yuji |
+| 7 server | 対象外（サーバー側変更なし・`./verify-deploy.sh` 不要） |
+| 8 iRacing実走 | ⏸ Yuji |
+| 9 公開 | **未実施** |
+
+### ★署名を埋めていない理由
+
+`PITWALL_RELEASE_GATE.md` 絶対ルール：
+
+> 同じAIが作業と確認を兼任した場合は**独立確認済みとしない**。
+
+**GAP修正（G1〜G4）は Claude Code が実装した。** よって上記は**作業者による自己検査**であり、
+ゲートが要求する独立確認ではない。Build 282/283 とは役割が逆（あの時は Codex 実装・Claude 確認）。
+
+**Codex の独立確認が必要。** 逆引きで反証してほしい点：
+
+1. `authoritative` が True の poll で、EstTime の残り値が本当に消えているか（G4）
+2. 再生側（`gap-freshness.js` 5秒）と質問側（`local-intent-router.js` 5秒）が実際に同じ基準か（G3）
+3. `observe()` が権威の後ろで動いているか＝自発コールと質問回答が同じ数字か（G1b）
+4. Practice / Qualifying で GAP が全面沈黙していないか（G4 の `authoritative=False` 経路）
+5. package 欠落（`gap-freshness.js` / `session-memory.js` の実物同梱）
+
+### 公開について
+
+**publish=false**（push 起動のため公開ステップの条件を満たさない）。
+**Gate 6（Windows）と Gate 8（iRacing実走）が未実施**のため、この artifact は配布可能な状態ではない。
+GAP修正9本が実際に効くかは**実走でしか分からない**。
+
 ## 2026-08-25 Claude Code — G4：S/F 跨ぎ（§4-4）／**GAP側 §4 は §4-2 を除き完了**
 
 ### G1 の配線に残っていた穴
