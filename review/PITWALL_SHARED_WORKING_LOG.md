@@ -1844,4 +1844,42 @@ Yujiの「mdを確認。GO」に基づき、Claude実装後の現行HEADを独�
 
 **判定：ソース／ローカル統合の入口→出口は今回の実装で接続済み。出荷可否はartifact再生成後のGate 5〜8を通してから確定する。**
 
+## 2026-08-25 JST — Claude向けBuild 285 private artifact引き渡し指示
+
+### 目的
+
+現行HEADのMemory→Strategy全ジャンル接続、Decision ID採点、訂正／削除、GAP PTT鮮度修正を含む状態から、**Build 285のprivate artifactだけを作成し、独立検査へ渡す**。
+
+### 固定対象
+
+- 対象SHA：作業開始時の現行HEADを記録する（現在の候補は `9f5f5eb` 系列）。
+- **Build 282の既存artifact（SHA `81a912b...`）は検査対象に戻さない。**
+- artifact内に `decision-memory.js`、`session-memory.js`、`gap-freshness.js`、`local-intent-router.js`、`fuel-plan-guard.js`、`cost-meter.js` とBridge実行体が存在すること。
+
+### Claudeが実施すること
+
+1. 対象SHA、ビルド番号285、workflow run、生成日時を記録。
+2. Windows向けprivate installerを再生成する。公開Release・latest URLへのPublishはしない。
+3. app.asarを展開し、rendererから参照される全runtime moduleとBridgeの同梱を実物検査。
+4. installer／app.asar／Bridgeのサイズ・SHA-256を記録。
+5. `preflight.sh`、Decision tunnel、Session memory tunnel、GAP answer queue、deploy verificationを対象SHAで再実行。
+6. Gate 5 evidenceを `review/BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md` に作成し、以下を明記する。
+   - 対象SHAとBuild番号
+   - artifact名と取得元
+   - packaged runtime moduleのmissing list（空であること）
+   - app.asar／Bridge／installerのhash
+   - Publishがskipされた証拠
+   - Gate 6 Windows、Gate 7 server、Gate 8 iRacing実走、Gate 9公開は未実施であること
+7. 完了後、artifactの所在と証拠をこの共有ログへ追記する。
+
+### 禁止
+
+- Build 282 artifactをBuild 285として報告しない。
+- `origin/main`へpush、server deploy、公開Release、利用者配布を独断で行わない。
+- artifactがない状態でGate 5合格、実走可能、出荷可と断定しない。
+
+### Codex独立確認後の順序
+
+ClaudeのGate 5 evidenceをCodexが対象SHAとartifact内部で再確認する。その後、別途明示GOがあればGate 6（Windows取得・ACK）、Gate 7（server反映確認）、Gate 8（実走）へ進む。公開は最後の別GOとする。
+
 G1/G2の自発GAP経路そのもの（同一frame authority、EstTime残留抑止、queue直前再確認）の設計と単体再生は確認できた。だが上記P1を残したままBuild 284を利用者テスト候補・出荷可とは扱わない。
