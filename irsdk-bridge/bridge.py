@@ -55,7 +55,7 @@ import practice_profile
 import gap_call_policy as gap_call_policy_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 284 (gap authority, queue freshness and session memory)"
+BUILD_VERSION = "Build 285 (decision memory, server ledger and gap answer freshness)"
 PORT = 8765
 connected_clients = set()
 loop = None

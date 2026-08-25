@@ -63,10 +63,12 @@ check('実行可能ビットが立っている',
   // 全ケースが「到達不能」で失敗し、「不一致を検出できた」ように見えてしまう
   // （初版はこれで嘘の合格を出した）。
   const PORT = 39200 + (process.pid % 300);
-  const runAgainst = (payload, expectCommit) => {
+  // ★経路の応答も渡す。既定 401 は「経路が生きていて認証も効いている」本番の正常形。
+  const runAgainst = (payload, expectCommit, memoryStatus = 401) => {
     const stub = spawn(process.execPath, ['-e', `
       const http=require('http');
       http.createServer((q,r)=>{
+        if(q.url==='/api/memory/decisions'){r.writeHead(${memoryStatus});return r.end();}
         if(q.url!=='/api/version'){r.writeHead(404);return r.end();}
         r.writeHead(200,{'Content-Type':'application/json'});
         r.end(${JSON.stringify(payload)});
@@ -92,8 +94,16 @@ check('実行可能ビットが立っている',
   };
 
   const SHA = 'a'.repeat(40), OTHER = 'b'.repeat(40);
-  check('一致なら成功する（exit 0）',
-    runAgainst(JSON.stringify({ commit: SHA, branch: 'main', startedAt: 'x' }), SHA) === 0);
+  const version = c => JSON.stringify({ commit: c, branch: 'main', startedAt: 'x' });
+  check('SHA一致かつ経路が生きていれば成功する（exit 0）',
+    runAgainst(version(SHA), SHA, 401) === 0);
+  // ★ここが Build 281 型の事故：SHA は合っているのに、その版の経路が本番に無い。
+  check('★SHA一致でも経路が404なら失敗する（反映済みと誤認しない）',
+    runAgainst(version(SHA), SHA, 404) !== 0);
+  check('★SHA一致でも503（DB未準備）なら失敗する',
+    runAgainst(version(SHA), SHA, 503) !== 0);
+  check('★経路が200（認証が外れている）なら失敗する',
+    runAgainst(version(SHA), SHA, 200) !== 0);
   check('不一致なら失敗する（本番が古いまま素通りしない）',
     runAgainst(JSON.stringify({ commit: OTHER, branch: 'main', startedAt: 'x' }), SHA) !== 0);
   check('commitを返さない旧版は失敗（＝この変更自体が未反映）',
@@ -116,4 +126,35 @@ console.log('\n══ 運用に組み込まれているか ══');
 }
 
 console.log(`\nDeploy verification: ${pass}/${pass + fail}`);
+if (fail > 0) process.exit(1);
+
+// ══════════════════════════════════════════════════════════════════════
+// ★2026-08-25 — SHA一致だけを「反映済み」と読まない。
+//
+// スライス3で auth.init() に `CREATE TABLE strategy_decisions` を足した。
+// マイグレーションが失敗しても /api/version は正しい SHA を返し続けるため、
+// SHA だけ見ると「反映済み」に見えて記憶APIが 503 のまま、という状態になる。
+// Build 281（SHAは合っていたが module が入っていなかった）と同じ型。
+// ══════════════════════════════════════════════════════════════════════
+{
+  console.log('\n══ 経路が生きているかを SHA と別に確認する ══');
+  check('★未認証で経路を叩く関数がある', /probe_endpoint\(\)/.test(script));
+  check('★戦略判断の正本を確認対象にしている',
+    /probe_endpoint "\/api\/memory\/decisions"/.test(script));
+  check('★401/403 を「生きている」と判定する（認証情報を使わない）',
+    /401\|403\)\s*echo[^\n]*経路は生きている/.test(script));
+  check('★404 を「この版が入っていない」と判定する', /404\)[^\n]*経路が無い/.test(script));
+  check('★503 を「テーブル作成の失敗」と判定する（auth未準備と区別する）',
+    /503\)[^\n]*未準備/.test(script));
+  check('★200 を重大扱いにする（認証が外れている）',
+    /200\)[^\n]*認証が外れている/.test(script));
+  check('★SHA一致でも経路が死んでいれば失敗する',
+    /SHAは合っているのに経路が死んでいる/.test(script) && /verify_live_routes; then[\s\S]{0,200}exit 0/.test(script));
+  check('経路が死んだ時に調べ先を示す', /DBマイグレーション\)失敗|マイグレーション/.test(script));
+  // 「一致したら即 exit 0」に戻す変異を検出するため、経路確認を通らない exit 0 が無いことを見る。
+  const okPaths = (script.match(/exit 0/g) || []).length;
+  check('★経路確認を経ない成功パスが無い', okPaths === 1, String(okPaths) + ' 個の exit 0');
+}
+
+console.log(`\n(経路確認を含む累計) ${pass}/${pass + fail}`);
 if (fail > 0) process.exit(1);

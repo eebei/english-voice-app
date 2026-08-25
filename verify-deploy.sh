@@ -53,12 +53,59 @@ echo "起動   : ${STARTED:-unknown}"
 echo "本番SHA: $LIVE"
 echo "期待SHA: $WANT"
 
+# ★2026-08-25：SHA一致は「そのコミットが起動した」証拠であって、
+#   「新しい経路が実際に生きている」証拠ではない。
+#   スライス3で auth.init() に `CREATE TABLE strategy_decisions` を足したため、
+#   マイグレーション失敗時は auth.isReady() が false のまま起動しうる。
+#   その時 /api/version は正しい SHA を返すのに、記憶APIは 503 を返し続ける。
+#   Build 281（SHAは合っていたが module が入っていなかった）と同じ型なので、
+#   経路そのものを外から叩いて区別する。
+#
+#   認証情報は使わない。**未認証で 401 が返ることが正常**＝
+#     401 → 経路が生きていて認証も効いている ✅
+#     404 → 経路が存在しない（この版が入っていない／登録に失敗）
+#     503 → auth/DB が未準備（テーブル作成が失敗している疑い）
+#     200 → **認証が外れている＝重大**
+probe_endpoint() {
+  local path="$1" label="$2"
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$URL$path" 2>/dev/null)"
+  case "$code" in
+    401|403) echo "   ✅ $label ($code 未認証で拒否＝経路は生きている)" ;;
+    404)     echo "   ❌ $label (404 経路が無い＝この版はまだ本番に入っていない)"; return 1 ;;
+    503)     echo "   ❌ $label (503 auth/DB が未準備＝テーブル作成の失敗を疑う)"; return 1 ;;
+    200)     echo "   ❌ $label (200 **認証が外れている**)"; return 1 ;;
+    "")      echo "   ❌ $label (応答なし)"; return 1 ;;
+    *)       echo "   ❌ $label (予期しない $code)"; return 1 ;;
+  esac
+  return 0
+}
+
+verify_live_routes() {
+  echo "経路確認（未認証で叩いて、生きているかを区別する）:"
+  local bad=0
+  probe_endpoint "/api/memory/decisions" "戦略判断の正本 GET" || bad=1
+  return $bad
+}
+
+MATCH=0
 case "$WANT" in
-  "$LIVE"*) echo "✅ 一致 — 本番はこのコミットで動いている"; exit 0 ;;
+  "$LIVE"*) MATCH=1 ;;
 esac
 case "$LIVE" in
-  "$WANT"*) echo "✅ 一致 — 本番はこのコミットで動いている"; exit 0 ;;
+  "$WANT"*) MATCH=1 ;;
 esac
+
+if [ "$MATCH" -eq 1 ]; then
+  echo "✅ SHA一致 — 本番はこのコミットで起動している"
+  if verify_live_routes; then
+    echo "✅ 経路も生きている — サーバー側は反映済み"
+    exit 0
+  fi
+  echo "❌ **SHAは合っているのに経路が死んでいる。** 反映済みとして扱わないこと。"
+  echo "   Railway のログで auth の初期化（DBマイグレーション）失敗を確認すること。"
+  exit 1
+fi
 
 echo "❌ 不一致 — **本番はまだ古いコミットで動いている**"
 if git cat-file -e "$LIVE" 2>/dev/null; then
