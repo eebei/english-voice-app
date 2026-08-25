@@ -2,7 +2,15 @@
 
 最終更新: 2026-08-25 JST
 
-## 2026-08-25 スライス1（A/B/C）実装済み・未commit
+## ⚠️ 2026-08-25 Build 282 artifact の記録は無効（Gate 5 やり直し）
+
+- 下記に記録した `OMORAY-PITWALL-Desktop-Build-282-20260825-0022` / SHA-256 `880a98b3...` は **`7bc5cb8` 由来**で、**スライス1（記憶→戦略）が入る前の版**。
+- 実物を展開して確認した結果、その app.asar には **`session-memory.js` が存在しない**。現在のコード基準で検査すると `missing packaged runtime modules: session-memory.js` で失敗する。
+- 起動もGAPも燃料も正常に動くため、**欠落は「Lunaが昨日の話をしない」という形でしか現れない**。出荷すると Yuji が1ヶ月待った症状と同じ見え方になる。
+- **この artifact を Gate 5 合格の証拠として使わない。** HEAD（`bb5e9cf`）で作り直し、Gate 5 を再実施する。
+- 判断待ち：Build番号を283へ上げるか282のまま作り直すか／push GO。
+
+
 
 - 記憶→戦略の入口→出口が**初めて1本で閉じた**。`Bridge捕捉 → session_summary → pw_raceHistory → 決定論的取得 → 発話`。
 - A スタート順位（`cur_ss 3→4` の一度だけ捕捉）、B 天候（毎フレーム保持しsummaryへ）、C setup_fingerprint / series_id（Bridgeが既に持っていた値をsummaryへ）。**新規計測はAだけ。**
@@ -27,6 +35,7 @@
 
 - Build・出荷・公開の正本は`review/PITWALL_RELEASE_GATE.md`。作業者と確認者を分け、ソース、完成artifact、Windows、server、実走、公開取得物を別々に検査する。
 - `preflight.sh`合格だけで出荷可としない。完成`app.asar`と同梱Bridgeを確認しないBuildは公開不可。
+- **2026-08-25訂正**：Build 282 artifactの記録は無効。Gate 5は未通過として扱い、過去artifact、過去SHA、過去hashを次候補の証拠に流用しない。次のYuji Build GO後、現HEADから`publish=false`のprivate candidateを新規生成し、完成installer / `app.asar` / 同梱Bridge / bytes / SHA-256をゼロから検査する。
 
 ## Build 281 公開後実走で出荷欠陥を確認（2026-08-24）
 

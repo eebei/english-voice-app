@@ -61,6 +61,12 @@ Claude Codeの報告後、Codexは4本の入口→出口を出力側から逆引
 
 ## 2026-08-24 Build 281実走後の最優先
 
+### 2026-08-25 Build 282 artifact記録の無効化 — Gate 5やり直し
+
+Build 282 artifactに関する従来の記録は証拠として無効。Gate 5は**未通過**へ戻す。過去artifact、過去SHA、過去hash、旧`desktop/dist`を次候補のpackage合格証拠として再利用しない。
+
+次のYuji明示Build GO後だけ、現HEADから`publish=false`のprivate candidateを新規生成する。Codexは完成installer、`app.asar`のrenderer参照runtime全件（`session-memory.js`を含む）、同梱Bridge、bytes、SHA-256、workflow SHAを実物で検査する。公開・配布・Windows field testは別Gateであり、この記録だけでは行わない。
+
 - Build 281では、Bridgeに`gapBehind`が届きデブリーフでも参照できた一方、Windows installerへ`local-intent-router.js`が同梱されず、ライブ後方GAP質問がno-dataへ落ちた。`fuel-plan-guard.js`も同じpackage指定漏れだった。
 - ソース直接テストと`preflight.sh`は合格していたが、完成`app.asar`を検査していなかった。これは出荷ゲートの欠陥であり、保存・計算・デブリーフ成功をライブ発話成功とみなしてはならない。
 - Codexがpackage指定、完成asar検査、runtime欠落診断、後方GAPの実走文言回帰、過去天候の現在値代用禁止を修正中。commit / build / 公開は未実施。
@@ -243,6 +249,114 @@ memory_identity = {
 - スライス1→3の順で進めてよいか。1だけでも過去天候の行は閉じるため、**空欄を残したまま次へ行かない**方針には合致する。
 
 commit / push / build / deploy / 公開は未実施。Build 282 は Gate 5 合格（Codex確認待ち）。
+
+## 2026-08-25 Claude Code — **Build前最終確認：Gate 5 の証拠が HEAD と一致しない（進行停止事項）**
+
+作業者 Codex（`bb5e9cf`）／確認者 Claude Code。機械検証は全て緑だが、**Gate 5 の合格証拠が現在のコードに対するものではない**。
+
+### 事実（実物で確認）
+
+```
+Gate 5 で合格を出した installer : 7bc5cb8 由来
+  artifact  OMORAY-PITWALL-Desktop-Build-282-20260825-0022
+  SHA-256   880a98b34931155684566b692bfd8ca80f6c2c5d2e88c41444046da160933d8a
+
+その installer の app.asar 内 JS（実際に展開して列挙）:
+  cost-meter.js / fuel-plan-guard.js / local-intent-router.js
+  main.js / memory-action-layer.js / preload.js / strategy-playbook.js
+  ← **session-memory.js が無い**
+
+現在の renderer が要求するモジュール: 上記5本 + session-memory.js
+
+現在のコード基準で同じ installer を検査した結果:
+  ❌ missing packaged runtime modules: session-memory.js
+```
+
+`7bc5cb8 → bb5e9cf` の差分は `desktop/renderer.html +83` / `desktop/session-memory.js +156（新規）` / `irsdk-bridge/bridge.py +37`。
+
+**判定が誤っていたのではない。** `7bc5cb8` 時点では正しかった。その後スライス1が入り、**証拠だけが古くなった**。
+
+### なぜ危険か — Build 281 と同じ形
+
+| | Build 281 | 今回 |
+|---|---|---|
+| ソース | ✅ 正しい | ✅ 正しい |
+| テスト | ✅ 緑 | ✅ 緑 |
+| **届く物** | ❌ module 欠落 | ❌ **module が入る前の版** |
+
+Build 281 は「packageへ入れ忘れた」、今回は「**入れた後にビルドし直していない**」。
+症状は同じで、**テスターの手元には記憶機能が1行も無い installer が届く**。
+
+さらに悪いのは、この installer は**正常に起動し、GAP も燃料も動く**こと。
+動かないのは記憶機能だけで、それは「**Luna が昨日の話をしない**」という形でしか現れない。
+＝**Yuji が1ヶ月待った症状とまったく同じ見え方になる。**
+
+`HANDOFF.md` には「Build 282 / SHA-256 `880a98b3...` / Gate 5 合格」が記録済みで、
+**その記録だけを見ると出荷可能に見える**。古い証拠を残したまま進むのが最も危険。
+
+### 機械検証（Claude Code が独立実行・すべて緑）
+
+| 項目 | 結果 |
+|---|---|
+| JS 全スイープ | ✅ 全緑 |
+| Python | ✅ 264 passed |
+| `tests-session-memory-tunnel.js` | **72/72**（Codex が9件追加） |
+| `tests_bridge_poll_replay.py` | ✅ 19 tests（poll loop 実再生） |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+| 変異試験 | **7/7 検出** |
+| renderer 参照JSの package 対象 | **6/6**（`session-memory.js` 含む） |
+
+### 内部テスト（静的検査ではなく実挙動）
+
+Bridge のリセット辞書を実際に呼び出し：
+`race_start_class_pos=None / session_setup_fingerprint='' / session_series_id=None / last_weather=None / pit_events=[]`
+→ 既定値は全て「事実なし」。前回値を引き継がない。
+
+1レース→翌日を実際に流した：
+```
+発話    : 前回2026-08-24のOkayamaは8番手スタートで4位、路面41.2℃。
+過去天候 : 2026-08-24のOkayamaは路面41.2℃、気温29.8℃。
+```
+
+漏洩の反証を実際に流した（数値 41.2 / 29.8 / 8番手 / 4位 が一切出ないこと）：
+```
+✅ 別コース(Monza) → briefing=(無言) / historical_weather_unavailable
+✅ 別シリーズ      → briefing=(無言) / historical_weather_unavailable
+✅ 記録ゼロ        → briefing=(無言) / historical_weather_unavailable
+```
+
+### Yuji の逆引き5項目
+
+| 項目 | 結果 |
+|---|---|
+| identity漏れ | ✅ 実測で漏洩なし。`lastSessionAuthority` 由来のみ |
+| 別コース混入 | ✅ 実測で無言。変異でも検出 |
+| 記録なし | ✅ 数字を一切含まず「無い」と言う |
+| package欠落 | ✅ 追跡済み・6/6対象。欠ければ build が止まる（実証済み） |
+| queue未再生 | ✅ `speak()` 明示投入。`dedupeKey` は**キュー内のみ**の判定（`renderer.html:2782`）で、再生後は再度発話される＝恒久抑止ではない |
+
+### Codex が Claude の弱点を閉じた点（記録）
+
+Claude が「最も弱い」と自己申告した「**ブリーフィングが最終的に LLM 経由**」を Codex が解消した。
+`memory_strategy_briefing` として**決定論 queue へ直接投入**し、LLM へは「数字を言い直すな」と指示する形。
+**Claude の実装より上。** Codex が正本12節で提案した「決定論カード＋queue fate」の設計どおり。
+
+### Yuji 判断待ち（2点）
+
+1. **Build 番号**：`BUILD_VERSION` は 282 のまま。このまま build すると**中身の違う2つの artifact が同じ「Build 282」を名乗る**。
+   7bc5cb8 の 282 は未公開だが `HANDOFF.md` に hash が記録済み。**283 へ上げるのが安全**というのが Claude の意見。
+2. **push GO**：現在 `origin/main` は `7bc5cb8`、ローカルは 4コミット先行。CI は push された commit を見るため、build には push が前提。
+
+### 再実施が必要な手順
+
+1. push
+2. Build 番号の確定
+3. 新 candidate を `publish=false` で生成
+4. Claude Code が実物を展開し、**`session-memory.js` の存在を app.asar 内で確認**
+5. `HANDOFF.md` の Build 282 / `880a98b3...` の記録を**無効化または上書き**（古い証拠を残さない）
+
+**Gate 5 は未合格として扱う。commit 済み・push / build / deploy / 公開はすべて未実施。**
 
 ### 2026-08-25 13:21 JST Yuji決定 — スライス1（A・B・C）着手GO
 
