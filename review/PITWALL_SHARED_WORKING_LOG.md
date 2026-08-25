@@ -1975,4 +1975,33 @@ Yujiの「mdを確認。GO」に基づき、Claude実装後の現行HEADを独�
 
 ClaudeのGate 5 evidenceをCodexが対象SHAとartifact内部で再確認する。その後、別途明示GOがあればGate 6（Windows取得・ACK）、Gate 7（server反映確認）、Gate 8（実走）へ進む。公開は最後の別GOとする。
 
+## 2026-08-26 JST — Codex Build 285 Gate 5独立再確認
+
+Claudeの `review/BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md` を自己申告のまま採用せず、GitHub Actions run `32858968763` からprivate artifactを再取得して検査した。
+
+| 確認 | 結果 |
+|---|---|
+| run headSha | `c6db9f4a1ae2cc22828408b456da3a2b1c9dd190`（証拠書記載と一致） |
+| ref | `build/285`（`origin/main`はBuild 284のまま） |
+| installer 3本 | **同一SHA `c55f7f7b12cc17c89929c2d26a494323d7eb16dcb3cc5c1b71716c984608e043`** |
+| app.asar | **SHA `e550a9379ff7294681b90344e534ae8e1fe4f21b849a7baf075d4011570897f3`** |
+| Bridge exe | **SHA `19cfd0c6c3272fb091c6b016ed0a4102c8908fca58b470b8b6fefe7e45a96535`** |
+| `build-info.json` | `buildNum: 285`, tag `20260825-1422` |
+| runtime modules | **8/8存在、missing 0**（decision/session/gap/local/fuel/cost/memory/strategy） |
+| sourceとの突合 | CRLF正規化後、renderer＋8 runtime全ファイル **MATCH** |
+| workflow | success、`publish=false`、公開Release変更なし |
+
+### 判定
+
+**Gate 5 artifactはCodex独立確認済み。** Claudeの報告値と実物が一致した。
+
+未実施は引き続き以下。
+
+- Gate 6：Windowsで取得・インストール・起動・ACK
+- Gate 7：`auth.js`／`server.js`を本番へ反映し、`verify-deploy.sh`でSHAとmemory API経路を確認
+- Gate 8：iRacing実走（GAP数値、Memory自発発話、Decision IDの実走結合）
+- Gate 9：公開
+
+artifactはprivateのまま。Codexはpush、deploy、公開を行っていない。
+
 G1/G2の自発GAP経路そのもの（同一frame authority、EstTime残留抑止、queue直前再確認）の設計と単体再生は確認できた。だが上記P1を残したままBuild 284を利用者テスト候補・出荷可とは扱わない。
