@@ -2200,6 +2200,16 @@ async function sendMsg(inputSource){
       return;
     }
   }
+  // ★スライス4：setup を触った申告を、Bridge の fingerprint 区間へラベルとして貼る。
+  //   申告文から数値は作らない（「1段柔らかく」を量として解釈しない）。
+  //   SDK が出さない setup の中身は推測せず、出所を declared として分けて持つ。
+  {
+    const _m=text.match(/(?:セットアップ|セッティング|アンチロールバー|スタビ|バネ|スプリング|車高|ダンパー|タイヤ内圧|内圧|キャンバー)(?:を)?.{0,10}(?:変えた|替えた|変更した|いじった|柔らかく|硬く|上げた|下げた|抜いた|入れた)|(?:changed|adjusted|softened|stiffened|raised|lowered).{0,16}(?:setup|bar|spring|ride height|damper|pressure|camber)/i);
+    if(_m){
+      const _ok=recordSetupDeclaration(_m[0]);
+      diagnosticLog('SETUP_MEMORY','declared attached='+(_ok?'yes':'no'));
+    }
+  }
   // ★スライス1の出口①：過去天候はモードを問わず事実照会なので、
   //   LLMへ落とす前に保存記録から決定論的に答える。記録が無ければ「無い」と言う。
   {
@@ -4408,6 +4418,21 @@ async function scheduleAutoBriefing(){
         dedupeKey:'decision_strategy_briefing|'+String(_decSel.record.decision_id)});
       diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_strategy_briefing');
     }
+    // ★スライス4の出口：次回 Practice で前回の setup 変更と結果を比較材料として出す。
+    const _setupCmp=setupComparisonForBriefing();
+    const _setupLine=(window.PitwallSessionMemory
+      &&typeof window.PitwallSessionMemory.setupComparisonLine==='function')
+      ? window.PitwallSessionMemory.setupComparisonLine(_setupCmp,_decLang) : '';
+    diagnosticLog('SETUP_MEMORY','available='+(_setupCmp.available?'yes':'no')
+      +' reason='+(_setupCmp.reason||'-')
+      +' source='+String(_setupCmp.declaredSource||'sdk_only')
+      +' fate='+(_setupLine?'spoken':'missing_required_evidence'));
+    if(_setupLine){
+      addMsg('ai',_setupLine);
+      speak(_setupLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'setup_comparison_briefing',
+        dedupeKey:'setup_comparison|'+String(_setupCmp.previousDate||'')});
+      diagnosticLog('SETUP_MEMORY','queue=queued kind=setup_comparison_briefing');
+    }
     if(_decAdvice.reply){
       addMsg('ai',_decAdvice.reply);
       speak(_decAdvice.reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'decision_plan_advice',
@@ -6513,6 +6538,23 @@ function deleteDecision(decisionId){
     }catch(e){ diagnosticLog('DECISION_SYNC','delete failed='+String(e&&e.message||e)); }
   }
   return out.reason==='deleted';
+}
+// ★スライス4：本人申告は最新の走行記録へラベルとして貼る。数値は Bridge 実測のみ。
+function recordSetupDeclaration(label){
+  const m=window.PitwallSessionMemory;
+  if(!m||typeof m.attachSetupDeclaration!=='function'){
+    diagnosticLog('SETUP_MEMORY','reason=module_missing'); return false;
+  }
+  const out=m.attachSetupDeclaration(loadRaceHistory(),label,Date.now());
+  if(!out.attached) return false;
+  try{ localStorage.setItem('pw_raceHistory',JSON.stringify(out.history)); }
+  catch{ diagnosticLog('SETUP_MEMORY','reason=persist_failed'); return false; }
+  return true;
+}
+function setupComparisonForBriefing(){
+  const m=window.PitwallSessionMemory;
+  if(!m||typeof m.setupComparison!=='function') return {available:false,reason:'module_missing'};
+  return m.setupComparison(loadRaceHistory(),currentMemoryIdentity(),Date.now());
 }
 function buildPreviousRaceBriefingNote(){
   try{

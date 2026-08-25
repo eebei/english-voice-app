@@ -216,3 +216,72 @@ console.log('\n══ E2E trace（Bridge summary → 保存 → 取得 → 発�
 
 console.log(`\nSession memory tunnel: ${pass}/${pass + fail}`);
 if (fail) process.exit(1);
+
+// ══════════════════════════════════════════════════════════════════════
+// ★スライス4（2026-08-25）setup の前後比較（正本 §5.4）
+//   本人申告はラベルとしてのみ持ち、数値は Bridge 実測だけを使う。
+// ══════════════════════════════════════════════════════════════════════
+{
+  const fsx = require('fs');
+  const M = require('./desktop/session-memory');
+  const NOWX = Date.parse('2026-08-25T12:00:00Z');
+  const rec = (over) => Object.assign({
+    date: '2026-08-24', recordedAt: '2026-08-24T12:00:00.000Z', userId: 'u1',
+    track: 'Okayama', car: 'Audi R8 LMS GT3', carClass: 'GT3', seriesId: 419,
+    setupFingerprint: 'aaa111', bestLap: 95.400,
+  }, over || {});
+  const idx = (over) => Object.assign({
+    userId: 'u1', track: 'Okayama', car: 'Audi R8 LMS GT3',
+    seriesId: 419, setupFingerprint: 'bbb222',
+  }, over || {});
+
+  console.log('\n══ スライス4 setup 前後比較 ══');
+  const history = [rec(), rec({ setupFingerprint: 'bbb222', bestLap: 94.850,
+    date: '2026-08-25', recordedAt: '2026-08-25T10:00:00.000Z' })];
+  const cmp = M.setupComparison(history, idx(), NOWX);
+  check('同一条件で fingerprint が違う2件を比較する', cmp.available === true, cmp.reason);
+  check('数値は Bridge 実測のみ', cmp.measuredSource === 'sdk' && Math.abs(cmp.deltaS + 0.55) < 1e-6);
+  const line = M.setupComparisonLine(cmp, 'ja');
+  check('★次回 Practice で比較材料として言える', /0\.550秒速く/.test(line), line);
+
+  const same = M.setupComparison([rec(), rec({ bestLap: 94.8 })], idx({ setupFingerprint: 'aaa111' }), NOWX);
+  check('★同じ setup 同士は比較しない', same.available === false && same.reason === 'no_setup_change_to_compare');
+  const noFp = M.setupComparison(history, idx({ setupFingerprint: null }), NOWX);
+  check('現在の fingerprint が無ければ比較しない', noFp.available === false);
+  const other = M.setupComparison(history, idx({ track: 'Monza' }), NOWX);
+  check('★別コースの setup と比べない', other.available === false);
+  check('比較できない時は文を作らない', M.setupComparisonLine(other, 'ja') === '');
+
+  // 欠損記録を比較材料にすると NaN が「0.000秒速くなった」として喋られる。
+  const missingLap = M.setupComparison(
+    [rec({ bestLap: null }), rec({ setupFingerprint: 'bbb222', bestLap: null })], idx(), NOWX);
+  check('★bestLap が無い記録は比較に使わない', missingLap.available === false, missingLap.reason);
+  const missingFp = M.setupComparison(
+    [rec({ setupFingerprint: '' }), rec({ setupFingerprint: 'bbb222', bestLap: 94.8 })], idx(), NOWX);
+  check('★fingerprint が無い記録は「別のsetup」として扱わない',
+    missingFp.available === false, missingFp.reason);
+  check('★欠損があっても NaN を喋らない',
+    M.setupComparisonLine(missingLap, 'ja') === '' && M.setupComparisonLine(missingFp, 'ja') === '');
+
+  const declared = M.attachSetupDeclaration(history.slice(), 'アンチロールバーを1段柔らかく', NOWX);
+  check('本人申告はラベルとして貼る', declared.attached === true
+    && declared.history[1].setupDeclared.label === 'アンチロールバーを1段柔らかく');
+  check('★申告は source=declared で分けて持つ', declared.history[1].setupDeclared.source === 'declared');
+  const declaredCmp = M.setupComparison(declared.history, idx(), NOWX);
+  check('★申告があれば出所を明示して述べる',
+    declaredCmp.declaredSource === 'declared'
+    && /申告のあと/.test(M.setupComparisonLine(declaredCmp, 'ja')));
+  check('★申告文から数値を作らない',
+    !/1段/.test(String(declaredCmp.deltaS)) && declaredCmp.deltaS === cmp.deltaS);
+  check('空の申告は貼らない', M.attachSetupDeclaration(history.slice(), '  ', NOWX).attached === false);
+  check('記録が無ければ貼らない', M.attachSetupDeclaration([], 'x', NOWX).attached === false);
+
+  const renderer4 = fsx.readFileSync(__dirname + '/desktop/renderer.html', 'utf8')
+    .split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  check('renderer が申告を捕捉する', /recordSetupDeclaration\(_m\[0\]\)/.test(renderer4));
+  check('★renderer がブリーフィングで発話する', /kind:'setup_comparison_briefing'/.test(renderer4));
+  check('fate が trace に残る', /SETUP_MEMORY','available=/.test(renderer4));
+}
+
+console.log(`\n(スライス4含む累計) ${pass}/${pass + fail}`);
+if (fail) process.exit(1);

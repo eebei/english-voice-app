@@ -152,5 +152,79 @@
     return `${head}${bits.join(ja ? '、' : ', ')}${tail}${setup}`;
   }
 
-  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, isFreshRecord };
+  // ★スライス4（2026-08-25）setup の前後比較（正本 §5.4）。
+  //
+  // 実測すると、比較に必要な材料は**既に全部 pw_raceHistory にある**。
+  // `setupFingerprint`（Bridge の SHA-256 先頭16桁）も `bestLap` も入っている。
+  // 足りなかったのは「同一 track / car で fingerprint が違う2件を突き合わせて、
+  // 次回 Practice で提示する」出口だけだった。
+  //
+  // 原則：
+  //   - 数値は Bridge 実測（`bestLap`）だけ。SDK が出さない setup の中身は推測しない。
+  //   - 本人申告は `source:'declared'` として**ラベルとしてのみ**持つ。
+  //     申告文から数値を作らない（「1段柔らかく」を量として解釈しない）。
+  //   - fingerprint が同じ2件は「別のsetup」ではないので比較しない。
+
+  function setupComparison(history, identity, nowMs) {
+    if (!Array.isArray(history) || !identity) return { available: false, reason: 'no_history' };
+    const current = norm(identity.setupFingerprint);
+    if (!current) return { available: false, reason: 'no_current_setup_fingerprint' };
+    // identity 一致（track / car / series / user / 鮮度）は既存規約をそのまま使う。
+    const matches = history.filter(record => matchesIdentity(record, identity, nowMs)
+      && finite(record.bestLap) !== null && norm(record.setupFingerprint));
+    if (!matches.length) return { available: false, reason: 'no_matching_record' };
+    const same = matches.filter(r => norm(r.setupFingerprint) === current);
+    const other = matches.filter(r => norm(r.setupFingerprint) !== current);
+    if (!same.length || !other.length) {
+      return { available: false, reason: 'no_setup_change_to_compare' };
+    }
+    const now = same[same.length - 1];
+    const before = other[other.length - 1];
+    const declared = now.setupDeclared || before.setupDeclared || null;
+    return {
+      available: true, reason: null,
+      track: now.track || null,
+      currentBestLap: finite(now.bestLap),
+      previousBestLap: finite(before.bestLap),
+      deltaS: finite(now.bestLap) - finite(before.bestLap),
+      previousDate: String(before.date || '') || null,
+      // 申告は出所を明示して持つ。SDK 実測と混ぜない。
+      declaredLabel: declared && declared.label ? String(declared.label) : null,
+      declaredSource: declared ? 'declared' : null,
+      measuredSource: 'sdk',
+    };
+  }
+
+  function setupComparisonLine(comparison, lang) {
+    if (!comparison || !comparison.available) return '';
+    const ja = isJP(lang);
+    const delta = finite(comparison.deltaS);
+    if (delta === null) return '';
+    const abs = Math.abs(delta).toFixed(3);
+    const better = delta < 0;
+    const label = comparison.declaredLabel
+      ? (ja ? `${comparison.declaredLabel}の申告のあと、` : `After your reported change (${comparison.declaredLabel}), `)
+      : (ja ? 'セットアップを変えたあと、' : 'After the setup change, ');
+    const body = ja
+      ? `ベストは${abs}秒${better ? '速く' : '遅く'}なった。`
+      : `your best lap was ${abs}s ${better ? 'quicker' : 'slower'}.`;
+    return label + body;
+  }
+
+  // 本人申告を最新の記録へラベルとして貼る。数値は作らない。
+  function attachSetupDeclaration(history, label, nowMs) {
+    const out = Array.isArray(history) ? history.slice() : [];
+    if (!out.length || !String(label || '').trim()) return { history: out, attached: false };
+    const record = out[out.length - 1];
+    record.setupDeclared = {
+      label: String(label).trim().slice(0, 60),
+      at: new Date(nowOrMs(nowMs)).toISOString(),
+      source: 'declared',
+    };
+    return { history: out, attached: true };
+  }
+  function nowOrMs(ms) { return Number.isFinite(ms) ? ms : Date.now(); }
+
+  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, isFreshRecord,
+    setupComparison, setupComparisonLine, attachSetupDeclaration };
 }));
