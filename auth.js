@@ -368,6 +368,28 @@ async function init() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_chief_team_handoffs_updated ON chief_team_handoffs (updated_at);`);
 
+  // ★スライス3（2026-08-25）戦略判断のサーバー正本。
+  //   ローカルの localStorage は offline cache であり正本ではない。同じ利用者が
+  //   別PC・別キャラクターで走っても、戦略の事実は一つでなければならない。
+  //   保存するのは構造化した戦略・結果の要約だけで、生音声・会話全文・raw
+  //   telemetry は入れない（sanitizeDecisionRecord がサーバー側で強制する）。
+  //   owner_key で認証主体を分離し、他人の記録は決して返さない。
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS strategy_decisions (
+      owner_key TEXT NOT NULL,
+      decision_id TEXT NOT NULL,
+      identity JSONB NOT NULL,
+      record JSONB NOT NULL,
+      outcome TEXT NOT NULL,
+      status TEXT NOT NULL,
+      deleted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (owner_key, decision_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_strategy_decisions_owner ON strategy_decisions (owner_key, updated_at);`);
+
   if (BREVO_API_KEY) {
     mailer = 'brevo';
     // 診断：鍵の長さと頭だけログ（秘密は出さない）。正しいv3鍵は xkeysib- で始まり約89文字。
@@ -1794,8 +1816,172 @@ async function getChiefTeamHandoff({ teamCode } = {}) {
   return { ok: true, handoff: { id: row.handoff_id, packet, updatedAt: row.updated_at } };
 }
 
+// ══════════════════════════════════════════════════════════════════
+// ★スライス3（2026-08-25）戦略判断のサーバー正本。
+//
+// 方針：
+//   - owner_key で認証主体を分離する。他人の記録は返さない・書けない。
+//   - 何を保存してよいかは **サーバーが決める**。client が余計な項目を送っても
+//     ここで落ちる。生音声・会話全文・raw telemetry は保存しない。
+//   - 保持期間を超えた記録は読み書きのたびに物理削除する。
+//   - 削除は物理削除。tombstone を残さない（「消したのに残っている」を作らない）。
+// ══════════════════════════════════════════════════════════════════
+const DECISION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;   // 90日
+const DECISION_MAX_PER_OWNER = 200;
+const DECISION_OUTCOMES = new Set(['success', 'traffic_failure', 'fuel_failure',
+  'not_executed', 'incident_or_disconnect', 'unknown']);
+const DECISION_STATUSES = new Set(['open', 'closed', 'disputed', 'corrected']);
+
+function decisionOwnerKey({ userId, betaTokenHash } = {}) {
+  if (userId) return 'user:' + String(userId);
+  if (typeof betaTokenHash === 'string' && /^[a-f0-9]{64}$/.test(betaTokenHash)) {
+    return 'beta:' + betaTokenHash;
+  }
+  return null;
+}
+
+// 保存してよい形の唯一の定義。client を信用しない。
+function sanitizeDecisionRecord(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const str = (v, max) => typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
+  const num = v => typeof v === 'number' && Number.isFinite(v) ? v : null;
+  const int = v => Number.isInteger(v) ? v : null;
+  const tri = v => v === true ? true : v === false ? false : null;
+  const decisionId = str(raw.decision_id, 160);
+  if (!decisionId) return null;
+  const p = raw.proposal && typeof raw.proposal === 'object' ? raw.proposal : null;
+  if (!p) return null;
+  const e = raw.execution && typeof raw.execution === 'object' ? raw.execution : null;
+  const b = raw.blend && typeof raw.blend === 'object' ? raw.blend : null;
+  const c = raw.closure && typeof raw.closure === 'object' ? raw.closure : null;
+  const d = raw.dispute && typeof raw.dispute === 'object' ? raw.dispute : null;
+  const outcome = DECISION_OUTCOMES.has(String(raw.outcome)) ? String(raw.outcome) : 'unknown';
+  const status = DECISION_STATUSES.has(String(raw.status)) ? String(raw.status) : 'open';
+  return {
+    decision_id: decisionId,
+    date: str(raw.date, 10),
+    recordedAt: str(raw.recordedAt, 40),
+    updatedAt: str(raw.updatedAt, 40),
+    outcome, status,
+    track: str(raw.track, 80), car: str(raw.car, 80), carClass: str(raw.carClass, 40),
+    seriesId: int(raw.seriesId), setupFingerprint: str(raw.setupFingerprint, 64),
+    raceFormat: str(raw.raceFormat, 24), sessionNum: int(raw.sessionNum),
+    proposal: {
+      selected_plan: str(p.selected_plan, 4), reason: str(p.reason, 120),
+      decided_at_lap: int(p.decided_at_lap), entry_class_position: int(p.entry_class_position),
+      target_lap: int(p.target_lap), add_fuel_l: num(p.add_fuel_l),
+      conditions: {
+        fuel_window_open: tri(p.conditions && p.conditions.fuel_window_open),
+        relative_pace_advantage_s: num(p.conditions && p.conditions.relative_pace_advantage_s),
+        rejoin_not_worse: tri(p.conditions && p.conditions.rejoin_not_worse),
+      },
+    },
+    execution: e ? {
+      executed_plan: str(e.executed_plan, 4), actual_entry_lap: int(e.actual_entry_lap),
+      entry_lap_error: int(e.entry_lap_error), planned_add_fuel_l: num(e.planned_add_fuel_l),
+      actual_fuel_added_l: num(e.actual_fuel_added_l), fuel_add_error_l: num(e.fuel_add_error_l),
+      pos_in: int(e.pos_in), pos_out: int(e.pos_out), lane_total_s: num(e.lane_total_s),
+      corrected: e.corrected === true,
+    } : null,
+    blend: b ? {
+      physical_exit_position: int(b.physical_exit_position),
+      post_cycle_actual_position: int(b.post_cycle_actual_position),
+      conditional_cycle_position: int(b.conditional_cycle_position),
+      condition_met: b.condition_met === true, closed_reason: str(b.closed_reason, 40),
+    } : null,
+    closure: c ? {
+      finish_pos: int(c.finish_pos), finish_pos_confirmed: c.finish_pos_confirmed === true,
+      total_laps: int(c.total_laps), incidents: int(c.incidents), reason: str(c.reason, 40),
+    } : null,
+    dispute: d ? {
+      at: str(d.at, 40), resolved_at: str(d.resolved_at, 40),
+      // 本人が書いた自由文は保存しない。会話全文を預からない方針のため。
+      note: null,
+    } : null,
+  };
+}
+
+async function purgeExpiredDecisions(ownerKey) {
+  await pool.query(
+    `DELETE FROM strategy_decisions
+      WHERE owner_key=$1 AND updated_at < now() - ($2::bigint * interval '1 millisecond')`,
+    [ownerKey, DECISION_RETENTION_MS]);
+}
+
+async function saveStrategyDecisions({ userId, betaTokenHash, decisions } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
+  if (!ownerKey) throw new Error('invalid_decision_identity');
+  const input = Array.isArray(decisions) ? decisions.slice(0, 50) : [];
+  const clean = input.map(sanitizeDecisionRecord).filter(Boolean);
+  await purgeExpiredDecisions(ownerKey);
+  for (const record of clean) {
+    await pool.query(
+      `INSERT INTO strategy_decisions
+         (owner_key,decision_id,identity,record,outcome,status,created_at,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,now(),now())
+       ON CONFLICT (owner_key,decision_id) DO UPDATE SET
+         identity=EXCLUDED.identity, record=EXCLUDED.record,
+         outcome=EXCLUDED.outcome, status=EXCLUDED.status,
+         deleted_at=NULL, updated_at=now()`,
+      [ownerKey, record.decision_id,
+        JSON.stringify({ track: record.track, car: record.car, seriesId: record.seriesId,
+          setupFingerprint: record.setupFingerprint, raceFormat: record.raceFormat }),
+        JSON.stringify(record), record.outcome, record.status]);
+  }
+  // 上限超過は古いものから物理削除する。無制限に預からない。
+  await pool.query(
+    `DELETE FROM strategy_decisions WHERE owner_key=$1 AND decision_id IN (
+       SELECT decision_id FROM strategy_decisions WHERE owner_key=$1
+       ORDER BY updated_at DESC OFFSET $2)`,
+    [ownerKey, DECISION_MAX_PER_OWNER]);
+  return { ok: true, stored: clean.length, rejected: input.length - clean.length };
+}
+
+async function listStrategyDecisions({ userId, betaTokenHash } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
+  if (!ownerKey) throw new Error('invalid_decision_identity');
+  await purgeExpiredDecisions(ownerKey);
+  const { rows } = await pool.query(
+    `SELECT record,updated_at FROM strategy_decisions
+      WHERE owner_key=$1 AND deleted_at IS NULL ORDER BY updated_at ASC`, [ownerKey]);
+  return { ok: true, decisions: rows.map(r => r.record).filter(Boolean) };
+}
+
+async function markStrategyDecisionDisputed({ userId, betaTokenHash, decisionId } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
+  const id = typeof decisionId === 'string' ? decisionId.slice(0, 160) : '';
+  if (!ownerKey || !id) throw new Error('invalid_decision_identity');
+  const { rowCount } = await pool.query(
+    `UPDATE strategy_decisions
+        SET status='disputed', updated_at=now(),
+            record = jsonb_set(record,'{status}','"disputed"'::jsonb)
+      WHERE owner_key=$1 AND decision_id=$2 AND deleted_at IS NULL`, [ownerKey, id]);
+  return { ok: rowCount > 0, disputed: rowCount };
+}
+
+async function deleteStrategyDecision({ userId, betaTokenHash, decisionId } = {}) {
+  if (!ready) throw new Error('auth_not_ready');
+  const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
+  if (!ownerKey) throw new Error('invalid_decision_identity');
+  if (decisionId === null || decisionId === undefined) {
+    const { rowCount } = await pool.query(
+      `DELETE FROM strategy_decisions WHERE owner_key=$1`, [ownerKey]);
+    return { ok: true, deleted: rowCount, scope: 'all' };
+  }
+  const id = String(decisionId).slice(0, 160);
+  const { rowCount } = await pool.query(
+    `DELETE FROM strategy_decisions WHERE owner_key=$1 AND decision_id=$2`, [ownerKey, id]);
+  return { ok: rowCount > 0, deleted: rowCount, scope: 'one' };
+}
+
 module.exports = {
   init, isConfigured, isReady: () => ready,
+  sanitizeDecisionRecord, decisionOwnerKey, DECISION_RETENTION_MS,
+  saveStrategyDecisions, listStrategyDecisions,
+  markStrategyDecisionDisputed, deleteStrategyDecision,
   requestMagicLink, verifyMagicToken, getUserFromToken,
   publicUser, attachUser, updateProfile,
   setMemberByEmail, grantStarterPass, hasActiveStarterPass, getStarterPassStatus, hasPitwallEntitlement, sendWelcomeEmail, setMemberActive, unsetMemberByCustomer, restoreMemberByCustomer, foundingStatus,

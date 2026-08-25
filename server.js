@@ -601,6 +601,55 @@ app.post('/api/memory/import-seeds/ack', requirePitwallEntitlement, async (req, 
   }
 });
 
+// ★スライス3（2026-08-25）戦略判断のサーバー正本。
+//
+// 認証主体（ログインユーザー or beta token）ごとに分離する。req.user / req.betaTokenHash は
+// requirePitwallEntitlement が確定させたものだけを使い、body の識別子は一切信用しない。
+// 保存してよい形は auth.sanitizeDecisionRecord がサーバー側で強制する。
+// 表示・訂正・削除・保持期間を同じ scope に置き、預けたものを本人が見て消せる状態にする。
+const decisionMemoryLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false });
+function decisionOwner(req) {
+  return { userId: (req.user && req.user.id) || null, betaTokenHash: req.betaTokenHash || null };
+}
+app.put('/api/memory/decisions', decisionMemoryLimiter, express.json({ limit: '256kb' }), requirePitwallEntitlement, async (req, res) => {
+  try {
+    const result = await auth.saveStrategyDecisions({
+      ...decisionOwner(req), decisions: req.body && req.body.decisions });
+    res.json(result);
+  } catch (err) {
+    console.error('[decision-memory] save failed:', err.message);
+    res.status(400).json({ ok: false, error: 'invalid_decision_payload' });
+  }
+});
+app.get('/api/memory/decisions', decisionMemoryLimiter, requirePitwallEntitlement, async (req, res) => {
+  try {
+    res.json(await auth.listStrategyDecisions(decisionOwner(req)));
+  } catch (err) {
+    console.error('[decision-memory] list failed:', err.message);
+    res.status(503).json({ ok: false, error: 'decision_memory_unavailable' });
+  }
+});
+app.post('/api/memory/decisions/dispute', decisionMemoryLimiter, express.json(), requirePitwallEntitlement, async (req, res) => {
+  try {
+    res.json(await auth.markStrategyDecisionDisputed({
+      ...decisionOwner(req), decisionId: req.body && req.body.decisionId }));
+  } catch (err) {
+    res.status(400).json({ ok: false, error: 'invalid_decision_dispute' });
+  }
+});
+app.delete('/api/memory/decisions', decisionMemoryLimiter, express.json(), requirePitwallEntitlement, async (req, res) => {
+  try {
+    const body = req.body || {};
+    // 全削除は明示指定でだけ通す。id 欠落を「全部消す」と解釈しない。
+    const decisionId = (body.all === true) ? null
+      : (typeof body.decisionId === 'string' && body.decisionId ? body.decisionId : undefined);
+    if (decisionId === undefined) return res.status(400).json({ ok: false, error: 'decision_id_required' });
+    res.json(await auth.deleteStrategyDecision({ ...decisionOwner(req), decisionId }));
+  } catch (err) {
+    res.status(400).json({ ok: false, error: 'invalid_decision_delete' });
+  }
+});
+
 const usageCheckpointLimiter = rateLimit({ windowMs: 60 * 1000, max: 12, standardHeaders: true, legacyHeaders: false });
 app.post('/api/usage/session-checkpoint', usageCheckpointLimiter, async (req, res) => {
   try {

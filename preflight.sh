@@ -250,6 +250,9 @@ if node tests-gap-freshness.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── スライス2 Decision ID：提案→pit exit→blend→終了→採点→翌回発話（2026-08-25）"
 if node tests-decision-memory-tunnel.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-decision-memory-tunnel.js 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── スライス3 サーバー正本：auth分離・sanitize・表示/訂正/削除/保持期間（2026-08-25）"
+if node tests-decision-memory-server.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-decision-memory-server.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo "── G5 GAP回答の出口：質問→queue待ち→TTS開始で旧数値を再生しない（2026-08-25）"
 if node tests-gap-answer-queue.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-gap-answer-queue.js 2>&1|grep "❌"|head -8; fail=1; fi
 

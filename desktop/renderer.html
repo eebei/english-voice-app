@@ -3480,6 +3480,8 @@ function connectBridge(){
         // ★スライス2：完走時だけでなく、途中終了・DNF でも同じ判断へ追記する。
         //   ここを落とすと「実行されなかった」と「事故で終わった」が区別できない。
         recordDecisionStage('closure',data);
+        // 判断が閉じた時点で正本へ送る（opt-in の時だけ）。失敗しても cache は残す。
+        syncDecisionsToServer();
         reconcileEvidenceSummary(data);
         if(data.is_race) scheduleAutoDebrief(data);
         else if(sessionPurpose==='practice') handlePracticeSessionSummary(data);
@@ -4386,6 +4388,10 @@ async function scheduleAutoBriefing(){
     //   成功例と失敗例の両方を使う。失敗は「勧めない理由」として出す。
     //   条件が揃っていなければ過去の成功を今日の保証として話さない。
     const _decLang=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en';
+    // ★正本を先に引く。別PCで走った結果や、別の場所で消した記録を、
+    //   古いローカル cache のまま今日の事実として喋らないため。
+    //   opt-out なら何もしないので、ここが同期の有無で挙動を変えることはない。
+    await pullDecisionsFromServer();
     const _decSel=decisionBriefingSelection();
     const _decLine=(window.PitwallDecisionMemory
       &&typeof window.PitwallDecisionMemory.briefingLine==='function')
@@ -6387,6 +6393,16 @@ function disputeLatestDecision(lang){
   saveDecisions(out.store);
   pendingDecisionDispute=target.decision_id;
   diagnosticLog('DECISION_MEMORY','stage=dispute reason='+out.reason+' id='+target.decision_id);
+  // ★正本にも即座に反映する。cache だけ止めても別PCでは使われ続けるため。
+  if(decisionSyncEnabled()){
+    try{
+      fetch(API_BASE+'/api/memory/decisions/dispute',
+        {method:'POST',headers:applyPitwallAccess({'Content-Type':'application/json'}),
+         body:JSON.stringify({decisionId:target.decision_id})})
+        .then(r=>diagnosticLog('DECISION_SYNC','dispute status='+r.status))
+        .catch(e=>diagnosticLog('DECISION_SYNC','dispute failed='+String(e&&e.message||e)));
+    }catch(e){ diagnosticLog('DECISION_SYNC','dispute failed='+String(e&&e.message||e)); }
+  }
   return {decisionId:target.decision_id,readback:m.readbackLine(out.record,lang)};
 }
 function confirmDecisionCorrection(correction,lang){
@@ -6399,12 +6415,103 @@ function confirmDecisionCorrection(correction,lang){
   if(out.reason==='corrected') pendingDecisionDispute=null;
   return out.record;
 }
+// ══════════════════════════════════════════════════════════════════
+// ★スライス3（2026-08-25）サーバー正本との同期。
+//
+// **既定は無効（opt-in）。** 公開ページには現在
+// 「Telemetry never leaves your machine」と書いてあり、その文言を Yuji が
+// 改定するまで、利用者データを機械の外へ出さない。これは実装の未完成では
+// なく、公開済みの約束を破らないための fail-closed。
+// （正本 §5.2 の privacy / terms / 事前明示 / opt-out に対応。Gate 7）
+//
+// 同期の向き：サーバーが正本、localStorage は offline cache。
+// 同一 decision_id が両側にある場合は updatedAt の新しい方を採る
+// （別PCで走った結果を、古い cache で上書きしないため）。
+// ══════════════════════════════════════════════════════════════════
+const DECISION_SYNC_OPTIN_KEY='pw_decision_sync_optin';
+function decisionSyncEnabled(){
+  try{ return localStorage.getItem(DECISION_SYNC_OPTIN_KEY)==='1'; }catch{ return false; }
+}
+function setDecisionSyncEnabled(on){
+  try{ localStorage.setItem(DECISION_SYNC_OPTIN_KEY,on?'1':'0'); }catch{}
+  diagnosticLog('DECISION_SYNC','optin='+(on?'on':'off'));
+}
+function mergeDecisionStores(localStore,serverStore){
+  const byId=new Map();
+  for(const r of (Array.isArray(localStore)?localStore:[])){
+    if(r&&r.decision_id) byId.set(String(r.decision_id),r);
+  }
+  for(const r of (Array.isArray(serverStore)?serverStore:[])){
+    if(!r||!r.decision_id) continue;
+    const id=String(r.decision_id);
+    const mine=byId.get(id);
+    const mineAt=Date.parse(String((mine&&mine.updatedAt)||''));
+    const theirsAt=Date.parse(String(r.updatedAt||''));
+    // 片方しか時刻を持たない場合は、時刻を持つ方を採る（推測で古い方を残さない）。
+    if(!mine||!Number.isFinite(mineAt)||(Number.isFinite(theirsAt)&&theirsAt>mineAt)) byId.set(id,r);
+  }
+  return [...byId.values()];
+}
+async function syncDecisionsToServer(){
+  if(!decisionSyncEnabled()){ diagnosticLog('DECISION_SYNC','skipped=optout'); return false; }
+  const store=loadDecisions();
+  if(!store.length){ diagnosticLog('DECISION_SYNC','skipped=empty'); return false; }
+  try{
+    const headers=applyPitwallAccess({'Content-Type':'application/json'});
+    const r=await fetch(API_BASE+'/api/memory/decisions',
+      {method:'PUT',headers,body:JSON.stringify({decisions:store})});
+    const j=await r.json().catch(()=>null);
+    diagnosticLog('DECISION_SYNC','push status='+r.status
+      +' stored='+String((j&&j.stored)??'-')+' rejected='+String((j&&j.rejected)??'-'));
+    return r.ok;
+  }catch(e){
+    // 同期できなくても走行は続く。cache は消さない（次回まとめて送る）。
+    diagnosticLog('DECISION_SYNC','push failed='+String(e&&e.message||e));
+    return false;
+  }
+}
+async function pullDecisionsFromServer(){
+  if(!decisionSyncEnabled()){ diagnosticLog('DECISION_SYNC','pull skipped=optout'); return false; }
+  try{
+    const headers=applyPitwallAccess({});
+    const r=await fetch(API_BASE+'/api/memory/decisions',{headers});
+    if(!r.ok){ diagnosticLog('DECISION_SYNC','pull status='+r.status); return false; }
+    const j=await r.json().catch(()=>null);
+    const merged=mergeDecisionStores(loadDecisions(),(j&&j.decisions)||[]);
+    saveDecisions(merged);
+    diagnosticLog('DECISION_SYNC','pull merged='+merged.length);
+    return true;
+  }catch(e){
+    diagnosticLog('DECISION_SYNC','pull failed='+String(e&&e.message||e));
+    return false;
+  }
+}
+// 表示：本人が預けたものを見られる状態にする（正本 §5.2 の「表示」）。
+function listDecisionsForDisplay(){
+  const m=decisionModule();
+  return loadDecisions().filter(r=>r&&!r.deleted).map(r=>({
+    decision_id:r.decision_id, date:r.date, track:r.track, car:r.car,
+    plan:r.proposal&&r.proposal.selected_plan, lap:r.proposal&&r.proposal.decided_at_lap,
+    outcome:r.outcome, status:r.status,
+    usable:!!(m&&m.usable(r,currentDecisionIdentity(),Date.now())),
+  }));
+}
 function deleteDecision(decisionId){
   const m=decisionModule();
   if(!m) return false;
   const out=m.remove(loadDecisions(),decisionId,Date.now());
   saveDecisions(out.store);
   diagnosticLog('DECISION_MEMORY','stage=delete reason='+out.reason+' id='+String(decisionId));
+  // ★削除は正本からも消す。ローカルだけ消して「消したのに残っている」を作らない。
+  if(decisionSyncEnabled()){
+    try{
+      fetch(API_BASE+'/api/memory/decisions',
+        {method:'DELETE',headers:applyPitwallAccess({'Content-Type':'application/json'}),
+         body:JSON.stringify({decisionId:String(decisionId)})})
+        .then(r=>diagnosticLog('DECISION_SYNC','delete status='+r.status))
+        .catch(e=>diagnosticLog('DECISION_SYNC','delete failed='+String(e&&e.message||e)));
+    }catch(e){ diagnosticLog('DECISION_SYNC','delete failed='+String(e&&e.message||e)); }
+  }
   return out.reason==='deleted';
 }
 function buildPreviousRaceBriefingNote(){
