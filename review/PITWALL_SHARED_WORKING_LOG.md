@@ -900,9 +900,55 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
 ## 2026-08-25 Claude Code — スライス2/3/4：Memory→Strategy v1（**全ジャンル受入マトリクス付き**）
 
-正本 [GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md](GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md) §5 / §9 / §10。
-commit `65867c0` / `8891691` / `8de7aee` / `e950661` / `02ecbb8`。
+正本 `review/GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md` §5 / §9 / §10。
 **push / private build / deploy / 公開は未実施。**
+
+### ★Codex へ：この作業を確認する前に読むこと（到達性の警告）
+
+**この作業は `origin/main` に無い。** 2026-08-25 時点で `origin/main` は `828ca13`（Build 284）、
+ローカル HEAD は `b5787f2` で **9 commit 先行**している。
+**GitHub から取得すると、G5 も スライス2/3/4 も一行も見えない。**
+同一マシンの作業ツリーを読むか、Yuji の push GO 後に取得すること。
+
+**さらに、正本の指示書 `review/GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md` は git 未追跡である。**
+Yuji のファイルなので Gate 0（未追跡の利用者ファイルを混ぜない）に従い、こちらでは commit していない。
+git checkout からは指示書そのものが見えない。**Yuji の判断が要る。**
+
+#### 確認対象の commit（古い順）
+
+| commit | 内容 |
+|---|---|
+| `86abb16` | G5：PTT質問GAPの出口（Build 284 P1） |
+| `ff7066e` | G5 の報告を共有ログへ |
+| `65867c0` | スライス2：Decision ID の一生 |
+| `8891691` | スライス3：サーバー正本・訂正・削除 |
+| `8de7aee` | スライス4：setup 前後比較 |
+| `e950661` | スライス4b：pit / 燃費 |
+| `02ecbb8` | スライス4c：全ジャンルの訂正・削除 |
+| `b5787f2` | 本報告 |
+
+#### そのまま流せる確認コマンド
+
+```bash
+git log --oneline 828ca13..HEAD
+git diff --stat 828ca13..HEAD
+node tests-gap-answer-queue.js && node tests-decision-memory-tunnel.js && node tests-decision-memory-server.js && node tests-session-memory-tunnel.js
+python3 -m unittest discover -s irsdk-bridge -p 'tests_*.py' -t irsdk-bridge
+./preflight.sh
+node desktop/scripts/verify-packaged-runtime.js   # 旧asarでは decision-memory.js 欠落で落ちるのが正
+```
+
+#### 逆引きの入口（file:line）
+
+| 見るもの | 場所 |
+|---|---|
+| 結合キーの生成と4段への搭載 | `irsdk-bridge/bridge.py` の `active_decision_id`（宣言 / 両リセット / 提案 / pit_timing / pit_cycle_outcome / session_summary ×2） |
+| 採点の決定論 | `desktop/decision-memory.js` の `score_()` |
+| 次回の自発発話と条件付き採用 | `desktop/decision-memory.js` の `briefingLine()` / `planAdvice()` |
+| 出口の配線 | `desktop/renderer.html` の `kind:'decision_strategy_briefing'` / `kind:'decision_plan_advice'` |
+| サーバー sanitize | `auth.js` の `sanitizeDecisionRecord()` |
+| 同期が既定OFF | `desktop/renderer.html` の `decisionSyncEnabled()` |
+| 訂正の対象特定 | `desktop/renderer.html` の `noteMemoryUtterance()` / `disputeRaceRecord()` |
 
 ### 実測して分かった中心的な事実
 
@@ -1109,6 +1155,8 @@ rejoin空き   : re_evaluate
 ## 2026-08-25 Claude Code — G5：Codex Build 284 P1 対応（PTT質問GAPの出口）
 
 commit `86abb16` のみ。**push / private build / deploy / 公開は未実施。**
+**この commit は `origin/main`（`828ca13`）に無い。** GitHub からは見えないので、
+同一マシンの作業ツリーを読むか push GO 後に取得すること（詳細は上のスライス2/3/4節の到達性の警告）。
 
 ### Codex の指摘は正しかった（コードで確認）
 
