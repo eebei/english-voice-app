@@ -898,6 +898,92 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - #3bは、**既存 `lap_time_hist` を温存し、Phase E専用のクリーン周履歴を別に持つ方式を正式に承認**。既存の残り周回推定等を変えず、Phase Eのbaseline／median／逸脱だけを同一クリーン周集合で扱う。
 - Codex再実行: session state 65 tests、bridge wiring 51 tests、JP radio 28/28、Python compile、diff checkは全て通過。
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
+## 2026-08-25 Claude Code — G5：Codex Build 284 P1 対応（PTT質問GAPの出口）
+
+commit `86abb16` のみ。**push / private build / deploy / 公開は未実施。**
+
+### Codex の指摘は正しかった（コードで確認）
+
+`renderer.html:2163` の `speak()` に `gapIdentity` が無い。自発コール（`renderer.html:4023`）は
+`data.gap_identity` を渡しているのに、**PTT回答だけが素通り**していた。
+回答生成時の 5 秒契約（G3）は満たしていたが、`回答 → queue → TTS開始` の出口は誰も見ていなかった。
+
+### 契約を意図的に分けた（最重要の設計判断）
+
+自発と回答へ同じ判定を当てると、**Build 281 の「値があるのに答えない」を再発させる**。
+
+| | 自発 `gap_trend` | 質問 `nearest_gap` |
+|---|---|---|
+| 主張の性質 | 「**あの車**に対して2.6秒開いた」＝特定対象への時間差分 | 「**今**、後ろは何秒」＝時点の事実 |
+| 対象車が交代 | **破棄**（主張ごと無効） | **最新値へ作り直す**（いま後ろにいる車が答え） |
+| 古さの基準 | 候補の `sampled_at` | **現在 snapshot の年齢** |
+| 値が消えた | 破棄 | その方向だけ落とし、残りは答える |
+
+回答側で対象車交代を破棄にすると、ドライバーの質問が無応答で終わる。`⑧` と `M10` で固定した。
+
+### 変更ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `desktop/gap-freshness.js` | `evaluateAnswer()` / `rebuildAnswerText()` 追加。**既存 `evaluate()` は無改変**（自発の契約を動かさない） |
+| `desktop/local-intent-router.js` | `gapIdentityFor()` / `gapAnswer()`。**両方の GAP 分岐**が identity を返す |
+| `desktop/renderer.html` | `sendMsg` → `speak(gapIdentities)` → queue item → `drainQueue` で照合 |
+| `tests-gap-answer-queue.js` | **新規 44件**。renderer 本体を抽出して実行する統合再生 |
+| `preflight.sh` | 出荷ゲートへ収録 |
+
+**新規 runtime module なし**（既存3本の変更のみ）。renderer の `<script src>` は7本のまま＝package 対象に変化なし。
+
+### Codex 受入条件4の再生（写経ではなく本番コードを実行）
+
+`tests-speak-async.js` の前例に倣い、`desktop/renderer.html` から本番の
+`sendMsg` / `speak` / `drainQueue` を抽出し、本物の `local-intent-router.js` と
+`gap-freshness.js` を `window.*` として読み込んで vm で実行した。
+**ドライバー発話 → router → speak() → queue待ち6秒 → drainQueue → TTS開始**を一列で流している。
+TTS へ実際に渡された文（fetch body の `text`）を読んで判定するので、文面の作り直しが本当に届いたかを見ている。
+
+```
+② 質問時 3.8秒 → 6秒待機 → 実測 0.6秒 → 再生 "後ろ0.6秒。"   旧3.8は出ない
+④ 前後同時。前だけ 5.5→0.7 → "前0.7秒、後ろ3.8秒。"          片側だけ古く残らない
+⑤ 前の値が消失 → "後ろ3.8秒。"（reason=direction_dropped）    消えた方向の旧値を言わない
+⑥ snapshot 自体が9秒古い → 破棄（live_snapshot_stale）        古い数字を喋らない
+⑦ session_key 変化 → 破棄                                     別セッションの数字にしない
+⑧ 対象車 31→44 → "後ろ1.2秒。"                                無応答にしない
+⑨ Practice（権威レコード無し）→ 答える／動けば作り直す        G4 の非権威経路を殺さない
+⑩ module 欠落 → 破棄                                          Build 281 の package 漏れ対策
+```
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests-gap-answer-queue.js` | **44/44**（新規・preflight収録） |
+| JS 全スイープ | ✅ **全緑**（失敗0） |
+| Python | ✅ **305 passed** |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+| 外部有料API呼出 | **0件** |
+
+**変異試験 10件すべて検出**：`sendMsg` が identity を渡さない（＝Codex が見つけた元の欠陥そのもの）／
+`speak` が queue item へ載せない／`evaluateAnswer` を常に play にする／回答側だけ14秒へ緩める／
+session 変更を無視／消えた方向で旧値を残す／値変化で作り直さない／module 欠落を素通り／
+router の第2分岐だけ identity を落とす／対象車交代で破棄（質問に答えなくなる）。
+
+**M1 が検出されることが要点。** Codex が指摘した欠陥を戻すとテストが落ちる状態にしてある。
+
+### 未確認（field evidence）
+
+- **Windows実機・iRacing実走とも未実施。** queue 待ちの実際の長さ、作り直した文の自然さ、
+  Practice での挙動は実走でしか確認できない。
+- Build 284 artifact はこの変更を**含まない**。Gate 5 は次候補で取り直しになる。
+- `physical_traffic_gap` の実GTP/GT3 fixture 再生は未着手のまま（§4-2）。
+
+### Codex への確認依頼
+
+1. 自発と回答で契約を分けた判断が妥当か（対象車交代で回答を破棄しないこと）
+2. `liveAgeMs` の出所が `lastTelemetryAt` で正しいか（別の時刻源が要るか）
+3. 前後同時質問で片側 discard・片側 rebuild が混ざる経路が残っていないか
+4. `nearest_gap_stale`（生成時）と `live_snapshot_stale`（再生時）の二重判定に矛盾が無いか
+
 ## 2026-08-25 Claude Code — Build 284 private candidate 完成（**署名は Codex 待ち**）
 
 ### Build 番号を 283 → 284 へ
@@ -1345,3 +1431,43 @@ Claude Codeは次の正本を全文確認し、実装担当として着手して
 commitは変更単位ごとに可能。push / private build / deploy / 公開はYujiの別GOまで禁止です。完了後は本共有ログへ証拠を追記し、Codex独立確認へ回してください。
 
 ---
+
+## 2026-08-25 Codex — Build 284 independent review: **P1差戻し / 出荷不可**
+
+対象ソースSHA: `828ca13`（Build 284）。Build、push、公開は行っていない。
+
+### 独立に再実行した結果
+
+- `python3 -m unittest irsdk-bridge/tests_gap_authority.py irsdk-bridge/tests_gap_trend_wiring.py irsdk-bridge/tests_bridge_poll_replay.py` — **67 passed**
+- `node tests-gap-freshness.js` — **70/70**
+- `node tests-local-intent-router.js` — **38/38**
+- `node tests-chat-http.js` — **54/54**（ローカルポートを用いるため、隔離外で実行）
+- `node tests-require-admin.js` — **9/9**
+- `./preflight.sh` — **出荷可**
+- `git diff --check 6c17a9e..828ca13` — **合格**。外部有料API呼出なし。
+
+### P1 — PTTで質問したGAPは、TTS開始直前の鮮度確認を通っていない
+
+`renderer.html` は自発GAP無線の `data.gap_identity` を `speak()` に渡し、queue取り出し直後に
+`PitwallGapFreshness.evaluate()` で再検証している。これは正しい。
+
+ただし、PTTの直接質問は `localIntent` から `speak(reply, {...})` する際に `gapIdentity` を渡していない。
+そのため質問時点では5秒以内でも、先行発話でqueue待ちになった後に古い数値のまま再生され得る。
+「再生側と質問側を同じ5秒にする」というBuild 284の受入条件を、回答生成時だけ満たしており、
+**回答→queue→TTS開始の出口まで満たしていない。** `tests-local-intent-router.js` もこのqueue経路を再現していない。
+
+修正受入条件:
+
+1. `nearest_gap` のPTT回答にも、Bridgeの `gap_authority` 由来の対象車・方向・session・generationをqueue itemへ渡す。
+2. queue待ち中に対象車／方向／session／generationが変われば破棄、同一対象で数値だけ変われば現在値へ再構成する。
+3. 前後同時質問も、片側の旧値を残さない形で扱う。
+4. 「質問→先行発話で6秒待機→TTS開始」を再生する統合テストを追加し、古い数値が再生されないことを固定する。
+
+### 未署名のGate
+
+- Gate 4: 上記P1が0件ではないため**不合格**。
+- Gate 5: Build 284の完成artifactはローカルに無く、CI artifact / app.asarを確認者が実物で独立検査できていないため**未署名**。
+- Gate 6 Windows、Gate 8 iRacing実走: **未実施**。
+- `physical_traffic_gap` の実GTP/GT3 fixture再生は未完。今回の「異クラスの物理的接近を正しく話す」までを合格とはしない。
+
+G1/G2の自発GAP経路そのもの（同一frame authority、EstTime残留抑止、queue直前再確認）の設計と単体再生は確認できた。だが上記P1を残したままBuild 284を利用者テスト候補・出荷可とは扱わない。
