@@ -124,6 +124,7 @@
       airTempC: finite(record.airTempC),
       setupMatch: sameSetup(record, identity),
       pitCount: Array.isArray(record.pitEvents) ? record.pitEvents.length : null,
+      avgFuelPerLap: finite(record.avgFuelPerLap),
     };
   }
 
@@ -141,6 +142,15 @@
     }
     if (facts.trackTempC !== null) {
       bits.push(ja ? `路面${facts.trackTempC.toFixed(1)}℃` : `track ${facts.trackTempC.toFixed(1)}C`);
+    }
+    // ★スライス4：pit 回数と燃費も Bridge 実測なので同じ規律で述べる。
+    //   記録が無ければ足さない（0回と「記録なし」を混同しない）。
+    if (Number.isInteger(facts.pitCount)) {
+      bits.push(ja ? `ピット${facts.pitCount}回` : `${facts.pitCount} stop${facts.pitCount === 1 ? '' : 's'}`);
+    }
+    if (facts.avgFuelPerLap !== null) {
+      bits.push(ja ? `平均${facts.avgFuelPerLap.toFixed(2)}L/周`
+                   : `${facts.avgFuelPerLap.toFixed(2)}L per lap`);
     }
     if (!bits.length) return '';
     const head = ja ? `前回${facts.date ? facts.date + 'の' : ''}${facts.track || ''}は`

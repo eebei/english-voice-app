@@ -285,3 +285,44 @@ if (fail) process.exit(1);
 
 console.log(`\n(スライス4含む累計) ${pass}/${pass + fail}`);
 if (fail) process.exit(1);
+
+// ══════════════════════════════════════════════════════════════════════
+// ★スライス4b：pit / 燃費（正本 §10 ジャンル2）。
+//   `session-memory.js` は record.pitEvents を読んでいたが、renderer が
+//   一度も書いていなかった＝pitCount が常に null の死んだ経路だった。
+// ══════════════════════════════════════════════════════════════════════
+{
+  const fsy = require('fs');
+  const M2 = require('./desktop/session-memory');
+  const NOWY = Date.parse('2026-08-25T12:00:00Z');
+  const base = {
+    date: '2026-08-24', recordedAt: '2026-08-24T12:00:00.000Z', userId: 'u1',
+    track: 'Okayama', car: 'Audi R8 LMS GT3', seriesId: 419,
+    startPos: 8, finishPos: 4, trackTempC: 41.2,
+  };
+  const id2 = { userId: 'u1', track: 'Okayama', car: 'Audi R8 LMS GT3', seriesId: 419 };
+
+  console.log('\n══ スライス4b pit / 燃費 ══');
+  const withPit = M2.briefingFacts([Object.assign({}, base, {
+    pitEvents: [{ entry_lap: 6 }, { entry_lap: 14 }], avgFuelPerLap: 2.71,
+  })], id2, NOWY);
+  check('★pit 回数が取り出せる（死んだ経路が生きた）', withPit.pitCount === 2, String(withPit.pitCount));
+  check('★燃費が取り出せる', withPit.avgFuelPerLap === 2.71, String(withPit.avgFuelPerLap));
+  const line2 = M2.briefingLine(withPit, 'ja');
+  check('★pit 回数を自発発話に含める', /ピット2回/.test(line2), line2);
+  check('★燃費を自発発話に含める', /平均2\.71L\/周/.test(line2), line2);
+
+  const noPit = M2.briefingFacts([Object.assign({}, base)], id2, NOWY);
+  check('記録が無ければ null（0回と混同しない）', noPit.pitCount === null && noPit.avgFuelPerLap === null);
+  check('★記録が無ければ言わない', !/ピット/.test(M2.briefingLine(noPit, 'ja')));
+
+  const renderer4b = fsy.readFileSync(__dirname + '/desktop/renderer.html', 'utf8')
+    .split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  check('★renderer が pit_events を保存する',
+    /pitEvents:Array\.isArray\(data\.pit_events\)\?data\.pit_events:null/.test(renderer4b));
+  check('★renderer が燃費を保存する',
+    /avgFuelPerLap:Number\.isFinite\(Number\(data\.avg_fuel_per_lap\)\)/.test(renderer4b));
+}
+
+console.log(`\n(スライス4b含む累計) ${pass}/${pass + fail}`);
+if (fail) process.exit(1);
