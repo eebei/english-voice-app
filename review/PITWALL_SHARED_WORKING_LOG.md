@@ -898,6 +898,71 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - #3bは、**既存 `lap_time_hist` を温存し、Phase E専用のクリーン周履歴を別に持つ方式を正式に承認**。既存の残り周回推定等を変えず、Phase Eのbaseline／median／逸脱だけを同一クリーン周集合で扱う。
 - Codex再実行: session state 65 tests、bridge wiring 51 tests、JP radio 28/28、Python compile、diff checkは全て通過。
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
+## 2026-08-25 Claude Code — G1b：二重権威を閉じた（前回報告の訂正を含む）
+
+### 前回報告の訂正
+
+「G1完了」と報告したが、**指示書 §2.1 の半分しか閉じていなかった**。同じ poll 内の実行順序が原因。
+
+```
+5234  EstTime が gap / idx を決める
+5352  gap_call_policy.observe()   ← ★自発コールはここ。EstTime値を読む
+5712  standings_by_pos 構築
+5742  権威レコード適用             ← ★質問回答（telemetry snapshot）はここから
+```
+
+G1 で直したのは**質問回答側と対象車IDの取り残し**だけで、**19:11:59「後ろ3.8秒」は自発コール**なので
+その経路は EstTime を読んだままだった。悪化はしていないが、未解決を完了と報告したのは誤り。
+
+### 移動前に確認したこと（前提を鵜呑みにしない）
+
+- **依存の洗い出し**：`_gap_event` / `_gap_generation` / `_gap_now` / `_gap_session_key` /
+  `flush_radio` / `_update_gap_live_context` を移動区間 390 行の全行で検索。**該当はコメント1行のみ**、機能的依存ゼロ。
+- **ブロック構造**：移動元・移動先とも `if (player_car_idx >= 0 and onTrack and not onPit and not in_formation …)`（`bridge.py:5205`）の中で indent 12 のまま有効。
+  **権威ブロック（indent 24）の中へ入れると Practice/Qualifying で動かなくなる**ため、そこは避けた。
+- **設計意図との整合**：`bridge.py:3430-3433` に既に
+  「A held GAP sentence must not be released against the previous poll's adjacent-car snapshot.
+  The current poll refreshes that snapshot in the GAP block below, then calls flush_radio().」
+  とある。**保留GAPは更新後スナップショットで再検証してから解放する**設計。
+  今回そのスナップショット自体が権威値になったので、**設計意図により忠実になった**。
+  `_update_gap_live_context()` と `flush_radio()` を observe と一緒に動かしたのはこのため。
+
+### 変更後の順序
+
+```
+5712  standings_by_pos 構築
+5715  権威レコード適用
+5741  _update_gap_live_context()  ← 権威値
+5752  flush_radio()               ← 権威値で保留GAPを再検証
+5756  gap_call_policy.observe()   ← ★権威値。質問回答と同じ数字
+```
+
+### 順序を固定するテストを追加
+
+移動しただけでは戻りうるので、**行番号で順序を固定**した。
+
+- 権威 < `observe()`
+- 権威 < `_update_gap_live_context()`
+- context更新 < `flush_radio()`
+
+**変異試験で、旧構造へ戻すと落ちることを確認済み。**
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests_gap_authority.py` | **36/36**（33 → +3） |
+| Python 全体 | ✅ **297 passed** |
+| `tests_bridge_poll_replay.py` | ✅ 19（poll loop 実再生） |
+| JS 全スイープ | ✅ 全緑 |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+| 順序変異 | ✅ 検出 |
+
+**指示書 §2.1（二重の数値権威）はこれで閉じた。** §2.2（Renderer queue の陳腐化）は G2 として次に着手する。
+
+commit のみ。**push / private build / deploy / 公開は未実施。**
+
 ## 2026-08-25 Claude Code — G1（GAP数値権威）実装完了
 
 指示書 [GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md](GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md) の §2.1／§3.1／§3.2 に対応。

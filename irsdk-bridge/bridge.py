@@ -5331,33 +5331,6 @@ def poll_iracing():
                                 stopped_warned[idx] = _now2
                                 last_battle_global = _now2
 
-            # Gap reports are information, not a battle instruction.  The
-            # physical adjacent-car identity and incident/position epoch are
-            # part of the candidate.  A held sentence is revalidated again by
-            # flush_radio() immediately before delivery.
-            _gap_now = time.time()
-            _gap_session_key = (cur_snum, session_track, session_car_model)
-            _gap_generation = _update_gap_live_context(
-                _gap_session_key, _gap_now,
-                nearest_ahead_idx, nearest_behind_idx,
-                nearest_ahead_gap, nearest_behind_gap,
-                class_pos, incidents)
-            # Revalidate and deliver an older held GAP only after this poll's
-            # physical neighbour IDs, raw gaps, position and incident epoch
-            # have replaced the previous snapshot.
-            flush_radio()
-            if (is_race_session and session_racing_started and onTrack and not onPit
-                    and not in_formation
-                    and (nearest_ahead_gap is not None or nearest_behind_gap is not None)):
-                _gap_event = gap_call_policy.observe(
-                    _gap_session_key, _gap_now,
-                    ahead_s=nearest_ahead_gap, behind_s=nearest_behind_gap,
-                    ahead_car_idx=nearest_ahead_idx,
-                    behind_car_idx=nearest_behind_idx,
-                    player_position=class_pos, incident_count=incidents)
-                if _gap_event is not None:
-                    _gap_event['context_generation'] = _gap_generation
-                    broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
 
             _same_class_main = set()  # ★R2：下のstandings_gapsブロックからも参照するため、分岐の外で既定値を持つ
             if car_f2_times and player_car_idx < len(car_f2_times):
@@ -5755,6 +5728,40 @@ def poll_iracing():
                         if _applied['behind_gap'] is not None:
                             nearest_behind_gap = _applied['behind_gap']
                             nearest_behind_idx = _applied['behind_idx']
+
+            # ★G1b（2026-08-25）：この GAP ブロックは**権威レコード確定後**に走る。
+            #   以前はここが 390 行前にあり、自発コールだけが EstTime 値を読み、
+            #   質問回答（telemetry snapshot）は F2 権威値を読んでいた。同じ poll で
+            #   二つの数字が並立し、19:11:59『後ろ3.8秒』と DATA CHECK gapBehind:0.6 の
+            #   食い違いになった。_update_gap_live_context() と flush_radio() も一緒に
+            #   動かす必要がある（保留中の GAP を旧スナップショットで解放しないため）。
+            # Gap reports are information, not a battle instruction.  The
+            # physical adjacent-car identity and incident/position epoch are
+            # part of the candidate.  A held sentence is revalidated again by
+            # flush_radio() immediately before delivery.
+            _gap_now = time.time()
+            _gap_session_key = (cur_snum, session_track, session_car_model)
+            _gap_generation = _update_gap_live_context(
+                _gap_session_key, _gap_now,
+                nearest_ahead_idx, nearest_behind_idx,
+                nearest_ahead_gap, nearest_behind_gap,
+                class_pos, incidents)
+            # Revalidate and deliver an older held GAP only after this poll's
+            # physical neighbour IDs, raw gaps, position and incident epoch
+            # have replaced the previous snapshot.
+            flush_radio()
+            if (is_race_session and session_racing_started and onTrack and not onPit
+                    and not in_formation
+                    and (nearest_ahead_gap is not None or nearest_behind_gap is not None)):
+                _gap_event = gap_call_policy.observe(
+                    _gap_session_key, _gap_now,
+                    ahead_s=nearest_ahead_gap, behind_s=nearest_behind_gap,
+                    ahead_car_idx=nearest_ahead_idx,
+                    behind_car_idx=nearest_behind_idx,
+                    player_position=class_pos, incident_count=incidents)
+                if _gap_event is not None:
+                    _gap_event['context_generation'] = _gap_generation
+                    broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
 
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
         # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。

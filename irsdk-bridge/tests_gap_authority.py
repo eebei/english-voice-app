@@ -328,5 +328,46 @@ class BridgeWiringUsesTheAuthority(unittest.TestCase):
         self.assertIn("gap_authority_records = _sig_reset['gap_authority_records']", self.src)
 
 
+class ProactiveCallReadsTheAuthority(unittest.TestCase):
+    """G1b: 自発コールと質問回答が同じ値を読む（二重権威の解消）。
+
+    移動前は `gap_call_policy.observe()` が権威レコードより 390 行前にあり、
+    自発コールだけ EstTime 値を読んでいた。19:11:59『後ろ3.8秒』の直後に
+    DATA CHECK が `gapBehind:0.6` を出した食い違いはこれ。
+
+    行番号で順序を固定する。並べ替えで壊れたら必ず落ちる。
+    """
+
+    def setUp(self):
+        with open(os.path.join(HERE, 'bridge.py'), encoding='utf-8') as fh:
+            self.lines = fh.read().split('\n')
+
+    def _line_of(self, needle):
+        for i, line in enumerate(self.lines, 1):
+            if needle in line:
+                return i
+        self.fail('not found: ' + needle)
+
+    def test_authority_runs_before_the_proactive_call(self):
+        authority = self._line_of('gap_authority.apply_same_class_records(')
+        observe = self._line_of('_gap_event = gap_call_policy.observe(')
+        self.assertLess(authority, observe,
+                        'observe() must read authority values, not EstTime leftovers')
+
+    def test_live_context_refresh_also_runs_after_the_authority(self):
+        """保留中の GAP を旧スナップショットで解放しないため、
+        `_update_gap_live_context()` も権威の後ろでなければならない。"""
+        authority = self._line_of('gap_authority.apply_same_class_records(')
+        context = self._line_of('_gap_generation = _update_gap_live_context(')
+        self.assertLess(authority, context)
+
+    def test_held_gap_is_flushed_after_the_context_refresh(self):
+        context = self._line_of('_gap_generation = _update_gap_live_context(')
+        for i in range(context, len(self.lines)):
+            if self.lines[i].strip() == 'flush_radio()':
+                return
+        self.fail('flush_radio() must follow the refreshed GAP context')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
