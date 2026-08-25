@@ -197,8 +197,18 @@ def apply_same_class_records(*, session_key, sampled_at, standings_by_pos,
         standings_by_pos=standings_by_pos,
         player_class_position=player_class_position,
         player_class=player_class, previous=previous)
+    # ★G4（2026-08-25）S/F 跨ぎ対策。
+    #   Race で standings が取れているなら、**権威がこの poll の唯一の出所**。
+    #   確認できなかった方向は EstTime の残り値を使わず None にする。
+    #   EstTime は S/F ラインを跨ぐ瞬間に符号が反転しうる（実走ログの
+    #   `DIR FIX ... EstTime said behind, position says ahead`）。
+    #   権威が黙った方向で旧値が生き残ると、その反転値がそのまま喋られる。
+    authoritative = bool(isinstance(standings_by_pos, dict) and standings_by_pos
+                         and isinstance(player_class_position, int)
+                         and player_class_position > 0)
     applied = {'ahead_gap': None, 'ahead_idx': None,
-               'behind_gap': None, 'behind_idx': None}
+               'behind_gap': None, 'behind_idx': None,
+               'authoritative': authoritative}
     traces = []
     for direction, prefix in ((DIRECTION_AHEAD, 'ahead'), (DIRECTION_BEHIND, 'behind')):
         record = records.get(direction)

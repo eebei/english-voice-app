@@ -5722,10 +5722,22 @@ def poll_iracing():
                         for _t in _gap_traces:
                             log('GAP AUTHORITY: %s not speakable reason=%s idx=%s'
                                 % (_t['direction'], _t['reason'], _t['target_car_idx']))
-                        if _applied['ahead_gap'] is not None:
+                        if _applied['authoritative']:
+                            # ★G4：Race で standings が取れている以上、権威が唯一の出所。
+                            #   確認できなかった方向は EstTime の残り値を引き継がない。
+                            #   S/F 跨ぎで反転した EstTime 値がそのまま喋られるのを防ぐ。
+                            if (nearest_ahead_gap is not None
+                                    and _applied['ahead_gap'] is None):
+                                log('GAP AUTHORITY: dropping unconfirmed ahead gap '
+                                    '(est=%s) — authority did not confirm this poll'
+                                    % (nearest_ahead_gap,))
+                            if (nearest_behind_gap is not None
+                                    and _applied['behind_gap'] is None):
+                                log('GAP AUTHORITY: dropping unconfirmed behind gap '
+                                    '(est=%s) — authority did not confirm this poll'
+                                    % (nearest_behind_gap,))
                             nearest_ahead_gap = _applied['ahead_gap']
                             nearest_ahead_idx = _applied['ahead_idx']
-                        if _applied['behind_gap'] is not None:
                             nearest_behind_gap = _applied['behind_gap']
                             nearest_behind_idx = _applied['behind_idx']
 

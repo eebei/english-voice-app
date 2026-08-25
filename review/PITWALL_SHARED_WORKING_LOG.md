@@ -898,6 +898,86 @@ Yuji発案：「Claudeは指摘されると記憶して方向転換できるが�
 - #3bは、**既存 `lap_time_hist` を温存し、Phase E専用のクリーン周履歴を別に持つ方式を正式に承認**。既存の残り周回推定等を変えず、Phase Eのbaseline／median／逸脱だけを同一クリーン周集合で扱う。
 - Codex再実行: session state 65 tests、bridge wiring 51 tests、JP radio 28/28、Python compile、diff checkは全て通過。
 - この承認は前回P1三点だけ。#2 / #4 / #6 / #7、八木さんログ由来5項目は未解決。Build 266は候補不可。commit / push / build / 公開はしない。
+## 2026-08-25 Claude Code — G4：S/F 跨ぎ（§4-4）／**GAP側 §4 は §4-2 を除き完了**
+
+### G1 の配線に残っていた穴
+
+```python
+if _applied['ahead_gap'] is not None:          # 権威が黙った方向は
+    nearest_ahead_gap = _applied['ahead_gap']  # EstTime の値が生き残る
+```
+
+**S/F 跨ぎで符号が反転するのは、まさにその EstTime の値。**
+権威が「矛盾しているので喋るな」と判断しても、**旧値が残っていればそれが喋られていた**。
+G1 の時点でこの穴に気づいていなかった。
+
+### 修正
+
+Race で standings が取れているなら、**権威がその poll の唯一の出所**にする。
+
+```python
+if _applied['authoritative']:
+    # 確認できなかった方向も None で上書きする
+    nearest_ahead_gap  = _applied['ahead_gap']
+    nearest_behind_gap = _applied['behind_gap']
+```
+
+破棄時はログに残す（`dropping unconfirmed ahead gap (est=1.2)`）。**黙った理由が追えないと実走で原因が分からない。**
+
+### Practice を巻き込まない条件
+
+`authoritative` は **standings が実際に取れていて、自分のクラス順位が有効な時だけ True**。
+Practice / Qualifying や F2 配列欠損の poll では False になり、EstTime 値を消さない。
+**常に True にすると standings が使えないセッションで GAP が全面沈黙する**（変異 I2 で固定）。
+
+### 内部テスト（実挙動）
+
+```
+[通常]     ahead=5.5 idx=12 / behind=3.0 idx=31
+[S/F跨ぎ]  ahead=None（誤方向を喋らない） / behind=3.0
+           trace: direction_conflict_rank_vs_physical
+           authoritative=True → bridge が ahead を None で上書き
+[Practice] authoritative=False → EstTime値を消さない
+```
+
+**矛盾した方向だけが黙り、正常な後方は喋り続ける。** 片方の異常で全部黙るのは過剰なので方向ごとに判定する。
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests_gap_authority.py` | **41/41**（36 → +5） |
+| Python 全体 | ✅ 300 passed |
+| JS 全スイープ | ✅ 全緑 |
+| `./preflight.sh` | ✅ 出荷可 |
+| 外部有料API呼出 | **0件** |
+
+**変異試験 4件すべて検出**：EstTime残り値を引き継ぐ／権威を常に名乗る（Practiceも黙る）／矛盾方向にも値を入れる／破棄をログに残さない。
+
+### 指示書 §4 の到達点
+
+| # | 内容 | 状態 |
+|---|---|---|
+| 1・3 | dashboard値一致／EstTime矛盾で誤方向を言わない | ✅ G1 |
+| **4** | **S/F 跨ぎで前後が逆転しない** | ✅ **G4** |
+| 5・6 | 対象車交代・session変更で破棄 | ✅ G1+G2 |
+| 7・8・9 | queue鮮度・14秒の旧数値・値変化後の旧値 | ✅ G2 |
+| 10 | PTT質問が no-data へ落ちない | ✅ G3 |
+| **2** | 異クラス接近の**実データ再生** | **△ 種別分離のみ・実データ待ち** |
+
+### §4-2 が残る理由（実データが要る）
+
+`SOURCE_PHYSICAL_TRAFFIC` の定数と「同クラス順位GAPと混ぜない」契約は入っているが、
+**GTP が後方から接近する実データでの再生は未実施**。合成 fixture では
+「対象class・car index・方向・数値が一致する」ことの実証にならない。保存ログの入手が前提。
+
+### 未確認（field evidence）
+
+**Windows実機・iRacing実走とも未実施。** G1〜G4 はすべて決定論層の契約であり、
+実走での対象車選択・破棄・作り直しの妥当性は実データでしか確認できない。
+
+commit のみ。**push / private build / deploy / 公開は未実施。**
+
 ## 2026-08-25 Claude Code — G3：PTT質問の鮮度と no-data 防止（§4-10 / §3.3 最終項）
 
 ### 見つけた不整合

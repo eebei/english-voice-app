@@ -297,6 +297,60 @@ class ApplyIsBehaviourNotStrings(unittest.TestCase):
                             second[ga.DIRECTION_AHEAD]['generation'])
 
 
+class StartFinishCrossingDoesNotFlipDirection(unittest.TestCase):
+    """§4-4: S/F 跨ぎで前後が逆転しない。
+
+    EstTime は S/F ラインを跨ぐ瞬間に符号が反転しうる（実走ログの
+    `DIR FIX ... EstTime said behind, position says ahead`）。順位は跨いでも
+    変わらないので、両方を突き合わせれば矛盾として捕まえられる。
+    捕まえた後、**EstTime の残り値を引き継がないこと**がこのクラスの主題。
+    """
+
+    def test_rank_stays_while_physical_sign_flips(self):
+        # 順位は前(7)のまま。EstTime 由来の符号だけが後ろへ反転した。
+        record = ga.build_record(
+            session_key=SK, source_kind=ga.SOURCE_SAME_CLASS_BATTLE,
+            signed_gap_s=+1.2, target_car_idx=12,
+            target_class_position=7, player_class_position=8, sampled_at=100.0)
+        self.assertFalse(record['speakable'])
+        self.assertEqual(record['reason'], ga.CONFLICT_RANK_VS_PHYSICAL)
+
+    def test_authoritative_poll_clears_unconfirmed_direction(self):
+        """権威が黙った方向は None になる＝呼び出し側が旧値を残せない。"""
+        _, applied, traces = ga.apply_same_class_records(
+            session_key=SK, sampled_at=100.0,
+            standings_by_pos={7: {'car_idx': 12, 'signed_gap_s': +1.2},   # 矛盾
+                              9: {'car_idx': 31, 'signed_gap_s': +3.0}},  # 正常
+            player_class_position=8)
+        self.assertTrue(applied['authoritative'])
+        self.assertIsNone(applied['ahead_gap'])      # 矛盾側は空
+        self.assertIsNone(applied['ahead_idx'])
+        self.assertEqual(applied['behind_gap'], 3.0)  # 正常側は出る
+        self.assertEqual(traces[0]['reason'], ga.CONFLICT_RANK_VS_PHYSICAL)
+
+    def test_missing_neighbour_is_also_cleared_not_inherited(self):
+        """隣接順位の記録が無い方向も、旧値を引き継がせない。"""
+        _, applied, _ = ga.apply_same_class_records(
+            session_key=SK, sampled_at=100.0,
+            standings_by_pos={9: {'car_idx': 31, 'signed_gap_s': +3.0}},
+            player_class_position=8)
+        self.assertTrue(applied['authoritative'])
+        self.assertIsNone(applied['ahead_gap'])
+        self.assertEqual(applied['behind_gap'], 3.0)
+
+    def test_no_standings_is_not_authoritative(self):
+        """standings が無い poll では権威を名乗らない。
+
+        Practice / Qualifying や F2 配列欠損で GAP を全面的に黙らせないため。
+        """
+        for standings, pos in (({}, 8), (None, 8),
+                               ({7: {'car_idx': 12, 'signed_gap_s': -5.5}}, 0)):
+            _, applied, _ = ga.apply_same_class_records(
+                session_key=SK, sampled_at=100.0,
+                standings_by_pos=standings, player_class_position=pos)
+            self.assertFalse(applied['authoritative'])
+
+
 class BridgeWiringUsesTheAuthority(unittest.TestCase):
     """bridge が権威レコード経由になっていること（値だけの上書きに戻っていない）。"""
 
@@ -320,6 +374,18 @@ class BridgeWiringUsesTheAuthority(unittest.TestCase):
     def test_unspeakable_record_is_traced_not_spoken(self):
         self.assertIn('GAP AUTHORITY: %s not speakable reason=%s', self.src)
         self.assertIn("_t['reason']", self.src)
+
+    def test_race_poll_does_not_inherit_esttime_leftovers(self):
+        """§4-4: 権威が確認した poll では、確認できなかった方向も上書きする。
+
+        `if _applied['ahead_gap'] is not None:` のままだと、S/F で反転した
+        EstTime 値がその方向に生き残る。
+        """
+        self.assertIn("if _applied['authoritative']:", self.src)
+        self.assertIn("nearest_ahead_gap = _applied['ahead_gap']", self.src)
+        self.assertIn("nearest_behind_gap = _applied['behind_gap']", self.src)
+        self.assertNotIn("if _applied['ahead_gap'] is not None:", self.src)
+        self.assertIn('dropping unconfirmed ahead gap', self.src)
 
     def test_records_are_cleared_on_both_session_boundaries(self):
         # Build 281 P1-2：片系統だけのリセットは前セッションの事実を流出させる。
