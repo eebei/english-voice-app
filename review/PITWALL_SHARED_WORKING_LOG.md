@@ -29,6 +29,30 @@ Claude Codeは実装後、この文書を勝手に「完了」へ書き換えな
 - 保存だけでは学習完了ではない。`申告 → 状態 → Plan → handler → 無線 → 結果保存` のtraceを要求する。
 - `preflight成功`だけでは出荷可にしない。完成installerの`app.asar`、同梱Bridge、Windows旧版更新、本番server SHA、公開取得物を`review/PITWALL_RELEASE_GATE.md`に従って別々に検査する。
 
+## 2026-08-25 12:33 JST Yuji配置変更・即時作業指示
+
+**Claude Codeが実装担当、Codexが独立確認担当。** 作業開始前に`AGENTS.md`→`HANDOFF.md`→`review/MEMORY_TO_STRATEGY_SHARED_UNDERSTANDING_V1.md`17節→関連コードの順で全文確認する。
+
+Yuji恒久ルールは**「トンネルに入口があるなら、出口を必ず作る」**。保存、handler、注入、テストの一部だけを作って完了にしない。`source → authority → state/persistence → retrieval/identity → decision → radio/UI/briefing → outcome/scoring → correction/delete/reset → proof`を一つの完成単位として接続する。入口→出口マトリクスに空欄がある場合は実装済みと報告しない。
+
+今回Claude Codeが実装する統合scope:
+
+1. Build 282のpackage/GAP/fuel/hazard/session-state修正を回帰基盤として保持する。
+2. 過去天候を実測要約として保存し、同一driver/car/track/session/日時で取得し、質問回答と次回briefing/setup協議へ出す。現在値を過去値として代用しない。
+3. setup fingerprint/versionと本人申告変更を、変更前後のvalid lap・fuel・tyre/handling・天候へ結び、次回Practiceの比較・提案・訂正まで出す。取得不能なsetup数値は推測しない。
+4. Decision IDを提案→pit cycle→blend→session終了→成功/失敗/途中終了採点→次回自発発話→当日Plan採用→今回再採点まで繋ぐ。成功例だけでなく失敗例と異議訂正も使う。
+5. server canonical、auth分離、local cache、privacy/terms、表示・訂正・削除・保持期間を同scopeで閉じる。
+
+禁止事項:
+
+- 過去天候だけの単独patch、setup保存だけ、Decision ID保存だけで完了報告しない。
+- LLMに数値・事実・対象record・採用戦略を選ばせない。
+- source直テストだけでradio/briefing/package/Windows/実走成功とみなさない。
+- 新しい重複仕様書を作らない。正本17節と本共有ログを更新する。
+- この指示単独ではcommit / push / build / deploy / 公開を行わない。各工程はYujiの明示GOを待つ。
+
+Claude Codeの報告後、Codexは4本の入口→出口を出力側から逆引きし、欠損、stale cache、別identity、失敗例、訂正後再利用、package欠落を独立に反証する。
+
 ## 2026-08-24 Build 281実走後の最優先
 
 - Build 281では、Bridgeに`gapBehind`が届きデブリーフでも参照できた一方、Windows installerへ`local-intent-router.js`が同梱されず、ライブ後方GAP質問がno-dataへ落ちた。`fuel-plan-guard.js`も同じpackage指定漏れだった。

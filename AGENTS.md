@@ -47,6 +47,24 @@ For each meaningful task:
 
 Do not create a new planning, review-request, response, completion-evidence, or session-log Markdown file when the information belongs in Git history or `HANDOFF.md`. Add a durable document only when it will remain useful after the current task is complete.
 
+### Tunnel Completion Rule（入口があるなら出口を必ず作る）
+
+Yujiの恒久ルールとして、機能は入口だけを作って完了にしてはならない。実装前に、対象機能について次の経路を明示し、該当する全段を一つの完成単位として接続する。
+
+1. source / capture（telemetry、ドライバー申告、import、server event等）
+2. authority / validation（何を事実として採用し、何を推測禁止にするか）
+3. state / persistence（session限定か永続か、server正本かlocal cacheか）
+4. retrieval / identity（driver、car、track、series、session、日時、Decision ID）
+5. decision / consumer（strategy、handler、briefing、setup協議等）
+6. output（radio、UI、briefing、提案、警告）
+7. outcome / scoring（実結果、成功・失敗・不成立、次回への反映）
+8. correction / delete / reset（異議、訂正、削除、session切替、失効）
+9. proof（trace、fixture、package、Windows、実走。必要な証拠レベルを区別する）
+
+入口・保存・handlerの存在だけでは完成ではない。実装前に入口→出口マトリクスを作り、空欄が一つでもあれば未完成として扱う。確認者は出力からsourceまで逆向きにも辿り、別session、古いcache、欠損データ、訂正後の再利用を反証する。
+
+各release candidateは、既定Phaseの完成スライスを前進させながら実走P0/P1を限定的に修正する。バグ修正だけの連続BuildでPhaseを止めず、共通データ契約へ属する修正を孤立moduleや片道配線として追加しない。
+
 ## Verification policy
 
 Use three verification levels:
@@ -87,6 +105,8 @@ For changes that may affect LLM calls, prompt/token size, STT/TTS usage, generat
 Daily measured cost reports live outside this Git repository at `../OMORAY-PITWALL/reports/daily-cost/`. They are evidence inputs. Do not copy their full contents into the repository.
 
 ## Independent review
+
+現在のMemory→Strategy実戦版v1と、それに統合する過去天候・setup進化・Build 282回帰については、**Claude Codeを実装担当、Codexを独立確認担当**とする。担当変更は`HANDOFF.md`の現行scopeに従い、同一変更を作業者自身の報告だけで合格にしない。Codexは作業を重複実装せず、Tunnel Completion Ruleの入口→出口、fixture、trace、package、field evidenceを独立に反証する。
 
 Claude Code is an exception reviewer, not a mandatory relay for every change. Request independent review only when it has clear value, especially for:
 

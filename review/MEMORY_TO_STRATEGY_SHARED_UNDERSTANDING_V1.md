@@ -536,3 +536,29 @@ Gate 5合格後、Claude Codeが実装する。最小scopeは次の通り。
 
 Codexは作業報告を転載せず、コード・差分・テスト・traceを独立確認する。特に、成功例だけのテスト、
 localStorageだけの保存、LLM任せの発話、異議recordの再利用、別ユーザー混入、privacy文言と実装の不一致を反証する。
+
+---
+
+## 17. Tunnel Completion Rule — 入口があるなら出口を必ず作る
+
+2026-08-25 Yuji恒久指示。保存、handler、注入、traceの一部だけを実装して「完成」としない。以下のマトリクスを**一つの統合scope**として実装し、各行を出力側からsource側へ逆向きにも検証する。空欄または未接続が一つでもあれば未完成。
+
+| 対象 | 入口 / source | 権威・保存 | 取得・判断 | 必須出口 | 結果・訂正 | 必須証拠 |
+|---|---|---|---|---|---|---|
+| Build 282回帰 | Bridgeのlive GAP・fuel・hazard・session state | Bridgeを権威とし、欠損時はfail-closed | packaged local router / deterministic handler | Race中の短いradio、queue fate trace | session切替・stale snapshot破棄 | source testだけでなく完成asar、Windows取得、実iRacing質問 |
+| 過去天候 | live telemetry、import済みPractice Profile | driver / car / track / session / 日時を伴う実測要約。現在値の過去代用は禁止 | 同一条件の履歴だけを検索し、当日との差を判断 | 質問への過去値回答、次回briefingまたはsetup協議での根拠付き比較 | 誤記録の異議・訂正・削除 | 記録あり、記録なし、別track、現在値代用禁止、次回発話のE2E trace |
+| setup進化 | importのsetup fingerprint/version、本人申告の変更 | 取得できた値と本人申告をsource labelで分離。得られない数値は推測禁止 | 変更前後のvalid lap、fuel、tyre/handling、天候を同一versionへ結合 | 次回Practice briefing、setup質問への比較、条件付き提案 | ドライバー確認、反証、supersede、削除 | setup変更→走行結果→次回提案→本人訂正を一本のfixtureで再生 |
+| Memory→Strategy | Decision ID、option、根拠、条件、予測、pit cycle | 認証ユーザー単位server正本＋local cache。成功・失敗・途中終了を保存 | 現在のseries / format / track / car / driver / traffic条件と照合 | `memory_strategy_briefing`の自発発話、当日Planへの条件付き採用 | 今回結果を同じIDへ採点。異議で即`disputed`、合意後だけ訂正 | 保存→次回選択→queue→発話/破棄→Plan→今回採点→訂正のE2E trace |
+
+### 統合実装の境界
+
+- Build 282のpackage/GAP修正は捨てず、次候補の回帰基盤として全行に適用する。
+- 過去天候だけの単独handler、setup fingerprintだけの保存、Decision IDだけのDB追加は禁止。共通のsession-memory identity、server canonical、retrieval、radio/briefing consumerへ接続する。
+- LLMは数値、事実、対象record、戦略採用を選ばない。決定論層が選び、LLMは許可された表現だけを整える。
+- 機械検証、package検証、Windows検証、実走確認は別証拠として記録する。source test合格をfield successと扱わない。
+- この指示はbuild / push / deploy / 公開の許可ではない。各工程は`PITWALL_RELEASE_GATE.md`とYujiの明示GOに従う。
+
+### 役割
+
+- Claude Code: 上記4行を共通契約として実装し、完全diff、状態遷移、入口→出口trace、未確認項目を共有ログへ報告する。
+- Codex: 同じ機能を重複実装せず、各出口からsourceまで逆引きし、欠損・stale・別identity・失敗例・訂正後の再利用・package欠落を独立確認する。
