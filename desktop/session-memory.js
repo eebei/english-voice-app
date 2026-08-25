@@ -40,6 +40,9 @@
   // 別series・別アカウントの過去を今回の事実として喋る事故になる。
   function matchesIdentity(record, identity, nowMs) {
     if (!record || !identity) return false;
+    // ★スライス4c：ドライバーが「それ違う」と言った記録は、本人合意で訂正される
+    //   まで一切使わない。天候・順位・setup・pit すべて同じ規律にする。
+    if (record.disputed === true) return false;
     if (!isFreshRecord(record, nowMs)) return false;
     if (!norm(identity.track)) return false;
     if (norm(record.track) !== norm(identity.track)) return false;

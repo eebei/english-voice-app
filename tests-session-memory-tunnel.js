@@ -326,3 +326,77 @@ if (fail) process.exit(1);
 
 console.log(`\n(スライス4b含む累計) ${pass}/${pass + fail}`);
 if (fail) process.exit(1);
+
+// ══════════════════════════════════════════════════════════════════════
+// ★スライス4c：訂正・削除を全ジャンルへ（正本 §10 の最終列）。
+//   「それ違う」で止まるのが Decision 記録だけでは、順位・天候・setup・pit の
+//   誤りは止められない。同じ規律を race 記録側にも通す。
+// ══════════════════════════════════════════════════════════════════════
+{
+  const fsz = require('fs');
+  const M3 = require('./desktop/session-memory');
+  const NOWZ = Date.parse('2026-08-25T12:00:00Z');
+  const r0 = {
+    date: '2026-08-24', recordedAt: '2026-08-24T12:00:00.000Z', userId: 'u1',
+    track: 'Okayama', car: 'Audi R8 LMS GT3', seriesId: 419,
+    startPos: 8, finishPos: 4, trackTempC: 41.2, airTempC: 29.8,
+    setupFingerprint: 'aaa111', bestLap: 95.4,
+  };
+  const id3 = { userId: 'u1', track: 'Okayama', car: 'Audi R8 LMS GT3', seriesId: 419 };
+
+  console.log('\n══ スライス4c 全ジャンルの訂正・削除 ══');
+  check('訂正前は使える', M3.selectPrevious([r0], id3, NOWZ) !== null);
+  const disputed = Object.assign({}, r0, { disputed: true });
+  check('★disputed な記録は選ばれない', M3.selectPrevious([disputed], id3, NOWZ) === null);
+  check('★disputed だと過去天候にも答えない（誤った数字を止める）',
+    M3.answerHistoricalWeather([disputed], id3, 'ja', NOWZ).intent === 'historical_weather_unavailable');
+  check('★disputed だとブリーフィングでも黙る',
+    M3.briefingLine(M3.briefingFacts([disputed], id3, NOWZ), 'ja') === '');
+  check('★disputed だと setup 比較にも使わない',
+    M3.setupComparison([disputed, Object.assign({}, r0, { setupFingerprint: 'bbb222', bestLap: 94.8 })],
+      Object.assign({}, id3, { setupFingerprint: 'bbb222' }), NOWZ).available === false);
+
+  const renderer4c = fsz.readFileSync(__dirname + '/desktop/renderer.html', 'utf8')
+    .split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  check('★記憶から喋った出所を1件だけ覚える', /function noteMemoryUtterance\(kind,id\)/.test(renderer4c));
+  check('  過去天候の発話が出所を残す', /if\(out\.record\) noteMemoryUtterance\('race',out\.record\.date\)/.test(renderer4c));
+  check('  前回結果の発話が出所を残す', /noteMemoryUtterance\('race',memoryFacts\.date\)/.test(renderer4c));
+  check('  setup 比較の発話が出所を残す', /noteMemoryUtterance\('race',_setupCmp\.previousDate\)/.test(renderer4c));
+  check('  戦略判断の発話が出所を残す', /noteMemoryUtterance\('decision',_decSel\.record\.decision_id\)/.test(renderer4c));
+  check('★「それ違う」が出所で振り分けられる',
+    /_src&&_src\.kind==='race'\)\s*\?\s*disputeRaceRecord\(_src\.id,_lang\)/.test(renderer4c));
+  check('race 記録にも読み返しがある', /記録を止めた。これで合っている？/.test(renderer4c));
+  check('★race 記録も削除できる', /function deleteRaceRecord\(recordDate\)/.test(renderer4c));
+  // ★文字列検査では「日付を無視して直近を掴む」変異を捕まえられない。
+  //   本番の disputeRaceRecord を取り出して実際に動かす。
+  {
+    const vm = require('vm');
+    const m = renderer4c.match(/function disputeRaceRecord\(recordDate,lang\)\{[\s\S]*?\n\}/);
+    check('本番の disputeRaceRecord を取り出せた', !!m);
+    let stored = null;
+    const box = {
+      loadRaceHistory: () => ([
+        { date: '2026-08-23', track: 'Suzuka' },
+        { date: '2026-08-24', track: 'Okayama' },
+      ]),
+      localStorage: { setItem: (_k, v) => { stored = JSON.parse(v); } },
+      diagnosticLog: () => {}, RACE_DISPUTE_KEY: 'pw_raceHistory',
+      Date, JSON, String,
+    };
+    vm.createContext(box);
+    vm.runInContext(m[0], box);
+    const hit = box.disputeRaceRecord('2026-08-24', 'ja');
+    check('日付が一致した記録だけを止める',
+      !!hit && hit.date === '2026-08-24'
+      && stored[1].disputed === true && stored[0].disputed === undefined);
+    stored = null;
+    const miss = box.disputeRaceRecord(null, 'ja');
+    check('★出所が無ければ推測で直近を止めない', miss === null && stored === null);
+    const unknown = box.disputeRaceRecord('2026-01-01', 'ja');
+    check('★知らない日付では何も止めない', unknown === null);
+    check('聞き返し文が用意されている', /推測で直さない/.test(renderer4c));
+  }
+}
+
+console.log(`\n(スライス4c含む累計) ${pass}/${pass + fail}`);
+if (fail) process.exit(1);

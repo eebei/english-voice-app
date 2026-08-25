@@ -2187,7 +2187,12 @@ async function sendMsg(inputSource){
       return;
     }
     if(/(?:それ|そこ|さっきの).{0,4}(?:違う|ちがう|間違い)|(?:記憶|記録).{0,6}(?:違う|間違)|that(?:'s| is) (?:wrong|not right)|(?:wrong|incorrect) (?:memory|record)/i.test(text)){
-      const _d=disputeLatestDecision(_lang);
+      // ★スライス4c：直前に記憶から喋った物を訂正対象にする。何も喋っていなければ
+      //   推測で別の記録を巻き添えにせず、聞き返す。
+      const _src=lastMemoryUtterance;
+      const _d=(_src&&_src.kind==='race')
+        ? disputeRaceRecord(_src.id,_lang)
+        : disputeLatestDecision(_lang);
       const _reply=_d&&_d.readback
         ? _d.readback
         : (_isJPnow?'どの記録のことか特定できない。推測で直さない。どのレースのどの判断か教えて。'
@@ -4392,6 +4397,7 @@ async function scheduleAutoBriefing(){
       speak(memoryLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'memory_strategy_briefing',
         dedupeKey:'memory_strategy_briefing|'+String(memoryFacts.date||'')+'|'+String(memoryFacts.track||'')});
       diagnosticLog('MEMORY_BRIEFING','queue=queued kind=memory_strategy_briefing');
+      noteMemoryUtterance('race',memoryFacts.date);
     }
     // ★スライス2の出口：前回の**戦略判断とその結果**を自発的に述べ、
     //   今日の条件が揃った時だけ Plan の根拠へ接続する。
@@ -4417,6 +4423,7 @@ async function scheduleAutoBriefing(){
       speak(_decLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'decision_strategy_briefing',
         dedupeKey:'decision_strategy_briefing|'+String(_decSel.record.decision_id)});
       diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_strategy_briefing');
+      noteMemoryUtterance('decision',_decSel.record.decision_id);
     }
     // ★スライス4の出口：次回 Practice で前回の setup 変更と結果を比較材料として出す。
     const _setupCmp=setupComparisonForBriefing();
@@ -4432,6 +4439,7 @@ async function scheduleAutoBriefing(){
       speak(_setupLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'setup_comparison_briefing',
         dedupeKey:'setup_comparison|'+String(_setupCmp.previousDate||'')});
       diagnosticLog('SETUP_MEMORY','queue=queued kind=setup_comparison_briefing');
+      noteMemoryUtterance('race',_setupCmp.previousDate);
     }
     if(_decAdvice.reply){
       addMsg('ai',_decAdvice.reply);
@@ -6317,6 +6325,7 @@ function answerHistoricalWeatherLocally(text, lang){
   const out=window.PitwallSessionMemory.answerHistoricalWeather(
     loadRaceHistory(), currentMemoryIdentity(), lang);
   diagnosticLog('SESSION_MEMORY','intent='+out.intent+' matched='+(out.record?'yes':'no'));
+  if(out.record) noteMemoryUtterance('race',out.record.date);
   return out;
 }
 function loadRaceHistory(){
@@ -6333,6 +6342,41 @@ function loadRaceHistory(){
 //
 // localStorage は offline cache。サーバー正本との同期は syncDecisionsToServer()。
 // ══════════════════════════════════════════════════════════════════
+// ★スライス4c：「それ違う」がどの記録を指すのかを、推測せずに決めるための追跡。
+//   記憶から喋った時にだけ、その出所を1件だけ覚えておく。喋っていなければ
+//   訂正対象は無い＝聞き返す（別の記録を巻き添えにしない）。
+let lastMemoryUtterance=null;
+function noteMemoryUtterance(kind,id){
+  lastMemoryUtterance={kind:String(kind),id:(id===undefined?null:id),at:Date.now()};
+  diagnosticLog('MEMORY_UTTERANCE','kind='+kind+' id='+String(id||'-'));
+}
+// レース記録（順位・周回・pit・燃費・天候・setup）の訂正と削除。
+// Decision 台帳と同じ規律：即停止 → 読み返し → 合意後だけ有効化。
+const RACE_DISPUTE_KEY='pw_raceHistory';
+function disputeRaceRecord(recordDate,lang){
+  const history=loadRaceHistory();
+  const target=recordDate
+    ? history.filter(r=>String(r&&r.date||'')===String(recordDate)).slice(-1)[0]
+    : null;
+  if(!target) return null;
+  target.disputed=true;
+  target.disputedAt=new Date().toISOString();
+  try{ localStorage.setItem(RACE_DISPUTE_KEY,JSON.stringify(history)); }
+  catch{ diagnosticLog('RACE_MEMORY','reason=persist_failed'); return null; }
+  diagnosticLog('RACE_MEMORY','stage=dispute date='+String(target.date));
+  const ja=String(lang||'').toLowerCase().startsWith('ja');
+  return {date:target.date,
+    readback:ja?`${target.date}の${target.track||''}の記録を止めた。これで合っている？`
+               :`I have suspended the ${target.date} ${target.track||''} record. Is that the right one?`};
+}
+function deleteRaceRecord(recordDate){
+  const history=loadRaceHistory();
+  const kept=history.filter(r=>String(r&&r.date||'')!==String(recordDate));
+  if(kept.length===history.length) return false;
+  try{ localStorage.setItem(RACE_DISPUTE_KEY,JSON.stringify(kept)); }catch{ return false; }
+  diagnosticLog('RACE_MEMORY','stage=delete date='+String(recordDate));
+  return true;
+}
 const DECISION_STORE_KEY='pw_decisions';
 function decisionModule(){
   const m=window.PitwallDecisionMemory;
