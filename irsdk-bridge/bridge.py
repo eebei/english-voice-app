@@ -827,6 +827,12 @@ def _session_scoped_reset_values():
         # Pit facts are session-scoped debrief evidence.  Keeping them in
         # this shared reset source clears both SessionNum and signature paths.
         'pit_events': [],
+        # ★スライス1：セッションを跨いで持ち越すと、前回の条件を今回の事実として喋る。
+        #   pit_events と同じ扱いにして、両リセット経路から同じ値を取る。
+        'race_start_class_pos': None,
+        'session_setup_fingerprint': '',
+        'session_series_id': None,
+        'last_weather': None,
         # ★2026-07-23 Codex再指摘 P1：予選で予算満杯のままレース開始→最初の警告が通らない
         #   事故を防ぐ。SessionNum変更時に候補予算をリセット（judge_llm_call_timesは他の
         #   セッション限定状態と同じくセッション毎に独立させる）。
@@ -2448,6 +2454,12 @@ def poll_iracing():
     session_car_model = ''
     session_event_type = ''
     session_num_in_class = 0
+    # ★スライス1（2026-08-25）：記憶→戦略の identity と欠落フィールド。
+    #   どれも Bridge が既に計算している値で、session_summary へ渡していなかっただけ。
+    session_setup_fingerprint = ''   # SessionInfo 由来・同一setupの前後比較キー
+    session_series_id = None         # 同一シリーズ判定キー
+    race_start_class_pos = None      # ★スタート順位。捕捉できるのは Racing 遷移の一度だけ
+    last_weather = None              # 直近の実測天候。summary へ「その日の条件」として残す
     session_effective_fuel_capacity_l = None
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
     pit_enter_lap = None    # Plan A/Bの目標周回と実行周回を照合
@@ -2715,6 +2727,8 @@ def poll_iracing():
                     session_car_model = info.get('player_car_model', '')
                     session_event_type = info.get('event_type', '')
                     session_num_in_class = info.get('num_drivers', 0)
+                    session_setup_fingerprint = info.get('setup_fingerprint') or ''
+                    session_series_id = info.get('series_id')
                     session_effective_fuel_capacity_l = info.get(
                         'effective_fuel_capacity_l') or info.get(
                             'physical_tank_capacity_l')
@@ -2788,6 +2802,10 @@ def poll_iracing():
                         session_racing_started = _sig_reset['session_racing_started']
                         session_laps = _sig_reset['session_laps']
                         pit_events = _sig_reset['pit_events']
+                        race_start_class_pos = _sig_reset['race_start_class_pos']
+                        session_setup_fingerprint = _sig_reset['session_setup_fingerprint']
+                        session_series_id = _sig_reset['session_series_id']
+                        last_weather = _sig_reset['last_weather']
                         # ★2026-07-23 Codex再指摘 P1(2回目)：SessionNum経路と同じくsig経路でも
                         #   LLM候補予算をリセットしないと、trackやevent_typeが変わった瞬間に
                         #   前セッションの予算満杯を持ち越して最初のcallが通らない事故になる。
@@ -2945,6 +2963,11 @@ def poll_iracing():
                         'incidents': prev_incidents or 0,
                         'laps': list(session_laps),
                         'pit_events': list(pit_events),
+                        # ★スライス1：同一条件の検索キーと、その日の実測条件。
+                        'setup_fingerprint': session_setup_fingerprint or None,
+                        'series_id': session_series_id,
+                        'start_class_position': race_start_class_pos,
+                        'weather': dict(last_weather) if isinstance(last_weather, dict) else None,
                     }
                     _transition_summary = _old_summary
             checker_out_notice_sent = _reset['checker_out_notice_sent']
@@ -2977,6 +3000,10 @@ def poll_iracing():
             session_racing_started = _reset['session_racing_started']
             session_laps = _reset['session_laps']
             pit_events = _reset['pit_events']
+            race_start_class_pos = _reset['race_start_class_pos']
+            session_setup_fingerprint = _reset['session_setup_fingerprint']
+            session_series_id = _reset['session_series_id']
+            last_weather = _reset['last_weather']
             judge_llm_call_times = _reset['judge_llm_call_times']
             judge_llm_skip_log_last = _reset['judge_llm_skip_log_last']
             # ★2026-07-24 Codex P1：接触監視もSessionNum変更で捨てる
@@ -3045,6 +3072,10 @@ def poll_iracing():
         # SessionState: 3=ParadeLaps(formation/rolling), 4=Racing
         if cur_ss == 4 and prev_session_state != 4:
             race_start_time = time.time()
+            # ★スタート順位はこの瞬間にしか取れない。後から再構成できないので取りこぼさない。
+            if race_start_class_pos is None and isinstance(class_pos, int) and class_pos > 0:
+                race_start_class_pos = class_pos
+                log('RACE START POSITION: class_pos=%d' % class_pos)
         if cur_ss >= 2:  # Warmup以上 = 何らかのセッションで走行中
             if onTrack:
                 session_racing_started = True
@@ -3270,6 +3301,11 @@ def poll_iracing():
                         'incidents': prev_incidents or 0,
                         'laps': session_laps,
                         'pit_events': list(pit_events),
+                        # ★スライス1：同一条件の検索キーと、その日の実測条件。
+                        'setup_fingerprint': session_setup_fingerprint or None,
+                        'series_id': session_series_id,
+                        'start_class_position': race_start_class_pos,
+                        'weather': dict(last_weather) if isinstance(last_weather, dict) else None,
                     }
                     _official_rows = latest_session_results.get(cur_snum, [])
                     _official_player = next((r for r in _official_rows
@@ -3355,6 +3391,7 @@ def poll_iracing():
             'humidity':     round(rel_humidity * 100, 0) if rel_humidity is not None else None,
             'track_wetness_code': track_wet_code,
         }
+        last_weather = weather   # session_summary が「その日の条件」として運ぶ
 
         # ── コーナー単位サイドバイサイド検知（新規・2026-07-14 Yuji設計）──
         # 舵角(SteeringWheelAngle)でコーナー進入/脱出を検知し、その間だけiRacing公式スポッター値

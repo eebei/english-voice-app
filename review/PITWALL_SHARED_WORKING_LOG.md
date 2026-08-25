@@ -6,7 +6,13 @@ Status: Yuji ↔ Codex ↔ Claude Code の作業共有用正本
 
 ## 使い方
 
-YujiはClaudeへ長文を転記しない。次の一文だけ伝える。
+YujiはClaudeへ長文を転記しない。**YujiはClaude CodeとCodexの伝書鳩ではない。** 実装者と確認者の連絡・証拠・差戻しはこの共有ログだけで完結させる。Yujiが判断するのはscope、優先順位、Build / 公開GOだけである。
+
+- Claude Codeは、実装開始・変更・テスト・未確認をこの文書の`Claude Code 実装報告`へ記す。
+- Codexは、その報告と実際のdiffを自分で読み、同じ文書へ独立確認・差戻し・承認条件を書く。
+- Yujiは結果の転記、テスト出力の説明、両者への質問の中継をしない。Yujiが「次」または「確認」と言えば、Codexが正本を確認して次の判定を進める。
+
+Claudeを明示的に再開させる必要がある時も、Yujiは次の一文だけ伝える。
 
 ```text
 2026-08-12 08:21 JST。review/PITWALL_SHARED_WORKING_LOG.md を更新した。作業前に必ず全文を確認して、現行の指示と差戻しを反映して。
@@ -127,15 +133,24 @@ asked_past_weather: historical_weather -> 2026-08-24のOkayamaは路面41.2℃�
 
 | 項目 | 結果 |
 |---|---|
-| `tests-session-memory-tunnel.js` | **59/59**（preflightへ収録） |
+| `tests-session-memory-tunnel.js` | **72/72**（preflightへ収録） |
 | JS 全スイープ | ✅ 全緑 |
 | Python | ✅ 264 passed |
 | `./preflight.sh` | ✅ 出荷可 |
 | `git diff --check` | ✅ |
 | 外部有料API呼出 | **0件** |
 
-変異試験 **7件すべて検出**：現在値代用へ戻す／別トラック流用／summaryへ載せない／sig_resetで消さない／
-記録なしでも喋る／決定論回答をLLMより後ろへ／script tagを外す。
+変異試験 **14件すべて検出**：現在値代用へ戻す／別トラック流用／summaryへ載せない／sig_resetで消さない／
+記録なしでも喋る／決定論回答をLLMより後ろへ／script tagを外す／**発話せずに終わる（queueへ入らない）**／
+**優先度を暗黙のP4へ戻す**／別認証ユーザー／車種欠損／series欠損／90日超過／未来日時。
+
+**13:21 GO の受入条件「queue→実発話または明示的破棄」への対応**：初版は発話文の生成と `speak()` 呼び出しまでしか
+証明しておらず、**queue段が抜けていた**。決定論回答を `speak(text, {prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply'})` と
+明示して投入する形へ変更し、暗黙の `P4_INFO` へ落ちないようにした。Codex独立確認で、次回ブリーフィングの記憶も
+LLMへの注入だけでは出口未接続と判断し、`memory_strategy_briefing`として先に直接queueへ投入、LLMは数字を言い直さない
+契約へ修正した。queue投入後の fate
+（`queued` → `played` / `deferred` / `discarded`＋理由）は既存 speech queue 契約が持つため、
+**独自queueを作らずその契約に乗っていること**を検査項目として追加した（`costRecord` / `speechLatencyTrace` の両方）。
 
 ### 未確認（field evidence）
 

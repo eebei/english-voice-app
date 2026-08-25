@@ -714,6 +714,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="fuel-plan-guard.js"></script>
 <script src="cost-meter.js"></script>
 <script src="local-intent-router.js"></script>
+<script src="session-memory.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -2158,6 +2159,21 @@ async function sendMsg(inputSource){
     speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'local_'+localIntent.intent,
       dedupeKey:'local|'+localIntent.intent+'|'+reply});
     return;
+  }
+  // ★スライス1の出口①：過去天候はモードを問わず事実照会なので、
+  //   LLMへ落とす前に保存記録から決定論的に答える。記録が無ければ「無い」と言う。
+  {
+    const isJPnow=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
+    const past=answerHistoricalWeatherLocally(text, isJPnow?'ja':'en');
+    if(past&&past.handled){
+      usageCount(inputSource==='ptt'?'ptt':'typed');
+      addMsg('ai',past.reply);pushMsg({role:'assistant',content:past.reply});
+      // ★queue fate を追える形で入れる。優先度と種別を明示し、暗黙のP4_INFOへ落とさない。
+      //   ここから先の queued→played/deferred/discarded は既存の speech queue 契約が持つ。
+      speak(past.reply,{prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply'});
+      diagnosticLog('LOCAL_INTENT_ROUTE','intent='+past.intent+' source=session_memory');
+      return;
+    }
   }
   if(selMode==='race' && iracingLive){
     const bypassReason=!lastTelemetry?'no_telemetry':(!localRouterAvailable?'router_missing':'unhandled');
@@ -4219,11 +4235,35 @@ async function scheduleAutoBriefing(){
     const headers = {'Content-Type':'application/json'};
     const profile = loadProfile()||{};
     const previousRaceBriefing = buildPreviousRaceBriefingNote();
+    // ★スライス1の出口②：前回事実を決定論層が文にして渡す。数字はここが唯一の出所で、
+    //   LLMは選ばない。事実が無ければ空文字＝言わない。
+    const memoryFacts = (window.PitwallSessionMemory
+      && typeof window.PitwallSessionMemory.briefingFacts==='function')
+      ? window.PitwallSessionMemory.briefingFacts(loadRaceHistory(), currentMemoryIdentity())
+      : {available:false, reason:'module_missing'};
+    const memoryLine = (window.PitwallSessionMemory
+      && typeof window.PitwallSessionMemory.briefingLine==='function')
+      ? window.PitwallSessionMemory.briefingLine(memoryFacts,
+          (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en')
+      : '';
+    diagnosticLog('MEMORY_BRIEFING','available='+(memoryFacts.available?'yes':'no')
+      +' reason='+(memoryFacts.reason||'-')+' spoken='+(memoryLine?'yes':'no'));
+    // ★北極星の出口：過去の確定事実はLLMの「自然に使う」任せにしない。
+    //   先に字幕と発話queueへ直接渡す。LLMのブリーフィング本文はその後に続け、
+    //   同じ数字を言い直さない。これで「保存・注入したのに一度も自分から言わない」
+    //   片道配線を禁止する。
+    if(memoryLine){
+      addMsg('ai',memoryLine);
+      speak(memoryLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'memory_strategy_briefing',
+        dedupeKey:'memory_strategy_briefing|'+String(memoryFacts.date||'')+'|'+String(memoryFacts.track||'')});
+      diagnosticLog('MEMORY_BRIEFING','queue=queued kind=memory_strategy_briefing');
+    }
     const body = {
       messages:[{role:'user', content:`[BRIEFING_KICKOFF] iRacingに接続した。現在の権威データを踏まえ、短い戦略ブリーフィングを始めよ。
 「レースかテストか」は状況に関係なく質問するな。現在のSession種別をこちらから宣言し、未知なら接続待ちとして数字や種別を作るな。
 SOF・iRating・SRと、下記の直近同条件レースを自然に使え。良い根拠がある時は、レーサーが誇れる具体的成果を一言だけ先に褒めろ。根拠がない美辞麗句は禁止。
 ${previousRaceBriefing}
+${memoryLine?`前回同条件の確定事実は決定論radioで既に伝達済み。数字を言い直さず、現在の戦略だけを続けよ。参照用事実: ${memoryLine}`:'前回同条件の確定事実なし。過去の数字を作るな。'}
 最後の質問は、今日の目標などテレメトリで分からない主観を一つだけ聞け。マークダウン禁止。`}],
       character:sel, mode:'strategy', level:'C2', userName,
       telemetry: iracingLive?'live':(bridgeConnected?'bridge':'off'),
@@ -5436,7 +5476,11 @@ function saveSessionSummary(data){
   data=sanitizeSessionEvidence(data);
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    history.push({date:new Date().toISOString().slice(0,10),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:validFinishPosition(data.finish_pos),irating:lastIrating||null,sr:lastSr||null});
+    // ★スライス1（2026-08-25）：Bridgeが既に持っていた identity と当日条件をここで初めて残す。
+    //   これが無いと「昨日の路面温度」「前回のsetup」「何番手スタート」に答える材料が存在しない。
+    //   値はBridge由来のみを採用し、欠けていればnullで残す（推測で埋めない）。
+    const _w=(data&&typeof data.weather==='object'&&data.weather)?data.weather:null;
+    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -6060,6 +6104,43 @@ function buildSessionEvidenceNote(){
 // 今日と同じコース（可能なら同じ車）の直近結果をブリーフィング用に1件だけ選ぶ。
 // 「良いレース」の判定はLLMへ委ねず、表彰台・無事故・自己ベスト更新だけを
 // 褒めてよい根拠として構造化する。保存していない事実は作らない。
+// ★スライス1：記憶の検索キーはBridge権威だけで作る。会話・推測からは作らない。
+function currentMemoryIdentity(){
+  return {
+    userId:currentMemoryUserId(),
+    track:lastTrack||'',
+    car:lastCarModel||lastCarClass||'',
+    seriesId:Number.isInteger(lastSessionAuthority&&lastSessionAuthority.series_id)
+      ?lastSessionAuthority.series_id:null,
+    setupFingerprint:(lastSessionAuthority&&lastSessionAuthority.setup_fingerprint
+      &&lastSessionAuthority.setup_fingerprint!=='unknown')?lastSessionAuthority.setup_fingerprint:null,
+  };
+}
+function currentMemoryUserId(){
+  try{
+    const user=JSON.parse(localStorage.getItem('pw_auth_user')||'null');
+    return user&&user.id!==undefined&&user.id!==null?user.id:null;
+  }catch{ return null; }
+}
+// 過去天候の質問に、保存記録から決定論的に答える。記録が無ければ「無い」と言う。
+// Build 281 の実走では現在値23.3℃を「昨日」として返していた。ここがその再発防止。
+function answerHistoricalWeatherLocally(text, lang){
+  if(!window.PitwallSessionMemory||typeof window.PitwallSessionMemory.answerHistoricalWeather!=='function'){
+    diagnosticLog('SESSION_MEMORY','reason=module_missing');
+    return null;
+  }
+  const card=(typeof cards!=='undefined'&&cards&&typeof cards.classify==='function')?cards.classify(text):null;
+  const isHistorical=(card&&card.topic==='historical_weather');
+  if(!isHistorical) return null;
+  const out=window.PitwallSessionMemory.answerHistoricalWeather(
+    loadRaceHistory(), currentMemoryIdentity(), lang);
+  diagnosticLog('SESSION_MEMORY','intent='+out.intent+' matched='+(out.record?'yes':'no'));
+  return out;
+}
+function loadRaceHistory(){
+  try{ const h=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]'); return Array.isArray(h)?h:[]; }
+  catch{ return []; }
+}
 function buildPreviousRaceBriefingNote(){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');

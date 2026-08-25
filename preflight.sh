@@ -238,6 +238,9 @@ echo "※ サーバー側（server.js/prompts.js/engineer-card.js/auth.js）を�
 echo "   push 後に ./verify-deploy.sh を実行して本番への反映を確認すること。"
 echo "   preflight が見ているのは手元のコードであって、本番に届いたかではない。"
 
+echo "── 記憶→戦略 スライス1：入口→出口トンネル（2026-08-25）"
+if node tests-session-memory-tunnel.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-session-memory-tunnel.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

@@ -1,6 +1,16 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-24 JST
+最終更新: 2026-08-25 JST
+
+## 2026-08-25 スライス1（A/B/C）実装済み・未commit
+
+- 記憶→戦略の入口→出口が**初めて1本で閉じた**。`Bridge捕捉 → session_summary → pw_raceHistory → 決定論的取得 → 発話`。
+- A スタート順位（`cur_ss 3→4` の一度だけ捕捉）、B 天候（毎フレーム保持しsummaryへ）、C setup_fingerprint / series_id（Bridgeが既に持っていた値をsummaryへ）。**新規計測はAだけ。**
+- 新規 `desktop/session-memory.js` が取得層で、**数字を持つ唯一の場所**。LLMは記録も数字も選ばない。記録が無ければ空文字＝言わない。過去天候はLLMより先に答え、無ければ「無い」と言い現在値を代用しない。
+- Codex独立確認で、認証ユーザー・車種・seriesの記録側欠損を「一致」と扱わず、90日超過・未来日時のrecordも除外した。過去の確定事実はLLM注入だけにせず、`memory_strategy_briefing`として字幕・speech queueへ先に直接投入し、LLMには同じ数字を言い直さないよう限定した。
+- `tests-session-memory-tunnel.js` **72/72**（preflight収録）。変異試験にpackage欠落、queue未投入、暗黙P4化、別認証ユーザー、車種/series欠損、古いcache、未来日時を含む。外部有料API 0件。Windows実機・iRacing実走は未確認。
+- **未確認**：Windows実機・iRacing実走。スタート順位はローリング／スタンディング／SC先導での実挙動が実走でしか確認できない。
+- D（Decision ID）／E（サーバー正本）／F（訂正・削除）は**未着手**。commit / push / build / 公開すべて未実施。
 
 ## 2026-08-25 Memory→Strategy 製品判断
 
