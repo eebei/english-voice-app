@@ -60,6 +60,184 @@ Claude Codeの報告後、Codexは4本の入口→出口を出力側から逆引
 - Codexがpackage指定、完成asar検査、runtime欠落診断、後方GAPの実走文言回帰、過去天候の現在値代用禁止を修正中。commit / build / 公開は未実施。
 - 次のBuildは`review/PITWALL_RELEASE_GATE.md`の署名欄を、作業者と別の確認者が埋めるまで出荷不可。Claude CodeはCodex実装の独立確認者として、差分だけでなくprivate candidate artifactを確認する。
 
+## 2026-08-25 Claude Code — スライス1（A/B/C）実装完了報告
+
+範囲は Yuji 指定どおり **A/B/C のみ**。Decision ID（D）、サーバー正本（E）、訂正・削除（F）には手をつけていない。
+**commit / push / build / deploy / 公開はすべて未実施。**
+
+### 変更ファイル（完全diff）
+
+| ファイル | 内容 |
+|---|---|
+| `irsdk-bridge/bridge.py` | スタート順位の捕捉、天候の保持、setup_fingerprint / series_id の取得、両session_summaryへの搭載、両リセット経路 |
+| `desktop/session-memory.js` | **新規**。決定論的な取得層（数字を持つ唯一の場所） |
+| `desktop/renderer.html` | script tag、`currentMemoryIdentity()`、過去天候の決定論回答、ブリーフィングへの確定事実注入、trace |
+| `tests-session-memory-tunnel.js` | **新規**。入口→出口の一本証明 59ケース |
+| `preflight.sh` | 上記を出荷ゲートへ収録 |
+
+### 状態遷移
+
+```
+[session開始]        race_start_class_pos = None / last_weather = None
+     ↓ SessionInfo   session_setup_fingerprint, session_series_id ← Bridge が既に計算していた値
+     ↓ 毎フレーム     last_weather ← weather（実測）
+     ↓ cur_ss 3→4    race_start_class_pos ← class_pos（**この瞬間しか取れない**・一度だけ・logに残す）
+     ↓ session終了    session_summary へ4項目を搭載（**両方の生成箇所**）
+     ↓ renderer      pw_raceHistory へ保存（Bridge由来のみ・欠けたらnull・推測で埋めない）
+     ↓ 翌セッション   selectPrevious(identity) で同一条件の最新1件だけ選択
+     ↓ 出口①        過去天候の質問 → 決定論回答（LLMより前）
+     ↓ 出口②        ブリーフィング → briefingLine() の確定文を注入
+[session境界]        _reset と _sig_reset の**両方**で全変数を破棄
+```
+
+### 入口→出口 trace（テストが実際に出力）
+
+```
+bridge_summary:     start=8 finish=4 track_temp=41.2
+stored:             startPos=8 trackTempC=41.2
+retrieved:          2026-08-24@Okayama
+spoken:             前回2026-08-24のOkayamaは8番手スタートで4位、路面41.2℃。
+asked_past_weather: historical_weather -> 2026-08-24のOkayamaは路面41.2℃、気温29.8℃。
+```
+
+**北極星の骨格が自発発話として出る。** 別コースでは `spoken` が空＝**言わない**ことも同trace内で反証済み。
+
+### 実測から分かったこと
+
+**新規計測は A（スタート順位）だけ。** B（天候）と C（setup/series）は Bridge が既に計算しており、
+`session_summary` へ渡していなかっただけだった。`setup_fingerprint` は `bridge.py:1848`、
+`series_id` は `bridge.py:1870` に以前から存在する。
+
+### Build 281 の教訓の適用
+
+新設した4変数すべてを共通リセット辞書へ入れ、`_reset` と `_sig_reset` の**両方**から読む。
+`pit_events` が片系統だけだった欠陥（Claude が P1-2 として指摘）と同じ穴を作らないため。
+**Codex が同指摘を規約どおり修正済み**（`_session_scoped_reset_values()` へ集約）だったので、その規約に合わせた。
+変異試験 T4 で「片方だけ消さない」が検出されることを確認済み。
+
+### 決定論であることの担保
+
+- 数字を持つのは `session-memory.js` **だけ**。LLM は記録も数字も選ばない
+- 記録が無ければ `briefingLine()` は**空文字＝言わない**（捏造しない）
+- 過去天候は**LLMより先**に答え、記録が無ければ「無い」と言う。**現在値を代用しない**（Build 281 実走欠陥の再発防止）
+- identity は **Bridge権威だけ**で作る（`lastSessionAuthority` 由来。会話・推測から作らない）
+- `SESSION_MEMORY` / `MEMORY_BRIEFING` trace で**黙った理由が必ず残る**（`module_missing` を通常の未処理と区別）
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `tests-session-memory-tunnel.js` | **59/59**（preflightへ収録） |
+| JS 全スイープ | ✅ 全緑 |
+| Python | ✅ 264 passed |
+| `./preflight.sh` | ✅ 出荷可 |
+| `git diff --check` | ✅ |
+| 外部有料API呼出 | **0件** |
+
+変異試験 **7件すべて検出**：現在値代用へ戻す／別トラック流用／summaryへ載せない／sig_resetで消さない／
+記録なしでも喋る／決定論回答をLLMより後ろへ／script tagを外す。
+
+### 未確認（field evidence）
+
+- **Windows実機・iRacing実走とも未実施。** スタート順位の捕捉は `cur_ss 3→4` 遷移に依存するため、
+  ローリングスタート／スタンディング／セーフティカー先導での実挙動は**実走でしか確認できない**。
+- `session-memory.js` は renderer が参照するため、次Buildで**完成asar検査の自動対象**になる（変異試験T7で確認）。
+- サーバー側は未変更のため `./verify-deploy.sh` の対象外。
+
+### Codex への確認依頼（17節の逆引き）
+
+出口から source へ逆向きに、次を反証してほしい。
+
+1. 別session・別car・別series・古いcacheの記録が発話へ混入しないか
+2. `cur_ss 3→4` 以外の開始形態（既に走行中に接続、リジョイン、セッション再開）でスタート順位が誤らないか
+3. `last_weather` が前セッションの値を今回の条件として運ばないか（両リセット経路）
+4. 記録が欠損している時に、LLM側が数字を補完して喋る余地が残っていないか
+
+## 2026-08-25 Claude Code — Tunnel Completion Rule 入口→出口マトリクス（実装前・実態調査結果）
+
+17節の指示どおり、コードを書く前に**現行実装の実測**でマトリクスを埋めた。`Tunnel Completion Rule` は
+「実装前に入口→出口マトリクスを作り、空欄が一つでもあれば未完成として扱う」と定めているため、
+共通契約を決める前の着手は禁止されている片道patchになる。
+
+### 実測サマリ（すべてコードで確認）
+
+**既存の永続ストア（localStorage 17キー）**
+`pw_raceHistory`（レース結果11項目）／`pw_ctmem`（コース×車種のベスト・燃費）／`pw_session_evidence`（デブリーフ証拠）／
+`pw_profile_*`／`pw_contract`／`pw_chief_*`（耐久relay）／認証・UI設定系。
+
+**サーバー側の記憶API**：`/api/memory/import-seeds` と `/ack` の**2本のみ**。
+いずれも**サーバー→利用者へ配る**方向で、**利用者データを預かる方向は存在しない**。
+
+**Bridge が既に持っている identity**
+- `setup_fingerprint`（`bridge.py:1848` SHA-256 先頭16桁）— **setup進化の source は既に存在する**
+- `series_id`（`bridge.py:1870`）— **series 識別は既に取れる**
+- `track` / `car_class` / `car_model` / `session_num`（`bridge.py:2931-2933`）
+
+**`session_summary` が現在運んでいるもの**
+`is_race, total_laps, finish_pos, finish_pos_confirmed, best_lap, worst_lap, avg_lap, avg_fuel_per_lap,
+pace_first_half, pace_last_half, incidents, laps, pit_events`
+
+### 空欄（＝これが埋まるまで未完成）
+
+| # | 欠落 | 影響する行 | 現状 |
+|---|---|---|---|
+| A | **スタート順位を誰も記録していない** | Memory→Strategy | `start_pos` / `grid_pos` 相当が Bridge に**存在しない**。北極星の「8位からスタート」が言えない。捕捉時点は `session_racing_started`（`bridge.py:825`）が使える |
+| B | **`session_summary` に天候が入っていない** | 過去天候 | `weather` は telemetry として毎フレーム broadcast されるが（`bridge.py:6395`）、**セッション記録には残らない**。だから「昨日の路面温度」に答える材料が無い |
+| C | **`session_summary` に `setup_fingerprint` / `series_id` が入っていない** | setup進化 / Memory→Strategy | Bridge は持っているのに**サマリへ渡していない**。同一setupの前後比較ができない |
+| D | **Decision ID が存在しない** | Memory→Strategy | 提案・予測・実結果を貫くIDが無い。`score_execution()` は採点しているが broadcast して捨てている（`bridge.py:5018`） |
+| E | **サーバー正本が存在しない** | 全行 | 預かる方向のAPIもschemaも認証付きCRUDも無い。**新規設計が必要** |
+| F | **訂正・削除の経路が存在しない** | 全行 | `disputed` / supersede / 削除のrecordも導線も無い |
+
+### 共通契約（4行が共有すべき単一の identity）
+
+17節が禁じる「別々の片道patch」を避けるため、4行すべてがこの identity を使う。
+
+```
+memory_identity = {
+  user_id      : 認証ユーザー（サーバー正本の分離キー）
+  series_id    : bridge.py:1870（既存）
+  track        : 既存
+  car_model    : 既存
+  setup_fingerprint : bridge.py:1848（既存）
+  session_num  : 既存
+  recorded_at  : 日時
+}
+```
+
+**A / B / C は「新規計測」ではなく「既にある値をサマリへ渡す」だけ。** D / E / F が新規実装。
+
+### 実装順序の提案（各段が単独で入口→出口を閉じる）
+
+1. **スライス1：identity と欠落フィールドを `session_summary` へ通す**（A・B・C）
+   source（Bridge既存値）→ 権威（Bridgeが唯一の出所）→ 保存（`pw_raceHistory` 拡張）→
+   取得（`buildPreviousRaceBriefingNote` が読む）→ 出口（**前回天候・setup・スタート順位を答える**）→
+   証拠（fixture 再生 + E2E trace）。
+   **これ単独で「昨日の路面温度」に根拠付きで答えられるようになり、過去天候の行が閉じる。**
+
+2. **スライス2：Decision ID と結果採点**（D）
+   `score_execution()` の出口を繋ぎ、成功・失敗・途中終了を同じIDへ追記する。
+
+3. **スライス3：サーバー正本と訂正・削除**（E・F）
+   privacy / terms / 表示・訂正・削除・保持期間を同scope。**公開済みの
+   `Telemetry never leaves your machine` の改定が必須**（13節）。
+
+### 着手前に Yuji の判断が要る点
+
+- **スライス3のプライバシー文言改定**は公開ページの変更であり、`PITWALL_RELEASE_GATE.md` Gate 7 の対象。
+  実装は進められるが、**文言案の承認なしに公開ページを確定させない**。
+- スライス1→3の順で進めてよいか。1だけでも過去天候の行は閉じるため、**空欄を残したまま次へ行かない**方針には合致する。
+
+commit / push / build / deploy / 公開は未実施。Build 282 は Gate 5 合格（Codex確認待ち）。
+
+### 2026-08-25 13:21 JST Yuji決定 — スライス1（A・B・C）着手GO
+
+Claude Codeはスライス1だけに着手してよい。対象は、Bridge既存値を`session_summary`から`pw_raceHistory`へ通し、同一identityで過去天候・setup・スタート順位を取得して、質問回答および次回briefingへ**決定論的に出す**経路である。
+
+- fixtureとE2E traceで、source→保存→取得→handler/briefing→queue→実発話または明示的破棄までを証明する。
+- `current value`を過去値として代用しない。setup数値の推測もしない。
+- スライス2以降、commit / push / build / deploy / 公開には進まない。
+- CodexはBuild 282 Gate 5とスライス1の出口から入口への独立確認を並行して行う。
+
 ## 2026-08-25 記憶→戦略 共有認識 V1（Claude Code ↔ Codex 突き合わせ）
 
 正本: [MEMORY_TO_STRATEGY_SHARED_UNDERSTANDING_V1.md](MEMORY_TO_STRATEGY_SHARED_UNDERSTANDING_V1.md)
