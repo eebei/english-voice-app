@@ -2146,7 +2146,10 @@ async function sendMsg(inputSource){
     ? window.PitwallLocalIntentRouter.route({
       text,
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
-      live:lastTelemetry
+      live:lastTelemetry,
+      // ★G3：GAP は数秒で意味が変わる。接続判定(12秒)のままだと、
+      //   queue では破棄される古さの値を質問回答で喋ってしまう。
+      snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null)
     }) : null;
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;

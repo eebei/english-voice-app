@@ -162,5 +162,55 @@ console.log('\n══ bridge 側の identity ══');
     /if isinstance\(_r, dict\) and _r\.get\('speakable'\) else None/.test(bridge));
 }
 
+// ── §4-10 PTT の直接質問（G3）─────────────────────────────────
+console.log('\n══ §4-10 PTT質問：live値があれば必ず答える／古ければ黙る ══');
+{
+  const R = require('./desktop/local-intent-router');
+  const LIVE = { gap_ahead: 4.6, gap_behind: 5.8 };
+  const ask = (text, age) => R.route({ text, lang: 'ja', live: LIVE, snapshotAgeMs: age });
+
+  // Build 281 の実走欠陥：値があるのに no-data へ落ちた。
+  ['後ろとの差は？', '前とのギャップは？', '前後のギャップは？', 'パンで後ろとの差。'].forEach(q => {
+    const r = ask(q, 1000);
+    check(`★live値があれば答える: ${q}`,
+      r.handled && r.intent === 'nearest_gap' && /秒/.test(r.reply), JSON.stringify(r));
+    check('  no-data文言へ落ちない', !/取れていない|伝えられない/.test(r.reply), r.reply);
+  });
+
+  // 古い snapshot は喋らない。G2 の再生側と同じ基準。
+  const stale = ask('後ろとの差は？', 9000);
+  check('★12秒接続判定のままにしない（9秒の値は喋らない）',
+    stale.intent === 'nearest_gap_stale', stale.intent);
+  check('  数字を含まない', !/[0-9]/.test(stale.reply), stale.reply);
+  check('  短く待つよう伝える', /少し待って/.test(stale.reply), stale.reply);
+  check('  英語も同じ契約',
+    /do not have a current gap/.test(
+      R.route({ text: '後ろとの差は？', lang: 'en', live: LIVE, snapshotAgeMs: 9000 }).reply));
+
+  check('境界ちょうど（5000ms）は答える', ask('後ろとの差は？', 5000).intent === 'nearest_gap');
+  check('境界超過（5001ms）は黙る', ask('後ろとの差は？', 5001).intent === 'nearest_gap_stale');
+  check('年齢が渡されなければ従来どおり答える（呼び出し側が判断できない時に黙らせない）',
+    R.route({ text: '後ろとの差は？', lang: 'ja', live: LIVE }).intent === 'nearest_gap');
+
+  // 値そのものが無い場合は、古さではなく「まだ取れていない」を返す（従来契約）。
+  const noValue = R.route({ text: '後ろとの差は？', lang: 'ja', live: { gap_ahead: 4.6 }, snapshotAgeMs: 1000 });
+  check('値が無い時は unavailable（stale と区別する）',
+    noValue.intent === 'nearest_gap_unavailable', noValue.intent);
+}
+
+console.log('\n══ 再生側と質問側の基準が揃っているか ══');
+{
+  const router = fs.readFileSync('desktop/local-intent-router.js', 'utf8');
+  const m = router.match(/const GAP_ANSWER_MAX_AGE_MS = (\d+);/);
+  check('router に closed constant がある', !!m);
+  check(`★再生側(${F.MAX_AGE_MS}ms)と質問側が同じ基準`,
+    m && Number(m[1]) === F.MAX_AGE_MS, m && m[1]);
+  const renderer2 = fs.readFileSync('desktop/renderer.html', 'utf8');
+  check('renderer が実際の snapshot 年齢を渡す',
+    /snapshotAgeMs:\(lastTelemetryAt>0\?Date\.now\(\)-lastTelemetryAt:null\)/.test(renderer2));
+  check('両方のGAP分岐で検査する（片方に抜け道を残さない）',
+    (router.match(/nearest_gap_stale/g) || []).length >= 2);
+}
+
 console.log(`\nGap freshness: ${pass}/${pass + fail}`);
 if (fail) process.exit(1);

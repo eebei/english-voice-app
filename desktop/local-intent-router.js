@@ -91,10 +91,19 @@
       : 'I need clean-lap fuel data before I can calculate the requirement.';
   }
 
+  // ★G3（2026-08-25）GAP 回答の許容鮮度。
+  //   接続判定は TELEMETRY_STALE_MS=12000ms だが、GAP は数秒で意味が変わる。
+  //   gap-freshness.js の再生側と同じ 5 秒に揃える。片方だけ緩いと、
+  //   queue では破棄される古さの値を質問回答では喋ってしまう。
+  const GAP_ANSWER_MAX_AGE_MS = 5000;
+
   function route(input) {
     const text = String(input && input.text || '').trim();
     const lang = input && input.lang === 'en' ? 'en' : 'ja';
     const live = input && input.live && typeof input.live === 'object' ? input.live : null;
+    // PTT の直接質問も snapshot 時刻を検査する。渡されない場合は従来どおり
+    // 検査しない（呼び出し側が古さを判断できない時に黙らせないため）。
+    const snapshotAgeMs = finite(input && input.snapshotAgeMs);
     if (!text || !live) return { handled:false };
 
     if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
@@ -178,6 +187,13 @@
       const wantsBoth = /前後|both/i.test(text);
       const wantsAhead = wantsBoth || /前|ahead/i.test(text);
       const wantsBehind = wantsBoth || /後ろ|後方|behind/i.test(text);
+      // ★G3：値があっても古ければ答えない。古い数字を今の事実として渡さない。
+      //   接続判定(12秒)より厳しくし、G2 の再生側(5秒)と同じ基準に揃える。
+      if (snapshotAgeMs !== null && snapshotAgeMs > GAP_ANSWER_MAX_AGE_MS) {
+        return answer('nearest_gap_stale', isJP(lang)
+          ? 'いまのGAPは取れていない。少し待って。'
+          : 'I do not have a current gap right now. Give me a moment.');
+      }
       const ahead = finite(live.gap_ahead);
       const behind = finite(live.gap_behind);
       const parts = [];
@@ -191,6 +207,13 @@
         : `${requested} is not available yet.`);
     }
     if (/(?:ギャップ|GAP|gap).{0,8}(?:どう|教えて|何秒|どれくらい|どのくらい|[?？])|(?:どう|何秒).{0,8}(?:ギャップ|GAP|gap)/i.test(text)) {
+      // ★G3：値があっても古ければ答えない。古い数字を今の事実として渡さない。
+      //   接続判定(12秒)より厳しくし、G2 の再生側(5秒)と同じ基準に揃える。
+      if (snapshotAgeMs !== null && snapshotAgeMs > GAP_ANSWER_MAX_AGE_MS) {
+        return answer('nearest_gap_stale', isJP(lang)
+          ? 'いまのGAPは取れていない。少し待って。'
+          : 'I do not have a current gap right now. Give me a moment.');
+      }
       const ahead = finite(live.gap_ahead);
       const behind = finite(live.gap_behind);
       const parts = [];
