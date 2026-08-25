@@ -715,6 +715,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="cost-meter.js"></script>
 <script src="local-intent-router.js"></script>
 <script src="session-memory.js"></script>
+<script src="gap-freshness.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -2773,6 +2774,7 @@ function speak(text, opts){
   const prio = (typeof o.prio === 'number') ? o.prio : SPEAK_PRIO.P4_INFO;
   const kind = o.kind||'radio';
   const item = {text, prio, kind, ts:Date.now(), queuedAt:Date.now(), dedupeKey:o.dedupeKey||null,
+                gapIdentity:o.gapIdentity||null,
                 costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
   typeof costRecord==='function'&&costRecord('queued', {id:item.costId, kind:kind});
@@ -2884,6 +2886,38 @@ async function drainQueue(){
 
   const myGen = speakGeneration;   // ★この発話の世代。以降のawait後・callbackで必ず照合する
   const _it = speakQueue.splice(nextIndex,1)[0];
+  // ★G2（2026-08-25）再生開始の直前に GAP の鮮度を照合する。
+  //   8/23 実走では queue 14,742ms 後に古い「前5.5秒」を再生した。対象車が
+  //   入れ替わっていれば破棄し、同じ車で値だけ動いていれば最新値へ作り直す。
+  //   古い数字を喋るくらいなら黙る。
+  if(_it && typeof _it === 'object' && _it.gapIdentity){
+    const _fresh = (window.PitwallGapFreshness && typeof window.PitwallGapFreshness.evaluate==='function')
+      ? window.PitwallGapFreshness.evaluate(_it.gapIdentity, lastTelemetry, Date.now())
+      : {fate:'discard', reason:'module_missing', gapS:null};
+    if(_fresh.fate === 'discard'){
+      diagnosticLog('GAP_FRESHNESS','fate=discard reason='+_fresh.reason
+        +' target='+_it.gapIdentity.target_car_idx+' dir='+_it.gapIdentity.direction
+        +' age_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
+      typeof costRecord==='function'&&costRecord('discarded',{id:_it.costId, kind:_it.kind, reason:'gap_'+_fresh.reason});
+      if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',_it,{reason:'gap_'+_fresh.reason});
+      draining=false; isSpeaking=false;
+      setTimeout(drainQueue,0);
+      return;
+    }
+    if(_fresh.fate === 'rebuild'){
+      const _rebuilt = window.PitwallGapFreshness.rebuildText(
+        _it.gapIdentity.direction, _fresh.gapS,
+        (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
+      if(_rebuilt){
+        diagnosticLog('GAP_FRESHNESS','fate=rebuild was='+_it.gapIdentity.gap_s
+          +' now='+_fresh.gapS+' target='+_it.gapIdentity.target_car_idx);
+        _it.text = _rebuilt;
+      }
+    } else {
+      diagnosticLog('GAP_FRESHNESS','fate=play target='+_it.gapIdentity.target_car_idx
+        +' dir='+_it.gapIdentity.direction);
+    }
+  }
   const raw = (typeof _it === 'string') ? _it : _it.text;
   currentSpeakPrio = (typeof _it === 'object' && typeof _it.prio === 'number') ? _it.prio : 9;
   // ★Build 265 fix E：現在再生中の item を割り込みルートから再キューできるよう保持する。
@@ -3979,8 +4013,11 @@ function injectRadio(data){
   // ★2026-07-20 Codexレビュー P0-1：bridgeが決めた優先度をそのまま使う。
   //   旧実装は crash_check だけ boolean で昇格させ、他は既定のP4に落ちていたため、
   //   停止車両・速いクラス接近・ピット手順まで「情報」と同列に扱われていた。
+  // ★G2：GAP候補は完成文だけで queue へ入れない。どの車のどちら向きの、
+  //   いつの値かを一緒に持たせ、TTS開始直前に最新snapshotと照合する。
   speak(spokenText||text, {prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
                kind:data.trigger||'radio',
+               gapIdentity:(data.gap_identity&&typeof data.gap_identity==='object')?data.gap_identity:null,
                dedupeKey:(data.trigger||'') + (data.class_name||'') + (data.car_number||'')});
 }
 

@@ -18,9 +18,28 @@ class GapTrendWiringTests(unittest.TestCase):
         self.assertIn("'rolling_gap': 4, 'gap_trend': 4", BRIDGE)
         self.assertIn("'rolling_gap', 'gap_trend',", BRIDGE)
         self.assertIn("'trigger': 'gap_trend'", BRIDGE)
-        block = BRIDGE[BRIDGE.index("'trigger': 'gap_trend'") - 900:BRIDGE.index("'trigger': 'gap_trend'")]
-        self.assertIn('is_race_session and session_racing_started and onTrack and not onPit', block)
-        self.assertIn('not in_formation', block)
+        # ★2026-08-25：固定文字数の窓で判定していたため、候補へ identity を足した
+        #   だけで落ちた。ガードは残っているのに窓から押し出されただけ＝行が増える
+        #   たびにズレる書き方だった。窓ではなく**ネスト構造**で判定する。
+        lines = BRIDGE.split('\n')
+        guard = next(i for i, l in enumerate(lines)
+                     if 'is_race_session and session_racing_started and onTrack and not onPit' in l)
+        broadcast = next(i for i, l in enumerate(lines) if "'trigger': 'gap_trend'" in l)
+        self.assertLess(guard, broadcast)
+        # 条件文字列が残っていても `if True or (...)` で無効化できてしまうため、
+        # ガード行が条件そのもので始まることを確認する。
+        self.assertRegex(lines[guard].strip(), r'^if \(is_race_session\b',
+                         'the race guard must not be short-circuited')
+        self.assertIn('not in_formation', '\n'.join(lines[guard:guard + 4]))
+        guard_indent = len(lines[guard]) - len(lines[guard].lstrip())
+        escaped = [i for i in range(guard + 1, broadcast)
+                   if lines[i].strip() and not lines[i].strip().startswith('#')
+                   and (len(lines[i]) - len(lines[i].lstrip())) <= guard_indent]
+        self.assertEqual(escaped, [], 'gap_trend broadcast must stay inside the race guard')
+        # 間の行だけ見ると、broadcast 自身をガード階層まで下げる変異を見逃す。
+        broadcast_indent = len(lines[broadcast]) - len(lines[broadcast].lstrip())
+        self.assertGreater(broadcast_indent, guard_indent,
+                           'gap_trend broadcast must be nested under the race guard')
 
     def test_gap_snapshot_is_taken_before_policy_observe(self):
         gap_calc = BRIDGE.index('nearest_ahead_gap = -_gd')

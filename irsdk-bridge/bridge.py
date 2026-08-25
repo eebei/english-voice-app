@@ -5761,6 +5761,21 @@ def poll_iracing():
                     player_position=class_pos, incident_count=incidents)
                 if _gap_event is not None:
                     _gap_event['context_generation'] = _gap_generation
+                    # ★G2（2026-08-25）：完成文だけを queue へ渡さない。どの車の
+                    #   どちら向きの、いつの値かを一緒に運ぶ。renderer は TTS 開始
+                    #   直前にこれで照合し、対象や方向が変われば破棄、値が変われば
+                    #   最新値で作り直す。8/23 実走は queue 14,742ms 後に古い
+                    #   「前5.5秒」をそのまま再生していた。
+                    _auth = (gap_authority_records or {}).get(_gap_event.get('direction'))
+                    _gap_event['gap_identity'] = {
+                        'session_key': (_auth or {}).get('session_key'),
+                        'generation': (_auth or {}).get('generation'),
+                        'source_kind': (_auth or {}).get('source_kind'),
+                        'direction': _gap_event.get('direction'),
+                        'target_car_idx': _gap_event.get('car_idx'),
+                        'gap_s': _gap_event.get('gap_s'),
+                        'sampled_at': _gap_event.get('observed_at'),
+                    }
                     broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
 
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
@@ -6428,6 +6443,17 @@ def poll_iracing():
                     else None),
                 'post_stop_fuel_projection': _post_stop_fuel_projection,
                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
+                # ★G2：queue に残った候補と突き合わせるための現在値。
+                #   完成文だけを保持した候補は、これと照合して破棄・再構築する。
+                'gap_authority': {
+                    _d: ({'generation': _r.get('generation'),
+                          'target_car_idx': _r.get('target_car_idx'),
+                          'direction': _r.get('direction'),
+                          'source_kind': _r.get('source_kind'),
+                          'session_key': _r.get('session_key'),
+                          'gap_s': _r.get('gap_s')}
+                         if isinstance(_r, dict) and _r.get('speakable') else None)
+                    for _d, _r in (gap_authority_records or {}).items()},
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,
                 'on_track': onTrack,
                 'on_pit_road': bool(onPit),

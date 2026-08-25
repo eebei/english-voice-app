@@ -244,6 +244,9 @@ if node tests-session-memory-tunnel.js >/dev/null 2>&1; then echo "   ✅ 全ケ
 echo "── G1 GAP数値権威：値・方向・対象車の同時確定（2026-08-25）"
 if python3 irsdk-bridge/tests_gap_authority.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_gap_authority.py 2>&1|tail -12; fail=1; fi
 
+echo "── G2 GAP鮮度：再生直前の照合（14秒の旧数値を再生しない・2026-08-25）"
+if node tests-gap-freshness.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-gap-freshness.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
