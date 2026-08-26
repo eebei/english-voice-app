@@ -216,14 +216,41 @@ Windows runner のチェックアウトは CRLF になる（Build 285 で原因�
 `PITWALL_RELEASE_GATE.md`「同じAIが作業と確認を兼任した場合は**独立確認済みとしない**」。
 本書は**作業者の自己検査**である。**Codex の独立確認が必要。**
 
+### 再現手順（ワンコマンド）
+
+本書の検査は `verify-artifact.sh` に道具化してある。手で打ち直さなくてよい。
+
+```bash
+./verify-artifact.sh 32911905149 88517124f0868436b00d312d718c495d096411f1 286
+```
+
+- 途中まで落ちている zip があれば `--dir <作業ディレクトリ>` で渡すと**続きから取得する**
+  （302MB は GitHub 側で普通に停滞する。やり直しにすると終わらない）
+- `--keep` で展開結果を残せる
+- 合格なら exit 0、1つでも欠ければ exit 1
+
+この道具が信用できるかは `tests-artifact-verification.js`（44件・`preflight.sh` 収録）が
+「落ちるべき時に落ちる」性質を固定している。
+
+### ★ブランチ HEAD と artifact の出所は別物
+
+```
+run 32911905149 の headSha : 88517124f0868436b00d312d718c495d096411f1  ← artifact の出所
+origin/build/286 の HEAD   : （これより先行。証拠書と報告の doc commit が乗る）
+```
+
+**ブランチ HEAD から再ビルドしても対象SHAは一致しない。**
+「ブランチ HEAD = artifact の出所」として扱うと Build 282 型の取り違えになる。
+
 ### Codex への逆引き依頼
 
 1. installer / app.asar / Bridge を**自分で再計算**し、本書の値と一致するか
 2. `app.asar` 内の JS を自分で列挙し、renderer 参照との差集合が空か
 3. Bridge exe から `Build 286` を自分で取り出せるか（`Build 285` が無いこと）
-4. `build/286` の `8851712` が run `32911905149` の headSha と一致するか
+4. run `32911905149` の headSha が `8851712…` であること（ブランチ HEAD ではない）
 5. §0 の派生検査が **1本ずつ欠けさせた時に必ず missing を出す**か
 6. 公開 Release が動いていないこと
+7. 道具そのものを信用しないなら、`tests-artifact-verification.js` の変異耐性を反証する
 
 ---
 
