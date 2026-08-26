@@ -116,6 +116,9 @@ if node tests-memory-action-layer.js >/dev/null 2>&1; then echo "   ✅ 全ケ�
 echo "── Memory V2 ローカル再読込・履歴投入ACK契約（Build 255）"
 if node tests-evidence-debrief.js >/dev/null 2>&1 && node tests-memory-import.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-evidence-debrief.js 2>&1|grep "❌"|head -10; node tests-memory-import.js; fail=1; fi
 
+echo "── Luna自己反省記憶：保存→次回ブリーフィング出口"
+if node tests-luna-self-memory.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-luna-self-memory.js; fail=1; fi
+
 echo "── /api/chat HTTP統合テスト（stream/non-stream応答契約・P0-1再発防止）"
 if node tests-chat-http.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-chat-http.js 2>&1|grep "❌"|head -5; fail=1; fi
 

@@ -2586,3 +2586,155 @@ Build 282 で「証拠だけが古いまま残った」型と同じで、
 ### 待ちは変わらない
 
 Gate 5（Codex）の完走待ち。**Gate 6・7・8・9 はいずれも未実施。**
+
+## 2026-08-26 JST — 状態訂正：Build 286 Gate 5 は完了済み
+
+直上の「Gate 5完走待ち」は、検査完走前に記録された古い待ち状態であり、現在の判定ではない。
+Codexは `./verify-artifact.sh 32911905149 88517124f0868436b00d312d718c495d096411f1 286` を実行し、artifact全量取得、installer/app.asar/BridgeのSHA照合、8本のruntime module、Build 286表記、対象SHA逆引きを完了した。
+
+**現在の判定**：Gate 5（Build 286 private artifactの独立検査）＝**合格**。
+Gate 6（Windows実機）、Gate 7（server反映）、Gate 8（iRacing実走）、Gate 9（公開）は未実施。
+
+### 次の担当と入力（再質問しない）
+
+| Gate | 担当 | 次の作業 |
+|---|---|---|
+| 6 | Yuji | `BUILD286_GATE6_WINDOWS_HANDOFF.md` のprivate artifactを取得・インストールし、`RUNTIME_MODULE_STATUS` 8本 / `missing:[]` / `status:"loaded"` をACK |
+| 7 | Yujiの明示GO後 | server反映と `verify-deploy.sh` |
+| 8 | Gate 6/7後、Yuji | iRacing実走・実データ確認 |
+| 9 | Gate 8後、Yujiの明示GO | 公開 |
+
+`verify-artifact.sh` と `tests-artifact-verification.js` のローカル修正は検査道具の修正であり、Build 286 artifactの中身や公開版を変更していない。commit/push/build/publicは未実施。
+
+## 2026-08-26 JST — Build 286公開反映完了
+
+Yujiの「旧exe起動時に自動更新できる状態へ更新」の指示に基づき、GitHub Actionsから `build/286` を `publish=true` で実行した。
+
+| 項目 | 実測結果 |
+|---|---|
+| workflow run | `32934665652` |
+| head SHA | `92e82a3d54b27e8bc56ca941adb53c40bd6fdfc1` |
+| 結果 | success |
+| Publish to Release | success |
+| Release | `desktop-latest` |
+| Release名 | `OMORAY PITWALL Desktop — Build 286` |
+| 新規versioned asset | `OMORAY-PITWALL-Setup-20260826-0536.exe` |
+| 自動更新asset | `OMORAY-PITWALL-Setup-latest.exe` / `OMORAY-PITWALL-Desktop-latest.exe` |
+
+旧exeの更新先と同じ `desktop-latest` にBuild 286のinstallerを反映した。これにより、旧exeを起動した利用者は公開更新経路からBuild 286を取得できる。Windows実機Gate 6とiRacing実走Gate 8は別途未確認。
+
+## 2026-08-26 Claude Code — 公開物の実物検査＋作業ツリーの並行作業について
+
+### ① 公開された Build 286 の実物を検査した
+
+公開は Gate 5 で Codex が検査した artifact **とは別 SHA** から作られている。
+
+```
+Gate 5 検査済 : run 32911905149  headSha 8851712…
+公開          : run 32934665652  headSha 92e82a3…
+```
+
+**`desktop/` と `irsdk-bridge/` の差分はゼロ。** 変わったのは doc・テスト・検査道具のみで、
+installer に入る経路は動いていない。ただし推測で済ませず、**公開物そのものを展開して検査**した。
+
+```
+✅ headSha が対象SHAと一致 (92e82a3…)
+✅ installer 3本すべて同一ハッシュ  100,659,576 / ecd1f16d…
+✅ app.asar  4,253,139 / e4887421…    ✅ Bridge 17,013,109 / dffc2c91…
+✅ runtime module 欠落なし (8/8)      ← decision-memory.js を含む
+✅ 同梱物は対象SHAと一致（CRLF正規化後）
+✅ build-info.json の buildNum = 286
+✅ Build 286 が Bridge に実在（旧 Build 285 は無し）
+✅ pygame 52 件（Electron同梱用の正しい系統）
+```
+
+**公開物の中身は対象SHAと一致している。**
+
+### ② サーバーは未反映だが、公開版に実害はない（コードで確認）
+
+```
+本番 /api/version          : commit 828ca13（Build 284 のコード）
+本番 /api/memory/decisions : HTTP 404
+```
+
+`/api/memory/decisions` を叩く箇所は renderer に **4件**。実コードを走査した結果、
+**4件すべてが `decisionSyncEnabled()` ガードの内側**で、既定は OFF。
+**404 を踏む経路は無い。** Decision 記憶はローカルで完結して動くので主機能は生きている。
+
+サーバー正本（別PC間共有）は**入っているが休止状態**。有効化は privacy 文言の確定後。
+
+### ③ 検査道具を公開Buildにも対応させた（`--published`）
+
+道具は private candidate 前提で、公開Buildを検査すると
+`❌ Publish の結論が 'success'` で不合格になった。公開版なら success が正しい。
+
+**ただし実際の結果に合わせて判定を後付けすると、意図しない公開を検出できなくなる。**
+よって「どちらであるべきか」を**呼び出し側が宣言する**形にした。
+
+```bash
+./verify-artifact.sh <run> <sha> <build>              # private 期待（skipped でなければ失敗）
+./verify-artifact.sh <run> <sha> <build> --published  # 公開期待（success でなければ失敗）
+```
+
+既定は private。**付け忘れても危険側には倒れない。**
+
+#### 変異試験で自分の穴を1つ塞いだ
+
+初版のテストは文字列の存在だけを見ており、`PUBLISHED=1` を引数解析の外へ足す変異
+（＝**常に公開扱いになり、意図しない公開を検出できなくなる**）を**見逃した**。
+代入が引数解析の1箇所だけであることを構造で固定し、既定が private であることも固定した。
+`tests-artifact-verification.js` **50/50**、変異2件とも検出。
+
+### ④ ★作業ツリーに Claude 以外の変更がある（触っていない）
+
+現在、作業ツリーに**私が作っていない未コミット変更**がある。
+
+```
+HANDOFF.md                 +14
+desktop/renderer.html      +57 -2
+desktop/strategy-playbook.js +21 -4
+tests-strategy-playbook.js +24
+```
+
+`desktop/renderer.html` に `saveLunaSelfReflection()` が追加されており、
+**ジャンル7（Luna 自己訂正記憶）の実装が進行中**と見られる。
+
+**この変更には一切触っていない。commit もしていない。**
+私の commit 対象は `preflight.sh` / `verify-artifact.sh` / `tests-artifact-verification.js` /
+本共有ログの4本だけで、パス指定で明示している。
+
+#### 現在 `tests-evidence-debrief.js` が落ちている（原因は上記の作業中コード）
+
+```
+ReferenceError: saveLunaSelfReflection is not defined
+  at autoSaveEvidenceMemory (evalmachine)
+```
+
+`saveLunaSelfReflection` は `renderer.html:5694` に定義されているので**本番では動く**
+（関数宣言は巻き上げられる）。落ちているのは、テストが `autoSaveEvidenceMemory` を
+vm サンドボックスへ抽出する際、その窓に新しい依存先が入っていないため。
+**テストの抽出範囲の問題であって、製品の欠陥ではない。**
+
+作業中の担当が直すべき箇所なので、**こちらでは直していない**。
+
+#### ★自分のやり方が危なかった点（報告）
+
+原因切り分けのために `git stash -u` → `git stash pop` を実行した。
+**他人の未コミット作業を一時退避したことになり、pop が衝突していれば失っていた。**
+結果は `git stash list` が空・全ファイル残存で無事だったが、**やるべきではなかった。**
+以後、作業ツリーに自分以外の変更がある時は stash を使わず、
+`git show <sha>:<path>` など**作業ツリーを触らない方法**で切り分ける。
+
+### 現在の Gate
+
+| Gate | 状態 |
+|---|---|
+| 0〜4 | 合格（Codex 独立確認済） |
+| 5 artifact | 合格（private は Codex 独立確認済。**公開物も本日 Claude が実物検査**） |
+| 6 Windows | **未実施** |
+| 7 server | **未実施**（本番は `828ca13`＝Build 284 のコードのまま） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **実施済み**（Yuji 判断） |
+
+**Gate 6 と Gate 8 を経ずに公開されている。** 判断は Yuji のものとして進めるが、記録として明示する。
+公開版は**一度も Windows で起動されておらず、一度も実走していない**。

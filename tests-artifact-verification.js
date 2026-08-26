@@ -51,10 +51,33 @@ console.log('\n══ 「別のコードから作られた artifact」を掴ま�
     /build-info\.json の buildNum が \$GOT/.test(script));
 }
 
-console.log('\n══ 公開していないことを確認する ══');
+console.log('\n══ 公開状態が「期待どおりか」を見る ══');
 {
-  check('Publish ステップの結論を見る', /Publish to Release -> skipped/.test(script));
-  check('★skipped でなければ失敗する', /公開された可能性/.test(script));
+  // ★契約変更（2026-08-26）：初版は「Publish は必ず skipped であるべき」だった。
+  //   Build 286 が公開されたので、公開Buildの検査では success が正しい。
+  //   ただし**実際の結果に合わせて判定を後付けすると、意図しない公開を検出できなくなる**。
+  //   よって「どちらであるべきか」を呼び出し側が宣言する形にした。緩めていない。
+  check('★期待する公開状態を呼び出し側が宣言する', /--published\) PUBLISHED=1/.test(script));
+  // ★文字列があるだけでは足りない。`PUBLISHED=1` を引数解析の外で立てると
+  //   「常に公開扱い」になり、**意図しない公開を検出できなくなる**。
+  //   代入が引数解析の1箇所だけであることを構造で固定する。
+  {
+    const sets = script.match(/PUBLISHED=1/g) || [];
+    check('★PUBLISHED を立てるのは --published の1箇所だけ',
+      sets.length === 1, sets.length + ' 箇所で代入している');
+    check('  その1箇所が引数解析の中にある',
+      /--published\) PUBLISHED=1; shift ;;/.test(script));
+    check('  既定は private（宣言しなければ公開扱いにしない）',
+      /KEEP=0; WORK=""; PUBLISHED=0/.test(script));
+  }
+  check('  付け忘れても危険側に倒れない（private 前提のまま落ちる）',
+    /付け忘れても危険側には倒れない/.test(script));
+  check('private のはずが公開されていたら失敗する',
+    /private のはずが Publish の結論が '\$PUB'（意図しない公開）/.test(script));
+  check('公開Buildのはずが公開されていなければ失敗する',
+    /公開Buildのはずが Publish の結論が/.test(script));
+  check('★公開物では「実走を確認した証拠ではない」と言い切る',
+    /\*\*Windows起動・server反映・実走を確認した証拠ではない。\*\*/.test(script));
 }
 
 console.log('\n══ 途中で切れた取得物を証拠にしない ══');
@@ -85,7 +108,7 @@ console.log('\n══ 停滞しても完走できる（Codex が踏んだ 302MB 
   check('★1バイトも進まないなら失敗させる（諦めず回り続けない）',
     /再開しても1バイトも進まない/.test(script));
   check('試行回数に上限がある', /attempt" -gt 12/.test(script));
-  check('進捗が見える（黙って止まらない）', /取得 試行 \$attempt/.test(script));
+  check('進捗が見える（黙って止まらない）', /取得 試行 \$\{?attempt\}?/.test(script));
 }
 
 console.log('\n══ 同梱物を実物で見る（manifest を証拠にしない）══');

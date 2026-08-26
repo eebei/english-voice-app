@@ -21,10 +21,13 @@
 
 set -u
 
-RUN_ID=""; TARGET_SHA=""; BUILD_NUM=""; KEEP=0; WORK=""
+RUN_ID=""; TARGET_SHA=""; BUILD_NUM=""; KEEP=0; WORK=""; PUBLISHED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep) KEEP=1; shift ;;
+    # 公開済みBuildを検査する時に付ける。公開そのものを異常扱いしないための明示。
+    # 付け忘れても危険側には倒れない（private 前提のまま「公開された」で落ちる）。
+    --published) PUBLISHED=1; shift ;;
     --dir) WORK="$2"; shift 2 ;;
     *) if [ -z "$RUN_ID" ]; then RUN_ID="$1"; elif [ -z "$TARGET_SHA" ]; then TARGET_SHA="$1";
        else BUILD_NUM="$1"; fi; shift ;;
@@ -32,7 +35,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$RUN_ID" ] || [ -z "$TARGET_SHA" ] || [ -z "$BUILD_NUM" ]; then
-  echo "使い方: ./verify-artifact.sh <run-id> <target-sha> <build-number> [--keep] [--dir D]"
+  echo "使い方: ./verify-artifact.sh <run-id> <target-sha> <build-number> [--keep] [--dir D] [--published]"
   exit 2
 fi
 
@@ -63,14 +66,23 @@ case "$HEAD_SHA" in
 esac
 [ "$CONCL" = "success" ] && ok "run は success" || bad "run の結論が $CONCL"
 
-# ── 2. 公開していないこと ─────────────────────────────────────────
-echo "── 2. Publish がスキップされたか"
+# ── 2. 公開状態が期待どおりか ────────────────────────────────────
+# private candidate なら skipped、公開Buildなら success が正しい。
+# **どちらであるべきかは呼び出し側が宣言する。** 実際の結果に合わせて
+# 判定を後付けすると、意図しない公開を検出できなくなる。
+echo "── 2. 公開状態（期待: $([ "$PUBLISHED" -eq 1 ] && echo '公開済み' || echo 'private=skipped')）"
 PUB="$(gh run view "$RUN_ID" --json jobs 2>/dev/null | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 r=[s["conclusion"] for j in d.get("jobs",[]) for s in j.get("steps",[]) if "Publish" in s.get("name","")]
 print(",".join(r) if r else "none")')"
-[ "$PUB" = "skipped" ] && ok "Publish to Release -> skipped" || bad "Publish の結論が '$PUB'（公開された可能性）"
+if [ "$PUBLISHED" -eq 1 ]; then
+  [ "$PUB" = "success" ] && ok "Publish to Release -> success（公開Buildとして期待どおり）" \
+                         || bad "公開Buildのはずが Publish の結論が '$PUB'"
+else
+  [ "$PUB" = "skipped" ] && ok "Publish to Release -> skipped" \
+                         || bad "private のはずが Publish の結論が '$PUB'（意図しない公開）"
+fi
 
 # ── 3. artifact 取得 ──────────────────────────────────────────────
 echo "── 3. artifact 取得"
@@ -106,7 +118,7 @@ else
   while [ "$HAVE_BYTES" != "$ART_BYTES" ]; do
     attempt=$((attempt+1))
     if [ "$attempt" -gt 12 ]; then bad "12回試しても取得しきれない（$HAVE_BYTES / $ART_BYTES）"; exit 1; fi
-    note "取得 試行 $attempt（$HAVE_BYTES / $ART_BYTES bytes）"
+    note "取得 試行 ${attempt}（${HAVE_BYTES} / ${ART_BYTES} bytes）"
     # --speed-limit/--speed-time: 60秒間 50KB/s を割ったら諦めて再開に回す（無限待ちを作らない）
     curl -sSL -C - --retry 3 --retry-delay 5 --speed-limit 50000 --speed-time 60 \
       -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
@@ -248,7 +260,12 @@ fi
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "✅ artifact は対象SHA $TARGET_SHA の中身を含んでいる"
-  echo "   ただしこれは **Gate 5 の証拠**であり、Windows起動・server反映・実走の証拠ではない。"
+  if [ "$PUBLISHED" -eq 1 ]; then
+    echo "   これは **公開物の中身が対象SHAと一致する証拠**である。"
+    echo "   **Windows起動・server反映・実走を確認した証拠ではない。**"
+  else
+    echo "   ただしこれは **Gate 5 の証拠**であり、Windows起動・server反映・実走の証拠ではない。"
+  fi
 else
   echo "❌ 検査不合格。この artifact を Build $BUILD_NUM の証拠に使わないこと。"
 fi
