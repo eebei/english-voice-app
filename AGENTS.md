@@ -120,6 +120,14 @@ The review package should normally be the commit/diff, objective, risk focus, an
 
 ## Handoff discipline
 
+### Claude Code / Codex MD連携の明示合図
+
+Claude CodeまたはCodexが、相手担当へ向けたレビューコメント、差戻し、修正指示、再確認依頼をMDへ追加した場合、チャット報告には必ず次の一文をそのまま含める。
+
+`次のMDに指示書あり`
+
+相手担当はこの合図を受けたら、ユーザーへ担当判断を聞き返さず、最新の共有MDと更新commitを確認して作業を継続する。指示書を読まずにBuild、公開、再質問へ進まない。
+
 Keep `HANDOFF.md` concise and current. Update it after a meaningful completed slice, before ending a session with unfinished work, and whenever the release/field/cost state changes materially.
 
 It must answer:

@@ -71,6 +71,10 @@
     const pitLane = finite(input.pitLaneS);
     const memoryEvidence = input.memoryEvidence && typeof input.memoryEvidence === 'object'
       ? input.memoryEvidence : {};
+    const selfMemory = input.selfMemory && typeof input.selfMemory === 'object'
+      ? input.selfMemory : {};
+    const selfTags = Array.isArray(selfMemory.tags)
+      ? selfMemory.tags.filter(tag => typeof tag === 'string').slice(0, 6) : [];
     if (format.kind === 'unknown') return unavailable('race_format_unavailable', { format });
     if (!(burn > 0)) return unavailable('historical_fuel_unavailable', { format });
     if (!(capacity > burn + RESERVE_L)) return unavailable('effective_capacity_unavailable', { format, burn });
@@ -107,7 +111,8 @@
       reason: undercutStops.length <= baselineStops.length ? 'same_stop_count' : 'adds_extra_stop',
       first_pit_lap: undercutStops[0] || null, pit_laps: undercutStops,
       stop_count: undercutStops.length, first_service: undercutService,
-      conditions: ['blocked_by_slower_same_class_car', 'verified_clean_pace_advantage', 'clear_rejoin'],
+      conditions: ['blocked_by_slower_same_class_car', 'verified_clean_pace_advantage', 'clear_rejoin']
+        .concat(selfTags.includes('gap_accuracy') ? ['latest_gap_same_frame_required'] : []),
     };
     const planC = {
       id: 'C', kind: 'overcut', available: overcutFirst < totalLaps,
@@ -117,7 +122,9 @@
       first_service: overcutService,
       required_first_stint_burn_l_per_lap: Math.round(overcutTargetBurn * 1000) / 1000,
       required_fuel_saving_pct: Math.round(overcutSavingPct * 10) / 10,
-      conditions: ['pace_difference_small', 'fuel_target_achieved', 'next_lap_rejoin_not_worse'],
+      conditions: ['pace_difference_small', 'fuel_target_achieved', 'next_lap_rejoin_not_worse']
+        .concat(selfTags.includes('gap_accuracy') ? ['latest_gap_same_frame_required'] : [])
+        .concat(selfTags.includes('fuel_window_proactive') ? ['fuel_window_authority_required'] : []),
     };
 
     let endurance = null;
@@ -162,6 +169,8 @@
           ? memoryEvidence.matchedKeys.slice(0, 12) : [],
         canonical_track: memoryEvidence.canonicalTrack || '',
         canonical_car: memoryEvidence.canonicalCar || '',
+        luna_self_memory_tags: selfTags,
+        luna_self_memory_id: selfMemory.memoryId || null,
       },
       safe_stint_laps: safeStintLaps,
       plans: { A: planA, B: planB, C: planC },
@@ -195,6 +204,10 @@
         canonicalTrack: playbook.evidence.canonical_track,
         canonicalCar: playbook.evidence.canonical_car,
       },
+      selfMemory: {
+        tags: playbook.evidence.luna_self_memory_tags || [],
+        memoryId: playbook.evidence.luna_self_memory_id || null,
+      },
     });
     if (!rebuilt.available) return playbook;
     rebuilt.source = 'live_clean_laps';
@@ -211,6 +224,20 @@
     return value != null && value >= 1 ? Math.trunc(value) : null;
   }
 
+  function sameFrameGapProof(live) {
+    const battle = live && live.battle_context && typeof live.battle_context === 'object'
+      ? live.battle_context : {};
+    const now = live && live.pit_exit_forecast && typeof live.pit_exit_forecast === 'object'
+      ? live.pit_exit_forecast : {};
+    const next = live && live.pit_next_lap_forecast && typeof live.pit_next_lap_forecast === 'object'
+      ? live.pit_next_lap_forecast : {};
+    const id = typeof battle.snapshot_id === 'string' ? battle.snapshot_id : '';
+    const topGap = finite(live && live.gap_ahead);
+    const battleGap = finite(battle.gap_ahead_s);
+    return !!id && now.snapshot_id === id && next.snapshot_id === id
+      && topGap != null && battleGap != null && Math.abs(topGap - battleGap) < 0.011;
+  }
+
   function evaluateSwitch(playbook, live = {}) {
     if (!playbook || !playbook.available || !/race/i.test(String(live.session_type || ''))
         || live.on_track !== true || live.on_pit_road === true) return null;
@@ -225,6 +252,10 @@
     const paceAdvantage = finite(live.battle_context && live.battle_context.player_pace_advantage_s);
     const baseline = playbook.plans.A, undercut = playbook.plans.B, overcut = playbook.plans.C;
     if (!(lap > 0) || gap == null || paceAdvantage == null) return null;
+    const selfTags = Array.isArray(playbook.evidence && playbook.evidence.luna_self_memory_tags)
+      ? playbook.evidence.luna_self_memory_tags : [];
+    const gapProofRequired = selfTags.includes('gap_accuracy');
+    if (gapProofRequired && !sameFrameGapProof(live)) return null;
 
     const now = live.pit_exit_forecast || {};
     const next = live.pit_next_lap_forecast || {};
@@ -238,7 +269,8 @@
       return {
         decision_id: `playbook:${live.session_num ?? 'x'}:${lap}:B`, selected_plan: 'B',
         reason: 'blocked_with_verified_pace_advantage_and_clear_rejoin',
-        evidence: { lap, gap_ahead_s: gap, player_pace_advantage_s: paceAdvantage, physical_rejoin_position: nowLikely },
+        evidence: { lap, gap_ahead_s: gap, player_pace_advantage_s: paceAdvantage, physical_rejoin_position: nowLikely,
+          self_memory_guards: gapProofRequired ? ['latest_gap_same_frame_verified'] : [] },
       };
     }
 
@@ -254,7 +286,8 @@
         decision_id: `playbook:${live.session_num ?? 'x'}:${lap}:C`, selected_plan: 'C',
         reason: 'similar_pace_fuel_safe_and_next_lap_rejoin_not_worse',
         evidence: { lap, gap_ahead_s: gap, player_pace_advantage_s: paceAdvantage,
-          pit_now_position: nowLikely, pit_next_lap_position: nextLikely },
+          pit_now_position: nowLikely, pit_next_lap_position: nextLikely,
+          self_memory_guards: gapProofRequired ? ['latest_gap_same_frame_verified'] : [] },
       };
     }
     return null;

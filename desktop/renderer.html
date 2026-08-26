@@ -717,6 +717,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="session-memory.js"></script>
 <script src="decision-memory.js"></script>
 <script src="gap-freshness.js"></script>
+<script src="luna-self-memory.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -1249,6 +1250,7 @@ let strategyPlaybookDecisionKeys = new Set();
 let enduranceForecastAnnouncedKey = '';
 let enduranceFuelWindowAnnouncedKey = '';
 let fuelWindowWatch = {armed:false,sessionKey:'',announced:false};
+let pendingLunaSelfMemoryConfirmation = null;
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
@@ -2129,6 +2131,72 @@ fetch('build-info.json').then(r=>r.json()).then(info=>{
 function sendFeedback(btn, val){ btn.parentElement.innerHTML = val===1?'<span style="color:var(--blue)">👍 Logged</span>':'<span style="color:var(--muted)">👎 Logged</span>'; }
 function setHint(t){ document.getElementById('hint-text').textContent=t; }
 
+function lunaSelfMemoryStore(){
+  try{ const rows=JSON.parse(localStorage.getItem('pw_luna_self_memory_v1')||'[]'); return Array.isArray(rows)?rows:[]; }
+  catch{return [];}
+}
+function saveLunaSelfMemoryStore(rows){
+  try{ localStorage.setItem('pw_luna_self_memory_v1',JSON.stringify(rows||[])); return true; }
+  catch{return false;}
+}
+function lunaSelfMemoryProposalLine(record,isJP){
+  const tag=record?.tags?.[0];
+  if(tag==='gap_accuracy') return isJP?'GAP判断は同一フレームの最新値だけを使う。それでいい？':'I will only use a same-frame latest GAP for strategy. Is that right?';
+  if(tag==='fuel_window_proactive') return isJP?'給油ウィンドウが開いた時点で先に伝える。それでいい？':'I will call the fuel window as soon as it opens. Is that right?';
+  return isJP?'周回遅れと同一周回の車を明確に区別して伝える。それでいい？':'I will clearly distinguish lapped and same-lap cars. Is that right?';
+}
+function handleLunaSelfMemoryInput(text){
+  const layer=window.PitwallLunaSelfMemory;
+  if(!layer) return null;
+  const isJP=isJapaneseEngineer();
+  const yes=/^(?:はい|そう|そうです|合ってる|それでいい|yes|correct|right)[。.!！]?$/i.test(text);
+  const no=/^(?:いいえ|違う|ちがう|やめて|no|wrong|cancel)[。.!！]?$/i.test(text);
+  const selfChoice=/(?:自己反省|反省記憶|Luna).*(?:はい|いいえ|違う|yes|no|correct|wrong)/i.test(text);
+  const decisionChoice=/(?:戦略|判断|Decision|記録).*(?:はい|いいえ|違う|yes|no|correct|wrong)/i.test(text);
+  if(pendingLunaSelfMemoryConfirmation&&pendingDecisionDispute&&(yes||no)){
+    return isJP?'確認が2件ある。自己反省記憶と戦略記録、どちらへの返事か教えて。':'I have two pending confirmations. Is that for the self-correction or the strategy record?';
+  }
+  if(pendingLunaSelfMemoryConfirmation&&pendingDecisionDispute&&decisionChoice){
+    const accept=!/(?:いいえ|違う|no|wrong)/i.test(text);
+    if(!accept) return isJP?'戦略記録は停止済み。訂正内容を確認できるまで再利用しない。':'The strategy record remains suspended until its correction is confirmed.';
+    const rec=confirmDecisionCorrection({},isJP?'ja':'en');
+    return rec?(isJP?'了解。戦略記録の訂正を確定した。':'Understood. I confirmed the strategy-record correction.')
+      :(isJP?'戦略記録の訂正を確定できなかった。停止したままにする。':'I could not confirm it. The strategy record remains suspended.');
+  }
+  const selfAnswer=pendingLunaSelfMemoryConfirmation&&(yes||no||selfChoice);
+  if(selfAnswer){
+    const accepted=selfChoice?!/(?:いいえ|違う|no|wrong)/i.test(text):yes;
+    const out=layer.confirm(lunaSelfMemoryStore(),pendingLunaSelfMemoryConfirmation,accepted,Date.now());
+    if(out.record) saveLunaSelfMemoryStore(out.store);
+    diagnosticLog('LUNA_SELF_MEMORY',JSON.stringify({phase:'confirmation',memory_id:pendingLunaSelfMemoryConfirmation,reason:out.reason}));
+    pendingLunaSelfMemoryConfirmation=null;
+    return isJP?(accepted?'了解。合意済みの訂正として次回から適用する。':'了解。この候補は破棄して適用しない。')
+      :(accepted?'Understood. I will apply that confirmed correction next time.':'Understood. I rejected the candidate and will not apply it.');
+  }
+  if(/(?:反省|訂正|記憶).{0,5}(?:消して|削除|元に戻)|(?:delete|remove|reset).{0,8}(?:correction|memory|lesson)/i.test(text)){
+    const active=layer.latest(lunaSelfMemoryStore(),currentMemoryIdentity(),Date.now());
+    if(!active) return isJP?'削除できる合意済み訂正はない。':'There is no active correction to remove.';
+    const out=layer.remove(lunaSelfMemoryStore(),active.memory_id);
+    if(out.removed) saveLunaSelfMemoryStore(out.store);
+    diagnosticLog('LUNA_SELF_MEMORY',JSON.stringify({phase:'delete',memory_id:active.memory_id,removed:out.removed}));
+    return isJP?'了解。直近の自己訂正記憶を削除した。':'Understood. I removed the latest correction.';
+  }
+  const out=layer.observe(lunaSelfMemoryStore(),text,{...currentMemoryIdentity(),sessionKey:String(lastSessionNum??'')},Date.now());
+  if(out.reason==='not_explicit_correction') return null;
+  if(out.reason==='identity_unavailable') return isJP?'ユーザー・コース・車両を確認できないため、この訂正は保存しない。':'I cannot verify the user, track and car, so I will not save this correction.';
+  if(out.reason==='already_active') return isJP?'その訂正はすでに有効になっている。':'That correction is already active.';
+  if(out.reason==='previously_rejected') return isJP?'その提案は以前否定されたため、再提案しない。':'You previously rejected that proposal, so I will not propose it again.';
+  if(out.reason==='observation_too_close') return isJP?'同じ場面での連続指摘として記録した。恒久変更の2回目には数えない。':'I recorded that as the same incident, not a second vote for a permanent change.';
+  if(out.record) saveLunaSelfMemoryStore(out.store);
+  diagnosticLog('LUNA_SELF_MEMORY',JSON.stringify({phase:'observe',memory_id:out.record?.memory_id||null,
+    count:out.record?.observed_count||0,reason:out.reason}));
+  if(out.proposal){
+    pendingLunaSelfMemoryConfirmation=out.proposal.memory_id;
+    return lunaSelfMemoryProposalLine(out.proposal,isJP);
+  }
+  return isJP?'訂正として記録した。同じ指摘がもう一度あれば、適用前に確認する。':'I recorded that correction. If it happens again, I will confirm it before applying it.';
+}
+
 // ── Send message ──
 function onKey(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();} }
 function autoResize(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; }
@@ -2142,6 +2210,14 @@ async function sendMsg(inputSource){
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
+  const selfMemoryReply=handleLunaSelfMemoryInput(text);
+  if(selfMemoryReply){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    addMsg('ai',selfMemoryReply);pushMsg({role:'assistant',content:selfMemoryReply});
+    speak(selfMemoryReply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'luna_self_memory_confirmation',
+      dedupeKey:'luna_self_memory_confirmation|'+selfMemoryReply});
+    return;
+  }
   // 誤タップ/PTTで「ルール」だけ入った時に、内部プロンプトや文字数制限を長々と読み上げない。
   if(/^(?:ルール|rules?|help)[。.!！?？]?$/i.test(text)){
     usageCount(inputSource==='ptt'?'ptt':'typed');
@@ -4390,6 +4466,23 @@ async function scheduleAutoBriefing(){
     const headers = {'Content-Type':'application/json'};
     const profile = loadProfile()||{};
     const previousRaceBriefing = buildPreviousRaceBriefingNote();
+    // Luna自身の前回反省を、次回の最初に一度だけ明示する。保存済みでも
+    // 戦略へ出口が無ければ利用者には「成長」が見えないため、ここで接続する。
+    const selfLayer=window.PitwallLunaSelfMemory;
+    let selfRecord=null;
+    try{
+      const selfStore=JSON.parse(localStorage.getItem('pw_luna_self_memory_v1')||'[]');
+      if(selfLayer&&typeof selfLayer.latest==='function') selfRecord=selfLayer.latest(selfStore,currentMemoryIdentity(),Date.now());
+    }catch{}
+    const selfLine=selfLayer&&typeof selfLayer.briefingLine==='function'
+      ? selfLayer.briefingLine(selfRecord,(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en') : '';
+    diagnosticLog('LUNA_SELF_MEMORY',JSON.stringify({phase:'retrieve',available:!!selfRecord,
+      memory_id:selfRecord?.memory_id||null,spoken:!!selfLine}));
+    if(selfLine){
+      addMsg('ai',selfLine);
+      speak(selfLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'luna_self_memory',
+        dedupeKey:'luna_self_memory|'+String(selfRecord.memory_id)});
+    }
     // ★スライス1の出口②：前回事実を決定論層が文にして渡す。数字はここが唯一の出所で、
     //   LLMは選ばない。事実が無ければ空文字＝言わない。
     const memoryFacts = (window.PitwallSessionMemory
@@ -5206,7 +5299,7 @@ function confirmEvidenceMemory(){
   evidenceDebrief.recordId=record.review_id;
   const objective=saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
   addMsg('sys',objective&&evidenceLanguage()==='ja'
-    ? '✅ 確認済み記憶として保存し、次回の能動課題へ接続しました。'
+    ? '✅ 確認済み記憶として保存しました。'
     : c.saved);
   dismissEvidenceDebrief('saved');
 }
@@ -5903,6 +5996,14 @@ function refreshStrategyPlaybook(options={}){
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
     memory=findCarTrackMemory(mem,lastTrack,lastCarModel||'',lastCarClass||'');
   }catch{}
+  let lunaSelfMemory=null;
+  try{
+    const selfLayer=window.PitwallLunaSelfMemory;
+    const selfStore=JSON.parse(localStorage.getItem('pw_luna_self_memory_v1')||'[]');
+    if(selfLayer&&typeof selfLayer.latest==='function'){
+      lunaSelfMemory=selfLayer.latest(selfStore,currentMemoryIdentity(),Date.now());
+    }
+  }catch{}
   const q=lastWeekendAuthority?.qualifying_result||{};
   const storedAverageLap=matchingHistoricalAverageLap();
   const liveAverageLap=Number(lastTelemetry?.driver_pace_sample_count)>=3
@@ -5916,6 +6017,7 @@ function refreshStrategyPlaybook(options={}){
     Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
     loadConfirmedFuelCapacity(),q.status,q.class_position||q.overall_position||null,
     Number(liveFuel.clean_laps_sampled)||0,Number(liveFuel.avg_fuel_per_lap)||null,
+    lunaSelfMemory?.memory_id||null,(lunaSelfMemory?.tags||[]).join(','),
   ]);
   if(options.force!==true&&strategyPlaybookRefreshKey===refreshKey&&activeStrategyPlaybook){
     if(options.announce===true) announceStrategyPlaybook(activeStrategyPlaybook);
@@ -5934,6 +6036,7 @@ function refreshStrategyPlaybook(options={}){
     memoryEvidence:{source:memory?.source||'none',recordCount:Number(memory?.memoryRecordCount)||0,
       sessionCount:Number(memory?.sessions)||0,matchedKeys:memory?.matchedKeys||[],
       canonicalTrack:memory?.canonicalTrack||'',canonicalCar:memory?.canonicalCar||''},
+    selfMemory:{memoryId:lunaSelfMemory?.memory_id||null,tags:lunaSelfMemory?.tags||[]},
   });
   activeStrategyPlaybook=playbook;
   activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),strategyPlaybook:playbook};
@@ -5941,7 +6044,10 @@ function refreshStrategyPlaybook(options={}){
     track:lastTrack,car:lastCarModel||lastCarClass,record_count:Number(memory?.memoryRecordCount)||0,
     session_count:Number(memory?.sessions)||0,fuel_samples:Number(memory?.fuelSampleCount)||0,
     avg_fuel_l_per_lap:memory?.avgFuel??null,avg_lap_s:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
-    matched_keys:memory?.matchedKeys||[],playbook_available:playbook.available,reason:playbook.reason}));
+    matched_keys:memory?.matchedKeys||[],
+    luna_self_memory_id:lunaSelfMemory?.memory_id||null,
+    luna_self_memory_tags:lunaSelfMemory?.tags||[],
+    playbook_available:playbook.available,reason:playbook.reason}));
   diagnosticLog('STRATEGY_PLAYBOOK',JSON.stringify({available:playbook.available,reason:playbook.reason,
     source:playbook.source,format:playbook.format,plans:playbook.plans,evidence:playbook.evidence}));
   if(options.announce===true) announceStrategyPlaybook(playbook);
@@ -6090,6 +6196,12 @@ function evaluateLiveStrategySwitch(live){
   diagnosticLog('STRATEGY_PLAYBOOK_DECISION',JSON.stringify(decision));
 }
 function maybeDeliverFuelWindowWatch(live){
+  const selfFuelGuard=activeStrategyPlaybook?.evidence?.luna_self_memory_tags?.includes('fuel_window_proactive')===true;
+  if(selfFuelGuard&&!fuelWindowWatch.armed&&!fuelWindowWatch.announced){
+    fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
+    diagnosticLog('FUEL_WINDOW_WATCH','armed source=luna_self_memory memory_id='+
+      String(activeStrategyPlaybook?.evidence?.luna_self_memory_id||'-'));
+  }
   if(!fuelWindowWatch.armed||fuelWindowWatch.announced||isSessionEndingLifecycle()) return;
   const currentSession=String(lastSessionNum??'');
   if(fuelWindowWatch.sessionKey!==currentSession){
@@ -6108,7 +6220,8 @@ function maybeDeliverFuelWindowWatch(live){
   const key=['fuel_window_watch',currentSession,Number(live?.lap)||0].join('|');
   addMsg('ai',msg);pushMsg({role:'assistant',content:msg});
   speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'fuel_window_watch',dedupeKey:key});
-  diagnosticLog('FUEL_WINDOW_WATCH','delivered key='+key);
+  diagnosticLog('FUEL_WINDOW_WATCH','delivered key='+key+
+    (selfFuelGuard?' source=luna_self_memory':' source=driver_request'));
 }
 function maybeAnnounceEnduranceFuelForecast(live){
   if(!/race/i.test(String(lastSessionType||live?.session_type||''))||isSessionEndingLifecycle()) return;

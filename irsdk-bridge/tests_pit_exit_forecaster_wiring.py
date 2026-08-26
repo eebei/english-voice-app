@@ -16,6 +16,7 @@ checks = {
     "live payload carries forecast": "'pit_exit_forecast': _pit_now_forecast" in source,
     "fresh driver forecast is scored": "pit_exit_forecast_shadow = pit_exit_forecast_live" in source,
     "forecast freshness uses session clock": "pit_exit_forecast_live_at = _pit_now_session_time" in source,
+    "battle context carries same-frame snapshot": "'snapshot_id': _pit_option_snapshot['snapshot_id']" in source,
 }
 
 failed = [name for name, ok in checks.items() if not ok]

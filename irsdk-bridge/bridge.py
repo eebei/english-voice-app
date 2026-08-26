@@ -55,7 +55,7 @@ import practice_profile
 import gap_call_policy as gap_call_policy_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 286 (decision memory, server ledger and derived runtime module diagnostics)"
+BUILD_VERSION = "Build 287 (driver-confirmed Luna self-memory and strategy condition guards)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -5901,6 +5901,9 @@ def poll_iracing():
                                               (_player_samples[_mid - 1]
                                                + _player_samples[_mid]) / 2.0)
                             _battle_context = {
+                                # Explicit proof that GAP, pace and rejoin forecasts
+                                # were derived from this one telemetry frame.
+                                'snapshot_id': _pit_option_snapshot['snapshot_id'],
                                 'ahead_car_idx': _ahead_idx,
                                 'ahead_car_number': car_number_map.get(_ahead_idx),
                                 'ahead_class_position': class_pos - 1,

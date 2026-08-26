@@ -31,6 +31,21 @@ check('planned first add never exceeds tank', monza.plans.A.first_service.estima
 check('historical start-fuel assumption stays internal until bridge authority exists',
   !/スタート燃料は.*前提|給油設定.*L/.test(playbook.briefing(monza,'ja')));
 
+const selfCorrected = playbook.buildPlaybook({
+  track: 'monza full', car: 'Mercedes-AMG GT3 2020',
+  raceDetail: { session_type: 'Race', session_time: '1200 sec' },
+  historicalFuelPerLapL: 3.582, historicalFuelSamples: 20,
+  historicalAverageLapS: 110.0, effectiveCapacityL: 20.14,
+  selfMemory: { memoryId: 'luna-self|rbr|1', tags: ['gap_accuracy', 'fuel_window_proactive'] },
+});
+check('Luna self-memory tags become explicit Plan B/C conditions',
+  selfCorrected.plans.B.conditions.includes('latest_gap_same_frame_required')
+  && selfCorrected.plans.C.conditions.includes('latest_gap_same_frame_required')
+  && selfCorrected.plans.C.conditions.includes('fuel_window_authority_required'));
+check('self-memory provenance is retained in the playbook evidence',
+  selfCorrected.evidence.luna_self_memory_id === 'luna-self|rbr|1'
+  && selfCorrected.evidence.luna_self_memory_tags.includes('gap_accuracy'));
+
 const live = playbook.updateWithLive(monza, { fuel_strategy: { clean_laps_sampled: 3, avg_fuel_per_lap: 3.7 } });
 check('three clean laps replace historical source', live.source === 'live_clean_laps');
 check('live sample count is retained', live.evidence.live_fuel_samples === 3);
@@ -47,6 +62,10 @@ const baseLive = {
   fuel_strategy: { avg_fuel_per_lap: 3.58 },
   pit_exit_forecast: { available: true, likely: { position: 8, traffic_state: 'clear_air' } },
   pit_next_lap_forecast: { available: true, likely: { position: 7, traffic_state: 'clear_air' } },
+};
+const sameFrame = {
+  snapshot_id: 'live:2:42.5', available: true,
+  likely: { position: 8, traffic_state: 'clear_air' },
 };
 let decision = playbook.evaluateSwitch(monza, {
   ...baseLive, battle_context: { player_pace_advantage_s: 0.7 },
@@ -68,6 +87,30 @@ decision = playbook.evaluateSwitch(monza, {
 });
 check('bridge-authoritative evidence allows overcut candidate', decision && decision.selected_plan === 'C', JSON.stringify(decision));
 check('missing pace evidence never switches plan', playbook.evaluateSwitch(monza, baseLive) === null);
+const selfGuardedDecision = playbook.evaluateSwitch(selfCorrected, {
+  ...baseLive,
+  fuel_strategy: { avg_fuel_per_lap: 3.58, estimated_crossings_to_finish: 8 },
+  strategy_options: { available:true, selected_plan:'B', plan_b:{fuel_window_open:true} },
+  pit_exit_forecast: sameFrame,
+  pit_next_lap_forecast: {...sameFrame, likely:{position:7,traffic_state:'clear_air'}},
+  battle_context: { snapshot_id:sameFrame.snapshot_id, gap_ahead_s:0.8, player_pace_advantage_s:0.7 },
+});
+check('self-memory guarded switch records same-frame latest-gap proof',
+  selfGuardedDecision && selfGuardedDecision.evidence.self_memory_guards.includes('latest_gap_same_frame_verified'),
+  JSON.stringify(selfGuardedDecision));
+check('gap correction fails closed without same-frame proof', playbook.evaluateSwitch(selfCorrected, {
+  ...baseLive,
+  fuel_strategy: { avg_fuel_per_lap:3.58, estimated_crossings_to_finish:8 },
+  strategy_options: { available:true, selected_plan:'B', plan_b:{fuel_window_open:true} },
+  battle_context: { player_pace_advantage_s:0.7 },
+}) === null);
+check('gap correction rejects a mismatched top-level GAP', playbook.evaluateSwitch(selfCorrected, {
+  ...baseLive, gap_ahead:0.9,
+  fuel_strategy: { avg_fuel_per_lap:3.58, estimated_crossings_to_finish:8 },
+  strategy_options: { available:true, selected_plan:'B', plan_b:{fuel_window_open:true} },
+  pit_exit_forecast:sameFrame, pit_next_lap_forecast:sameFrame,
+  battle_context:{snapshot_id:sameFrame.snapshot_id,gap_ahead_s:0.8,player_pace_advantage_s:0.7},
+}) === null);
 check('blend-risk rejoin blocks undercut', playbook.evaluateSwitch(monza, {
   ...baseLive, battle_context: { player_pace_advantage_s: 0.7 },
   pit_exit_forecast: { available: true, likely: { position: 8, traffic_state: 'blend_risk' } },

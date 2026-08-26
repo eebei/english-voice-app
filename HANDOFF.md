@@ -1,6 +1,23 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-25 JST
+最終更新: 2026-08-26 JST
+
+## 2026-08-26 Build 287 Luna自己反省記憶スライス（private build準備中・未公開）
+
+- Build 286のRBRデブリーフを発端にした「訂正を次回へ返す」出口を追加。ただしLuna自身の発話を教訓として自動保存する初版は設計契約違反のため撤回した。`desktop/luna-self-memory.js` は、認証ユーザー・コース・車両が確定した時のドライバー本人による明示訂正だけを決定論的に候補化する。
+- 別sessionまたは10分以上離れた同型訂正2回 → Lunaが一度だけ読み返し → 本人の肯定でversion 2の`active`へ昇格、否定なら`rejected`として再提案しない。同一場面の連続発言は2票に数えない。合意前candidate、旧assistant由来version 1、identity欠損、未来日時、90日超過、deletedは次回取得・戦略利用しない。「反省記憶を削除／元に戻す」で直近activeを削除できる。
+- 自己反省記憶とDecision訂正の両方が確認待ちの時、裸の「はい／いいえ」を片方へ推測適用せず対象を聞き返す。保持上限ではdeleted → rejected → candidateをactiveより先に捨て、合意済み記憶を未確定候補で押し出さない。周回遅れタグも固定文だけを発話し、ドライバー自由文や数字をechoしない。
+- 合意済み記憶だけを `pw_luna_self_memory_v1` read-back → 次回Strategy briefing冒頭の一回発話（`luna_self_memory`）へ接続。GAP精度、給油ウィンドウ先出し、周回遅れ説明を閉じたタグとして扱い、数字や自由文から戦略事実を作らない。
+- 機械検証: `node tests-luna-self-memory.js` 18/18、renderer構文、`tests-evidence-debrief.js` 41/41、`tests-session-memory-tunnel.js` 118/118、runtime module status 11/11。外部有料API呼び出しなし。
+- 新moduleはpackage/CI検査の構成上同梱対象であることを確認済み。Claude Code独立再確認（`6fdf10d` / `2cf40d9`）でP0/P1/P2は0件、全JS・Python 305件・`preflight.sh`不合格0件。未確認は実artifactへの同梱、Windows loaded、次回iRacingセッションでの訂正往復・自発音声・実戦戦略への有用性。YujiのBuild GOを受領し、Build 287へ採番。commit / private build準備中、公開は未実施。
+
+### 追加：反省記憶を戦略条件へ接続（未公開）
+
+- `luna-self-memory.js` のタグを `strategy-playbook.js` のPlan B/Cへ渡す出口を追加。GAP精度の反省がある場合は `latest_gap_same_frame_required` を候補条件にし、BridgeがGAP・ペース・今周／次周復帰予測へ付けた同一 `snapshot_id` とGAP値の一致を実際の切替条件としてfail-closedで検証する。
+- 給油ウィンドウの反省がある場合は `fuel_window_authority_required` を候補条件へ付与し、既存の決定論的 `fuelWindowStatus` 監視を次回Raceで自動起動する。ドライバー要求で起動した監視と自己反省起因をtraceで区別する。
+- `renderer.html` は同一ユーザー・コース・車両の最新自己反省をプレイブック生成へ渡し、ID・タグ・適用条件を `MEMORY_ACTION` / `STRATEGY_PLAYBOOK` traceへ残す。既存のBridge権威・鮮度・復帰位置ゲートは緩めていない。
+- 機械検証: `node tests-strategy-playbook.js` 39/39、`node tests-luna-self-memory.js` 18/18、`python3 irsdk-bridge/tests_pit_exit_forecaster_wiring.py` 14/14、`node tests-evidence-debrief.js` 41/41、`node tests-session-memory-tunnel.js` 118/118、`node tests-runtime-module-status.js` 11/11、構文／diff check 合格。外部有料API呼び出しなし。
+- 未確認: Windows実機同梱、実iRacingでの次回自発発話、自己反省タグによる実戦Plan B/C再計算の有用性。まだcommit / push / build / 公開なし。
 
 ## ⚠️ 2026-08-25 Build 282 artifact の記録は無効（Gate 5 やり直し）
 
