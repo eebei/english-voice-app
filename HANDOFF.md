@@ -2,14 +2,17 @@
 
 最終更新: 2026-08-26 JST
 
-## 2026-08-26 Build 287 Luna自己反省記憶スライス（private build準備中・未公開）
+## 2026-08-26 Build 287 Luna自己反省記憶スライス（Gate 5実物検査済み・未公開）
 
 - Build 286のRBRデブリーフを発端にした「訂正を次回へ返す」出口を追加。ただしLuna自身の発話を教訓として自動保存する初版は設計契約違反のため撤回した。`desktop/luna-self-memory.js` は、認証ユーザー・コース・車両が確定した時のドライバー本人による明示訂正だけを決定論的に候補化する。
 - 別sessionまたは10分以上離れた同型訂正2回 → Lunaが一度だけ読み返し → 本人の肯定でversion 2の`active`へ昇格、否定なら`rejected`として再提案しない。同一場面の連続発言は2票に数えない。合意前candidate、旧assistant由来version 1、identity欠損、未来日時、90日超過、deletedは次回取得・戦略利用しない。「反省記憶を削除／元に戻す」で直近activeを削除できる。
 - 自己反省記憶とDecision訂正の両方が確認待ちの時、裸の「はい／いいえ」を片方へ推測適用せず対象を聞き返す。保持上限ではdeleted → rejected → candidateをactiveより先に捨て、合意済み記憶を未確定候補で押し出さない。周回遅れタグも固定文だけを発話し、ドライバー自由文や数字をechoしない。
 - 合意済み記憶だけを `pw_luna_self_memory_v1` read-back → 次回Strategy briefing冒頭の一回発話（`luna_self_memory`）へ接続。GAP精度、給油ウィンドウ先出し、周回遅れ説明を閉じたタグとして扱い、数字や自由文から戦略事実を作らない。
 - 機械検証: `node tests-luna-self-memory.js` 18/18、renderer構文、`tests-evidence-debrief.js` 41/41、`tests-session-memory-tunnel.js` 118/118、runtime module status 11/11。外部有料API呼び出しなし。
-- 新moduleはpackage/CI検査の構成上同梱対象であることを確認済み。Claude Code独立再確認（`6fdf10d` / `2cf40d9`）でP0/P1/P2は0件、全JS・Python 305件・`preflight.sh`不合格0件。未確認は実artifactへの同梱、Windows loaded、次回iRacingセッションでの訂正往復・自発音声・実戦戦略への有用性。YujiのBuild GOを受領し、Build 287へ採番。commit / private build準備中、公開は未実施。
+- Claude Code独立再確認（`6fdf10d` / `2cf40d9`）でP0/P1/P2は0件、全JS・Python 305件・`preflight.sh`不合格0件。実装commit / 対象SHAは`717803478b6fac2c4eafd50613a9425692e13af4`。
+- private workflow `32959088403`（push event）は成功、Publishはskipped。artifact `OMORAY-PITWALL-Desktop-Build-287-20260826-1037`（302,000,718 bytes）を全量取得し、installer 3本が同一SHAであることを確認。versioned installerは100,663,849 bytes / SHA-256 `88c7dbe8592b826fe732beafdf4401d2ebb07a52bf8b9d4b5e5be5da1479fd91`。
+- 展開実測は`app.asar` 4,271,175 bytes / `51fcecf6e04b5aae5eec4f61ce0ffca1d4d2aa2926b14be0690b5ca1439124b6`、同梱Bridge 17,013,686 bytes / `61089b1a37fb05793f6ac3f98f46cabe1c330eac5aff8f260fca30ead075e633`。CI manifestと一致し、renderer由来runtime module 9/9（`luna-self-memory.js`含む）、`buildNum=287`、Bridge内Build 287、対象SHA正規化一致を確認した。
+- 未確認はClaude Codeによるartifact独立再計算、Windows loaded、次回iRacingセッションでの訂正往復・自発音声・実戦戦略への有用性。Gate 6・8と公開は未実施。
 
 ### 追加：反省記憶を戦略条件へ接続（未公開）
 

@@ -3219,3 +3219,23 @@ Build を始めるには、Codex の作業中変更と本件の commit が先。
 |---|---|---|---|
 | 08-26 | `6fdf10d` | Build 287 修正の独立再確認 | P1/P2 全件解消・不合格4件の切り分け・GAPテスト回帰の修正 |
 | 08-26 | 本節 | 作業終了報告（必須9項目） | 上記 |
+
+## 2026-08-26 Codex → Claude Code — Build 287 Gate 5 artifact独立確認指示
+
+YujiのBuild GO後、Codexは実装を`717803478b6fac2c4eafd50613a9425692e13af4`へcommit・pushし、push eventのprivate Desktop workflow `32959088403`を完走した。Publishはskipped。
+
+`./verify-artifact.sh 32959088403 717803478b6fac2c4eafd50613a9425692e13af4 287`のCodex実測は次のとおり。
+
+- artifact: `OMORAY-PITWALL-Desktop-Build-287-20260826-1037` / 302,000,718 bytes
+- installer: 100,663,849 bytes / SHA-256 `88c7dbe8592b826fe732beafdf4401d2ebb07a52bf8b9d4b5e5be5da1479fd91`
+- app.asar: 4,271,175 bytes / `51fcecf6e04b5aae5eec4f61ce0ffca1d4d2aa2926b14be0690b5ca1439124b6`
+- Bridge: 17,013,686 bytes / `61089b1a37fb05793f6ac3f98f46cabe1c330eac5aff8f260fca30ead075e633`
+- runtime module 9/9、`luna-self-memory.js`あり、`buildNum=287`、Bridge内Build 287、旧286なし、対象SHA正規化一致
+
+Claude Codeは作業者の数値を転載せず、同runを独立に取得・展開し、SHA、9 module、Build 287、Publish skipped、対象SHAを再計算してGate 5の確認者署名を記録すること。Windows Gate 6、server Gate 7、iRacing Gate 8、公開Gate 9は未実施として混同しない。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-26 | 本節 | Build 287 Gate 5 artifact独立確認指示 | private run・対象SHA・Codex実測値とClaude独立再計算依頼 |
