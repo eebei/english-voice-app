@@ -3239,3 +3239,133 @@ Claude Codeは作業者の数値を転載せず、同runを独立に取得・展
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-26 | 本節 | Build 287 Gate 5 artifact独立確認指示 | private run・対象SHA・Codex実測値とClaude独立再計算依頼 |
+
+## 2026-08-26 JST — Claude Code 作業終了報告（Build 287 Gate 5 独立確認・**確認者署名**）
+
+必須MD報告。**Codex の数値は転載せず、同 run を独立に取得・展開して再計算した。**
+
+### 1. 作業日時と担当
+
+2026-08-26 JST。**確認担当 Claude Code**（実装・build は Codex）。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| 対象SHA | `717803478b6fac2c4eafd50613a9425692e13af4` |
+| ブランチ | `origin/main` は `828ca13` のまま（対象SHA は build ブランチ側） |
+| Build番号 | **287**（`BUILD_VERSION = "Build 287 (driver-confirmed Luna self-memory and strategy condition guards)"`） |
+| workflow run | `32959088403`（push event / private） |
+
+**私が Build 286 報告で未完了に挙げた「`BUILD_VERSION` が 286 のまま」は解消**（287 へ採番済み）。
+
+### 3. 変更ファイル
+
+**本作業で Claude が変更したファイルは無い**（確認のみ）。
+対象SHA と公開中 Build 286（`92e82a3`）の出荷経路の差分：
+
+```
+desktop/luna-self-memory.js   +116（新規）
+desktop/renderer.html         +119 -1
+desktop/strategy-playbook.js  +41
+irsdk-bridge/bridge.py        +5 -1
+irsdk-bridge/tests_pit_exit_forecaster_wiring.py +1
+```
+
+### 4. 実行したテスト（件数・終了コード）
+
+**対象SHA を隔離 worktree へ出して実行**（本作業ツリーには触っていない）。
+
+| 項目 | 結果 | exit |
+|---|---|---|
+| JS 全スイープ（対象SHA） | **失敗0** | — |
+| `tests-gap-answer-queue.js` | 44/44 | 0 |
+| `tests-runtime-module-status.js` | 11/11 | 0 |
+| `tests-luna-self-memory.js` / `tests-strategy-playbook.js` | — | 0 |
+| Python discover | 305 tests | 0 |
+| `./preflight.sh`（対象SHA） | **出荷可** | 0 |
+
+初回は5本が失敗したが、**worktree に root の `node_modules` が無いだけの環境要因**と切り分けた
+（用意して再実行 → 全て exit 0）。**実回帰ではない。**
+
+### 5. artifact（すべて Claude が自分で再計算）
+
+| 項目 | 実測値 |
+|---|---|
+| artifact | `OMORAY-PITWALL-Desktop-Build-287-20260826-1037` / 302,000,718 bytes |
+| run headSha | `717803478b6fac2c4eafd50613a9425692e13af4`（**対象SHAと一致**） |
+| Publish | **skipped**（private） |
+| installer | 100,663,849 bytes / `88c7dbe8592b826fe732beafdf4401d2ebb07a52bf8b9d4b5e5be5da1479fd91`（**3本すべて同一ハッシュ**） |
+| app.asar | 4,271,175 bytes / `51fcecf6e04b5aae5eec4f61ce0ffca1d4d2aa2926b14be0690b5ca1439124b6` |
+| Bridge | 17,013,686 bytes / `61089b1a37fb05793f6ac3f98f46cabe1c330eac5aff8f260fca30ead075e633` |
+| **runtime module 欠落数** | **0**（9/9・`luna-self-memory.js` を含む） |
+| build-info | `buildNum = 287` |
+| Bridge 内 | `Build 287` 実在／**旧 `Build 286` は同じ箇所に無し**／`pygame` 52件（正しい系統） |
+| 同梱物と対象SHA | **CRLF 正規化後に一致** |
+
+**不合格 0 件。** Codex の申告値と独立再計算値は全項目一致した。
+
+### 6. Gate 0〜9
+
+| Gate | 状態 |
+|---|---|
+| 0 変更範囲 | **合格** |
+| 1 失敗の固定 | **合格** |
+| 2 package 対象 | **合格**（renderer 参照9本すべて実物に同梱） |
+| 3 機械検証 | **合格**（対象SHA で preflight 出荷可・失敗0） |
+| 4 P0/P1 | **合格**（P1/P2 は `6fdf10d` で全件解消を反証済み） |
+| **5 artifact** | **合格 — 確認者署名: Claude Code（実装・build は Codex＝作業者と確認者が別）** |
+| 6 Windows | **未実施** |
+| 7 server | **未実施**（本番は `828ca13`＝Build 284 のコード。`/api/memory/decisions` は 404） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **未実施**（Build 287 は private。公開中は Build 286＝自己反省記憶を含まない） |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **なし**（本報告の MD 追記のみ） |
+| push | **なし** |
+| private build | **なし**（Codex が実施済み） |
+| server deploy | **なし** |
+| 公開 Release | **なし** |
+| Windows 実機確認 | **なし** |
+| iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 | 手順 |
+|---|---|---|---|
+| 1 | Gate 6 Windows | **Yuji** | Build 287 installer（SHA `88c7dbe8…`）を取得・起動し、`RUNTIME_MODULE_STATUS` が **9本**・`missing:[]`・`status:"loaded"` を ACK |
+| 2 | Gate 7 server | **Yuji の deploy GO** | `origin/main` への push が必要 → `./verify-deploy.sh` |
+| 3 | Gate 8 実走 | **Yuji** | iRacing。自己反省の訂正往復と次回自発発話は実走でしか確認できない |
+| 4 | Gate 9 公開 | **Yuji の別GO** | Gate 6/8 の後 |
+| 5 | Gate 6 handoff の更新 | Claude | `BUILD286_GATE6_WINDOWS_HANDOFF.md` は Build 286 向け。**287 用に差し替えが要る**（module 8本→9本、SHA 変更） |
+
+### 9. 到達段階（混同しない）
+
+| 段階 | 状態 |
+|---|---|
+| 実装済み | ✅（Codex） |
+| 内部テスト済み | ✅（対象SHA で全緑・exit 0） |
+| **artifact 確認済み** | ✅ **Codex 作成／Claude 独立再計算で一致。確認者署名あり** |
+| Windows 確認済み | ❌ **未実施** |
+| 実走済み | ❌ **未実施** |
+| 公開済み | ❌ **未実施**（公開中は Build 286） |
+
+**Gate 6・7・8・9 はいずれも未実施である。**
+本報告は「artifact が対象SHAの中身を含む」までであり、**実走で動く証拠でも出荷可でもない。**
+
+### 自分の実行ミスの訂正（記録）
+
+`git show $S:tests-...` と書いたところ、zsh が `:t` を修飾子として解釈し、
+「私の修正が対象SHA に入っていない」という**誤った観測**を得た。
+正しい記法（`"${S}:path"`）で再確認したところ**正しく入っていた**。
+誤報する前に確かめたので実害は無いが、記録する。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-26 | `2cf40d9` | 作業終了報告（Build 287 修正の独立再確認） | 必須9項目 |
+| 08-26 | 本節 | 作業終了報告（Build 287 Gate 5 独立確認） | Gate 5 確認者署名・独立再計算・未実施の再掲 |
