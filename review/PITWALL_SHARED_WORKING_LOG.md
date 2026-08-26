@@ -2462,3 +2462,50 @@ artifact 302MB のうち **200MB は同一 installer の複製2本**（`Setup-la
 **Gate 6（Windows）・Gate 7（server）・Gate 8（実走）・Gate 9（公開）はいずれも未実施である。**
 本 Build について現在言えるのは「実装済み」「内部テスト済み」「artifact は Claude 自己検査で対象SHAの中身を含む」までであり、
 **実走で正しく動くことの証拠でも、出荷可でもない。**
+
+## 2026-08-26 Claude Code — Gate 6 handoff に artifact情報と実機手順を追記
+
+`review/BUILD286_GATE6_WINDOWS_HANDOFF.md` を受領。役割分担
+「Claude：手順・artifact情報・証拠MDを更新する」に従って追記した。
+**Gate 5 が Codex で完了するまで Yuji へ実行依頼は出さない**（本書§前提を守る）。
+
+### 埋めた内容
+
+1. **installer の所在と実測値** — run URL、ファイル名、100,660,198 bytes、
+   SHA-256 `4D87C3E4…`、対象SHA `8851712…`、`Get-FileHash` コマンド、SmartScreen の扱い
+2. **Build 番号をどこで見るか** — タイトルバー／Bridge ログ1行目の実際の文字列
+3. **診断ログの場所** — `%USERPROFILE%\Desktop\OMORAY-bridge-debug-<日時>.log`。
+   `RUNTIME_MODULE_STATUS` の期待形（8本すべて `true` / `missing:[]` / `status:"loaded"`）と
+   `Select-String` コマンド。**5本しか並ばなければ Build 285 以前を掴んでいる**という判別も明記
+
+### ★項目8は private candidate では実行できない（要判断）
+
+> 8. 旧URLと現行URLが同じprivate candidateを指すことを確認する。
+
+実装を確認した。
+
+```
+desktop/main.js:12  LATEST_EXE_URL  = .../releases/download/desktop-latest/...Setup-latest.exe
+desktop/main.js:13  RELEASE_API_URL = .../releases/tags/desktop-latest
+```
+
+**どちらも公開 `desktop-latest` リリースを指す。** private artifact はそこに存在しない
+（今回 `Publish to Release` を skipped にしているため）。
+**この項目を満たそうとすると公開が必要になり、Gate 9 を先に踏むことになる。**
+
+→ 項目8は **Gate 9（公開）の確認事項**として扱い、Gate 6 では実行しない、と追記した。
+
+### 代わりに Gate 6 で見るべきものを1つ足した — 更新ゲートの誤爆
+
+公開 latest は現在 **Build 284**。更新ゲートは build 番号ではなく **buildTag（日時）** を比較する
+（`desktop/main.js:475-477`）。Build 286 の buildTag は `20260825-2342` なので、
+
+- **「Update available」バナーが出ないこと**が正しい挙動
+- **出たら不合格**。テスターを古い Build 284 へ引き戻す誤誘導になる
+
+これは private candidate でも実機で確認でき、かつ実害に直結する。
+
+### 待ちは変わらない
+
+Gate 5（Codex）の完走待ち。Gate 6 の実行依頼はその後。
+**Gate 6・7・8・9 はいずれも未実施であり、本追記は手順であって結果ではない。**
