@@ -2848,3 +2848,106 @@ Build 282 で「証拠だけが古いまま残った」のと同じ型なので�
 
 **公開中の Build 286 は、Windows 実機起動も実走も未確認のまま配布されている。**
 **また Build 286 に Luna 自己反省記憶は入っていない**（別 Build が必要）。
+
+## 2026-08-26 Claude Code — Luna自己反省記憶 独立確認：**P1 1件 / P2 2件（未コミット・実装は触っていない）**
+
+役割は逆（Codex 実装 / Claude 確認）。`HANDOFF.md` の追記を受けて、出口から入口へ逆引きした。
+**実装ファイルには一切触っていない。commit もしていない。**
+
+### 撤回は本物だった（確認できた点）
+
+設計V1の禁止事項①「**LLM に自分の反省を書かせない**」に対し、初版が違反していたのを Codex が撤回している。
+配線を実物で追い、**`observe()` に届くのは `sendMsg` のドライバー入力だけ**であることを確認した。
+assistant のテキストが source になる経路は無い。撤回は形だけでなく実装で成立している。
+
+合意ループ（同型2回 → 一度だけ読み返し → 肯定で `active` / 否定で `rejected` → 再提案しない）も、
+`confirm()` が `status==='candidate'` かつ `observed_count>=2` を要求し、
+`latest()` が `confirmedAt` の解析可能性を要求する形で実際に閉じている。
+
+独立再実行：`tests-luna-self-memory.js` / `tests-strategy-playbook.js` / `tests_pit_exit_forecaster_wiring.py`
+すべて exit 0、`tests-evidence-debrief.js` **41/41**（先に報告した失敗は解消済み）、
+`tests-session-memory-tunnel.js` **118/118**、`tests-runtime-module-status.js` **11/11**。
+`luna-self-memory.js` に外部有料API参照 **0件**。
+
+---
+
+### ★P1 — 「はい」が二重に取り合いになり、**戦略記録の訂正が永久に確定しない**
+
+`sendMsg` の先頭で `handleLunaSelfMemoryInput(text)` が走り、**早期 return** する。
+その肯定語パターンが、スライス2の Decision 訂正の確認と**完全に同一**。
+
+```
+renderer.html:2152  const yes=/^(?:はい|そう|そうです|合ってる|それでいい|yes|correct|right)[。.!！]?$/i
+renderer.html:2254  if(pendingDecisionDispute&&/^(?:はい|そう|そうです|合ってる|それでいい|yes|correct|right)[。.!！]?$/i
+```
+
+実行順を実測：`handleLunaSelfMemoryInput` = 文字位置 123192 / Decision 訂正 = 126083。
+**自己記憶が先に走って return するため、Decision 訂正の「はい」は届かない。**
+
+#### 再現手順
+
+1. ドライバー「それ違う」→ Decision 記録が `disputed`、読み返しが出る（利用停止）
+2. 同一セッションで自己反省の候補が2回目に達し、Luna が自分の確認を出す
+3. ドライバー「はい」（**1 の読み返しに答えたつもり**）
+
+#### 起きること（両方とも実害）
+
+- **ドライバーが合意していない自己反省が `active` になる**（設計V1 ③合意ループの意味が消える）
+- **`disputed` のままの Decision 記録が二度と復帰しない**＝正しい過去が永久に使えない
+
+#### 提案（実装は担当へ）
+
+肯定語を消費する前に、**どちらの確認が保留中かで分岐**する。
+両方保留なら、どちらへの返事かを一度聞き返す（推測で片方を確定させない）。
+
+---
+
+### P2-1 — 2回の観測に**時間差の要件が無い**
+
+設計V1の禁止事項②「一時の感情を恒久ルールにしない」に対し、
+`observe()` は `observed_count` を呼ばれた回数で数えるだけで、`lastObservedAt` を比較していない。
+
+```
+1秒差の連続2回 → proposal: 出る（reason=confirmation_required）
+```
+
+クラッシュ直後に同じ不満を続けて2回言うと、**その場で恒久ルール候補**になる。
+セッション跨ぎ、または一定時間の分離を要件にすべき。
+
+### P2-2 — **合意済み `active` が、無関係な候補に押し出されて消える**
+
+`observe()` の `while (out.length > MAX_RECORDS) out.shift();` は**先頭から捨てる**。
+古い順に並ぶため、**本人が合意した `active` が、別コース・別車両の新しい候補に押し出される**。
+
+```
+合意済み active を作成 → あり
+別条件の候補を24件追加 → 合意済み active は ❌ 消えた
+```
+
+本人が「はい」と言った訂正が黙って失われる。捨てる順は
+`deleted` → `rejected` → `candidate` → `active` の順にすべきで、`active` は最後まで残す。
+
+### P2-3 — `briefingLine` の既定分岐が**ドライバーの自由文をそのまま読み上げる**
+
+タグは3つ（`gap_accuracy` / `fuel_window_proactive` / `lapped_car_clarity`）だが、
+専用文は先の2つだけ。`lapped_car_clarity` は既定分岐へ落ち、原文を72字まで echo する。
+
+```
+入力: 次回から周回遅れを0.5秒以内で明確に説明して
+発話: 前回の反省：次回から周回遅れを0.5秒以内で明確に説明して
+      ★自由文中の「0.5秒」がそのまま無線に乗る
+```
+
+HANDOFF は「数字や自由文から戦略事実を作らない」としているが、
+**数字を含む自由文がそのまま音声になる**。`lapped_car_clarity` にも専用文を持たせ、
+既定分岐は原文 echo をやめるのが筋。
+
+---
+
+### 判定
+
+**中心設計（撤回・合意ループ・identity ゲート・閉じたタグ）に異論はない。**
+ただし **P1 は既存機能（スライス2の訂正）を壊す**ため、解消まで Build 候補にしない。
+P2 3件は設計V1の禁止事項②と、HANDOFF 自身の宣言に対する不整合。
+
+commit / push / build / 公開はしていない。実装ファイルにも触っていない。
