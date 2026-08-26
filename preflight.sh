@@ -247,6 +247,9 @@ if python3 irsdk-bridge/tests_gap_authority.py >/dev/null 2>&1; then echo "   �
 echo "── G2 GAP鮮度：再生直前の照合（14秒の旧数値を再生しない・2026-08-25）"
 if node tests-gap-freshness.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-gap-freshness.js 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── Gate 5道具：artifact検査が落ちるべき時に落ちるか（2026-08-26）"
+if node tests-artifact-verification.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-artifact-verification.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo "── Gate 6受け皿：起動時module診断が全runtime moduleを見ているか（2026-08-26）"
 if node tests-runtime-module-status.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-runtime-module-status.js 2>&1|grep "❌"|head -8; fail=1; fi
 

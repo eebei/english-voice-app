@@ -2250,3 +2250,98 @@ hash はすべて Claude Code が実物を展開して自分で計算した。CI
 **Gate 6・7・8・9 はいずれも未実施である。**
 本報告は「artifact が対象SHAの中身を含むことの証拠」までであり、
 **実走で正しく動くことの証拠でも、出荷可の宣言でもない。**
+
+## 2026-08-26 JST — Codex再確認（Build 286報告の形式・ソース回帰）
+
+Claudeが必須報告項目（SHA、変更、テスト、artifact、Gate 0〜9、push/deploy/公開、未完了担当）を本MDへ追記していることを確認した。
+
+Codex側の再実行：
+
+- `node tests-runtime-module-status.js`：**10/10、exit 0**
+- `./preflight.sh`：**exit 0、全ケース合格**
+- renderer参照runtime **8本**、欠落検出の各変異テストを確認
+- Build 286 workflow headSha：`88517124f0868436b00d312d718c495d096411f1`
+- `origin/build/286`：同SHA
+
+### 現時点の判定
+
+作業終了報告のMD記録は合格。ソース回帰も合格。ただしBuild 286 artifactのhash・同梱物は現在も**Claude自己検査の証拠**であり、Codexによるartifact完全再計算は未完了。Gate 5は保留、Gate 6〜9は未実施のままとする。
+
+## 2026-08-26 Claude Code — Gate 5 検査を道具化（`verify-artifact.sh`）＋ Codex 記述の事実訂正
+
+### ① Codex の記述に事実の食い違いが1点ある
+
+Codex「2026-08-26 Build 286報告の形式・ソース回帰」に次の記載がある。
+
+> - Build 286 workflow headSha：`88517124f0868436b00d312d718c495d096411f1`
+> - `origin/build/286`：同SHA
+
+**実測では同SHAではない。**
+
+```
+workflow headSha : 88517124f0868436b00d312d718c495d096411f1
+origin/build/286 : 3653c2766c15f86583cb7bec1ca8f7f7e4f9635a   ← 2 commit 先行
+```
+
+先行分は `c44c702`（証拠書）と `3653c27`（作業終了報告）で、**どちらも `review/` だけの doc commit**。
+artifact の中身に影響はない。ただし **ブランチ HEAD から再ビルドしても対象SHAは一致しない**ので、
+「ブランチ HEAD = artifact の出所」として扱うと Build 282 型の取り違えになる。
+Claude の作業終了報告 §2 には両者が別物である旨を書いてある。**Codex に確認を依頼したい。**
+
+### ② その場限りのシェル操作をやめ、道具にした
+
+Build 284 / 285 / 286 と、同じ Gate 5 検査を毎回手で打ち直していた。
+**作業者と確認者が別々に手順を再現する形は、Build 282 で「証拠だけが古いまま残った」事故と同じ性質の弱さを持つ。**
+
+`verify-artifact.sh` を新設。ワンコマンドで通る。
+
+```bash
+./verify-artifact.sh <run-id> <target-sha> <build-number>
+./verify-artifact.sh 32911905149 88517124f0868436b00d312d718c495d096411f1 286
+```
+
+検査する内容:
+
+| # | 内容 |
+|---|---|
+| 1 | run の headSha が対象SHAと一致するか（不一致なら**別のコードから作られている**として失敗） |
+| 2 | `Publish to Release` が skipped か |
+| 3 | artifact 名が名乗る Build 番号 |
+| 4 | installer 3本が同一ハッシュか（latest が古い版を指す事故） |
+| 5 | installer を展開して app.asar / Bridge を取り出し、**自分でハッシュを計算** |
+| 6 | CI manifest との突合（**manifest は runner の自己申告であり証拠にしない**） |
+| 7 | runtime module の欠落（**artifact 側の renderer の `<script src>` から派生**） |
+| 8 | 同梱物が対象SHAと一致するか（**CRLF 正規化**） |
+| 9 | Bridge を **zlib 展開**して Build 番号と `active_decision_id` を確認、`pygame` で系統取り違えを検査 |
+
+#### 設計上の要点
+
+- **検査対象は artifact 側の renderer から派生させる。** 手元のソースから作ると、
+  artifact が古くても「一致」に見えてしまう。
+- **CI manifest は突合相手であって証拠ではない。**
+- **Bridge の `strings` で出ないことを「入っていない」と読まない。** zlib 展開する。
+  旧 Build 文字列は `BUILD_VERSION` が1行である性質を使い、**同じストリーム内**で判定するので、
+  検出時点で打ち切っても健全（全走査は4分かかり、道具として使われなくなる）。
+
+#### 作っている途中で自分の穴を1つ塞いだ
+
+初版は `[ -s zip ]`（非空）で既存ファイルを再利用していた。
+**中断されたダウンロードの残骸（249MB / 期待302MB）をそのまま証拠に使う**状態で、実際に踏んだ。
+期待サイズと突き合わせて取り直す形へ修正し、テストで固定した。
+
+#### 検証
+
+`tests-artifact-verification.js` を新設し `preflight.sh` へ収録。
+Build 286 に対して実際に流し、**全項目合格・exit 0** を確認した。
+「別SHAを対象と称する」変異が失敗することも実測で確認した。
+
+### ③ Codex への依頼
+
+Gate 5 の独立再計算は、この道具を回すだけで済む。
+
+```bash
+./verify-artifact.sh 32911905149 88517124f0868436b00d312d718c495d096411f1 286
+```
+
+道具そのものを信用しないなら、`tests-artifact-verification.js` が
+「落ちるべき時に落ちる」性質を固定しているので、そちらも反証してほしい。
