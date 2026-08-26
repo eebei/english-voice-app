@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-26 JST
 
-## 2026-08-26 Build 287 Luna自己反省記憶スライス（Gate 5実物検査済み・未公開）
+## 2026-08-26 Build 287 Luna自己反省記憶スライス（公開・更新導線反映済み）
 
 - Build 286のRBRデブリーフを発端にした「訂正を次回へ返す」出口を追加。ただしLuna自身の発話を教訓として自動保存する初版は設計契約違反のため撤回した。`desktop/luna-self-memory.js` は、認証ユーザー・コース・車両が確定した時のドライバー本人による明示訂正だけを決定論的に候補化する。
 - 別sessionまたは10分以上離れた同型訂正2回 → Lunaが一度だけ読み返し → 本人の肯定でversion 2の`active`へ昇格、否定なら`rejected`として再提案しない。同一場面の連続発言は2票に数えない。合意前candidate、旧assistant由来version 1、identity欠損、未来日時、90日超過、deletedは次回取得・戦略利用しない。「反省記憶を削除／元に戻す」で直近activeを削除できる。
@@ -13,7 +13,8 @@
 - private workflow `32959088403`（push event）は成功、Publishはskipped。artifact `OMORAY-PITWALL-Desktop-Build-287-20260826-1037`（302,000,718 bytes）を全量取得し、installer 3本が同一SHAであることを確認。versioned installerは100,663,849 bytes / SHA-256 `88c7dbe8592b826fe732beafdf4401d2ebb07a52bf8b9d4b5e5be5da1479fd91`。
 - 展開実測は`app.asar` 4,271,175 bytes / `51fcecf6e04b5aae5eec4f61ce0ffca1d4d2aa2926b14be0690b5ca1439124b6`、同梱Bridge 17,013,686 bytes / `61089b1a37fb05793f6ac3f98f46cabe1c330eac5aff8f260fca30ead075e633`。CI manifestと一致し、renderer由来runtime module 9/9（`luna-self-memory.js`含む）、`buildNum=287`、Bridge内Build 287、対象SHA正規化一致を確認した。
 - Claude Codeがcommit `677a235`で同runを独立取得・展開し、installer / app.asar / Bridgeのbytes・SHA、Publish skipped、runtime module 9/9、Build 287、対象SHA一致をすべて再計算。Codex実測と全項目一致し、Gate 5は作業者・確認者分離で合格署名済み。
-- 未確認はWindows loaded、次回iRacingセッションでの訂正往復・自発音声・実戦戦略への有用性。Gate 6・8と公開は未実施。server/auth/payment/public pageのコード変更は本Buildに含まない。
+- 公開workflow `32970657576`（対象SHA `7178034`）は成功。`desktop-latest` Release名は`OMORAY PITWALL Desktop — Build 287`、versioned / Setup-latest / Desktop-latestの3資産は100,663,315 bytes / SHA-256 `ce9ae169444b7bb3eb1e39da80d9affe268fee3df9e32be4b9582da76b7053e0`で一致。公開artifactも`--published`実物検査で9/9 module、Build 287、対象SHA一致。
+- 旧exeはRelease APIの最新日時版`20260826-1250`を検出し、`Current: Build ... → Latest: Build 287`の更新案内から`OMORAY-PITWALL-Setup-latest.exe`へ到達する。Windowsで旧exeを起動すれば更新して即テスト走行できる状態。server/auth/payment/public pageのコード変更は本Buildに含まない。
 
 ### 追加：反省記憶を戦略条件へ接続（未公開）
 
