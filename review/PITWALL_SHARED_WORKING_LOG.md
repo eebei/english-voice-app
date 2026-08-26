@@ -2074,3 +2074,179 @@ Claudeの `review/BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md` を自己申告�
 artifactはprivateのまま。Codexはpush、deploy、公開を行っていない。
 
 G1/G2の自発GAP経路そのもの（同一frame authority、EstTime残留抑止、queue直前再確認）の設計と単体再生は確認できた。だが上記P1を残したままBuild 284を利用者テスト候補・出荷可とは扱わない。
+
+## 2026-08-26 JST — Build 286正式引き渡し指示
+
+Build 285はGate 6のmodule診断が5本ハードコードだったため確認対象から除外する。Claudeが派生検査へ修正した**Build 286**を正式候補とする。
+
+Claudeは `review/BUILD286_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md` に、対象SHA、workflow run、artifact名、installer／app.asar／Bridgeのhash、Publish skip、runtime module欠落0を記録し、Codex独立確認へ渡すこと。Build 285 artifactの再利用は禁止。
+
+進行順は次のとおり。
+
+1. Gate 5：CodexがBuild 286 artifactを独立再計算。
+2. Gate 6：YujiがWindowsで取得・起動・8本の`RUNTIME_MODULE_STATUS`・ACK確認。
+3. Gate 7：server反映後に`verify-deploy.sh`でSHAだけでなくmemory API経路とDB migrationを確認。
+4. Gate 8：YujiがiRacing実走でGAP数値、Memory自発発話、Decision ID結合を確認。
+5. Gate 9：上記完了後に公開判断。
+
+Build 286も、artifact検査だけで「実走済み」「公開可」と断定しない。
+
+## 2026-08-26 JST — Claude作業終了時の必須MD報告
+
+以後、Claudeは作業を終えたらチャットだけで「完了」と言わず、必ず共有MDへ最終報告を追記すること。
+
+### 必須報告項目
+
+1. 作業日時（JST）と担当。
+2. 対象SHA、ブランチ、Build番号。
+3. 実装／変更ファイルと変更内容。
+4. 実行したテスト名・件数・終了コード。
+5. artifactを作成した場合：workflow run、artifact名、取得元、installer／app.asar／Bridgeの実測hash、runtime module欠落数。
+6. Gate 0〜9を、**合格／未実施／保留**で個別に記載。
+7. push、deploy、公開、Windows確認、iRacing実走の有無を明記。
+8. 未完了項目と、次に実行する担当者・手順。
+9. 「実装済み」「内部テスト済み」「artifact確認済み」「実走済み」「公開済み」を混同しない明示。
+
+### 完了文の禁止
+
+証拠MDが更新されていない状態で、チャット上だけの「完了」「出荷可」「実走可能」は禁止する。artifactがClaude自己検査だけの場合は、**Codex独立確認待ち**と書く。Gate 6以降が未実施なら、その事実を最後の行にも再掲する。
+
+## 2026-08-26 JST — Claude Code 作業終了報告（Build 286）
+
+「作業終了時の必須MD報告」規約に従う。
+
+### 1. 作業日時と担当
+
+2026-08-25 〜 2026-08-26 JST。実装担当 Claude Code。独立確認担当 Codex。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| ブランチ HEAD | `c44c7024a8bda36ebd623b8740cd354b8a18283d` |
+| **artifact の対象SHA** | **`88517124f0868436b00d312d718c495d096411f1`** |
+| ブランチ | `build/286`（`origin/main` は `828ca13` = Build 284 のまま） |
+| Build 番号 | **286**（`Build 286 (decision memory, server ledger and derived runtime module diagnostics)`） |
+
+**ブランチ HEAD と artifact の対象SHA は別物である。** artifact は `8851712` から生成され、
+その後に証拠書 commit `c44c702` が乗っている。**artifact に `c44c702` の内容は入っていない。**
+
+### 3. 実装・変更ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `irsdk-bridge/bridge.py` | Decision ID 結合キー（`active_decision_id` / `active_decision_plan`）を提案・pit exit・blend・session終了の4段へ搭載。両リセット経路。`BUILD_VERSION` 286 |
+| `desktop/decision-memory.js` | **新規**。Decision 台帳（採点・選択・発話・訂正・削除）。数字と採点を持つ唯一の場所 |
+| `desktop/session-memory.js` | setup 前後比較、pit/燃費、disputed 除外 |
+| `desktop/gap-freshness.js` | `evaluateAnswer()` / `rebuildAnswerText()`（PTT回答の出口） |
+| `desktop/local-intent-router.js` | GAP 回答へ identity を付与（両分岐） |
+| `desktop/renderer.html` | 4段の捕捉、ブリーフィング出口3本、訂正の振り分け、server同期、**起動時module診断を派生化** |
+| `auth.js` | `strategy_decisions` テーブル、sanitize、保存/取得/dispute/削除、保持期間90日 |
+| `server.js` | `/api/memory/decisions` 4本（PUT/GET/POST dispute/DELETE。すべて entitlement + rate limit） |
+| `verify-deploy.sh` | SHA 一致に加え、未認証で経路を叩いて 401/404/503/200 を区別 |
+| `preflight.sh` | 新規4本を出荷ゲートへ収録 |
+| `irsdk-bridge/tests_strategy_plan_wiring.py` | リテラル一致 → 性質検査へ書き換え（緩めていない） |
+
+### 4. 実行したテスト（件数・終了コード）
+
+| テスト | 件数 | exit |
+|---|---|---|
+| `tests-runtime-module-status.js` | 10/10 | 0 |
+| `tests-decision-memory-tunnel.js` | 74/74 | 0 |
+| `tests-decision-memory-server.js` | 54/54 | 0 |
+| `tests-session-memory-tunnel.js` | 118/118 | 0 |
+| `tests-gap-answer-queue.js` | 44/44 | 0 |
+| `tests-deploy-verification.js` | 28/28 | 0 |
+| Python discover（irsdk-bridge） | 305 tests | 0 |
+| `./preflight.sh` | 出荷可 | 0 |
+| `git diff --check` | — | 0 |
+| JS 全スイープ | 全緑（失敗0） | — |
+
+**変異試験 累計 48件すべて検出。** 外部有料API呼出 **0件**。
+
+### 5. artifact
+
+| 項目 | 値 |
+|---|---|
+| workflow run | `32911905149`（`workflow_dispatch` / `publish=false` / success） |
+| run の headSha | `88517124f0868436b00d312d718c495d096411f1`（対象SHAと一致） |
+| artifact 名 | `OMORAY-PITWALL-Desktop-Build-286-20260825-2342`（301,989,583 bytes） |
+| 取得元 | `https://github.com/eebei/english-voice-app/actions/runs/32911905149` |
+| installer | 100,660,198 bytes / `4d87c3e436cb8428727bbffbf11356eeb9f7609427ab40fd377ed2b6c0679f13`（3本すべて同一） |
+| app.asar | 4,253,139 bytes / `28c6026a0df25f9690c3e4fede6a17b00afaaf00b722dafe8f42386d756604f4` |
+| Bridge | 17,014,431 bytes / `660eea44dcf7836e5738c033ce2e9562aef115830f7cd10e9bb7561e608757f5` |
+| **runtime module 欠落数** | **0**（renderer 参照 8/8 同梱） |
+| build-info | `{"buildNum": 286}` |
+| Publish | **skipped**（公開Release `desktop-latest` は 2026-06-30 のまま） |
+
+hash はすべて Claude Code が実物を展開して自分で計算した。CI manifest は自己申告として扱い証拠に採っていない。
+
+### 6. Gate 0〜9
+
+| Gate | 判定 |
+|---|---|
+| 0 変更範囲 | **合格**（artifact の出所 `8851712` に未追跡の利用者ファイルは無い。§8 の但し書きを参照） |
+| 1 失敗の固定 | **合格** |
+| 2 package 対象 | **合格**（renderer 参照 8/8） |
+| 3 機械検証 | **合格**（§4） |
+| 4 P0/P1 | **合格**（Build 285 時点で Codex 独立確認 0件。以降の差分は module 診断の派生化1件のみ） |
+| 5 artifact | **保留 — Claude 自己検査のみ。Codex 独立確認待ち** |
+| 6 Windows | **未実施** |
+| 7 server | **未実施** |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **未実施** |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **あり**（`build/286` 上） |
+| push | **あり — `build/286` ブランチのみ。`origin/main` は動かしていない**（Yuji のブランチ方式選択に従った） |
+| private build | **あり**（`publish=false`） |
+| server deploy | **なし** |
+| 公開 Release / 利用者配布 | **なし** |
+| Windows 実機確認 | **なし** |
+| iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 | 手順 |
+|---|---|---|---|
+| 1 | Gate 5 独立確認 | **Codex** | Build 286 artifact を再取得し hash・module 欠落・Bridge の `Build 286` を自分で再計算。逆引き6点は証拠本文 §8 |
+| 2 | Gate 6 Windows | **Yuji** | 証拠本文 §9 の手順。**`RUNTIME_MODULE_STATUS` に8本すべてが並び `missing:[]`** であること |
+| 3 | Gate 7 server | **Yuji の deploy GO 後に Claude** | `auth.js`/`server.js` は `build/286` にしかない。本番反映には `origin/main` への push が必要。deploy 後 `./verify-deploy.sh`（SHA だけでなく経路と DB migration） |
+| 4 | Gate 8 実走 | **Yuji** | GAP 数値の dashboard 突合、翌日の Memory 自発発話、Decision ID の4段結合 |
+| 5 | Gate 9 公開 | **Yuji** | 上記完了後 |
+
+#### ★報告すべき自分のミス（Gate 0 の但し書き）
+
+証拠書 commit `c44c702` で `git add review/` を使い、**未追跡だった利用者ファイルを巻き込んだ**。
+
+- `review/james-radio-review/**`（mp3 / zip **34ファイル**）
+- `review/store-build239-screenshot.png`
+- 未追跡だった各種 brief / plan の MD（`GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md` を含む）
+
+**artifact への影響は無い**（`8851712` から生成されており、`c44c702` は artifact の後）。
+ただし「未追跡の利用者ファイルを混ぜない」という Gate 0 の規律に反した。
+**Yuji の判断待ち**：(a) このまま残す ／ (b) バイナリ34件だけ untrack ／ (c) 巻き込んだ全件を untrack。
+なお brief MD は git に入ったことで、GitHub から読む Codex にも見えるようになった。
+
+#### その他の未決（既報）
+
+- **privacy / terms 文言改定**（Gate 7 対象）。決着まで**サーバー同期は既定 OFF** のまま。
+- **ジャンル7（フィーリング・発話方針の記憶）は未着手**。設計V1の判断4点が未決のため踏み込んでいない。
+
+### 9. 到達段階の明示（混同しない）
+
+| 段階 | 状態 |
+|---|---|
+| 実装済み | **✅ 済**（スライス2/3/4・G5・module診断） |
+| 内部テスト済み | **✅ 済**（§4。すべて exit 0） |
+| artifact 確認済み | **⚠ Claude の自己検査のみ。Codex 独立確認待ち** |
+| Windows 確認済み | **❌ 未実施** |
+| 実走済み | **❌ 未実施** |
+| 公開済み | **❌ 未実施** |
+
+**Gate 6・7・8・9 はいずれも未実施である。**
+本報告は「artifact が対象SHAの中身を含むことの証拠」までであり、
+**実走で正しく動くことの証拠でも、出荷可の宣言でもない。**
