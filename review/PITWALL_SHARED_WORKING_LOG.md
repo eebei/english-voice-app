@@ -2738,3 +2738,69 @@ vm サンドボックスへ抽出する際、その窓に新しい依存先が�
 
 **Gate 6 と Gate 8 を経ずに公開されている。** 判断は Yuji のものとして進めるが、記録として明示する。
 公開版は**一度も Windows で起動されておらず、一度も実走していない**。
+
+## 2026-08-26 Claude Code — Luna自己反省記憶（進行中）の同梱経路をビルド前に確認
+
+`HANDOFF.md` の追記でジャンル7（Luna 自己反省記憶）の実装が進行中と確認した。
+**この実装には触っていない。commit もしていない。**
+ただし「未確認: Windows実機での新module同梱」は、**ビルドを使わずに構成で確認できる**ので確認した。
+
+### 確認結果（読み取りのみ）
+
+renderer が読み込む runtime module は **8本 → 9本**（`luna-self-memory.js` 追加）。
+
+```
+cost-meter / decision-memory / fuel-plan-guard / gap-freshness / local-intent-router
+luna-self-memory ← 新規 / memory-action-layer / session-memory / strategy-playbook
+```
+
+| 経路 | 結果 |
+|---|---|
+| `desktop/package.json` の `files` | `"*.js"` を含む → **列挙不要で自動的に同梱対象** |
+| `verify-packaged-runtime.js`（CI 出荷ゲート） | renderer の `<script src>` から派生 → **新moduleを自動で検査対象にする** |
+| `verify-artifact.sh`（Gate 5 道具） | artifact 側 renderer から派生 → **同上** |
+| `tests-runtime-module-status.js`（起動時診断） | 派生 → **11/11**（9 module + 基本2件。Codex の報告値と一致） |
+
+**どこにも「列挙を足す」作業は要らない。** Build 286 で列挙をやめて派生にした効果がそのまま出ている。
+
+したがって「新module同梱」は、**構成上は保証されている**。
+残る未確認は「実際にビルドした artifact に入っているか」と「Windows 実機で loaded になるか」で、
+前者は次の build で `verify-artifact.sh` が、後者は Gate 6 の `RUNTIME_MODULE_STATUS` が拾う。
+
+### ★公開済み Build 286 には自己反省記憶は入っていない
+
+公開版の `app.asar` を実物で確認した。
+
+```
+公開 Build 286 の asar に luna-self-memory.js : ✗ 無し（module 8本）
+```
+
+当然だが明記しておく。**公開中の Build 286 は自己反省記憶を含まない。**
+この機能を配るには**新しい Build 番号での再ビルドと再公開が必要**で、
+Build 286 を「入っている版」として扱わないこと。
+
+### 自分の実行ミスの訂正
+
+`verify-packaged-runtime.js` を `--asar <path>` で呼び、
+`missing packaged runtime modules: fuel-plan-guard.js, cost-meter.js, …` を得た。
+**これはスクリプトの欠陥ではなく、私の呼び出し方の誤り。**
+CLI 形式は引数を取らず、既定の `desktop/dist/win-unpacked/resources/app.asar`
+（＝手元に残っていた Build 284 期の古い dist）を見ていた。
+任意の asar を指すには `verify-artifact.sh` を使う（そのために作った道具）。
+**誤った出力を「ゲートの不具合」として記録しないよう訂正する。**
+
+### 触っていないもの
+
+作業ツリーの以下は他担当の進行中作業であり、**一切変更・commit していない**。
+
+```
+HANDOFF.md / desktop/renderer.html / desktop/strategy-playbook.js
+irsdk-bridge/bridge.py / irsdk-bridge/tests_pit_exit_forecaster_wiring.py
+tests-strategy-playbook.js / desktop/luna-self-memory.js（未追跡）
+tests-luna-self-memory.js（未追跡）
+```
+
+### Gate は変わらない
+
+Gate 6（Windows）・Gate 7（server）・Gate 8（実走）は**未実施**。
+Gate 9 は Build 286 について実施済みだが、**その Build 286 に自己反省記憶は入っていない。**
