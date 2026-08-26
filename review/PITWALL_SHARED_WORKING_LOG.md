@@ -1726,7 +1726,76 @@ commitは変更単位ごとに可能。push / private build / deploy / 公開は
 - Gate 6 Windows、Gate 8 iRacing実走: **未実施**。
 - `physical_traffic_gap` の実GTP/GT3 fixture再生は未完。今回の「異クラスの物理的接近を正しく話す」までを合格とはしない。
 
-## 2026-08-26 Claude Code — Build 285 private artifact **生成・実物検査完了**（署名は Codex 待ち）
+## 2026-08-26 Claude Code — **Gate 6 のチェック自体が壊れていた → Build 286 で作り直し**
+
+証拠本文: [BUILD286_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md](BUILD286_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md)
+
+### 見つけた欠陥（Gate 6 に入る前に、Gate 6 の項目自体を検証して出た）
+
+`PITWALL_RELEASE_GATE.md` Gate 6「起動ログに必要moduleのloaded / missing状態が記録され、全てloadedである」。
+その実装 `reportRuntimeModuleStatus()` が **5本のハードコード**だった。
+
+```
+検査していた   : memory-action-layer / strategy-playbook / fuel-plan-guard / cost-meter / local-intent-router
+見ていなかった : session-memory / decision-memory / gap-freshness   ← 今回の新機能そのもの
+```
+
+**`decision-memory.js` が読み込めなくても `status:'loaded'` と報告する。**
+Build 281（package漏れ）、Build 282 P1-2（CI検査の2本ハードコード）と同型で、
+**Gate 6 が偽の合格を出す**状態だった。
+
+### asar 検査があるのに、なぜこれが要るのか（別の失敗を捕まえる）
+
+| 検査 | 捕まえるもの |
+|---|---|
+| asar 展開（Gate 5） | ファイルが **package に入っていない** |
+| 起動時 module 診断（Gate 6） | ファイルは入ったが **評価に失敗して global が生えない** |
+
+後者はまさに最新コードで起きうるもので、そこだけが素通りだった。
+
+### 修正
+
+自分の `<script src>` から派生させる。9本目を足しても自動で対象になる。
+本番関数を抽出して実行し、**8本を1本ずつ欠けさせて `missing` が出ること**を実挙動で確認。
+`tests-runtime-module-status.js` **10/10**・`preflight.sh` 収録・変異試験2件検出。
+
+### Build 285 → 286
+
+この修正で `renderer.html` が変わったため、**Codex が独立確認済みの Build 285 artifact は中身が古くなった。**
+同一番号で中身違いは Build 282 で証拠を無効化した事故と同じ形なので、**286 へ上げて作り直した。**
+Build 285 の証拠書には supersede 注記を入れた（**285 に対する記録としては有効**）。
+
+### Build 286 実物検査（すべて Claude Code が自分で計算した値）
+
+| 項目 | 値 |
+|---|---|
+| target_sha | `88517124f0868436b00d312d718c495d096411f1` |
+| run | [32911905149](https://github.com/eebei/english-voice-app/actions/runs/32911905149)（`workflow_dispatch` / `publish=false` / success・headSha 一致） |
+| artifact | `OMORAY-PITWALL-Desktop-Build-286-20260825-2342`（301,989,583 bytes） |
+| installer | 100,660,198 / `4d87c3e436cb8428…`（**3本すべて同一ハッシュ**） |
+| app.asar | 4,253,139 / `28c6026a0df25f96…` |
+| Bridge | 17,014,431 / `660eea44dcf7836e…` |
+| build-info | `{"buildNum": 286}` |
+
+CI manifest は runner の自己申告なので**証拠に採らず独立計算 → 3件とも一致**。
+runtime module **8/8 欠落なし**。CRLF 正規化後、**9ファイルすべて HEAD と一致**。
+実物 asar 内で旧ハードコード列挙が **0箇所**、派生検査が入っていることを確認。
+Bridge から zlib 展開で **`Build 286` を検出**（`Build 285` は無し）／`pygame` 52件＝正しい系統。
+`Publish to Release` **skipped**、公開 Release は 2026-06-30 のまま、`origin/main` は `828ca13` のまま。
+
+### ★署名は埋めていない
+
+作業者と確認者が同一のため。**Codex の独立確認を依頼する**（逆引き6点は証拠本文 §8）。
+特に「§0 の派生検査が 1本ずつ欠けさせた時に必ず missing を出すか」を反証してほしい。
+
+### Gate 6 の実施手順は証拠本文 §9 に書いた
+
+installer の入手先、SHA-256、SmartScreen の扱い、確認9項目を記載。
+**新設の #6**：診断ログの `RUNTIME_MODULE_STATUS` が
+`"status":"loaded"` / `missing:[]` かつ **modules に8本すべて**並ぶこと。
+5本しか並んでいなければ古い版を掴んでいる。
+
+## 2026-08-26 Claude Code — Build 285 private artifact 生成・実物検査完了（**superseded**）
 
 証拠本文: [BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md](BUILD285_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md)
 

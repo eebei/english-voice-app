@@ -1,0 +1,11 @@
+clip	category	situation_or_driver_prompt
+01_briefing_open	Conversation	Opening a pre-session briefing
+02_personal_best	Engineering	A completed lap is a personal best of 1:42.300
+03_gap_trend	Engineering	The car ahead is 1.8 seconds away and the gap is shrinking by 0.2 seconds per lap
+04_fuel_tradeoff	Engineering	Driver asks how many laps of fuel remain
+05_undercut_unknown	Honesty	Driver asks whether an undercut will work before enough calibration data exists
+06_other_class	Judgement	A faster car from another class is approaching
+07_tyres_unknown	Conversation	Driver asks whether the tyres are overheating, but tyre temperatures are unavailable
+08_pit_instruction	Immediate	Planned pit stop on the current lap
+09_contact_dialogue	Immediate	Driver has made contact but is still moving
+10_debrief_question	Conversation	First focused question after the session

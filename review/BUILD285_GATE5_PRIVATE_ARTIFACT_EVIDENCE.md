@@ -1,3 +1,10 @@
+> **⚠️ この Build 285 は superseded。** 起動時 module 診断が5本ハードコードで
+> 新3module（session-memory / decision-memory / gap-freshness）を見ておらず、
+> Gate 6 の「必要module全てloaded」が偽の合格を出す状態だった。
+> 修正により renderer が変わったため **Build 286** を新規生成した。
+> 本書は Build 285 に対する記録としては有効だが、**出荷候補は Build 286**。
+> → [BUILD286_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md](BUILD286_GATE5_PRIVATE_ARTIFACT_EVIDENCE.md)
+
 # Build 285 — Gate 5 private artifact 実物検査 証拠
 
 作成: 2026-08-26 JST  
