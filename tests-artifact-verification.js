@@ -63,8 +63,29 @@ console.log('\n══ 途中で切れた取得物を証拠にしない ══');
     /HAVE_BYTES" != "\$ART_BYTES"/.test(script));
   check('  非空判定だけで再利用しない（truncate を通さない）',
     !/if \[ ! -s "\$WORK\/artifact\.zip" \]/.test(script));
-  check('サイズ違いなら消して取り直す', /rm -f "\$WORK\/artifact\.zip"/.test(script));
+  // ★契約変更（2026-08-26）：初版は「サイズ違いなら消して取り直す」だった。
+  //   再開対応を入れたので、**消してはいけない**（消すと毎回ゼロから引き直しになり、
+  //   Codex が踏んだ 302MB 停滞が再発する）。守るべき性質は「消すこと」ではなく
+  //   「サイズが揃うまで検査へ進ませないこと」。緩めたのではなく、対象を正しくした。
+  check('★途中のファイルを消さない（消すと再開できない）',
+    !/rm -f "\$WORK\/artifact\.zip"/.test(script));
+  check('★サイズが揃うまで検査へ進ませない',
+    /while \[ "\$HAVE_BYTES" != "\$ART_BYTES" \]/.test(script)
+    && script.indexOf('unzip -o -q') > script.indexOf('取得完了'));
   check('展開に失敗したら止まる', /zip 展開失敗/.test(script));
+}
+
+console.log('\n══ 停滞しても完走できる（Codex が踏んだ 302MB 停滞）══');
+{
+  check('★やり直しでなく途中から再開する', /curl [^\n]*-C -/.test(script));
+  check('  再開の理由が書いてある', /途中から再開/.test(script) && /永久に終わらない/.test(script));
+  check('★停滞したら切って再開へ回す（無限待ちを作らない）',
+    /--speed-limit 50000 --speed-time 60/.test(script));
+  check('サイズが揃うまで繰り返す', /while \[ "\$HAVE_BYTES" != "\$ART_BYTES" \]/.test(script));
+  check('★1バイトも進まないなら失敗させる（諦めず回り続けない）',
+    /再開しても1バイトも進まない/.test(script));
+  check('試行回数に上限がある', /attempt" -gt 12/.test(script));
+  check('進捗が見える（黙って止まらない）', /取得 試行 \$attempt/.test(script));
 }
 
 console.log('\n══ 同梱物を実物で見る（manifest を証拠にしない）══');

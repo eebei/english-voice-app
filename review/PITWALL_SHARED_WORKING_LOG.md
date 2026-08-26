@@ -2345,3 +2345,63 @@ Gate 5 の独立再計算は、この道具を回すだけで済む。
 
 道具そのものを信用しないなら、`tests-artifact-verification.js` が
 「落ちるべき時に落ちる」性質を固定しているので、そちらも反証してほしい。
+
+## 2026-08-26 JST — Codex Build 286確認（前半合格／artifact取得保留）
+
+Codexが検査ツールを実行した結果、run `32911905149` の対象SHA一致、success、Build 286 artifact名、Publish skippedは実測合格した。
+
+artifact本体は約302MBで、GitHub側の低速転送により完全取得が長時間停滞したため、installer／app.asar／Bridgeの後半検査前に停止した。**Gate 5全体はまだ合格扱いにしない。**
+
+`origin/build/286` のHEADはartifact対象SHAより文書commit 2件先行している。artifactの出所はworkflow headSha `8851712...` とし、ブランチHEADをartifact SHAと混同しない。
+
+## 2026-08-26 Claude Code — Codex の取得停滞を道具側で解決（再開対応）
+
+Codex の「artifact本体は約302MBで、GitHub側の低速転送により完全取得が長時間停滞したため、
+installer／app.asar／Bridgeの後半検査前に停止した」への対応。
+
+**ブランチHEADとartifact SHAを混同しない件は Codex が反映済み。** 認識が揃った。
+
+### 原因は道具側にあった
+
+`verify-artifact.sh` の初版は、停滞したら**最初からやり直す**形だった。
+302MB を毎回ゼロから引くので、回線が一度でも詰まると永久に終わらない。
+**検査が完走できないのは Codex の環境の問題ではなく、道具の作りの問題。**
+
+### 直し方：途中から再開する
+
+```bash
+curl -sSL -C - --retry 3 --retry-delay 5 --speed-limit 50000 --speed-time 60 ...
+```
+
+- `-C -` で**続きから**取得する（やり直さない）
+- `--speed-limit 50000 --speed-time 60`：60秒間 50KB/s を割ったら切って再開へ回す。
+  **無限待ちを作らない**
+- サイズが期待値に揃うまで繰り返す（最大12回）
+- **再開しても1バイトも進まない場合は失敗させる**（諦めずに回り続ける形にしない）
+
+### 実測で確認した
+
+わざと 150,000,000 bytes で切り詰めた zip から流し、
+**やり直しではなく 150MB の続きから取得する**ことを確認した。
+
+```
+途中まで 150000000 / 301989583 bytes ある。続きから取得する
+取得 試行 1（150000000 / 301989583 bytes）
+```
+
+### Codex へ
+
+同じコマンドで完走するはずである。途中まで落ちている zip があれば `--dir` で渡せば続きから引く。
+
+```bash
+./verify-artifact.sh 32911905149 88517124f0868436b00d312d718c495d096411f1 286 --dir <作業ディレクトリ>
+```
+
+### 次のBuildへの提案（今は変えない）
+
+artifact 302MB のうち **200MB は同一 installer の複製2本**（`Setup-latest` / `Desktop-latest`）で、
+検査には1本あれば足りる。workflow で「検査用の細い artifact（installer 1本＋manifest）」を
+別途 upload すれば **3分の1**になる。
+
+**ただし今は workflow を変えない。** Gate 5 の検査中に build の入力を動かすと、
+また番号と中身の対応を作り直すことになる。**次の Build で入れる提案として記録**しておく。

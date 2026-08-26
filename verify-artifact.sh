@@ -93,16 +93,31 @@ esac
 #   中断されたダウンロードの残骸をそのまま証拠に使ってしまう。
 ART_BYTES="$(printf '%s' "$ART" | cut -f3)"
 HAVE_BYTES="$(stat -f%z "$WORK/artifact.zip" 2>/dev/null || stat -c%s "$WORK/artifact.zip" 2>/dev/null || echo 0)"
-if [ "$HAVE_BYTES" != "$ART_BYTES" ]; then
-  [ "$HAVE_BYTES" != "0" ] && note "既存 zip は $HAVE_BYTES bytes で期待 $ART_BYTES と違う。取り直す"
-  rm -f "$WORK/artifact.zip"
-  note "ダウンロード中（数分かかる）…"
-  curl -sSL -H "Authorization: token $(gh auth token)" -H "Accept: application/vnd.github+json" \
-    -o "$WORK/artifact.zip" \
-    "https://api.github.com/repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/artifacts/$ART_ID/zip" \
-    || { bad "ダウンロード失敗"; exit 1; }
-else
+if [ "$HAVE_BYTES" = "$ART_BYTES" ]; then
   note "既存 zip を再利用（サイズ一致 $HAVE_BYTES bytes）"
+else
+  # ★300MB 級の転送は GitHub 側で普通に停滞する。やり直しにすると永久に終わらないので、
+  #   **途中から再開**する（`-C -`）。停滞したら切って再開し、サイズが揃うまで繰り返す。
+  #   Codex がこの検査を完走できなかったのはここが原因（2026-08-26）。
+  [ "$HAVE_BYTES" != "0" ] && note "途中まで $HAVE_BYTES / $ART_BYTES bytes ある。続きから取得する"
+  URL="https://api.github.com/repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/actions/artifacts/$ART_ID/zip"
+  TOKEN="$(gh auth token)"
+  attempt=0
+  while [ "$HAVE_BYTES" != "$ART_BYTES" ]; do
+    attempt=$((attempt+1))
+    if [ "$attempt" -gt 12 ]; then bad "12回試しても取得しきれない（$HAVE_BYTES / $ART_BYTES）"; exit 1; fi
+    note "取得 試行 $attempt（$HAVE_BYTES / $ART_BYTES bytes）"
+    # --speed-limit/--speed-time: 60秒間 50KB/s を割ったら諦めて再開に回す（無限待ちを作らない）
+    curl -sSL -C - --retry 3 --retry-delay 5 --speed-limit 50000 --speed-time 60 \
+      -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
+      -o "$WORK/artifact.zip" "$URL" || true
+    NEW="$(stat -f%z "$WORK/artifact.zip" 2>/dev/null || stat -c%s "$WORK/artifact.zip" 2>/dev/null || echo 0)"
+    if [ "$NEW" = "$HAVE_BYTES" ] && [ "$attempt" -gt 3 ]; then
+      bad "再開しても1バイトも進まない（$NEW / $ART_BYTES）"; exit 1
+    fi
+    HAVE_BYTES="$NEW"
+  done
+  ok "取得完了（$HAVE_BYTES bytes・$attempt 回で完走）"
 fi
 rm -rf "$WORK/extracted"; mkdir -p "$WORK/extracted"
 unzip -o -q "$WORK/artifact.zip" -d "$WORK/extracted" || { bad "zip 展開失敗"; exit 1; }
