@@ -3105,3 +3105,117 @@ Build を始めるには、Codex の作業中変更と本件の commit が先。
 |---|---|---|---|
 | 08-26 | `2e51514` | 規則違反の訂正 | 担当決めを Yuji へ投げた件の訂正 |
 | 08-26 | 本節 | Build 287 修正の独立再確認 | P1/P2 全件解消・preflight 不合格4件の切り分け・GAP テスト回帰の修正 |
+
+## 2026-08-26 JST — Claude Code 作業終了報告（Build 287 修正の独立再確認）
+
+必須MD報告。前回この形を書かずに終わらせたため Yuji から指摘された。
+
+### 1. 作業日時と担当
+
+2026-08-26 JST。**確認担当 Claude Code**（実装は Codex）。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| 対象SHA | **未確定**（Codex の実装が未コミットのため） |
+| ブランチ | `build/286`（`origin/main` は `828ca13`） |
+| Build番号 | **未採番**（Codex は「Build 287」と呼称。`bridge.py` の `BUILD_VERSION` は **286 のまま**） |
+| 公開中 | Build 286（`92e82a3` 由来・自己反省記憶を**含まない**） |
+
+### 3. 変更ファイル
+
+**Codex の実装には触っていない。** Claude が変更したのは1本だけ。
+
+| ファイル | 内容 |
+|---|---|
+| `tests-gap-answer-queue.js` | `sendMsg` の抽出窓に `handleLunaSelfMemoryInput` / `lunaSelfMemoryProposalLine` を追加。スタブで潰さず本番関数を実行する形にした |
+| `review/PITWALL_SHARED_WORKING_LOG.md` | 本報告と再確認結果 |
+
+未コミットで残っている他担当の変更（**触っていない**）:
+`AGENTS.md` / `HANDOFF.md` / `desktop/renderer.html` / `desktop/strategy-playbook.js` /
+`irsdk-bridge/bridge.py` / `irsdk-bridge/tests_pit_exit_forecaster_wiring.py` / `tests-strategy-playbook.js` /
+`desktop/luna-self-memory.js`（未追跡） / `tests-luna-self-memory.js`（未追跡）
+
+### 4. 実行したテスト（件数・終了コード）
+
+| テスト | 件数 | exit |
+|---|---|---|
+| P1 反証（本番 `handleLunaSelfMemoryInput` を vm 実行） | 9/9 | 0 |
+| P2 反証（本番 `luna-self-memory.js` を直接実行） | 8/8 | 0 |
+| `tests-gap-answer-queue.js` | 44/44 | 0 |
+| `tests-luna-self-memory.js` | — | 0 |
+| `tests-strategy-playbook.js` | — | 0 |
+| `tests-evidence-debrief.js` | 41/41 | 0 |
+| `tests-session-memory-tunnel.js` | 118/118 | 0 |
+| `tests-runtime-module-status.js` | 11/11 | 0 |
+| `tests-chat-http.js` / `tests-require-admin.js` / `tests-deploy-verification.js` | — | 0（Codex 環境では失敗＝環境要因と切り分け） |
+| `irsdk-bridge/tests_pit_exit_forecaster_wiring.py` | — | 0 |
+| Python discover | 305 tests | 0 |
+| JS 全スイープ | 失敗0 | — |
+| `./preflight.sh` | 不合格0件 | 0 |
+
+外部有料API呼出 **0件**。
+
+### 5. artifact
+
+**作成していない。** 本作業で build は行っていない。
+
+### 6. Gate 0〜9
+
+| Gate | 状態 |
+|---|---|
+| 0 変更範囲 | **合格**（他担当の未追跡ファイルを混ぜていない） |
+| 1 失敗の固定 | **合格** |
+| 2 package 対象 | **合格**（renderer 参照9本・派生検査が新moduleを自動で拾う） |
+| 3 機械検証 | **合格**（preflight 不合格0件。Codex の不合格4件は 3件=環境要因／1件=実回帰でこちらが解消） |
+| 4 P0/P1 | **合格**（P0 0件・P1 0件・残 P2 0件） |
+| 5 artifact | **未実施**（新SHAの artifact が存在しない） |
+| 6 Windows | **未実施** |
+| 7 server | **未実施**（本番は `828ca13`＝Build 284 のコード。`/api/memory/decisions` は 404） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | Build 286 について**実施済み**。自己反省記憶スライスは**未公開** |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **あり**（`6fdf10d`・Claude の2ファイルのみ） |
+| push | **なし**（本作業では push していない） |
+| private build | **なし** |
+| server deploy | **なし** |
+| 公開 Release | **なし**（Build 286 の公開は先行作業） |
+| Windows 実機確認 | **なし** |
+| iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 | 手順 |
+|---|---|---|---|
+| 1 | 自己反省記憶スライスの commit | **Codex** | 実装が未コミットのため対象SHAが確定しない。Build はその後 |
+| 2 | `BUILD_VERSION` の採番 | **Codex**（実装側） | 現在 286 のまま。公開済み 286 と中身が違うので **287 へ上げないと Build 282 型の事故** |
+| 3 | Gate 5 artifact | Yuji の build GO 後 | `./verify-artifact.sh <run> <sha> 287` |
+| 4 | Gate 6 Windows | **Yuji** | `BUILD286_GATE6_WINDOWS_HANDOFF.md`（新Build時は差し替え） |
+| 5 | Gate 7 server | **Yuji の deploy GO** | `origin/main` への push が必要 → `./verify-deploy.sh` |
+| 6 | Gate 8 実走 | **Yuji** | iRacing |
+
+### 9. 到達段階（混同しない）
+
+| 段階 | 状態 |
+|---|---|
+| 実装済み | ✅（Codex 実装・Claude 確認済） |
+| 内部テスト済み | ✅（§4。すべて exit 0） |
+| artifact 確認済み | ❌ **未実施**（新SHAの artifact が存在しない） |
+| Windows 確認済み | ❌ **未実施** |
+| 実走済み | ❌ **未実施** |
+| 公開済み | ❌ **自己反省記憶スライスは未公開**（公開中の 286 には入っていない） |
+
+**Gate 5・6・7・8 はいずれも未実施である。**
+本報告は「ソースと内部テストが合格」までであり、**出荷可の宣言ではない。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-26 | `6fdf10d` | Build 287 修正の独立再確認 | P1/P2 全件解消・不合格4件の切り分け・GAPテスト回帰の修正 |
+| 08-26 | 本節 | 作業終了報告（必須9項目） | 上記 |
