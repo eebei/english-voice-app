@@ -38,8 +38,12 @@ function extract(name) {
   return rest.slice(0, end > 0 ? end + 1 : rest.length);
 }
 
+// ★2026-08-26：`sendMsg` の先頭に自己反省記憶の分岐が入った。
+//   スタブで潰さず**本番の関数をそのまま抽出する**。潰すと、
+//   「自己反省記憶が GAP の質問を飲み込む」回帰を検出できなくなる。
 const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
-  'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
+  'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech',
+  'handleLunaSelfMemoryInput', 'lunaSelfMemoryProposalLine']
   .map(extract).join('\n');
 
 let pass = 0, fail = 0;
@@ -108,6 +112,15 @@ const sandbox = {
   answerHistoricalWeatherLocally: () => null,
   // ── 計装 ──
   diagnosticLog: (tag, body) => traces.push(tag + ' ' + body),
+  // 自己反省記憶の依存（本番の判定ロジックはそのまま動かす）
+  PitwallLunaSelfMemory: require('./desktop/luna-self-memory.js'),
+  lunaSelfMemoryStore: () => [],
+  saveLunaSelfMemoryStore: () => true,
+  currentMemoryIdentity: () => ({ userId: 'u1', track: 'Okayama', car: 'Audi R8 LMS GT3' }),
+  confirmDecisionCorrection: () => null,
+  isJapaneseEngineer: () => true,
+  pendingLunaSelfMemoryConfirmation: null,
+  pendingDecisionDispute: null,
   speechLatencyTrace: () => {}, costRecord: () => {}, costReplyId: () => 'cost-1',
   ttsFailLog: () => {}, ttsEventLog: () => {},
   phonetify: t => t, normalizeLunaSpeech: t => t,

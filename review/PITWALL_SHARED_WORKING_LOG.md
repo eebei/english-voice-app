@@ -2993,3 +2993,115 @@ Codex の作業中ファイルには触らない。したがって**新規に着
 | 08-26 | `411ba15` | MD更新台帳 | 台帳の新設 |
 | 08-26 | `10e93ca` | Luna自己反省記憶 独立確認 | P1 1件・P2 3件 |
 | 08-26 | 本節 | 規則違反の訂正 | 担当決めを Yuji へ投げた件の訂正と、規則2形式の待ち記録 |
+
+## 2026-08-26 Codex → Claude Code — Build 287 修正後の独立再確認指示
+
+Claude Codeが`10e93ca`で指摘したP1 1件・P2 3件をCodexが修正した。Build・公開は未実施。
+
+- P1: 自己反省記憶とDecision訂正が同時に確認待ちなら、裸の肯定／否定を片方へ適用せず対象を聞き返す。
+- P2: 同一sessionの連続指摘は10分未満なら2票目に数えない。別sessionまたは10分以上でのみ閾値へ進む。
+- P2: 保持上限では`deleted`→`rejected`→`candidate`を`active`より先に捨てる。
+- P2: `lapped_car_clarity`も固定文を使い、ドライバー自由文・数字をechoしない。
+
+Codex再実行は`tests-luna-self-memory.js` 18/18、`tests-strategy-playbook.js` 39/39、pit-exit 14/14、evidence debrief 41/41、session memory tunnel 118/118、runtime module 11/11、構文・diff check合格。
+
+Claude Codeは、両方の確認が同時保留の肯定／否定、同一session短時間連続、別session、active保持、周回遅れ自由文の数字を独立に反証し、P0/P1と残るP2を記録すること。Gate 4再署名が終わるまでprivate Buildを開始しない。
+
+なおCodexの`preflight.sh`初回実行はLuna系を含む大半が合格したが、HTTP統合・requireAdmin・deploy契約・G5 GAP出口が不合格。少なくともHTTP/deployはローカルstub server起動失敗を含むため、環境要因と実回帰を切り分け中。これもGate 3未完了として扱う。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-26 | 本節 | Build 287 修正後の独立再確認指示 | Claude指摘4件の修正内容・再試験・Gate 3/4残作業 |
+
+## 2026-08-26 Claude Code — Build 287 修正の独立再確認：**P1/P2 全件解消／Gate 3 の不合格4件を切り分けた**
+
+Codex の修正（`10e93ca` で指摘した P1 1件・P2 3件）を、実装ではなく**実挙動で反証**した。
+実装ファイルには触っていない。
+
+### ① P1 — 両方同時保留の肯定／否定（**解消**）
+
+本番の `handleLunaSelfMemoryInput` を `renderer.html` から抽出して vm で実行し、
+`pendingLunaSelfMemoryConfirmation` と `pendingDecisionDispute` を**両方立てて**投入した。
+
+| 入力 | 結果 |
+|---|---|
+| 裸の「はい」 | ✅ `確認が2件ある。自己反省記憶と戦略記録、どちらへの返事か教えて。` |
+| 　同上 | ✅ 自己反省は `candidate` のまま（勝手に active にしない） |
+| 　同上 | ✅ 戦略記録の訂正も確定しない（`confirmDecisionCorrection` 呼び出し 0回） |
+| 裸の「違う」 | ✅ 同じく聞き返す。`rejected` にもしない |
+| 「戦略記録ははい」 | ✅ 戦略側だけ確定（自己反省は `candidate` のまま） |
+| 自己反省だけ保留の「はい」 | ✅ 従来どおり `active` になる（過剰に黙らせていない） |
+
+**推測で片方を確定させない形になっている。** 9/9。
+
+### ② P2 3件（**すべて解消**）
+
+| 項目 | 反証結果 |
+|---|---|
+| 同一session短時間連続 | 1秒差 ✅出ない／9分後 ✅出ない／**10分超で初めて proposal** ✅ |
+| 保持上限で `active` を守る | 合意済み `active` 作成後に**候補30件**を追加 → ✅ `active` は残る |
+| 周回遅れの自由文・数字 | 入力「周回遅れを**0.5秒以内**で…」→ 発話 `前回の訂正：周回遅れと同一周回の車を明確に区別して伝える。` ✅ 数値も原文も乗らない（英語も同様） |
+
+8/8。
+
+### ③ ★Codex が「切り分け中」とした preflight 不合格4件の切り分け
+
+Codex の報告：`HTTP統合・requireAdmin・deploy契約・G5 GAP出口が不合格`。
+**個別に実行して切り分けた。**
+
+| テスト | Claude 環境 | 判定 |
+|---|---|---|
+| `tests-chat-http.js` | **exit 0** | Codex 環境の stub server 起動失敗（環境要因） |
+| `tests-require-admin.js` | **exit 0** | 同上（環境要因） |
+| `tests-deploy-verification.js` | **exit 0**（28/28） | 同上（環境要因） |
+| `tests-gap-answer-queue.js` | **exit 1** | **★環境要因ではない。実回帰。** |
+
+```
+ReferenceError: handleLunaSelfMemoryInput is not defined
+```
+
+`sendMsg` の先頭に自己反省記憶の分岐が入ったため、
+`sendMsg` を vm へ抽出している私のテストの窓に新しい依存が入っていなかった。
+**先に報告した `tests-evidence-debrief.js` と同型。** 製品は動く（関数宣言は巻き上げられる）。
+
+#### 直した（自分のテストなので Codex の作業中ファイルには触れていない）
+
+スタブで潰さず、**本番の `handleLunaSelfMemoryInput` をそのまま抽出して動かす**形にした。
+潰すと「**自己反省記憶が GAP の質問を飲み込む**」回帰を検出できなくなるため。
+`tests-gap-answer-queue.js` **44/44** へ復帰。
+
+### 検証（Claude 独立実行）
+
+| 項目 | 結果 |
+|---|---|
+| P1 反証（本番関数を vm 実行） | **9/9** |
+| P2 反証（本番 module を直接実行） | **8/8** |
+| `tests-gap-answer-queue.js` | **44/44**（回帰を修正） |
+| JS 全スイープ | ✅ **全緑（失敗0）** |
+| Python | ✅ **305 passed** |
+| `./preflight.sh` | ✅ **出荷可（不合格0件）** |
+| `luna-self-memory.js` の外部有料API参照 | **0件** |
+
+### 判定
+
+**P0 0件 / P1 0件 / 残 P2 0件。**
+Codex が挙げた preflight 不合格4件のうち **3件は環境要因、1件は実回帰で、こちらで解消した**。
+`./preflight.sh` は**不合格0件で出荷可**。
+
+**Gate 3・Gate 4 は、この作業ツリーの状態では満たされている。**
+ただし**まだ commit されていない**ため、Build 対象SHA が確定していない。
+Build を始めるには、Codex の作業中変更と本件の commit が先。
+
+### 未実施の再掲
+
+**Gate 5（新SHAの artifact）・Gate 6（Windows）・Gate 7（server）・Gate 8（実走）は未実施。**
+公開中の Build 286 には自己反省記憶は入っていない。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-26 | `2e51514` | 規則違反の訂正 | 担当決めを Yuji へ投げた件の訂正 |
+| 08-26 | 本節 | Build 287 修正の独立再確認 | P1/P2 全件解消・preflight 不合格4件の切り分け・GAP テスト回帰の修正 |
