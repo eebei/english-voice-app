@@ -131,10 +131,20 @@ const remoteN = parseInt(latestTag.replace('-', ''), 10);
 if (remoteN > localN) { /* Update available を出す */ }
 ```
 
+**実データで裏を取った**（2026-08-26）。公開 `desktop-latest` の versioned asset のうち
+正規表現に合致する最新は `OMORAY-PITWALL-Setup-20260825-1004.exe`。
+
+```
+latestTag = 20260825-1004  →  remoteN = 202608251004   （公開 latest）
+localTag  = 20260825-2342  →  localN  = 202608252342   （Build 286）
+remoteN > localN は false
+```
+
 したがって Build 286 を起動した時、
 
 - **「Update available」バナーが出ないこと**が正しい挙動。
-- **もし出たら不合格**。テスターを古い Build 284 へ引き戻す誤誘導になる。
+- **もし出たら不合格**。テスターを古い公開版へ引き戻す誤誘導になる。
+- Bridge ログに `update available: local=... remote=...` の行が出ないことでも確認できる。
 
 ## 5. 合否の記録先
 

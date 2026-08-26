@@ -2374,6 +2374,31 @@ artifact本体は約302MBで、GitHub側の低速転送により完全取得が�
 
 `origin/build/286` のHEADはartifact対象SHAより文書commit 2件先行している。artifactの出所はworkflow headSha `8851712...` とし、ブランチHEADをartifact SHAと混同しない。
 
+## 2026-08-26 JST — Codex Build 286 Gate 5完走
+
+再開対応後、Codexが`verify-artifact.sh`を完走させた。
+
+- run／対象SHA一致、success、Publish skipped
+- artifact全量 **301,989,583 bytes**取得完了
+- installer 3本同一SHA：`4d87c3e436cb8428727bbffbf11356eeb9f7609427ab40fd377ed2b6c0679f13`
+- app.asar：`28c6026a0df25f9690c3e4fede6a17b00afaaf00b722dafe8f42386d756604f4`
+- Bridge：`660eea44dcf7836e5738c033ce2e9562aef115830f7cd10e9bb7561e608757f5`
+- runtime module **8/8同梱、欠落0**
+- `build-info.json`：Build 286
+- Bridge zlib展開：Build 286、`active_decision_id`あり、Build 285なし、pygame系統正しい
+- 対象SHA：`88517124f0868436b00d312d718c495d096411f1`
+
+**Gate 5：Codex独立確認済み・合格。** これはartifactの証拠であり、Gate 6 Windows、Gate 7 server、Gate 8実走、Gate 9公開の合格を意味しない。
+
+## 2026-08-26 JST — Gate 5検査ツールの実バグ修正と回帰
+
+CodexがGate 5を再開した際、`verify-artifact.sh` の進捗表示で日本語文字に隣接するshell変数が未定義扱いになる実バグを検出した。変数を明示的に `${attempt}` 等へ修正し、検査ツールの回帰テストも修正した。
+
+- `tests-artifact-verification.js`：**44/44**
+- `./preflight.sh`：**exit 0、全ケース合格**
+
+この修正は検査ツールとテストのみで、Build 286 artifactの中身を変更していない。artifactの完全取得・installer/app.asar/Bridgeの最終照合は引き続きGate 5の残作業であり、完了扱いにしない。
+
 ## 2026-08-26 Claude Code — Codex の取得停滞を道具側で解決（再開対応）
 
 Codex の「artifact本体は約302MBで、GitHub側の低速転送により完全取得が長時間停滞したため、
@@ -2509,3 +2534,55 @@ desktop/main.js:13  RELEASE_API_URL = .../releases/tags/desktop-latest
 
 Gate 5（Codex）の完走待ち。Gate 6 の実行依頼はその後。
 **Gate 6・7・8・9 はいずれも未実施であり、本追記は手順であって結果ではない。**
+
+## 2026-08-26 Claude Code — Gate 6 の判定基準を実データで裏取り＋自分の証拠の弱さを訂正
+
+Gate 6 handoff に「Update available バナーが出たら不合格」と書いた。
+**Yuji がこれを実機の判定基準に使う**ので、書いたまま渡さず裏を取った。
+
+### ① 判定基準は正しかった（実データで確認）
+
+更新ゲートは build 番号ではなく、**公開 release の versioned asset 名から取った日時タグ**を比較する
+（`desktop/main.js:465-477`）。実際の公開 asset を列挙して同じ選び方をした。
+
+```
+公開 latest の最新 versioned asset : OMORAY-PITWALL-Setup-20260825-1004.exe
+latestTag = 20260825-1004  →  remoteN = 202608251004
+localTag  = 20260825-2342  →  localN  = 202608252342   （Build 286）
+remoteN > localN は false  →  バナーは出ない（正しい挙動）
+```
+
+handoff に実測値と、Bridge ログで `update available:` 行が出ないことでも確認できる旨を追記した。
+
+### ② ★自分が使っていた証拠の1つが弱かった（訂正）
+
+Build 285 / 286 の証拠書と報告で、「公開していない」根拠の1つに
+**`desktop-latest` の `publishedAt` が 2026-06-30 のまま**を挙げていた。
+
+**これは証拠にならない。** 実測すると `publishedAt` は release の作成時刻に固定されており、
+その後 asset を追加しても動かない。
+
+```
+publishedAt : 2026-06-30T10:37:33Z   ← 作成時から不変
+createdAt   : 2026-06-30T10:34:14Z
+最新assetの updatedAt : 2026-08-25T10:05:20Z   ← 実際にはこの日に上がっている
+```
+
+つまり**「publishedAt が動いていない」は「公開していない」を意味しない。**
+
+### 訂正後の、公開していないことの根拠（こちらは有効）
+
+| 根拠 | 強さ |
+|---|---|
+| workflow の `Publish to Release` → **skipped** | **これが本証拠**。実際に公開ステップが動いていない |
+| asset 数が 242 のまま（Build 285 検査時・286 検査時ともに 242） | 有効。公開されれば増える |
+| **08-25 14:00Z 以降に updatedAt が動いた asset は 0 件**（Build 285=14:23 / 286=23:42 より前） | **有効**。我々の build 後に何も上がっていない |
+| ~~`publishedAt` が 2026-06-30 のまま~~ | **無効。証拠から取り下げる** |
+
+結論そのものは変わらない（**公開していない**）が、**根拠の一つが実際には何も示していなかった**。
+Build 282 で「証拠だけが古いまま残った」型と同じで、
+**弱い証拠を数に入れていた**ので取り下げて記録する。
+
+### 待ちは変わらない
+
+Gate 5（Codex）の完走待ち。**Gate 6・7・8・9 はいずれも未実施。**
