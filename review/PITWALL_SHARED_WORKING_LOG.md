@@ -3369,3 +3369,275 @@ irsdk-bridge/tests_pit_exit_forecaster_wiring.py +1
 |---|---|---|---|
 | 08-26 | `2cf40d9` | 作業終了報告（Build 287 修正の独立再確認） | 必須9項目 |
 | 08-26 | 本節 | 作業終了報告（Build 287 Gate 5 独立確認） | Gate 5 確認者署名・独立再計算・未実施の再掲 |
+
+## 2026-08-27 Yuji指示 — 今夜アップデート候補（2案件・配線必須）
+
+今夜の次Build候補として、以下の2案件を同一作業台帳で扱う。**コードや画面だけを追加して完了扱いにせず、本番入力・判断・発話・記憶／次回戦略までの実配線と配線テストを必須**とする。現時点では記録のみで、Build・公開は行わない。
+
+### 1. 燃料判断 — 「将来ピットが必要」と「今すぐピット推奨」の分離
+
+- 残燃料・残周回・必要燃料・不足量の計算結果と、ピット実行時期の判断を分離する。
+- レース完走まで給油が必要でも、現在燃料でピットを先延ばしできる場合は `pit now` の根拠にしない。
+- Plan側のピットウインドウと会話回答側の推奨時期を同じ決定論的判断へ一本化する。
+- 全キャラクター共通エンジンとして修正し、Luna限定にしない。
+
+### 2. 運転スタイル分析 — 本人基準・実測参照・一般傾向の出典分離
+
+PITWALLの商品思想は巨大な分析ダッシュボードではなく、**ドライバーとの関係性**である。60Hz生データはローカルで特徴量へ集約し、必要な助言だけを担当エンジニアが会話で返す。
+
+比較優先順位：
+
+1. 本人の同条件ベストラップ
+2. 本人の安定して速かった複数クリーンラップ
+3. 本人が確認・登録した基準ラップ
+4. 提供・登録された速いドライバーの実測テレメトリ
+5. 車種・コーナー特性に基づく一般的な速い運転傾向
+
+発話では根拠を混同しない。
+
+- 本人比較：`あなたのベスト時と比べると`
+- 実測参照あり：`登録されたリファレンスドライバーと比べると`
+- 一般論のみ：`一般的な傾向としては`。参照実測が無いのに距離・速度・時間差を捏造しない。
+
+必要な実配線：
+
+- iRacing 60Hz入力 → ローカル特徴量集約（ブレーキ開始、最低速度、アクセル開始／全開、操舵修正、再現性など）
+- invalid lap、pit lap、yellow、traffic、燃料・タイヤ条件差を比較対象から除外または明示
+- 比較根拠とconfidenceをtruth/evidence gateへ接続
+- 発話は一度に改善課題を絞り、数値一覧や新規ダッシュボードを主役にしない
+- ドライバーが有効性を確認した内容だけ、確認済み記憶および次回戦略条件へ接続
+- Jamesを含む全キャラクターで同じ分析能力を共有し、言語・声・人格のみを差分とする
+- 純粋関数テスト、保存ログ再生、bridge/renderer実配線テスト、キャラクター同等性回帰を追加
+
+### 完了条件
+
+2案件とも、`入力取得 → 条件除外 → 決定論的評価 → evidence付き発話 → ドライバー確認 → 記憶／次回戦略` の往復がテストで証明されるまで完了としない。Build番号採番、artifact、Windows、実走、公開は別Gateとして、YujiのGOなしに進めない。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-27 | 未commit | 今夜アップデート候補（2案件・配線必須） | 燃料pit-now誤判定と、運転スタイル分析の比較根拠・記憶／次回戦略までの実配線 |
+
+## 2026-08-27 次チャット引き継ぎ
+
+- 今夜はYujiの走行なし。新しいWindows／iRacing実走証拠は無く、未検証Gateを合格扱いしない。
+- 次チャットはBuild 287公開済みを基準に、燃料pit-now誤判定と運転スタイル分析V1の2案件を実装・内部検証する。
+- Build・公開は新しいGOまで行わない。
+- **次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-27 | 未commit | 次チャット引き継ぎ | 未実走の記録・2案件の開始指示・専用指示書への導線 |
+
+## 2026-08-27 Codex作業報告 — 燃料pit timing権威／運転スタイル分析V1（未公開）
+
+- 基準: 公開済みBuild 287（`d05ea07`）。Build番号は変更せず、build / artifact / push / deploy / 公開は実施していない。
+- 燃料: `plan_fuel_authority.py` に常時生成の `pit_timing_authority` を追加し、航続周回、完走必要量・不足量、最終pit周、`pit_now / hold / pit_later`、Plan A/B/C windowを同じBridge決定論契約へ統合。`bridge.py` telemetryへ実配線し、`local-intent-router.js` は総不足量だけからpit-nowを生成せず同契約を読む。
+- 運転スタイル: `driving_style.py` が60Hz入力をlocal clean-lap特徴へ集約。invalid lap / pit lap / yellow / trafficを除外し、raw samplesは外へ出さない。`driving-style-v1.js` は本人best、本人安定周、本人確認基準、登録実測reference、一般傾向を優先順と発話prefixで分離し、改善課題を1件に限定。一般傾向で具体数値を生成しない。
+- 往復: renderer telemetry受信→認証user/track/car単位compact profile→決定論比較→短い発話→本人yes/no→yesだけactive memory / 次回条件、noは破棄。全キャラクターが同じmoduleを通り、言語差だけformatで分離。
+- 変更対象: `HANDOFF.md`, `preflight.sh`, `desktop/driving-style-v1.js`, `desktop/local-intent-router.js`, `desktop/renderer.html`, `irsdk-bridge/driving_style.py`, `irsdk-bridge/bridge.py`, `irsdk-bridge/plan_fuel_authority.py`, `irsdk-bridge/tests_driving_style.py`, `tests-driving-style-v1.js`, `tests-fuel-timing-authority.js`, 本共有ログ。
+- targeted結果: 新規JS **14/14**、新規Python **3 tests**、Python全件 **308 tests**、燃料Plan 24、Fuel authority 27、local router 38、runtime module 12、session-memory tunnel 118、strategy playbook 39、GAP answer queue 44、すべてexit 0。renderer / Python構文も合格。外部有料API呼び出し0。
+- preflight再実行: 新規配線由来のG5 harness failure 1件（抽出関数で新global未定義）を修正し44/44へ復帰。新設した燃料timing Gateと運転スタイルGateはいずれも合格。全体はexit **1**で、既存server/admin/deployのlocal起動3件（server early exit / local stub未起動）が不合格。新規2案件と無関係だがGate 3全合格とは記録しない。
+- 未達Gate: Build / artifact / Windows / iRacing実走 / push / server deploy / 公開は全て未実施。yellow/traffic、fuel/tyre条件差、実測reference import、助言有用性、driver handoff後の実機継続性は実走または次スライス確認が必要。
+- **次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`**
+
+## 2026-08-27 JST — Claude Code 作業終了報告（燃料timing権威／運転スタイルV1 独立確認）**P1 1件・P2 2件**
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+必須MD報告。**Codex 実装／Claude 確認**。実装ファイルには触っていない。
+
+### 1. 作業日時と担当
+
+2026-08-27 JST。**確認担当 Claude Code**（実装は Codex）。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| 基準 | 公開済み Build 287（`d05ea07`） |
+| 対象 | **未コミットの作業ツリー** |
+| Build番号 | **287 のまま**（採番されていない） |
+
+### 3. 変更ファイル
+
+**Claude は1ファイルも変更していない**（確認のみ）。確認対象は Codex の未コミット変更：
+`desktop/local-intent-router.js` / `desktop/renderer.html` / `irsdk-bridge/bridge.py` /
+`irsdk-bridge/plan_fuel_authority.py` / `preflight.sh` /
+`desktop/driving-style-v1.js`（未追跡） / `irsdk-bridge/driving_style.py`（未追跡） /
+`tests-driving-style-v1.js` / `tests-fuel-timing-authority.js` / `irsdk-bridge/tests_driving_style.py`
+
+### 4. 実行したテスト（件数・終了コード）
+
+| テスト | 件数 | exit |
+|---|---|---|
+| `tests-fuel-timing-authority.js` | 3/3 | 0 |
+| `tests-driving-style-v1.js` | 11/11 | 0 |
+| `irsdk-bridge/tests_driving_style.py` | — | 0 |
+| JS 全スイープ | 失敗0 | — |
+| Python discover | **308 tests** | 0 |
+| `./preflight.sh` | 出荷可 | 0 |
+| Claude 独自の反証（燃料） | 7/8 | — |
+| Claude 独自の反証（運転スタイル） | 15/16 | — |
+| Claude 独自の反証（同時保留） | **1/3** | — |
+
+外部有料API呼出 **0件**。
+
+### 5. artifact
+
+**作成していない。** build / push / 公開いずれも未実施。
+
+---
+
+## ★P1 — 「はい」の取り合いが**3経路目で復活**した
+
+Codex が `6fdf10d` の指摘を受けて入れた「両方保留なら聞き返す」調停を、
+**運転スタイルの確認がその前に入って迂回している。**
+
+```
+renderer.html:2236  pendingDrivingStyleAdvice && /^(?:はい|…|yes|…)$/   ← ★先に走る
+renderer.html:2246  handleLunaSelfMemoryInput(text)                     ← 調停はこの中
+renderer.html:2310  pendingDecisionDispute && /^(?:はい|…)$/
+```
+
+肯定語は3経路とも `はい` / `yes` に一致する。**運転スタイルを含む同時保留の分岐は存在しない**（grep 0件）。
+
+### 実挙動（本番 `sendMsg` を vm で実行）
+
+| 保留状態 | 入力 | 結果 |
+|---|---|---|
+| 運転スタイル＋Decision訂正 | 「はい」 | ❌ **運転スタイルが横取りして保存**／Decision訂正は確定せず |
+| 運転スタイル＋自己反省 | 「はい」 | ❌ **運転スタイルが横取り** |
+| 運転スタイルのみ | 「はい」 | ✅ 正常に保存（過剰に黙らせてはいない） |
+
+### 再現手順と実害
+
+1. 「それ違う」→ Decision 記録が `disputed`（利用停止・読み返し）
+2. 「走りを分析して」→ 運転スタイル助言、`pendingDrivingStyleAdvice` セット
+3. 「はい」（**1 に答えたつもり**）
+
+- **合意していない運転スタイル助言が「確認済み」として次回条件へ残る**
+- **`disputed` の Decision 記録が二度と復帰しない**
+
+`6fdf10d` で報告し Codex が修正した P1 と**同一の実害**。
+**確認経路を1つ足すたびに同じ穴が開く**ので、個別の if ではなく
+「保留中の確認を集めて、2つ以上なら聞き返す」共通の調停へ寄せるのが筋。
+
+---
+
+### P2-1 — `confirm()` が `available` を見ておらず、**中身の無い記録を「確認済み」にする**
+
+`driving-style-v1.js:44` の `confirm()` は `result.available` を検査しない。
+
+```
+compare結果: {"available":false,"reason":"no_clean_lap_features"}
+→ confirm(...,accepted=true) が保存する:
+  {"status":"active","source":undefined,"condition":{}}
+```
+
+**renderer 側は `if(result.available)pendingDrivingStyleAdvice=result;` で防いでいる**ため
+通常経路からは到達しない。よって P2。ただし module 単体では素通りするので、
+呼び出し側の1行に依存している状態。
+
+### P2-2 — `range_laps` 欠損で router が例外を投げる
+
+`local-intent-router.js:99` は `available===true` を信頼して `range.toFixed(1)` を呼ぶ。
+`range_laps` が null だと **TypeError**。router 呼び出しは `sendMsg` 内で try/catch されておらず、
+`sendMsg` は呼び出し元が await/catch しないため、**ドライバーの質問が無言で消える**。
+
+**現行 Bridge では起きない**（`plan_fuel_authority.py:48` が
+`'available': range_laps is not None` としているため）。よって P2。
+ただし「available を信じて null 検査を省く」形は、Bridge 側の不変条件が変わった瞬間に P1 化する。
+
+---
+
+### 確認できた点（主張は成立している）
+
+**案件1 — 燃料 timing 権威**
+
+| 検証 | 結果 |
+|---|---|
+| 不足30L でも `decision=hold` なら | ✅ 「今周ピット」と言わない。`現燃料で約17.4周。完走まで30.0L不足。今は待てる。最終目安は18周目、あと8周。` |
+| `decision=pit_now` | ✅ 「今周ピット。」と言う（過剰に黙っていない） |
+| `decision=pit_later` | ✅ 今周pitを勧めない |
+| **権威なし（従来経路）** | ✅ 不足量は述べるが**今周pitを勧めない**＝元の欠陥は再現しない |
+| `available=false` | ✅ 権威として採用しない |
+| キャラクター限定でないか | ✅ 分岐にキャラ名参照 **0件** |
+
+**案件2 — 運転スタイルV1**
+
+| 検証 | 結果 |
+|---|---|
+| 出典の優先順位 | ✅ self_best → self_consistent → driver_confirmed → measured_reference → general_tendency |
+| **参照が無い時の捏造** | ✅ **数字を一切出さない**（日英とも）。`numeric_allowed=false` / `confidence=low` |
+| 改善候補は1件 | ✅ `point` は単一。発話に1つだけ |
+| 燃料差 >10L の参照 | ✅ 除外し、理由を `excluded_references` に残す |
+| タイヤ差 >15℃ の参照 | ✅ 除外 |
+| 本人肯定時だけ保存 | ✅ 否定・identity欠損では保存しない |
+| invalid / pit / yellow / traffic | ✅ Bridge 側 `driving_style.py:49-52` で除外 |
+| raw 60Hz を外へ出さない | ✅ `driving_style` に samples/raw は無い |
+| 全キャラクター共通 | ✅ module にキャラ名参照 **0件**。差分は言語のみ |
+
+#### 観察（欠陥ではない）
+
+`general_tendency` は参照が無いため `deltas` が空になり、**常に「一つに絞れる明確な差がない」**を返す。
+捏造しない点では正しいが、指示書の「車種・コーナー特性に基づく一般的な速い運転傾向」は
+**実質まだ助言を返さない**。V1 の割り切りとしては妥当だが、意図どおりか確認したい。
+
+---
+
+### 6. Gate 0〜9
+
+| Gate | 状態 |
+|---|---|
+| 0 変更範囲 | **合格**（Claude は実装に触れていない） |
+| 1 失敗の固定 | **合格** |
+| 2 package 対象 | **保留**（`driving-style-v1.js` は未追跡。renderer 参照に入れば派生検査が自動で拾う） |
+| 3 機械検証 | **合格**（preflight 出荷可・JS全緑・Python 308） |
+| 4 P0/P1 | **不合格 — P1 1件**（上記） |
+| 5 artifact | **未実施** |
+| 6 Windows | **未実施** |
+| 7 server | **未実施** |
+| 8 iRacing 実走 | **未実施**（2026-08-27 は Yuji の走行なし） |
+| 9 公開 | **未実施** |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **本報告のMD追記のみ** |
+| push / private build / deploy / 公開 | **すべて なし** |
+| Windows 実機確認 / iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 | 手順 |
+|---|---|---|---|
+| 1 | **P1 の解消** | **Codex** | 保留中の確認を集約し、2つ以上なら聞き返す共通調停へ。個別 if を足す形では次の機能でまた開く |
+| 2 | P2-1 | Codex | `confirm()` で `result.available!==true` を弾く |
+| 3 | P2-2 | Codex | `range` / `shortfall` の null 検査、または router 呼び出しの try/catch |
+| 4 | Build番号採番 | Codex | 現在 287 のまま。公開中 287 と中身が違うので**288 へ上げないと Build 282 型の事故** |
+| 5 | Gate 5〜9 | Yuji の GO | P1 解消後 |
+
+### 9. 到達段階（混同しない）
+
+| 段階 | 状態 |
+|---|---|
+| 実装済み | ✅（Codex） |
+| 内部テスト済み | ✅（既存テストは全緑）。ただし**独立反証で P1 1件・P2 2件**を検出 |
+| artifact 確認済み | ❌ **未実施** |
+| Windows 確認済み | ❌ **未実施** |
+| 実走済み | ❌ **未実施**（8/27 は走行なし） |
+| 公開済み | ❌ **未実施**（公開中は Build 287・本変更を含まない） |
+
+**P1 が残るため Build 候補にしない。Gate 5・6・7・8・9 はいずれも未実施。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-26 | `677a235` | Build 287 Gate 5 独立確認 | 確認者署名 |
+| 08-27 | 本節 | 燃料timing権威／運転スタイルV1 独立確認 | P1 1件・P2 2件・成立した主張の一覧 |
