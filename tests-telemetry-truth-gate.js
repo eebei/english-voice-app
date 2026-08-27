@@ -67,6 +67,12 @@ if(truthFallbackFn){
   const gapReply=context.telemetryTruthFallback({gap_ahead:0.2,gap_behind:1.7}, '後ろとギャップはどう？', true);
   check('8/24 GAP replay: Truth Gate replaces a blocked LLM gap with current Bridge gap',
     gapReply==='後ろ1.7秒。');
+  check('8/27 best-lap replay rebuilds the blocked correct value instead of saying 了解',
+    context.telemetryTruthFallback({best:470.356},'ベストラップ いくつ？',true)==='ベスト7分50秒356。');
+  check('8/27 data-status replay reports the live link instead of saying 了解',
+    context.telemetryTruthFallback({fuel:31},'ルナ データいってる？',true)==='データは来ている。');
+  check('unknown numeric question asks for a short retry instead of false acknowledgement',
+    context.telemetryTruthFallback({},'タイヤ何度？',true)!=='了解。');
 }
 
 const lapFn = renderer.match(/function lapTimeSpeechJP\(value\)\{[\s\S]*?\n\}/);
@@ -157,10 +163,14 @@ check('truth-gateデフォルト分岐から無関係な定型文が消えてい
 check('truth-gateはドライバーの目標やフィーリングを否定しない',
   renderer.includes('うん、完走しよう。インシデントゼロでいこう。')
   && renderer.includes('了解。無理に押さず、次の確認でフロントの状態を見よう。')
-  && renderer.includes("return '了解。';"));
+  && renderer.includes("return looksLikeQuestion?'その数値は確認できない。質問をもう一度短く教えて。':'了解。';"));
 check('truth-gateの最終fallbackは無関係な燃料/GAP説明を足さない',
   !renderer.includes('了解。いまは数値が揃った時だけコールする。')
-  && renderer.includes("return 'Copy.';"));
+  && renderer.includes("? 'I cannot confirm that value. Ask me again in one short phrase.' : 'Copy.';"));
+check('STT診断は全文を重複保存せずconfidenceと長さを記録',
+  renderer.includes("diagnosticLog('PTT_STT_RESULT'")
+  && renderer.includes('confidence:sttConfidence===null?null')
+  && renderer.includes('chars:text.length'));
 
 console.log(`\nTelemetry Truth Gate: ${pass}/${pass + fail}`);
 if(fail) process.exit(1);

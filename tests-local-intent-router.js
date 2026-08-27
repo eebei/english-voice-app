@@ -12,6 +12,9 @@ function check(label, condition) {
   condition ? pass++ : fail++;
 }
 function route(text, live) { return router.route({ text, lang:'ja', live }); }
+function routeWithAuthority(text, live) {
+  return router.route({text,lang:'ja',live,sessionAuthority:{track:'Nurburgring',car_model:'BMW M4 GT3 EVO',session_type:'Practice'}});
+}
 const live = {
   fuel: 15.0,
   player_class_position: 8,
@@ -58,6 +61,27 @@ r = route('今ポジション何位？', live);
 check('current class position is answered locally', r.handled && r.reply==='現在P8。');
 r = route('了解', live);
 check('acknowledgement bypasses cloud', r.handled && r.intent==='acknowledgement' && r.reply==='了解。');
+r = route('ベストラップ いくつ？', {...live,best:470.356});
+check('8/27 exact best-lap question is answered from Bridge authority',
+  r.handled && r.intent==='best_lap' && r.reply==='ベスト7分50秒356。');
+r = route('ベストラップ わかります。', {...live,best:470.356});
+check('8/27 punctuation-shifted best-lap question remains deterministic',
+  r.handled && r.intent==='best_lap' && r.reply==='ベスト7分50秒356。');
+r = route('ベストラップいくつ？', {...live,best:null});
+check('missing best-lap authority is stated without guessing',
+  r.handled && r.intent==='best_lap' && /まだ確定していない/.test(r.reply));
+r = routeWithAuthority('ルナ データいってる？', live);
+check('8/27 colloquial data-status question is answered locally',
+  r.handled && r.intent==='telemetry_status' && /データは来ている/.test(r.reply));
+r = routeWithAuthority('コースデータは空いてる？', live);
+check('8/27 STT 入ってる→空いてる variant keeps the intended data-status route',
+  r.handled && r.intent==='telemetry_status' && /コースと車両も確認済み/.test(r.reply));
+r = routeWithAuthority('コースは空いてる？', live);
+check('ordinary course-clear question is not overmatched as data status', !r.handled);
+r = routeWithAuthority('このデータを解析して', live);
+check('a data-analysis request remains a conversation, not a connection check', !r.handled);
+r = route('than。', live);
+check('unintelligible short transcript is not guessed into an operational intent', !r.handled);
 r = route('路面温度は何度？', live);
 check('current track temperature is answered locally and briefly', r.handled && r.intent==='track_temperature' && r.reply==='路面23.3℃。');
 r = route('昨日の路面温度は？', live);

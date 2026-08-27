@@ -2305,6 +2305,7 @@ async function sendMsg(inputSource){
       text,
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
       live:lastTelemetry,
+      sessionAuthority:(typeof lastSessionAuthority!=='undefined'?lastSessionAuthority:null),
       // ★G3：GAP は数秒で意味が変わる。接続判定(12秒)のままだと、
       //   queue では破棄される古さの値を質問回答で喋ってしまう。
       snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null)
@@ -2491,6 +2492,22 @@ function telemetryTruthFallback(live, userText, isJP){
       ? (isJP ? `残り${fmtDuration(Math.max(0,sec),true)}。残り周回はまだ確定できない。` : `${fmtDuration(Math.max(0,sec),false)} remain; finish crossings are not confirmed.`)
       : (isJP ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.');
   }
+  if(/(?:ベスト|自己ベスト|ベストラップ).{0,10}(?:いくつ|何|わかる|分かる|わかります|分かります|教えて|タイム)|(?:best|personal best).{0,12}(?:what|time|know|tell)/i.test(asked)){
+    const best=Number(live?.best);
+    if(Number.isFinite(best)&&best>0){
+      const totalMs=Math.round(best*1000), minutes=Math.floor(totalMs/60000);
+      const seconds=Math.floor((totalMs%60000)/1000), millis=totalMs%1000;
+      return isJP
+        ? `ベスト${minutes}分${seconds}秒${String(millis).padStart(3,'0')}。`
+        : `Best lap ${minutes}:${String(seconds).padStart(2,'0')}.${String(millis).padStart(3,'0')}.`;
+    }
+    return isJP?'ベストラップはまだ確定していない。':'The best lap is not confirmed yet.';
+  }
+  if(/(?:コース|セッション)?\s*データ.{0,8}(?:入って|はいって|行って|いって|来て|きて|取れて|届いて|空いて|あいて)|(?:data|telemetry).{0,12}(?:coming|connected|receiv|working)/i.test(asked)){
+    return live
+      ? (isJP?'データは来ている。':'Data is live.')
+      : (isJP?'データ接続は確認できない。':'I cannot confirm the data connection.');
+  }
   // A numeric nearest-car gap produced by the LLM was correctly blocked by
   // the truth gate in Build 280, but then degraded to "了解。".  Rebuild the
   // exact requested fact from this same Bridge snapshot instead.
@@ -2569,11 +2586,13 @@ function telemetryTruthFallback(live, userText, isJP){
     // フィーリングまで否定する定型文にはしない（8/16実走フィードバック）。
     if(/完走|finish|チェッカー|checkered/i.test(String(userText||''))) return 'うん、完走しよう。インシデントゼロでいこう。';
     if(/フロント.*(?:食わ|入ら|ない)|曲がら|アンダー|オーバー|ステア|grip|understeer|oversteer/i.test(String(userText||''))) return '了解。無理に押さず、次の確認でフロントの状態を見よう。';
-    return '了解。';
+    const looksLikeQuestion=/[?？]|(?:いくつ|何|どう|どこ|いつ|わかる|分かる|わかります|分かります|教えて|入って|来て|取れて|届いて)/i.test(asked);
+    return looksLikeQuestion?'その数値は確認できない。質問をもう一度短く教えて。':'了解。';
   }
   if(live && live.on_pit_road===true) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
-  return 'Copy.';
+  return /[?]|\b(?:what|where|when|how|which|can you|do you|is it|are we)\b/i.test(asked)
+    ? 'I cannot confirm that value. Ask me again in one short phrase.' : 'Copy.';
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -7049,6 +7068,14 @@ async function transcribePttAudio(data){
     }
     if(!result) throw lastError||new Error('empty STT result');
     const text=String(result.text||'').trim();
+    const sttConfidence=(result.confidence!==null&&result.confidence!==undefined
+      &&Number.isFinite(Number(result.confidence)))?Number(result.confidence):null;
+    diagnosticLog('PTT_STT_RESULT',JSON.stringify({
+      chars:text.length,
+      confidence:sttConfidence===null?null:Number(sttConfidence.toFixed(3)),
+      duration_s:Number(payload.audioDurationSeconds)||null,
+      language:payload.languageCode
+    }));
     setHint('');
     if(text){
       document.getElementById('chat-input').value=text;

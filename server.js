@@ -1472,6 +1472,20 @@ app.post('/api/tts', ttsLimiter, async (req, res) => {
   }
 });
 
+function parseGoogleSttResponse(data) {
+  const recognized = (data && Array.isArray(data.results) ? data.results : [])
+    .map(x => x && x.alternatives && x.alternatives[0])
+    .filter(Boolean);
+  const text = recognized
+    .map(x => x.transcript)
+    .filter(Boolean).join(' ').trim();
+  const confidences = recognized
+    .map(x => x.confidence)
+    .filter(x => x !== null && x !== undefined && Number.isFinite(Number(x)))
+    .map(Number);
+  return { text, confidence: confidences.length ? Math.min(...confidences) : null };
+}
+
 // ── Google Speech-to-Text proxy (PTT: 押してる間の音声→文字) ───────────────────
 // クライアントが録音した音声(base64)を受けてGoogle STTで文字起こし。
 // ※同じGOOGLE_TTS_API_KEYを使うが、Google CloudでSpeech-to-Text APIの有効化＋
@@ -1494,7 +1508,10 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
     const racingPhrases = isJapanese
       ? ['燃料', '燃料残量', 'タイヤ', '内圧', 'タイヤ内圧', 'ギャップ', 'ピット', 'ピットイン',
          'セクター', 'ラップタイム', 'ベスト', '自己ベスト', '順位', 'アンダーカット', 'オーバーカット',
-         'ブレーキバランス', 'セーフティカー', 'イエローフラッグ']
+         'ベストラップ', 'コースデータ', 'データ入ってる', 'セットアップ', 'セッティング',
+         'アンダーステア', 'オーバーステア', 'ダンパー', '車高', 'スプリング', 'スタビ',
+         'アンチロールバー', 'キャンバー', 'トー', 'リアウイング', 'ブレーキバランス',
+         'セーフティカー', 'イエローフラッグ']
       : ['fuel', 'fuel level', 'fuel remaining', 'tyre', 'tyres', 'tire', 'tires',
          'tyre pressure', 'tire pressure', 'tyre temperature', 'tire temperature',
          'gap', 'gap ahead', 'gap behind', 'box', 'box box box', 'pit', 'pit stop',
@@ -1533,10 +1550,7 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
     }
     const data = await r.json();
     recordGoogleUsageSafe(req, { kind: 'stt', audioBytes, audioSeconds: audioDurationSeconds, language: lang, success: true });
-    const text = (data.results || [])
-      .map(x => x.alternatives && x.alternatives[0] && x.alternatives[0].transcript)
-      .filter(Boolean).join(' ').trim();
-    res.json({ text });
+    res.json(parseGoogleSttResponse(data));
   } catch (err) {
     console.error('STT proxy error:', err.message);
     res.status(500).json({ error: err.message });

@@ -27,6 +27,16 @@
     if (m) return isJP(lang) ? `${m}分${s}秒` : `${m}m ${s}s`;
     return isJP(lang) ? `${s}秒` : `${s}s`;
   };
+  const formatLapTime = (seconds, lang) => {
+    const value = finite(seconds);
+    if (value === null || value <= 0 || value >= 86400) return '';
+    const totalMs = Math.round(value * 1000);
+    const minutes = Math.floor(totalMs / 60000);
+    const wholeSeconds = Math.floor((totalMs % 60000) / 1000);
+    const millis = totalMs % 1000;
+    if (isJP(lang)) return `${minutes}分${wholeSeconds}秒${String(millis).padStart(3, '0')}`;
+    return `${minutes}:${String(wholeSeconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`;
+  };
   const weatherValues = live => {
     const weather = live && live.weather && typeof live.weather === 'object' ? live.weather : {};
     return {
@@ -144,6 +154,8 @@
     // PTT の直接質問も snapshot 時刻を検査する。渡されない場合は従来どおり
     // 検査しない（呼び出し側が古さを判断できない時に黙らせないため）。
     const snapshotAgeMs = finite(input && input.snapshotAgeMs);
+    const sessionAuthority = input && input.sessionAuthority
+      && typeof input.sessionAuthority === 'object' ? input.sessionAuthority : null;
     if (!text || !live) return { handled:false };
 
     if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
@@ -166,6 +178,28 @@
     }
     if (/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
       return answer('fuel_status', fuelReply(live, lang));
+    }
+    // Build 287 field replay: Google correctly transcribed both
+    // "ベストラップ いくつ？" and the punctuation-shifted
+    // "ベストラップ わかります。".  Sending either to the LLM let the
+    // telemetry truth gate discard the correct number and reduce it to an
+    // unrelated acknowledgement.  Best lap is already a Bridge-owned fact,
+    // so answer it here from the same live snapshot.
+    if (/(?:ベスト|自己ベスト|ベストラップ).{0,10}(?:いくつ|何|わかる|分かる|わかります|分かります|教えて|タイム)|(?:best|personal best).{0,12}(?:what|time|know|tell)/i.test(text)) {
+      const best = formatLapTime(live.best, lang);
+      return answer('best_lap', best
+        ? (isJP(lang) ? `ベスト${best}。` : `Best lap ${best}.`)
+        : (isJP(lang) ? 'ベストラップはまだ確定していない。' : 'The best lap is not confirmed yet.'));
+    }
+    // A driver may say 入ってる/来てる quickly enough for STT to produce
+    // 行ってる or 空いてる.  In a live session those variants all ask
+    // whether PITWALL is receiving the current session data; they are not
+    // authority to invent a track or car name.
+    if (/(?:コース|セッション)?\s*データ.{0,8}(?:入って|はいって|行って|いって|来て|きて|取れて|届いて|空いて|あいて)|(?:data|telemetry).{0,12}(?:coming|connected|receiv|working)/i.test(text)) {
+      const scoped = !!(sessionAuthority && (sessionAuthority.track || sessionAuthority.car_model || sessionAuthority.session_type));
+      return answer('telemetry_status', isJP(lang)
+        ? (scoped ? 'データは来ている。コースと車両も確認済み。' : 'テレメトリは来ている。セッション詳細は確認中。')
+        : (scoped ? 'Data is live. Track and car are confirmed.' : 'Telemetry is live. Session details are still being confirmed.'));
     }
     if (/(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|何分\s*(?:制|製)(?:の)?(?:レース)?|session format|race format/i.test(text)) {
       const plan = live.race_plan && typeof live.race_plan === 'object' ? live.race_plan : {};
@@ -308,5 +342,5 @@
     return { handled:false };
   }
 
-  return { route, formatDuration, fuelWindowStatus };
+  return { route, formatDuration, formatLapTime, fuelWindowStatus };
 }));
