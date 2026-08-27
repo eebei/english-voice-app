@@ -93,6 +93,20 @@
     const fs = live && live.fuel_strategy && typeof live.fuel_strategy === 'object'
       ? live.fuel_strategy : {};
     const endurance = fs.endurance_plan || live.endurance_fuel_plan || {};
+    const timing = fs.pit_timing_authority && typeof fs.pit_timing_authority === 'object'
+      ? fs.pit_timing_authority : null;
+    if (timing && timing.available === true && finite(timing.range_laps) !== null) {
+      const range=finite(timing.range_laps), shortfall=finite(timing.shortfall_to_finish_l);
+      const until=integer(timing.laps_until_latest_safe_pit), latest=integer(timing.latest_safe_pit_lap);
+      const when=timing.decision==='pit_now'
+        ? (isJP(lang)?'今周ピット。':'Pit this lap.')
+        : (until!==null&&latest!==null
+          ? (isJP(lang)?`今は${timing.decision==='hold'?'待てる':'次のウインドウ'}。最終目安は${latest}周目、あと${until}周。`:`${timing.decision==='hold'?'Hold':'Pit later'}. Latest target lap ${latest}, ${until} laps away.`)
+          : (isJP(lang)?'今すぐのピット根拠はない。':'There is no pit-now evidence.'));
+      return isJP(lang)
+        ? `現燃料で約${range.toFixed(1)}周。完走まで${shortfall!==null?shortfall.toFixed(1)+'L不足':'不足量は未確定'}。${when}`
+        : `About ${range.toFixed(1)} laps of fuel remain. ${shortfall!==null?shortfall.toFixed(1)+'L short to finish':'Finish shortfall is not confirmed'}. ${when}`;
+    }
     const next = integer(endurance.next_fuel_stop_in_laps);
     const stops = integer(endurance.future_stop_count);
     if (endurance.available === true && endurance.multi_stop === true && next !== null && stops !== null) {

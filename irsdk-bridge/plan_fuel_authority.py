@@ -27,6 +27,76 @@ RESERVE_L = 0.5
 SMALL_SERVICE_CORRECTION_L = 0.5
 
 
+def build_timing_authority(fuel_strategy, strategy_options, *, current_lap,
+                           fuel_level_l, endurance_plan=None):
+    """Build the single driver-facing fuel timing contract.
+
+    Total fuel shortfall answers *whether* a stop is required.  This contract
+    separately answers *when* the selected deterministic window requires it.
+    Conversation, proactive radio and Plan A/B/C must consume this object
+    instead of turning ``add_fuel_l > 0`` into an early box call.
+    """
+    fs = fuel_strategy if isinstance(fuel_strategy, dict) else {}
+    current = float(fuel_level_l) if _finite(fuel_level_l) else None
+    burn = fs.get('avg_fuel_per_lap')
+    range_laps = (current / float(burn)
+                  if current is not None and _finite(burn) and burn > 0 else None)
+    required = fs.get('required_fuel_l')
+    shortfall = (max(0.0, float(required) - current)
+                 if current is not None and _finite(required) else None)
+    base = {
+        'available': range_laps is not None,
+        'source': 'bridge_deterministic_fuel_timing_v1',
+        'range_laps': round(range_laps, 2) if range_laps is not None else None,
+        'required_fuel_to_finish_l': round(float(required), 3) if _finite(required) else None,
+        'shortfall_to_finish_l': round(shortfall, 3) if shortfall is not None else None,
+        'stop_required_to_finish': bool(shortfall is not None and shortfall > 0),
+        'decision': 'unknown',
+        'latest_safe_pit_lap': None,
+        'laps_until_latest_safe_pit': None,
+        'selected_plan': None,
+        'plan_windows': {},
+        'reason': 'insufficient_evidence',
+    }
+    lap_int = int(current_lap) if _finite(current_lap) and current_lap >= 0 else None
+    ep = endurance_plan if isinstance(endurance_plan, dict) else {}
+    if ep.get('available') is True and ep.get('multi_stop') is True:
+        until = ep.get('next_fuel_stop_in_laps')
+        if isinstance(until, int) and until >= 0 and lap_int is not None:
+            latest = lap_int + until
+            return {**base, 'decision': 'pit_now' if ep.get('box_this_lap') else
+                    ('hold' if until > 1 else 'pit_later'),
+                    'latest_safe_pit_lap': latest,
+                    'laps_until_latest_safe_pit': until,
+                    'reason': ('current_stint_window_due' if ep.get('box_this_lap')
+                               else 'current_stint_window_reachable')}
+    plan_id, plan = _selected_plan(strategy_options)
+    windows = {}
+    if isinstance(strategy_options, dict):
+        for pid in ('A', 'B', 'C'):
+            p = strategy_options.get('plan_' + pid.lower())
+            if isinstance(p, dict) and p.get('available'):
+                windows[pid] = {'target_lap': p.get('target_lap'),
+                                'target_in_laps': p.get('target_in_laps'),
+                                'set_fuel_l': p.get('set_fuel_l')}
+    base['plan_windows'] = windows
+    base['selected_plan'] = plan_id
+    if plan is not None and isinstance(plan.get('target_lap'), int) and lap_int is not None:
+        latest = plan['target_lap']
+        until = max(0, latest - lap_int)
+        reach_margin = (current - float(burn) * until - RESERVE_L
+                        if current is not None and _finite(burn) and burn > 0 else None)
+        due = until == 0 or (reach_margin is not None and reach_margin < 0)
+        decision = 'pit_now' if due else ('hold' if until > 1 else 'pit_later')
+        return {**base, 'decision': decision, 'latest_safe_pit_lap': latest,
+                'laps_until_latest_safe_pit': until,
+                'reach_window_margin_l': round(reach_margin, 3) if reach_margin is not None else None,
+                'reason': ('selected_window_due' if due else 'selected_window_reachable')}
+    if base['available'] and not base['stop_required_to_finish']:
+        return {**base, 'decision': 'hold', 'reason': 'fuel_sufficient_to_finish'}
+    return base
+
+
 def _finite(value):
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value))

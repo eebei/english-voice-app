@@ -43,7 +43,8 @@ function extract(name) {
 //   「自己反省記憶が GAP の質問を飲み込む」回帰を検出できなくなる。
 const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
   'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech',
-  'handleLunaSelfMemoryInput', 'lunaSelfMemoryProposalLine']
+  'handleLunaSelfMemoryInput', 'lunaSelfMemoryProposalLine',
+  'pendingConfirmationKinds', 'bareConfirmationAnswer', 'confirmationClarification']
   .map(extract).join('\n');
 
 let pass = 0, fail = 0;
@@ -121,6 +122,7 @@ const sandbox = {
   isJapaneseEngineer: () => true,
   pendingLunaSelfMemoryConfirmation: null,
   pendingDecisionDispute: null,
+  pendingDrivingStyleAdvice: null,
   speechLatencyTrace: () => {}, costRecord: () => {}, costReplyId: () => 'cost-1',
   ttsFailLog: () => {}, ttsEventLog: () => {},
   phonetify: t => t, normalizeLunaSpeech: t => t,
@@ -162,6 +164,9 @@ function reset() {
   played.length = 0; audioInstances.length = 0; traces.length = 0; ttsResolve = null;
   fakeNow = 1_700_000_000_000;
   sandbox.lastTelemetry = snapshot(); sandbox.lastTelemetryAt = fakeNow;
+  sandbox.pendingLunaSelfMemoryConfirmation = null;
+  sandbox.pendingDecisionDispute = null;
+  sandbox.pendingDrivingStyleAdvice = null;
 }
 
 /** ドライバーが喋る（本番 sendMsg を実行する）。 */
@@ -194,6 +199,22 @@ sandbox.fetch = (url, init) => {
 const resetSpoken = () => { spokenTexts.length = 0; };
 
 (async () => {
+
+  console.log('\n══ ⓪ 共通確認arbiter：裸の「はい」を横取りしない ══');
+  reset(); resetSpoken();
+  sandbox.pendingDrivingStyleAdvice={available:true,point:{feature:'minimum_speed_mps'}};
+  sandbox.pendingDecisionDispute='decision-1';
+  await ask('はい');
+  check('運転スタイル＋Decisionは対象を聞き返す',traces.some(t=>/CONFIRMATION_ARBITER/.test(t)));
+  check('運転スタイルを勝手に確定しない',sandbox.pendingDrivingStyleAdvice!==null);
+  check('Decision訂正を保留したままにする',sandbox.pendingDecisionDispute==='decision-1');
+
+  reset(); resetSpoken();
+  sandbox.pendingDrivingStyleAdvice={available:true,point:{feature:'minimum_speed_mps'}};
+  sandbox.pendingLunaSelfMemoryConfirmation='self-1';
+  await ask('yes');
+  check('運転スタイル＋自己反省も対象を聞き返す',traces.some(t=>/CONFIRMATION_ARBITER/.test(t)));
+  check('自己反省を保留したままにする',sandbox.pendingLunaSelfMemoryConfirmation==='self-1');
 
   // ════════════════════════════════════════════════════════════════
   console.log('\n══ ① 回答が identity を持って queue へ入る（Codex 受入条件1）══');

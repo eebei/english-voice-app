@@ -718,6 +718,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="decision-memory.js"></script>
 <script src="gap-freshness.js"></script>
 <script src="luna-self-memory.js"></script>
+<script src="driving-style-v1.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -1094,6 +1095,28 @@ let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let iracingConnectionSeen = false, iracingConnectedAt = 0, lastTelemetryAt = 0, telemetryStaleNotified = false;
 const TELEMETRY_STALE_MS = 12000;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null, lastSessionNum = null;
+let pendingDrivingStyleAdvice = null;
+let lastDrivingStyleCapturedLap = null;
+function drivingStyleReferences(){
+  const id=currentMemoryIdentity();let rows=[];
+  try{rows=JSON.parse(localStorage.getItem('pw_driving_style_laps_v1')||'[]');}catch{}
+  const same=rows.filter(r=>r.user_id===id.userId&&r.track===id.track&&r.car===id.car);
+  const ranked=same.filter(r=>Number.isFinite(Number(r.features?.lap_time_s))).sort((a,b)=>a.features.lap_time_s-b.features.lap_time_s);
+  let memories=[];try{memories=JSON.parse(localStorage.getItem('pw_driving_style_memory_v1')||'[]');}catch{}
+  const active=memories.filter(r=>r.status==='active'&&r.user_id===id.userId&&r.track===id.track&&r.car===id.car).at(-1)||null;
+  return {self_best:ranked[0]||null,self_consistent:ranked.length>=3?ranked[1]:null,
+    driver_confirmed:same.filter(r=>r.confirmed===true).at(-1)||null,
+    confirmed_condition:active?.condition||null};
+}
+function captureDrivingStyleProfile(live){
+  const style=live?.driving_style;if(!style?.available||!style.features)return;
+  const lap=style.features.lap;if(lap===lastDrivingStyleCapturedLap)return;
+  lastDrivingStyleCapturedLap=lap;const id=currentMemoryIdentity();if(!id.userId||!id.track||!id.car)return;
+  let rows=[];try{rows=JSON.parse(localStorage.getItem('pw_driving_style_laps_v1')||'[]');}catch{}
+  rows.push({user_id:id.userId,track:id.track,car:id.car,features:style.features,source:'self_measured_clean'});
+  localStorage.setItem('pw_driving_style_laps_v1',JSON.stringify(rows.slice(-40)));
+  diagnosticLog('DRIVING_STYLE_CAPTURE',JSON.stringify({lap,source:style.source,confidence:style.confidence}));
+}
 // ★Build 265 lifecycle flags — cleared on session-num reset.  Consumed by fix B
 //   (strategy speech suppression) and fix C (follow-up refusal after checker).
 let finalLapNoticeSeen = false;   // trigger=final_lap_notice arrived from bridge
@@ -2200,6 +2223,24 @@ function handleLunaSelfMemoryInput(text){
 // ── Send message ──
 function onKey(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();} }
 function autoResize(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; }
+function pendingConfirmationKinds(){
+  const kinds=[];
+  if(typeof pendingDrivingStyleAdvice!=='undefined'&&pendingDrivingStyleAdvice) kinds.push('driving_style');
+  if(typeof pendingLunaSelfMemoryConfirmation!=='undefined'&&pendingLunaSelfMemoryConfirmation) kinds.push('self_memory');
+  if(typeof pendingDecisionDispute!=='undefined'&&pendingDecisionDispute) kinds.push('decision_correction');
+  return kinds;
+}
+function bareConfirmationAnswer(text){
+  if(/^(?:はい|そう|そうです|合ってる|それでいい|役立った|有効|yes|correct|right|helped|useful)[。.!！]?$/i.test(text)) return true;
+  if(/^(?:いいえ|違う|ちがう|やめて|no|wrong|cancel)[。.!！]?$/i.test(text)) return false;
+  return null;
+}
+function confirmationClarification(kinds,isJP){
+  const labels={driving_style:isJP?'運転スタイル助言':'driving-style advice',self_memory:isJP?'自己反省記憶':'self-correction memory',decision_correction:isJP?'戦略記録の訂正':'strategy-record correction'};
+  return isJP
+    ? `確認が${kinds.length}件ある。${kinds.map(k=>labels[k]).join('、')}のどれへの返事か教えて。`
+    : `I have ${kinds.length} pending confirmations: ${kinds.map(k=>labels[k]).join(', ')}. Tell me which one you mean.`;
+}
 async function sendMsg(inputSource){
   const inp = document.getElementById('chat-input');
   const text = inp.value.trim();
@@ -2210,6 +2251,23 @@ async function sendMsg(inputSource){
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
+  const pendingKinds=pendingConfirmationKinds();
+  if(bareConfirmationAnswer(text)!==null&&pendingKinds.length>1){
+    const reply=confirmationClarification(pendingKinds,isJapaneseEngineer());
+    diagnosticLog('CONFIRMATION_ARBITER',JSON.stringify({result:'clarify',pending:pendingKinds}));
+    addMsg('ai',reply);pushMsg({role:'assistant',content:reply});
+    speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'confirmation_clarification',dedupeKey:'confirmation_clarification|'+pendingKinds.join('|')});return;
+  }
+  if(typeof pendingDrivingStyleAdvice!=='undefined'&&pendingDrivingStyleAdvice&&/^(?:はい|役立った|有効|yes|helped|useful|いいえ|違う|no)[。.!！]?$/i.test(text)){
+    const accepted=!/^(?:いいえ|違う|no)/i.test(text);
+    let rows=[];try{rows=JSON.parse(localStorage.getItem('pw_driving_style_memory_v1')||'[]');}catch{}
+    const out=window.PitwallDrivingStyleV1.confirm(rows,pendingDrivingStyleAdvice,accepted,currentMemoryIdentity(),Date.now());
+    if(out.record)localStorage.setItem('pw_driving_style_memory_v1',JSON.stringify(out.store));
+    pendingDrivingStyleAdvice=null;
+    const reply=isJapaneseEngineer()?(accepted?'了解。有効だった助言だけを次回条件へ残した。':'了解。この助言は次回へ残さない。'):(accepted?'Understood. I kept only the confirmed advice for next time.':'Understood. I will not carry this advice forward.');
+    diagnosticLog('DRIVING_STYLE_CONFIRM',JSON.stringify({accepted,reason:out.reason}));
+    addMsg('ai',reply);pushMsg({role:'assistant',content:reply});speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'driving_style_confirmation'});return;
+  }
   const selfMemoryReply=handleLunaSelfMemoryInput(text);
   if(selfMemoryReply){
     usageCount(inputSource==='ptt'?'ptt':'typed');
@@ -2217,6 +2275,14 @@ async function sendMsg(inputSource){
     speak(selfMemoryReply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'luna_self_memory_confirmation',
       dedupeKey:'luna_self_memory_confirmation|'+selfMemoryReply});
     return;
+  }
+  if(/(?:運転|走り|ドライビング).{0,8}(?:分析|スタイル|改善|アドバイス)|driving style|analyse my driving|analyze my driving/i.test(text)){
+    const result=window.PitwallDrivingStyleV1.compare(lastTelemetry?.driving_style,drivingStyleReferences());
+    const reply=window.PitwallDrivingStyleV1.format(result,isJapaneseEngineer()?'ja':'en');
+    if(result.available&&result.point)pendingDrivingStyleAdvice=result;
+    diagnosticLog('DRIVING_STYLE_ADVICE',JSON.stringify({source:result.source||null,confidence:result.confidence||null,numeric_allowed:result.numeric_allowed===true}));
+    addMsg('ai',reply);pushMsg({role:'assistant',content:reply});
+    speak(reply,{prio:SPEAK_PRIO.P4_INFO,kind:'driving_style_advice',dedupeKey:'driving_style|'+(result.point?.feature||'none')});return;
   }
   // 誤タップ/PTTで「ルール」だけ入った時に、内部プロンプトや文字数制限を長々と読み上げない。
   if(/^(?:ルール|rules?|help)[。.!！?？]?$/i.test(text)){
@@ -3551,6 +3617,7 @@ function connectBridge(){
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=applySessionFormatAuthority(data);
+        captureDrivingStyleProfile(lastTelemetry);
         if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         rememberLiveFuelEvidence(lastTelemetry);
         updateStrategyPlaybookFromLive(lastTelemetry);

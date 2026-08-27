@@ -53,9 +53,10 @@ import endurance_handoff as endurance_handoff_mod
 import endurance_fuel as endurance_fuel_mod
 import practice_profile
 import gap_call_policy as gap_call_policy_mod
+import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 287 (driver-confirmed Luna self-memory and strategy condition guards)"
+BUILD_VERSION = "Build 288 (fuel timing authority and confirmed driving-style coaching v1)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -2499,6 +2500,7 @@ def poll_iracing():
     strategy_options_decision_sent = False
     strategy_options_box_call_sent = False
     latest_endurance_plan = None
+    driving_style_aggregator = driving_style_mod.DrivingStyleAggregator()
     pit_entry_announced_stop = False  # SDK接近境界で先行通知済みか（1ストップ1回）
     summary_sent = False        # チェッカー後に1回だけ送る
     checkered_pending = False   # チェッカー(全体状態)は見えたが、自分はまだ完走してない待機フラグ
@@ -6451,6 +6453,34 @@ def poll_iracing():
                 and not _lap_had_pit_road
                 and not _lap_had_pit_road_prev
                 and not _lap_had_off_track)
+            # V1 driver coaching: collapse the 60 Hz controls locally.  Raw
+            # samples never leave the Bridge; renderer receives one compact
+            # clean-lap evidence object with explicit exclusion reasons.
+            _style_flags = reader.read_int('SessionFlags') or 0
+            _style_yellow = bool(_style_flags & 0xC000)
+            _style_traffic = any(
+                isinstance(g, (int, float)) and 0 <= g < 1.5
+                for g in (nearest_ahead_gap, nearest_behind_gap))
+            _style_tyres = [x for x in (lfTemp, rfTemp, lrTemp, rrTemp)
+                            if isinstance(x, (int, float))]
+            _driving_style = driving_style_aggregator.update(
+                session_key=(cur_snum, session_track, session_car_model),
+                lap=int(lap) if isinstance(lap, int) else -1,
+                lap_dist_pct=reader.read_float('LapDistPct'),
+                speed_mps=_speech_speed, brake=brake_val, throttle=throttle_val,
+                steering_rad=steering_angle, valid_clean=_telemetry_lap_valid_clean,
+                on_pit_road=onPit, yellow=_style_yellow, traffic=_style_traffic,
+                fuel_l=fuel,
+                tyre_temp_c=(sum(_style_tyres) / len(_style_tyres)
+                             if _style_tyres else None),
+                last_lap_time_s=lapTime)
+            if isinstance(_fuel_strategy_live, dict):
+                _fuel_strategy_live['pit_timing_authority'] = (
+                    plan_fuel_authority_mod.build_timing_authority(
+                        _fuel_strategy_live, strategy_options,
+                        current_lap=lap, fuel_level_l=fuel,
+                        endurance_plan=(_fuel_strategy_live.get('endurance_plan')
+                                        or latest_endurance_plan)))
             broadcast({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
@@ -6466,6 +6496,7 @@ def poll_iracing():
                 'pit_out_this_lap': bool(_lap_had_pit_road_prev),
                 'off_track_this_lap': bool(_lap_had_off_track),
                 'clean_lap_candidate_count': _clean_lap_candidate_count,
+                'driving_style': _driving_style,
                 # Never expose SessionLapsRemain for timed races: AI sessions
                 # have supplied sentinel/stale values that became fabricated
                 # 18/19-lap answers.  The clock model is the sole authority.

@@ -265,6 +265,12 @@ if node tests-decision-memory-server.js >/dev/null 2>&1; then echo "   ✅ 全�
 echo "── G5 GAP回答の出口：質問→queue待ち→TTS開始で旧数値を再生しない（2026-08-25）"
 if node tests-gap-answer-queue.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-gap-answer-queue.js 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── 燃料pit timing単一権威：総不足とpit-now分離（2026-08-27）"
+if node tests-fuel-timing-authority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-fuel-timing-authority.js; fail=1; fi
+
+echo "── 運転スタイルV1：60Hz縮約→除外→比較→確認記憶（2026-08-27）"
+if python3 irsdk-bridge/tests_driving_style.py >/dev/null 2>&1 && node tests-driving-style-v1.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_driving_style.py; node tests-driving-style-v1.js; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
