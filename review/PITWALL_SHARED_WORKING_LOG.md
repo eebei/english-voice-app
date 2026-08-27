@@ -4006,3 +4006,58 @@ git diff d05ea07..2ba8ce4 -- server.js auth.js prompts.js engineer-card.js
 |---|---|---|---|
 | 08-27 | `20d22f1` | Build 288 Gate 5 独立確認 | 確認者署名 |
 | 08-27 | 本節 | Gate 6 handoff を Build 288 用へ差し替え | module 10本の期待値・掴み違いの判別・更新バナー判定 |
+
+## 2026-08-28 JST — Claude Code独立レビュー指示（実走会話/STT揺れ・Truth Gate修正）
+
+### 役割と対象
+
+Claude Codeは**独立レビュー担当**。Codex実装commit `ac518e6`（parent `58b272c`）を、自己申告やテスト名を鵜呑みにせず差分と実コードから反証すること。今回のレビューではファイルを修正せず、結果を本MD末尾へ追記する。修正が必要ならP0/P1/P2、対象ファイル・行、再現入力、期待結果を明記し、Codexが修正後に再確認する。
+
+実走証拠:
+
+- `/Users/yuji.s/Downloads/OMORAY-bridge-debug-20260827-2028.log`
+- 20:59:02 `ルナ データいってる？` → LLMはライブ値で正答したが`TELEMETRY_TRUTH_GATE`が遮断 → `了解。`
+- 20:59:19 `ベストラップ いくつ？` → LLMは`7:50.356`と正答したが同gateが遮断 → `了解。`
+- 21:01:17 `ベストラップ わかります。` → 同じ正答を遮断 → `了解。`
+- 21:01:32 `コースデータは空いてる？` → `入ってる`のSTT揺れと推定。ただし推定を権威値へ使ってはならない。
+- 22:18:04 `のな セクター どっか 遅れてる？` → 崩れがあっても回答は成立。全STT揺れを一律失敗扱いしない。
+
+### 必須反証項目
+
+1. `desktop/local-intent-router.js`のbest lap回答が`live.best`以外の会話値・履歴値を使わず、欠損時に捏造しないこと。`470.356`が日本語で`7分50秒356`へ正しく丸められること。
+2. `ベストラップ いくつ？`、質問符号が落ちた`ベストラップ わかります。`がLLMへ落ちず、Bridge権威から同じ回答へ到達すること。
+3. `ルナ データいってる？`、`コースデータは空いてる？`だけを狭くdata-statusへ寄せ、`コースは空いてる？`、`このデータを解析して`、`than。`、通常のsetup相談を誤ルーティングしないこと。
+4. local routerは`selMode==='race' && iracingLive && lastTelemetry`の既存ライブ境界を緩めず、セッション権威が無い時にコース名・車両名を作らないこと。
+5. local routeを外した変異でも`telemetryTruthFallback()`がbest/dataを最新`live`から再構成し、未知の数値質問を無関係な`了解。`へ落とさないこと。一方、通常の目標・フィーリング・単なる了承を過剰に拒否しないこと。
+6. `server.js`の追加STTヒントが日本語のみへ限定され、危険な一般語boostやintent確定をしていないこと。モデル変更・追加retry・追加API呼出が無いこと。
+7. `parseGoogleSttResponse()`が複数segmentを順序どおり結合し、confidence欠損/nullを0へ偽装せず、最弱値を診断用に返すこと。confidenceを発話可否・戦略権威へ使用していないこと。
+8. `PTT_STT_RESULT`が文字数・confidence・録音秒数・言語だけで、発話全文・生音声・個人別の癖を新規永続保存していないこと。既存のローカル`CONVO [USER]`ログとの境界も明記すること。
+9. best/dataのlocal化でAnthropic呼出は減るが、Google STT回数・秒数とTTS経路は増えないこと。通常テストがAnthropic/Google STT/TTSの実APIを呼ばないこと。
+10. 実走5入力をfixtureとして再生し、意図した3経路（local成功／LLM継続／unknown非推測）を確認すること。テストの文字列存在検査だけで合格せず、本番関数の実行結果を含めること。
+11. `server.js`変更を含むため、旧Build 288のGate 7 N/Aを流用できないこと。次candidateはBuild 289採番とGate 7が必要で、Build 288 artifactに本修正が入っていないこと。
+12. unrelated untracked filesを触らず、push / build / deploy / publish / 外部有料API呼出を行わないこと。
+
+### 実行する最低限の確認
+
+```bash
+git diff 58b272c..ac518e6 -- desktop/local-intent-router.js desktop/renderer.html server.js tests-local-intent-router.js tests-telemetry-truth-gate.js tests-ptt-capture.js HANDOFF.md
+node tests-local-intent-router.js
+node tests-telemetry-truth-gate.js
+node tests-ptt-capture.js
+node tests-gap-answer-queue.js
+node --check server.js
+git diff 58b272c..ac518e6 --check
+```
+
+必要なら外部APIゼロの追加fixture/変異試験を行う。Windows、実Google STT品質、実iRacing、音声の自然さを自動テスト済みと主張しない。
+
+### 報告形式
+
+- `P0 / P1 / P2`の指摘一覧（無ければ各0件）
+- 実走入力ごとの`STT text → intent → authority → output`表
+- privacy / cost / Gate 7 / Build番号の判定
+- 実行したテストと件数
+- 最終判定を **合格 / 条件付き合格 / 差戻し** のいずれかで明記
+- 本MDへ結果を追記してcommitし、commit SHAを報告する
+
+**このレビュー合格だけではBuild 289 GO、Windows合格、実走合格、公開GOにはならない。**
