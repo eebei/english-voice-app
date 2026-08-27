@@ -4061,3 +4061,155 @@ git diff 58b272c..ac518e6 --check
 - 本MDへ結果を追記してcommitし、commit SHAを報告する
 
 **このレビュー合格だけではBuild 289 GO、Windows合格、実走合格、公開GOにはならない。**
+
+## 2026-08-28 JST — Claude Code 独立レビュー結果（実走会話/STT揺れ・Truth Gate修正）**条件付き合格**
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+対象: Codex 実装 commit `ac518e6`（parent `58b272c`）。**ファイルは1つも修正していない。**
+
+### 最終判定
+
+**条件付き合格。** P0 0件 / P1 0件 / **P2 2件**。
+差戻しではないが、下記2件は Build 289 採番前に判断がいる。
+
+---
+
+### P2-1 — STT ヒントに2文字語 `トー` `車高` が入っている（項目6）
+
+`server.js` の日本語 `racingPhrases` へ15語追加された。うち **`トー`** は2文字で、
+「とー」「塔」「等」など無関係な音へ**認識を偏らせうる**。`車高` も2文字。
+
+**ヒントは intent を確定させないため実害は限定的**（誤認識しても router の狭い正規表現が受けない）。
+ただし PITWALL は STT の揺れで既に実走障害を出しており、**認識そのものを歪める入力は増やす前に見合うか判断すべき**。
+
+- 対象: `server.js` の `racingPhrases`（日本語分岐）
+- 再現: 「とーぜん」等を含む発話での認識揺れ
+- 期待: `トー` は `トー角` など3文字以上へ。`車高` は据え置き可（レース語として一意）
+
+### P2-2 — `BUILD_VERSION` が **288 のまま**（項目11に関連）
+
+`ac518e6` の `BUILD_VERSION` は `Build 288 (fuel timing authority and confirmed driving-style coaching v1)`。
+**公開前の Build 288 artifact（`2ba8ce4`）と中身が違う。**
+このままビルドすると **Build 282 型の事故**（同番号・中身違い）。
+
+- 期待: **289 へ採番**（`server.js` を含むため Gate 7 も必須）
+
+---
+
+### 必須反証12項目の結果
+
+| # | 項目 | 判定 |
+|---|---|---|
+| 1 | best lap が `live.best` のみ・欠損時に捏造しない・`470.356`→`7分50秒356` | ✅ |
+| 2 | `ベストラップ いくつ？`／`わかります。` が LLM へ落ちず同回答 | ✅ |
+| 3 | data-status が狭い（誤ルーティングなし） | ✅ |
+| 4 | ライブ境界を緩めず、権威なしでコース名・車両名を作らない | ✅ |
+| 5 | local route 変異でも fallback が再構成、過剰拒否なし | ✅ |
+| 6 | STT ヒントが日本語限定・モデル/retry/API追加なし | ⚠ **P2-1** |
+| 7 | `parseGoogleSttResponse` の結合・confidence 契約 | ✅ |
+| 8 | `PTT_STT_RESULT` が全文・生音声・癖を保存しない | ✅ |
+| 9 | Anthropic 減・Google STT/TTS 増なし | ✅ |
+| 10 | 実走5入力の3経路 | ✅ |
+| 11 | Gate 7 流用不可・Build 289 採番必要 | ⚠ **P2-2**（採番されていない） |
+| 12 | 無関係ファイル不触・push/build/deploy/公開なし | ✅ |
+
+#### 実測の要点
+
+**項目1**（`formatLapTime` を直接実行）
+`470.356`→`7分50秒356` / 英語 `7:50.356` / `60`→`1分0秒000` / `90.05`→`1分30秒050`（ミリ秒ゼロ埋め）。
+`0`・負値・`null`・非数は**空文字**。`session_best`/`last_lap`/`bestLap` を混ぜても
+**`live.best` の値しか出ない**。best 欠損時は数字を1つも含まない。
+
+**項目3**（誤ルーティング）
+寄る: `ルナ データいってる？` `コースデータは空いてる？` `データ入ってる？` `データ来てる？`
+寄らない: **`コースは空いてる？`** `このデータを解析して` `than。` `アンダーが出る` `次のピットどうする？` `タイヤ持たない`
+
+**項目4**（権威なしで名前を作らない）
+権威なし → `テレメトリは来ている。セッション詳細は確認中。`（コース名・車両名を出さない）
+**空の権威オブジェクト `{}` でも「確認済み」にしない**。
+
+**項目5**（`telemetryTruthFallback` を vm で実行）
+local route を通さずとも best/data を `live` から再構成。
+未知の数値質問（`セクター2どうなってる？` `タイヤ内圧いくつ？` `平均速度は？`）は**「了解。」へ落ちない**。
+`完走したい` `アンダーが出る` `了解` は**拒否文にならない**。
+
+**項目7**（`parseGoogleSttResponse` を実行）8/8
+複数 segment を順序どおり結合／**最弱 confidence を返す**／
+**欠損・null を 0 へ偽装しない（null のまま）**／`confidence:0` は 0 として欠損と区別／
+`results` 欠損でも壊れない。**confidence は診断ログ以外で使われていない**
+（`sttConfidence` の参照箇所は log 生成の2行のみ。発話可否・戦略権威に未使用）。
+
+**項目8**（privacy）
+`PTT_STT_RESULT` の記録キーは **`chars` / `confidence` / `duration_s` / `language` の4つのみ**。
+発話全文・生音声(base64)・個人別の癖は**含まれない**。
+※初回検査で私の正規表現が `text.length` と `audioDurationSeconds` に誤反応し「含む」と出たが、
+キーの実体を見て**誤りと判明**した。訂正して記録する。
+
+**項目9**（cost）
+差分に追加された課金API呼出は **0件**。モデル変更・retry 追加・新規 fetch なし。
+best_lap / telemetry_status が local 化され **Anthropic 呼出は減る**。Google STT/TTS の経路は不変。
+
+**項目10**（実走5入力の再生・本番関数の実行結果）
+
+| 時刻 | STT text | intent | authority | output |
+|---|---|---|---|---|
+| 20:59:02 | ルナ データいってる？ | `telemetry_status` | sessionAuthority | データは来ている。コースと車両も確認済み。 |
+| 20:59:19 | ベストラップ いくつ？ | `best_lap` | `live.best` | ベスト7分50秒356。 |
+| 21:01:17 | ベストラップ わかります。 | `best_lap` | `live.best` | ベスト7分50秒356。 |
+| 21:01:32 | コースデータは空いてる？ | `telemetry_status` | sessionAuthority | データは来ている。コースと車両も確認済み。 |
+| 22:18:04 | のな セクター どっか 遅れてる？ | **(LLM継続)** | — | LLM→Truth Gate |
+
+**意図した3経路（local成功／LLM継続／unknown非推測）が成立している。**
+崩れた STT を一律失敗扱いにしていない。
+
+### privacy / cost / Gate 7 / Build番号の判定
+
+| 項目 | 判定 |
+|---|---|
+| privacy | **合格**。新規の永続保存なし。診断ログは文字数・confidence・秒数・言語のみ |
+| cost | **合格**。課金API呼出の追加0件。Anthropic は減る方向 |
+| **Gate 7** | **必須**。`server.js` に +19/-5 の変更があり、**Build 288 の N/A は流用できない** |
+| **Build番号** | **未採番（P2-2）**。`BUILD_VERSION` は 288 のまま。**289 が必要** |
+
+### 実行したテストと件数
+
+| テスト | 件数 | exit |
+|---|---|---|
+| `tests-local-intent-router.js` | 46/46 | 0 |
+| `tests-telemetry-truth-gate.js` | 60/60 | 0 |
+| `tests-ptt-capture.js` | 14/14 | 0 |
+| `tests-gap-answer-queue.js` | 49/49 | 0 |
+| `node --check server.js` | — | 0 |
+| `git diff 58b272c..ac518e6 --check` | — | 0 |
+| Claude 独自反証（項目1〜4） | **25/25** | — |
+| Claude 独自反証（項目7） | **8/8** | — |
+| Claude 独自反証（項目5） | **10/10** | — |
+
+**テストの文字列存在検査だけで合格にしていない。** 本番関数（`formatLapTime` /
+`route` / `telemetryTruthFallback` / `parseGoogleSttResponse`）を実行した結果で判定した。
+外部有料API呼出 **0件**。
+
+### 未実施（自動テスト済みと主張しない）
+
+**Windows 実機・実 Google STT 品質・実 iRacing・音声の自然さは未確認。**
+`トー` のヒント追加が実際の認識に与える影響も、**実 STT でしか分からない**。
+
+### 次の担当と手順
+
+| # | 項目 | 担当 |
+|---|---|---|
+| 1 | P2-1 の判断（`トー` を残すか3文字以上へ） | Codex／Yuji |
+| 2 | **Build 289 採番** | Codex |
+| 3 | commit → build → Gate 5 | Codex（build は Yuji の GO 後） |
+| 4 | **Gate 7 必須**（server 変更あり）→ `./verify-deploy.sh` | Yuji の deploy GO |
+| 5 | Gate 6 Windows / Gate 8 実走 / Gate 9 公開 | Yuji |
+
+**このレビュー合格だけでは Build 289 GO、Windows 合格、実走合格、公開GO にならない。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-27 | `52e784f` | Gate 6 handoff を Build 288 用へ差し替え | module 10本の期待値 |
+| 08-28 | 本節 | 実走会話/STT揺れ・Truth Gate修正の独立レビュー | 条件付き合格・P2 2件・実走5入力の再生 |
