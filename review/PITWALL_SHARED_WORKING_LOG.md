@@ -3798,3 +3798,156 @@ compare(features無し・point無し) → record=null（advice_unavailable） �
 |---|---|---|---|
 | 08-27 | `15ff5ea` | 燃料timing権威／運転スタイルV1 独立確認 | P1 1件・P2 2件 |
 | 08-27 | 本節 | P1/P2修正の独立再確認 | 全件解消・同時保留3系統 11/11・自分のharness不足の記録 |
+
+## 2026-08-27 Codex → Claude Code — Build 288 Gate 5 artifact独立確認指示
+
+YujiのBuild 288 GO後、Codexは実装を `2ba8ce4a72c4034e6b4c6af20eb41ce0fc007a12` へcommitし、`build/288`へpushした。push eventのprivate Desktop workflow `33074707192` はsuccess、Publishはskipped。
+
+Codexの `./verify-artifact.sh 33074707192 2ba8ce4a72c4034e6b4c6af20eb41ce0fc007a12 288` 実測：
+
+- artifact: `OMORAY-PITWALL-Desktop-Build-288-20260827-1302` / 302,056,340 bytes
+- installer 3本同一: 100,682,608 bytes / SHA-256 `b6be060b3c056c0455e85eebc07ac19ae219a5338480d7d8a61d834d31961dc4`
+- app.asar: 4,283,002 bytes / SHA-256 `e2eeb10c19b5803b5d3a5e0ef04e037264f51b9edf8f6041ca6508a23b9d43c9`
+- Desktop同梱Bridge: 17,028,403 bytes / SHA-256 `bc97f1ff76850935d78ecb603443247925ac7f20127897df905ab4d64db02b15`
+- runtime module 10/10（`driving-style-v1.js`含む）、対象SHA一致、`buildNum=288`、BridgeにBuild 288実在・旧287不在、pygame 52件
+
+Claude Codeは上記数値を転載せず、別作業ディレクトリで同runを独立取得・展開し、bytes / SHA-256 / Publish skipped / module 10/10 /対象SHA / Build 288 / Bridge系統を再計算してGate 5確認者署名を記録すること。CodexからClaude CLIを起動した試行はローカルClaude Codeが未ログイン（`Not logged in · Please run /login`）のため検査開始前に終了した。変更・外部公開は無い。
+
+Gate 6 Windows、Gate 7 server（server変更なしのためN/A根拠確認）、Gate 8 iRacing、Gate 9公開は未実施。Gate 5も確認者署名前なので全体合格にしない。
+
+- **次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`**
+
+## 2026-08-27 JST — Claude Code 作業終了報告（Build 288 Gate 5 独立確認・**確認者署名**）
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+必須MD報告。**Codex の数値は転載せず、別作業ディレクトリで同 run を独立取得・展開して再計算した。**
+
+### 1. 作業日時と担当
+
+2026-08-27 JST。**確認担当 Claude Code**（実装・build は Codex）。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| 対象SHA | `2ba8ce4a72c4034e6b4c6af20eb41ce0fc007a12` |
+| ブランチ | `build/288`（`origin/main` は動かしていない） |
+| Build番号 | **288**（`BUILD_VERSION = "Build 288 (fuel timing authority and confirmed driving-style coaching v1)"`） |
+| workflow run | `33074707192`（push event / private） |
+
+**私が前回未完了に挙げた「`BUILD_VERSION` が 287 のまま」は解消**（288 へ採番済み）。
+
+### 3. 変更ファイル
+
+**Claude は1ファイルも変更していない**（確認のみ）。
+公開中 Build 287（`d05ea07`）との出荷経路の差分：
+
+```
+desktop/driving-style-v1.js          +55（新規）
+desktop/local-intent-router.js       +14
+desktop/renderer.html                +67
+irsdk-bridge/bridge.py               +33 -1
+irsdk-bridge/driving_style.py        +80（新規）
+irsdk-bridge/plan_fuel_authority.py  +70
+irsdk-bridge/tests_driving_style.py  +38（新規）
+7 files changed, 356 insertions(+), 1 deletion(-)
+```
+
+### 4. 実行したテスト（件数・終了コード）
+
+**対象SHA を隔離 worktree へ出して実行**（本作業ツリーには触っていない）。
+
+| 項目 | 件数 | exit |
+|---|---|---|
+| JS 全スイープ（対象SHA） | **失敗0** | — |
+| `tests-driving-style-v1.js` | 13/13 | 0 |
+| `tests-fuel-timing-authority.js` | 4/4 | 0 |
+| `tests-runtime-module-status.js` | **12/12**（module 10本＋基本2件） | 0 |
+| Python discover | **308 tests** | 0 |
+| `./preflight.sh`（対象SHA） | **出荷可** | 0 |
+
+外部有料API呼出 **0件**。
+
+### 5. artifact（すべて Claude が自分で再計算）
+
+| 項目 | 実測値 |
+|---|---|
+| artifact | `OMORAY-PITWALL-Desktop-Build-288-20260827-1302` / 302,056,340 bytes |
+| run headSha | `2ba8ce4a72c4034e6b4c6af20eb41ce0fc007a12`（**対象SHAと一致**） |
+| Publish | **skipped**（private） |
+| installer | 100,682,608 bytes / `b6be060b3c056c0455e85eebc07ac19ae219a5338480d7d8a61d834d31961dc4`（**3本すべて同一ハッシュ**） |
+| app.asar | 4,283,002 bytes / `e2eeb10c19b5803b5d3a5e0ef04e037264f51b9edf8f6041ca6508a23b9d43c9` |
+| Bridge | 17,028,403 bytes / `bc97f1ff76850935d78ecb603443247925ac7f20127897df905ab4d64db02b15` |
+| **runtime module 欠落数** | **0**（10/10・`driving-style-v1.js` を含む） |
+| build-info | `buildNum = 288` |
+| Bridge 内 | `Build 288` 実在／**旧 `Build 287` は同じ箇所に無し**／`active_decision_id` 実在／`pygame` 52件（正しい系統） |
+| 同梱物と対象SHA | **CRLF 正規化後に一致** |
+
+**不合格 0 件。** Codex の申告値と独立再計算値は全項目一致した。
+
+### ★Gate 7 が N/A である根拠を鵜呑みにせず実測した
+
+Codex は「server変更なしのため N/A」としていた。**差分で確認した。**
+
+```
+git diff d05ea07..2ba8ce4 -- server.js auth.js prompts.js engineer-card.js
+→ 差分ゼロ
+```
+
+**Gate 7 は N/A で正しい。** 出荷経路の変更は desktop / irsdk-bridge のみ。
+（`./verify-deploy.sh` は本 Build では不要。ただし将来 server を触った Build では必須。）
+
+### 6. Gate 0〜9
+
+| Gate | 状態 |
+|---|---|
+| 0 変更範囲 | **合格** |
+| 1 失敗の固定 | **合格** |
+| 2 package 対象 | **合格**（renderer 参照10本すべて実物に同梱） |
+| 3 機械検証 | **合格**（対象SHA で preflight 出荷可・失敗0） |
+| 4 P0/P1 | **合格**（P1/P2 全件解消を `7c6c34e` で独立反証済み） |
+| **5 artifact** | **合格 — 確認者署名: Claude Code**（実装・build は Codex＝作業者と確認者が別） |
+| 6 Windows | **未実施** |
+| 7 server | **N/A**（server 系に差分ゼロを実測。根拠は上記） |
+| 8 iRacing 実走 | **未実施**（2026-08-27 は Yuji の走行なし） |
+| 9 公開 | **未実施**（Build 288 は private。公開中は Build 287） |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **本報告のMD追記のみ** |
+| push / private build | **なし**（Codex が実施済み） |
+| server deploy / 公開 Release | **なし** |
+| Windows 実機確認 / iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 | 手順 |
+|---|---|---|---|
+| 1 | **Gate 6 Windows** | **Yuji** | Build 288 installer（SHA `b6be060b…`）を起動し、`RUNTIME_MODULE_STATUS` が **10本**・`missing:[]`・`status:"loaded"` を ACK |
+| 2 | **Gate 6 handoff の差し替え** | Claude | `BUILD286_GATE6_WINDOWS_HANDOFF.md` は Build 286 向け（module 8本・旧SHA）。**288 用が要る** |
+| 3 | Gate 8 実走 | **Yuji** | 8/29 耐久。指示書の確認項目9点 |
+| 4 | Gate 9 公開 | **Yuji の別GO** | Gate 6/8 の後 |
+
+### 9. 到達段階（混同しない）
+
+| 段階 | 状態 |
+|---|---|
+| 実装済み | ✅（Codex） |
+| 内部テスト済み | ✅（対象SHA で全緑・exit 0） |
+| **artifact 確認済み** | ✅ **Codex 作成／Claude 独立再計算で全項目一致。確認者署名あり** |
+| Windows 確認済み | ❌ **未実施** |
+| 実走済み | ❌ **未実施**（8/27 は走行なし） |
+| 公開済み | ❌ **未実施**（公開中は Build 287） |
+
+**Gate 6・8・9 は未実施である。**
+本報告は「artifact が対象SHAの中身を含む」までであり、**実走で動く証拠でも出荷可でもない。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-27 | `7c6c34e` | P1/P2修正の独立再確認 | 全件解消 |
+| 08-27 | 本節 | Build 288 Gate 5 独立確認 | 確認者署名・独立再計算・Gate 7 N/A の根拠実測 |
