@@ -7,8 +7,9 @@
 - 燃料はBridgeが毎telemetryで `pit_timing_authority` を生成する。現燃料の航続周回、完走必要量・不足量、選択Planの最終pit周、`pit_now / hold / pit_later`、A/B/C windowを同一契約に分離した。ローカル会話回答は総不足量を述べても、このtiming verdictが`hold`なら今周pitを勧めない。全キャラクター共通経路。
 - 運転スタイルV1はBridgeで60Hz control値をクリーン周特徴量へ縮約し、raw sampleはrendererへ送らず保存もしない。invalid/pit/yellow/trafficをfail-closed除外し、本人best→本人安定周→本人確認基準→登録実測reference→一般傾向の順で出典を固定。一度に改善候補は1件、一般傾向では数値差を発話しない。
 - rendererは認証ユーザー・track・car単位のcompact clean-lap profileだけを保持し、助言後の本人肯定時だけ `pw_driving_style_memory_v1` のactive条件へ保存する。否定、identity欠損は保存しない。Jamesを含む全キャラクターが同じanalyzerを通る。
-- 内部確認: 新規JS 17/17、新規Python 3 tests、確認arbiter実挙動を含むGAP queue 49/49、燃料/戦略/router/runtime/記憶回帰は合格。Claude独立確認のP1（裸の肯定横取り）とP2 2件（空助言保存・range欠損例外）はCodex修正済み。独立再確認前でありGate 4合格とはまだしない。外部有料API呼び出しなし。
-- 未確認: artifact、push、公開、Windows、iRacing実走。特に60Hz実機入力、yellow/traffic閾値、fuel/tyre条件差の実走妥当性、助言の有用性は未合格。公開済み287と区別するため製品番号をBuild 288へ採番した。
+- 内部確認: 新規JS 17/17、新規Python 3 tests、確認arbiter実挙動を含むGAP queue 49/49、燃料/戦略/router/runtime/記憶回帰は合格。Claude独立確認でP1（裸の肯定横取り）とP2 2件（空助言保存・range欠損例外）の解消を再生し、Gate 4はP0/P1/P2 0件で合格。外部有料API呼び出しなし。
+- Build 288対象SHAは `2ba8ce4a72c4034e6b4c6af20eb41ce0fc007a12`、private workflow `33074707192` はsuccess、Publish skipped。CodexとClaude Codeが別作業ディレクトリでartifactを独立取得・再計算し、installer 3本同一、app.asar module 10/10、Build 288、同梱Bridge Build 288、対象SHA一致を確認。Gate 5は確認者署名済みで合格。
+- 未確認: Gate 6 Windows、Gate 8 iRacing実走、Gate 9公開。Gate 7 serverは公開287との差分ゼロをClaudeが実測したためN/A。60Hz実機入力、yellow/traffic閾値、fuel/tyre条件差の妥当性、助言の有用性は未合格。Windows手順は `review/BUILD288_GATE6_WINDOWS_HANDOFF.md` を正本とする。
 
 ## 2026-08-26 Build 287 Luna自己反省記憶スライス（公開・更新導線反映済み）
 
