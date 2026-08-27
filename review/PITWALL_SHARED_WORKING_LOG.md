@@ -3951,3 +3951,58 @@ git diff d05ea07..2ba8ce4 -- server.js auth.js prompts.js engineer-card.js
 |---|---|---|---|
 | 08-27 | `7c6c34e` | P1/P2修正の独立再確認 | 全件解消 |
 | 08-27 | 本節 | Build 288 Gate 5 独立確認 | 確認者署名・独立再計算・Gate 7 N/A の根拠実測 |
+
+## 2026-08-27 Claude Code — Gate 6 handoff を Build 288 用へ差し替え
+
+前節 §8 で未完了に挙げた項目の解消。
+
+`BUILD286_GATE6_WINDOWS_HANDOFF.md` は Build 286 向けで、**期待値が module 8本・旧SHA**のままだった。
+これで合否を出すと **Build 287 を掴んでいても（9本）合格に見える**。
+`BUILD288_GATE6_WINDOWS_HANDOFF.md` を新設し、286 側には supersede 注記を入れた。
+
+### Build 288 用の期待値（実物 asar から取った）
+
+| 項目 | 値 |
+|---|---|
+| installer | `OMORAY-PITWALL-Setup-20260827-1302.exe` / 100,682,608 bytes |
+| SHA-256 | `B6BE060B3C056C0455E85EEBC07AC19AE219A5338480D7D8A61D834D31961DC4` |
+| 対象SHA | `2ba8ce4a72c4034e6b4c6af20eb41ce0fc007a12` |
+| **module** | **10本**（`driving-style-v1.js` を含む） |
+
+**掴み違いが番号で分かる形にした。**
+
+| 症状 | 意味 |
+|---|---|
+| 9本しか並ばない | Build 287 以前 |
+| 8本しか並ばない | Build 286 以前 |
+| `driving-style-v1.js` が `false` | package には入っているが評価に失敗 |
+
+### 更新バナーの判定も実データで裏を取った
+
+公開 latest の最新 versioned asset は **`20260826-1250`**、Build 288 は `20260827-1302`。
+`remoteN > localN` は false なので **バナーが出ないのが正しい**。出たら不合格。
+
+### 今回の新機能を触る場合の予行（Gate 8 の下見）
+
+- 「走りを分析して」→ 助言が**1件だけ**、参照が無ければ**数字を含まない**
+- 燃料質問で、完走に給油が必要でも**まだ入れる時は「今周ピット」と言わない**
+- 確認が複数保留の時に「はい」だけ返すと**どれへの返事か聞き返す**
+
+### 変更ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `review/BUILD288_GATE6_WINDOWS_HANDOFF.md` | **新規** |
+| `review/BUILD286_GATE6_WINDOWS_HANDOFF.md` | supersede 注記 |
+
+### Gate は変わらない
+
+**Gate 6・8・9 は未実施。Gate 7 は N/A（server 差分ゼロを実測）。**
+本追記は**手順であって結果ではない。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-27 | `20d22f1` | Build 288 Gate 5 独立確認 | 確認者署名 |
+| 08-27 | 本節 | Gate 6 handoff を Build 288 用へ差し替え | module 10本の期待値・掴み違いの判別・更新バナー判定 |

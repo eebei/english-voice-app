@@ -1,3 +1,8 @@
+> **⚠️ この文書は superseded。** 対象は Build 286（runtime module **8本**・旧SHA）。
+> 現在の候補は **Build 288**（module **10本**）。この文書の期待値で合否を出すと、
+> **9本しか無くても合格に見える**。
+> → [BUILD288_GATE6_WINDOWS_HANDOFF.md](BUILD288_GATE6_WINDOWS_HANDOFF.md)
+
 # Build 286 — Gate 6 Windows handoff
 
 ## 前提
