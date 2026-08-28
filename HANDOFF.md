@@ -12,7 +12,7 @@
 - 機械確認: Local Intent Router 53/53、Session Memory tunnel 121/121相当（RBR alias 2件と初走行truth gateを含む）、Memory Action Layer 27件、Evidence Debrief 47/47、GAP answer queue 49/49、Python compile、`git diff --check`、sandbox外の`./preflight.sh`は全項目合格して`✅ 出荷可`。外部有料AI API呼出なし。
 - 明日の耐久について、公開Build 289の燃料pit-now guardは8/28実走でholdを維持したが、事故により予定戦略pitそのものは未検証。既存の耐久燃料／Chief handoff回帰はpreflight合格。ただし3宅3PCの実relay、実機音声、計画pit完遂は機械試験では保証できない。次期候補もWindows/iRacing実走未確認で、まだBuildしない。
 - Claude Code初回独立確認commit `739959f`はRBR aliasの閉じた集合を実挙動5/5で反証し、コード変更後もBuild 289表記のままだったP1を1件検出した。CodexはBridge正本を**Build 290**へ採番し、版番号テストも289残存を拒否するよう更新した。
-- **Claude Code再確認待ち**: (1)個人成績が別userへ漏れない、(2)leader lapが残り周回／GAPへ誤配線されない、(3)抗議が保存されず通常回答は保存できる、(4)デブリーフが事実一問になる、(5)Build 290採番が全経路で一意、を実挙動で反証し、P0/P1/P2と件数をこの節へ追記する。Codexが最終確認する。build・push・公開はYujiの別GOまで禁止。
+- Claude Code再確認は、個人成績6/6、leader lap 5/5、抗議と通常回答13/13、事実ベース質問20/20、Build 290採番一意性に合格し、**P0/P1/P2 0件、Gate 4合格**。Codexも追跡コード差分が採番commit以降ゼロであること、Local Router 53/53、Evidence Debrief 47/47、PTT 15/15、Bridge compile、diff checkを再確認した。Build 290は内部テスト・独立確認済みだが、artifact／Windows／iRacing実走は未実施。build・push・公開はYujiの別GOまで禁止。
 
 ## Build 289公開完了 — 会話/STT揺れ・Truth Gate修正
 

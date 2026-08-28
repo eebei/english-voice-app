@@ -4943,3 +4943,128 @@ buildEvidenceQuestions() を vm で実行 → ReferenceError: EVIDENCE_COPY is n
 |---|---|---|---|
 | 08-28 | `739959f` | Build 289 公開後の独立確認 | 公開物ハッシュ一致・P1（番号未採番） |
 | 08-28 | 本節 | Build 290 5項目の再確認 | (1)(2)(3)(5) 合格・**(4) 未検証で次チャットへ** |
+
+## 2026-08-28 JST — Claude Code 再確認 (4) 完了（Build 290・5項目すべて決着）
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+前チャットで harness の依存不足により未検証だった **(4) incident/pit/pace から質問が一問だけ生成されるか** を完了した。
+**ファイルは1つも修正していない。** 検証専用スクリプトのみ（リポジトリ外・scratchpad）。
+
+### 対象
+
+| 項目 | 値 |
+|---|---|
+| 対象 | HEAD `cc89d1d`（`Record four of five re-checks, and hand off the fifth`）・追跡ファイルの未コミット差分なし |
+| Build番号 | **290**（`Build 290 (RBR memory, personal stats, and debrief routing)`） |
+| 公開中 | Build 289（`a587940`） |
+| 検証対象コード | `desktop/renderer.html:5090` `buildEvidenceQuestions()` |
+
+### 前チャットの停止原因（解消）
+
+`buildEvidenceQuestions` だけを vm へ渡すと `EVIDENCE_COPY is not defined` で止まっていた。
+`EVIDENCE_COPY` / `evidenceCopy` / `validFinishPosition` / `pickRotatingQuestion` /
+`loadDebriefFollowupHistory` / `rememberDebriefFollowup` / `buildMemoryAwareDebriefFollowup`
+を **renderer.html の実コードから波括弧対応で切り出して** 同一 vm コンテキストへ流し、
+`localStorage` と `window.PitwallMemoryActionLayer` のみ stub 化した。
+**質問生成ロジック自体は製品コードそのものを実行している。**
+
+### 判定：**P0 0件 / P1 0件 / P2 0件。20/20 合格。**
+
+#### 性質1 — 事実があれば各1問だけ（実挙動）
+
+```
+incident 2件のみ        → ["今回はインシデント2。…接触そのもの、避けた後のペース、それとも戦略変更のどれだった？"]
+incident + pit          → 1問に統合（"インシデント2、その後9周目にピットへ入っている。…"）
+incident + pit + pace   → やはり1問（多重発火なし）
+pit のみ (lap 12)       → ["12周目のピットは、予定どおり、前倒し、それとも事故対応のどれだった？"]
+pit 2件 (12/24)         → 12周目のみで1問（24 は混ざらない）
+pace 劣化 1.5秒         → ["後半は前半より平均1.5秒落ちている。…"]
+EN 言語                 → ["There were 2 incidents and a stop on lap 9. …"]
+```
+
+**戻り値は全ケースで length 1。incident > pit > pace の early-return で排他になっている。**
+
+#### 性質2 — 事実が無ければその質問を作らない（推測で生成しない）
+
+```
+incidents = 0           → incident 質問を作らない（結果別プールへ）
+incidents 欠損 / NaN     → 同上
+pit_events = []          → pit 質問を作らない
+entry_lap = 'x'（不正）  → pit 質問を作らない（周回数を捏造しない）
+pit_events が配列でない  → 落ちずに結果別プールへ
+pace 片方欠損            → pace 質問を作らない
+pace 差 0.2秒（閾値未満） → pace 質問を作らない
+data 空 {}               → 例外を出さず1問
+```
+
+**数字が無い時に数字入りの質問を組み立てる経路は無い。**
+
+#### 性質3 — practice / qualifying の分離
+
+```
+practice + incidents 3  → 定型 practice 質問（race 用 incident 質問は出ない）
+```
+
+### 記録のみ（欠陥ではない・修正不要）
+
+`incidents` と `pit_events` の分岐は `!practice && !qualify` で守られているが、
+**`pace_first_half` / `pace_last_half` の分岐だけ session type ガードが無い**（`renderer.html:5109`）。
+そのため practice でも「後半は前半より平均2.0秒落ちている」が出る。
+実測に基づく事実であり、練習走行の振り返りとしても成立するため **P2 に上げない。**
+仕様として意図したものか、次に触る担当が判断すればよい。
+
+### (1)〜(5) 総括
+
+| # | 再確認項目 | 結果 |
+|---|---|---|
+| (1) | 個人成績が漏洩／推測されない | ✅ 6/6（前チャット） |
+| (2) | leader lap の配線 | ✅ 5/5（前チャット） |
+| (3) | Lunaへの抗議は保存せず通常回答は保存 | ✅ 13/13（前チャット） |
+| (4) | incident/pit/pace から質問が一問だけ | ✅ **20/20（本節）** |
+| (5) | 製品番号 Build 290 で一意 | ✅（前チャット） |
+
+**Codex 差戻し5項目はすべて合格。P0 0件 / P1 0件 / P2 0件。**
+
+### Gate 0〜9
+
+| Gate | 状態 |
+|---|---|
+| 0〜3 | **合格** |
+| 4 P0/P1 | **合格 — 5項目完了により署名可（Claude Code）** |
+| 5〜9 | **未実施**（Build 290 は未ビルド） |
+
+公開中の **Build 289 は Gate 6（Windows）と Gate 8（実走）が未実施のまま配布されている。**
+本節は **8/29 耐久に向けた実走証拠ではない。未実走を合格扱いしていない。**
+
+### push / deploy / 公開 / Windows / 実走
+
+| 操作 | 実施 |
+|---|---|
+| commit | **本報告のMD追記のみ** |
+| push / build / deploy / 公開 | **なし** |
+| Windows 実機確認 / iRacing 実走 | **なし** |
+| 外部有料 API 呼出 | **0件** |
+
+### 次の担当
+
+| # | 項目 | 担当 |
+|---|---|---|
+| 1 | Build 290 の build 以降（Gate 5〜9） | **Yuji の GO 後** |
+| 2 | Gate 6 Windows | Yuji（公開中 289 で実施可） |
+| 3 | Gate 8 実走 | Yuji（8/29 耐久・指示書の確認項目9点） |
+| 4 | 燃料判断の権威一本化／運転スタイル分析V1 | **Build 289に収録済み**。燃料guardは8/28実走でhold作動、運転スタイルV1はcapture不成立で実走未確認 |
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | `cc89d1d` | Build 290 5項目の再確認 | (1)(2)(3)(5) 合格・(4) 未検証 |
+| 08-28 | 本節 | (4) の完了 | 20/20 合格・5項目すべて決着・pace ガード非対称を記録のみ |
+
+## 2026-08-28 JST — Codex最終確認（Build 290 Gate 4合格）
+
+- Claudeの5項目再確認を受領。P0/P1/P2 0件、Gate 4合格をCodex側でも承認する。
+- `b2d93cc`以降の追跡コード差分はゼロ（`cc89d1d`と本節はいずれもMDのみ）。Codex再実行はLocal Intent Router 53/53、Evidence Debrief 47/47、PTT 15/15、Bridge compile、`git diff --check`が全合格。
+- Claude報告末尾の「燃料判断／運転スタイルV1 未着手」は旧指示書由来の誤記として上表で訂正。両機能は公開Build 289に収録済み。ただし運転スタイルV1の実データcaptureと助言有用性は未実走のまま。
+- Build 290は実装・内部テスト・独立確認まで完了。Gate 5 artifact以降は未実施で、YujiのBuild GO待ち。push／build／deploy／公開は行っていない。
