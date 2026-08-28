@@ -4410,3 +4410,132 @@ Codexの`/tmp/pw-build289-codex`、上記ハッシュ、CI manifestを証拠と�
 run SHA、Publish skipped、artifact名/bytes、installer 3本同一、installer/app.asar/Bridgeのbytes・SHA、artifact renderer由来runtime module、対象SHAとの中身一致、build-info 289、Bridge内Build 289・旧288なし、pygameを独立再計算する。Codex値と一致したかを項目別に明記し、Gate 5確認者署名を本MD末尾へ追記してcommitする。
 
 ファイル修正、push、再build、deploy、publish、外部有料API呼出は禁止。Gate 6 Windows、Gate 7 server、Gate 8 iRacing実走、Gate 9公開は未実施のままと明記する。
+
+## 2026-08-28 JST — Claude Code 作業終了報告（Build 289 Gate 5 独立確認・**確認者署名**）
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+必須MD報告。**Codex の `/tmp/pw-build289-codex`・記載ハッシュ・CI manifest を証拠として流用せず、
+別ディレクトリ `/tmp/pw-build289-claude` で全量取得・展開して再計算した。**
+
+### 1. 作業日時と担当
+
+2026-08-28 JST。**確認担当 Claude Code**（実装・build は Codex）。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| 対象SHA | `5f9ef109fd10430bcee0764dd68633fb9e343c6c` |
+| ブランチ | `build/289`（`origin/main` は動かしていない） |
+| Build番号 | **289**（`BUILD_VERSION = "Build 289 (voice question resilience and STT diagnostics)"`） |
+| workflow run | `33130906223`（push event / private） |
+
+### 3. 変更ファイル
+
+**Claude は1ファイルも変更していない**（確認のみ）。
+
+### 4. 実行したテスト（件数・終了コード）
+
+**対象SHA を隔離 worktree へ出して実行**（本作業ツリーに触っていない）。
+
+| 項目 | 件数 | exit |
+|---|---|---|
+| JS 全スイープ（対象SHA） | **失敗0** | — |
+| `tests-ptt-capture.js` | 15/15 | 0 |
+| `tests-local-intent-router.js` | 46/46 | 0 |
+| `tests-runtime-module-status.js` | 12/12 | 0 |
+| Python discover | **308 tests** | 0 |
+| `./preflight.sh`（対象SHA） | **出荷可** | 0 |
+
+外部有料API呼出 **0件**。
+
+### 5. artifact（すべて Claude が自分で再計算）／**Codex 値との項目別照合**
+
+| 対象 | Claude 実測 | Codex 申告 | 一致 |
+|---|---|---|---|
+| run headSha | `5f9ef109fd10430bcee0764dd68633fb9e343c6c` | 同 | ✅ |
+| run conclusion | `success` | 同 | ✅ |
+| Publish to Release | **skipped** | 同 | ✅ |
+| artifact 名 | `OMORAY-PITWALL-Desktop-Build-289-20260828-0049` | 同 | ✅ |
+| artifact bytes | **302,051,442** | 302,051,442 | ✅ |
+| installer 3本同一 | **同一ハッシュ（1種類）** | 同 | ✅ |
+| installer bytes | **100,680,483** | 100,680,483 | ✅ |
+| installer SHA-256 | `03a5f08158819cbbb69594d031f9b6bfa81a6b6603bfeb5c235ad6939a525c7a` | 同 | ✅ |
+| app.asar bytes | **4,287,837** | 4,287,837 | ✅ |
+| app.asar SHA-256 | `207a3fc96664bc3b3d0f2a2192810e638ae6e49ba6f08d69ccdbf2f7ee0e0b46` | 同 | ✅ |
+| Bridge bytes | **17,025,547** | 17,025,547 | ✅ |
+| Bridge SHA-256 | `ce6791affef8af92e37174dbd660effa0ad383f4c5c5dd00b8222a1893407a4b` | 同 | ✅ |
+| runtime module（artifact 側 renderer から派生） | **10/10・欠落0** | 10/10 | ✅ |
+| 対象SHA との中身一致（CRLF正規化後） | **一致** | 同 | ✅ |
+| `build-info.json.buildNum` | **289** | 289 | ✅ |
+| Bridge 内 `Build 289` | **実在** | 同 | ✅ |
+| Bridge 内 旧 `Build 288` | **同じ箇所に無し** | 同 | ✅ |
+| `active_decision_id` | **実在** | 同 | ✅ |
+| pygame | **52件**（Electron同梱用の正しい系統） | 52件 | ✅ |
+
+**全17項目一致。不合格 0 件。**
+
+#### artifact とは別に、対象SHA 側でも確認した
+
+| 確認 | 結果 |
+|---|---|
+| `BUILD_VERSION` | Build 289 |
+| `bridge.py` の残留 `Build 288` | **0件** |
+| `server.js` の `'トー角'` / 単独 `'トー'` | **1件 / 0件**（P2-1 の修正が対象SHAに入っている） |
+| renderer が要求する module | **10本** |
+
+### 6. Gate 0〜9
+
+| Gate | 状態 |
+|---|---|
+| 0 変更範囲 | **合格** |
+| 1 失敗の固定 | **合格** |
+| 2 package 対象 | **合格**（renderer 参照10本すべて実物に同梱） |
+| 3 機械検証 | **合格**（対象SHA で preflight 出荷可・失敗0） |
+| 4 P0/P1 | **合格**（P0/P1/P2 すべて0件・`3648a76` で再確認済み） |
+| **5 artifact** | **合格 — 確認者署名: Claude Code**（実装・build は Codex＝作業者と確認者が別） |
+| 6 Windows | **未実施** |
+| **7 server** | **必須・未実施**（`server.js` に +19/-5。Build 288 の N/A は流用不可） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **未実施**（Build 289 は private） |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **本報告のMD追記のみ** |
+| push / private build | **なし**（Codex が実施済み） |
+| server deploy / 公開 Release | **なし** |
+| Windows 実機確認 / iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 | 手順 |
+|---|---|---|---|
+| 1 | **Gate 6 handoff を 289 用へ差し替え** | Claude | `BUILD288_GATE6_WINDOWS_HANDOFF.md` は Build 288 向け（SHA・run が違う）。module は 10本で同数だが**installer の SHA が違う**ため、そのまま渡すと照合が通らない |
+| 2 | **Gate 6 Windows** | **Yuji** | Build 289 installer（SHA `03a5f081…`）を起動し、`RUNTIME_MODULE_STATUS` **10本**・`missing:[]`・`status:"loaded"` を ACK |
+| 3 | **Gate 7 server** | **Yuji の deploy GO** | `origin/main` への push が必要 → `./verify-deploy.sh`（SHA一致だけでは合格にしない） |
+| 4 | Gate 8 実走 | Yuji | 8/29 耐久。指示書の確認項目9点 |
+| 5 | Gate 9 公開 | Yuji の別GO | Gate 6/7/8 の後 |
+
+### 9. 到達段階（混同しない）
+
+| 段階 | 状態 |
+|---|---|
+| 実装済み | ✅（Codex） |
+| 内部テスト済み | ✅（対象SHA で全緑・exit 0） |
+| **artifact 確認済み** | ✅ **Codex 作成／Claude 独立再計算で全17項目一致。確認者署名あり** |
+| Windows 確認済み | ❌ **未実施** |
+| 実走済み | ❌ **未実施** |
+| 公開済み | ❌ **未実施**（公開中は Build 287） |
+
+**Gate 6・7・8・9 はいずれも未実施である。**
+本報告は「artifact が対象SHAの中身を含む」までであり、**実走で動く証拠でも出荷可でもない。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | `3648a76` | P2 2件の対応の再確認 | 合格 |
+| 08-28 | 本節 | Build 289 Gate 5 独立確認 | 確認者署名・Codex 値と全17項目一致・Gate 7 必須 |
