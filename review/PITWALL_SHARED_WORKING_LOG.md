@@ -4621,3 +4621,26 @@ Desktop / Bridgeの公開Release操作は行っていない。
 SHA一致だけで合格にせず、経路復帰まで確認したため **Gate 7合格**。
 
 残りは **Gate 6 Windows、Gate 8 iRacing実走、Gate 9公開**。
+
+## 2026-08-28 JST — Build 289 public release（Codex）
+
+Yujiの明示的な公開GO後、DesktopとBridge単体版を同じremote `main` SHAから公開した。
+Windows実機・iRacing実走は未確認のままなので、その未確認事項は公開後も残す。
+
+| 項目 | 実測結果 |
+|---|---|
+| 対象SHA | `a587940edd52af69cd09abbc75bafe909042b14f` |
+| Desktop workflow | `33134346423` — success / Publish to Release success |
+| Bridge workflow | `33134348071` — success / Publish to Release success |
+| Desktop Release名 | `OMORAY PITWALL Desktop — Build 289` |
+| 公開日付版 | `OMORAY-PITWALL-Setup-20260828-0156.exe` |
+| 公開latest | `OMORAY-PITWALL-Setup-latest.exe` |
+| 公開installer bytes | **100,681,743** |
+| 公開installer SHA-256 | `b45a85411fab8801d430badcf048736b6f88cf1cc6d44bbf0487055e453137f5` |
+| 3資産照合 | 日付版／latest／旧互換版が同一bytes・digest |
+| workflow manifest | product_build 289 / runtime module 10本 / target SHA一致 |
+| Bridge単体 | `OMORAY-PITWALL-Bridge-20260828.exe` — 10,392,797 bytes / SHA-256 `17beead3c12963df6cad47110eca01cb7d074229ef1dd25ff8aad338a1a11bcf` |
+| 公開後server | SHA一致、保護経路401、`verify-deploy.sh` exit 0 |
+
+公開latestを `/tmp/pw-public289.nRnG4D` へ全量取得し、ローカルSHA-256とGitHub Release digestの一致を確認した。
+**公開版はBuild 289へ切替済み。残る未確認はGate 6 WindowsとGate 8 iRacing実走。**

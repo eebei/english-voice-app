@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-28 JST
 
-## Build 289候補 — 会話/STT揺れ・Truth Gate修正（private Build・Gate 5合格・未公開）
+## Build 289公開完了 — 会話/STT揺れ・Truth Gate修正
 
 - 八木さんのBuild 287実走ログを再生し、`ベストラップ いくつ？`ではGoogle STTとLLM回答が正しかったのに、rendererのTelemetry Truth Gateが`7:50.356`を遮断して`了解。`へ落としていたことを確定した。`ルナ データいってる？`も同型で、LLMの正しいライブ回答をgateが遮断していた。
 - Bridge権威の`best`とライブ接続状態をlocal intentへ追加し、`ベストラップ わかります。`の質問符号欠落、`コースデータは空いてる？`の`入ってる→空いてる`揺れも同じ決定論経路で回答する。通常の`コースは空いてる？`やデータ分析依頼、`than。`は誤って運用intentへ寄せない。Truth Gateへ到達した場合もbest/dataを最新Bridge値から再構成し、未知の数値質問を無関係な`了解。`へ変えず短い再質問を返す。
@@ -10,7 +10,8 @@
 - 機械確認: `tests-local-intent-router.js` 46/46、`tests-telemetry-truth-gate.js` 60/60、`tests-ptt-capture.js` 14/14、`tests-gap-answer-queue.js` 49/49、関連燃料/GAP/キャラクター回帰、`node --check server.js`、`git diff --check`は合格。変更途中の全`preflight.sh`も外部有料AI呼出なしで合格し、その後のSTT response parser分離は上記14/14と構文検査で再確認した。
 - Claude Code独立レビューcommit `fe897fa`はP0/P1 0件、P2 2件で条件付き合格。P2-1の短いSTTヒント`トー`は`トー角`へ狭め、P2-2の番号衝突はBridge正本を`Build 289 (voice question resilience and STT diagnostics)`へ採番した。Claude再確認commit `3648a76`は変異3/3を含めP0/P1/P2 0件で合格。Codexも同commitがMD追記だけでコード差分ゼロ、PTT回帰15/15、server構文、Bridge compileを再確認した。`server.js`変更を含むためGate 7対象。Build 288 artifact（SHA `2ba8ce4...`）には本修正が入らず、同番号で再Buildしない。
 - YujiのBuild 289 GO後、対象SHA `5f9ef109fd10430bcee0764dd68633fb9e343c6c`を`build/289`へpush。private workflow `33130906223`はsuccess、Publish skipped。artifact `OMORAY-PITWALL-Desktop-Build-289-20260828-0049`（302,051,442 bytes）をCodexが全量取得・展開し、installer 3本同一（100,680,483 bytes / SHA-256 `03a5f08158819cbbb69594d031f9b6bfa81a6b6603bfeb5c235ad6939a525c7a`）、asar 10/10・対象SHA一致・buildNum 289、Bridge Build 289・旧288なしを実測した。
-- Claude Codeは別作業ディレクトリへartifactを独立取得し、Codex申告の全17項目を再計算して全一致、失敗0件でGate 5へ確認者署名した（commit `0d39f73`）。Windows引き渡しはBuild 289専用の`review/BUILD289_GATE6_WINDOWS_HANDOFF.md`へ差し替え済み（commit `15d1082`）。YujiのDeploy GO後、`main`の`a587940edd52af69cd09abbc75bafe909042b14f`をRailwayへ反映し、`./verify-deploy.sh`で本番SHA一致と保護経路の401を実測してGate 7合格。残りはGate 6 WindowsとGate 8 iRacing実走。公開は未実施で、公開中はBuild 287。
+- Claude Codeは別作業ディレクトリへartifactを独立取得し、Codex申告の全17項目を再計算して全一致、失敗0件でGate 5へ確認者署名した（commit `0d39f73`）。Windows引き渡しはBuild 289専用の`review/BUILD289_GATE6_WINDOWS_HANDOFF.md`へ差し替え済み（commit `15d1082`）。YujiのDeploy GO後、`main`の`a587940edd52af69cd09abbc75bafe909042b14f`をRailwayへ反映し、`./verify-deploy.sh`で本番SHA一致と保護経路の401を実測してGate 7合格。
+- Yujiの公開GO後、Desktop workflow `33134346423`とBridge workflow `33134348071`を同じSHA `a587940...`で実行し成功。Desktop Releaseは**Build 289**へ更新。公開`OMORAY-PITWALL-Setup-latest.exe`を実取得し、100,681,743 bytes、SHA-256 `b45a85411fab8801d430badcf048736b6f88cf1cc6d44bbf0487055e453137f5`でRelease digestと一致。latest／日付版／旧互換版も同一。Bridge単体版`OMORAY-PITWALL-Bridge-20260828.exe`は10,392,797 bytes、SHA-256 `17beead3c12963df6cad47110eca01cb7d074229ef1dd25ff8aad338a1a11bcf`。公開後もserver SHA・保護経路を再確認して合格。残る未確認はGate 6 WindowsとGate 8 iRacing実走。
 
 ## Build 288候補 — 燃料timing権威／運転スタイルV1（未公開）
 

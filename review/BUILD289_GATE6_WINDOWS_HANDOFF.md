@@ -143,7 +143,8 @@ YujiのDeploy GO後、`main`の `a587940edd52af69cd09abbc75bafe909042b14f` をRa
 `./verify-deploy.sh`で実測したため、**Gate 7は合格**。起動直後の初回確認はDB初期化中の503だったが、
 再確認で401へ復帰した。公開Releaseは変更していない。
 
-## 9. この文書で言えないこと
+## 9. 公開後の状態
 
 本書は **Gate 6 の手順**であり、結果ではない。
-**Windows 実機での起動は未確認、iRacing 実走も未実施、公開もしていない。serverはGate 7合格済み。**
+2026-08-28のYuji公開GO後、Desktop公開版はBuild 289へ更新済み。通常のlatest URLから取得できる。
+serverもGate 7合格済み。ただし、**Windows実機での起動とiRacing実走は未確認**。
