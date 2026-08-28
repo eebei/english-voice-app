@@ -4644,3 +4644,165 @@ Windows実機・iRacing実走は未確認のままなので、その未確認事
 
 公開latestを `/tmp/pw-public289.nRnG4D` へ全量取得し、ローカルSHA-256とGitHub Release digestの一致を確認した。
 **公開版はBuild 289へ切替済み。残る未確認はGate 6 WindowsとGate 8 iRacing実走。**
+
+## 2026-08-28 JST — Claude Code 作業終了報告（Build 289 公開後の独立確認）**P1 1件**
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+必須MD報告。Codex の Gate 7 / Gate 9 報告を受け、**申告値を転載せず独立に再計算した。**
+
+### 1. 作業日時と担当
+
+2026-08-28 JST。**確認担当 Claude Code**（deploy・公開は Codex）。
+
+### 2. 対象
+
+| 項目 | 値 |
+|---|---|
+| Gate 5 で署名した SHA | `5f9ef109fd10430bcee0764dd68633fb9e343c6c` |
+| deploy / 公開した SHA | `a587940edd52af69cd09abbc75bafe909042b14f` |
+| **現在の HEAD** | **`d377de0`（公開SHA より1コミット先行）** |
+| Build番号 | 289（HEAD も公開も同じ） |
+
+### 3. 変更ファイル
+
+**Claude は1ファイルも変更していない**（確認のみ）。
+
+### 4. 実行したテスト（件数・終了コード）
+
+| 項目 | 結果 | exit |
+|---|---|---|
+| JS 全スイープ（現HEAD） | **失敗0** | — |
+| Python discover | 308 tests | 0 |
+| `./preflight.sh` | 出荷可 | 0 |
+| Claude 独自反証（Spielberg 正規化） | 5/5 | — |
+
+外部有料API呼出 **0件**。
+
+### 5. 独立に再計算した値／Codex 申告との照合
+
+#### ① Gate 5 署名SHA と 公開SHA の差
+
+```
+git diff 5f9ef10..a587940 -- desktop/ irsdk-bridge/
+→ 差分ゼロ
+```
+
+変わったのは `HANDOFF.md` と `review/*.md` の**4ファイルのみ**。`BUILD_VERSION` も同一。
+**私が Gate 5 で署名した中身が、そのまま公開されている。**
+
+#### ② 公開 installer（Codex の値を見ずに全量取得して計算）
+
+| 項目 | Claude 実測 | Codex 申告 | 一致 |
+|---|---|---|---|
+| Release 名 | `OMORAY PITWALL Desktop — Build 289` | 同 | ✅ |
+| 公開 installer bytes | **100,681,743** | 100,681,743 | ✅ |
+| 公開 installer SHA-256 | `b45a85411fab8801d430badcf048736b6f88cf1cc6d44bbf0487055e453137f5` | 同 | ✅ |
+| 3資産（日付版／latest／旧互換）の同一性 | **3本とも 100,681,743 bytes** | 同 | ✅ |
+
+**Gate 9（公開）の実物は Codex 申告と一致。**
+
+---
+
+## ★P1 — 公開後の未公開コミットが **Build 289 のまま**
+
+現在の HEAD `d377de0`（`Fix RBR memory stats and debrief routing`）は
+**公開SHA `a587940` の後ろに積まれており、出荷経路を変更している。**
+
+```
+desktop/local-intent-router.js  +33
+desktop/memory-action-layer.js  +7
+desktop/renderer.html           +56 -?
+desktop/session-memory.js       +11
+irsdk-bridge/bridge.py          +15
+```
+
+にもかかわらず `BUILD_VERSION` は **`Build 289 (voice question resilience and STT diagnostics)`** のまま。
+
+**公開中の Build 289 と、この HEAD の Build 289 は中身が違う。**
+このままビルドすると **Build 282 で証拠を無効化した事故と同じ形**になる。
+また、テスターが「Build 289」と報告してきても、**どちらの 289 か区別できない。**
+
+- 対象: `irsdk-bridge/bridge.py:58`
+- 期待: **290 へ採番**（`desktop/**` と `irsdk-bridge/**` を触っている以上、番号据え置きは不可）
+- 担当: **Codex**
+
+※ `irsdk-bridge/bridge.py` は変わっているが `server.js` は無変更のため、
+次候補の **Gate 7 は N/A になる見込み**（採番後に差分で再確認する）。
+
+---
+
+### 確認できた点（`d377de0` の中身）
+
+Spielberg / Red Bull Ring の表記ゆれを吸収する `normTrack()` が入っている。
+**実挙動で確認した。**
+
+| 検証 | 結果 |
+|---|---|
+| `Red Bull Ring` / `Red Bull Ring GP` / `Spielberg` / `Spielberg GP` の全組合せで記録が引ける | ✅ |
+| 無関係なコース（Monza）は混ざらない | ✅ |
+| Okayama など従来のコースも従来どおり | ✅ |
+| 空トラックでは引かない（identity 欠損で流用しない） | ✅ |
+| 記号・大小の表記ゆれを吸収（`RED-BULL_RING` ↔ `red bull ring`） | ✅ |
+
+**別コースの記録を引き込む緩和にはなっていない。** 対象は閉じた別名集合のみ。
+
+### 6. Gate 0〜9
+
+**公開済み Build 289（`a587940`）について:**
+
+| Gate | 状態 |
+|---|---|
+| 0〜4 | **合格** |
+| 5 artifact | **合格**（Claude 確認者署名済み。公開物も本日ハッシュ照合） |
+| 6 Windows | **未実施** |
+| 7 server | **合格**（Codex 実測。SHA 一致＋保護経路 401＋`verify-deploy.sh` exit 0） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **実施済み**（実物ハッシュを独立確認） |
+
+**現在の HEAD（`d377de0`）について:**
+
+| Gate | 状態 |
+|---|---|
+| 3 機械検証 | **合格**（全緑・preflight 出荷可） |
+| 4 P0/P1 | **不合格 — P1 1件**（Build番号未採番） |
+| 5〜9 | **未実施**（未ビルド） |
+
+### 7. push / deploy / 公開 / Windows / 実走の有無
+
+| 操作 | 実施 |
+|---|---|
+| commit | **本報告のMD追記のみ** |
+| push / build / deploy / 公開 | **なし**（Codex が実施済み） |
+| Windows 実機確認 / iRacing 実走 | **なし** |
+
+### 8. 未完了項目と次の担当・手順
+
+| # | 項目 | 担当 |
+|---|---|---|
+| 1 | **Build 290 採番**（P1） | **Codex** |
+| 2 | **Gate 6 Windows** | **Yuji** — 公開中の Build 289 で実施可。手順は `BUILD289_GATE6_WINDOWS_HANDOFF.md`（§1 の SHA は private artifact のもの。**公開版を使うなら `b45a8541…`**） |
+| 3 | Gate 8 実走 | **Yuji** — 8/29 耐久。指示書の確認項目9点 |
+| 4 | 次候補の Gate 5〜9 | 採番後 |
+
+### 9. 到達段階（混同しない）
+
+| 段階 | 公開済み Build 289 | 現HEAD `d377de0` |
+|---|---|---|
+| 実装済み | ✅ | ✅ |
+| 内部テスト済み | ✅ | ✅ |
+| artifact 確認済み | ✅ 署名あり | ❌ 未ビルド |
+| server 反映済み | ✅ Gate 7 合格 | — |
+| **Windows 確認済み** | ❌ **未実施** | ❌ |
+| **実走済み** | ❌ **未実施** | ❌ |
+| 公開済み | ✅ | ❌ |
+
+**公開中の Build 289 は、Windows 実機起動も iRacing 実走も未確認のまま配布されている。**
+**Gate 6 と Gate 8 はいずれも未実施である。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | `15d1082` | Gate 6 handoff を Build 289 用へ差し替え | 288 との見分け方 |
+| 08-28 | 本節 | Build 289 公開後の独立確認 | 公開物ハッシュ一致・P1（番号未採番）・Spielberg 正規化の実挙動確認 |
