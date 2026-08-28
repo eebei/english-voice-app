@@ -5348,3 +5348,24 @@ Claude Codeの独立artifact確認をCodex実測と照合し、全値一致・P0
 YujiからBuild 290の公開GOを受領した。ただし`review/PITWALL_RELEASE_GATE.md`の絶対ルールに対し、Build 290 private candidate固有のGate 6 Windows実機確認とGate 8 iRacing実走スモークが未確認であるため、公開workflow・Release差し替え・Bridge公開は実行していない。公開中はBuild 289のまま。
 
 公開承認は受領済みとして保持する。`review/BUILD290_GATE6_WINDOWS_HANDOFF.md`の同一installerでGate 6とGate 8の結果を記録し、停止条件が0件なら新たな公開GOを取り直さず、検査済みSHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`をGate 9へ進める。
+
+## 2026-08-28 JST — Build 290公開完了・公開後artifact照合
+
+Yujiから「公開しないと実機テストできない」という恒久運用の再指摘を受け、Gate 5合格済みcandidateを公開し、その公開update経路でGate 6／8を行う順序へ正本を訂正した。
+
+初回公開workflow `33151809626`（Desktop）／`33151816641`（Bridge）はSHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`でsuccess。公開後照合により、Desktop同梱Bridgeにはpygameがある一方、Bridge単体workflowはpygameをinstall／hidden-importしておらずjoystick PTT機能が一致しないことをCodexが検出した。`.github/workflows/build-bridge.yml`をDesktop側と揃え、commit `7c1ad59facd98702bad648b378953e8c90ecd1b8`へmainと`build/290`を更新した。
+
+最終公開workflowはDesktop `33152767207`、Bridge `33152765158`。ともにSHA `7c1ad59facd98702bad648b378953e8c90ecd1b8`、Publish stepを含めsuccess。
+
+- Desktop Release: `OMORAY PITWALL Desktop — Build 290`
+- Desktop日付版／latest／旧互換版: 各100,684,274 bytes、SHA-256 `5d6d343179bc2d4094ee09131aa0293b2860105ad71206eec64f1391211892ee`
+- 公開installer実取得・展開: `buildNum=290`、runtime local script 10/10、package entries 27
+- app.asar: 4,292,914 bytes、SHA-256 `431c94ffbbb1d7c7b0e5d7a22a6f395428b3d2367ecd277a0f9bbad201b8fcaf`
+- Desktop同梱Bridge: 17,027,723 bytes、SHA-256 `d07e8fd1986d71ca6f73ca27daf3d4f975568cd0cf28a3d981071158ff81edf3`
+- Bridge単体: 17,027,111 bytes、SHA-256 `80fdb41dbc79f563ef07d3e4e5db5b7014be1e0464b75a8b17f00cf42109bdf8`
+- Bridge installer: 16,321,781 bytes、SHA-256 `d0c0b22101a345a77ade4ad941a5eea6a44b5b0a7b86ee1e757985bda56f2dd8`
+- Bridge単体strings: pygame module群、SDL2／image／mixer／ttf DLL群を確認
+- server差分なし: Gate 7 N/A、Railway deployなし
+- 未確認: 公開Build 290でのGate 6 Windows、Gate 8 iRacing実走
+
+公開URL実取得値はGitHub Release APIのsize／digestと全件一致。Build 290を公開済みfield-test candidateとし、Windows／実走結果にGate 10停止条件があれば直ちに新規配布停止を判断する。

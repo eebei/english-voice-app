@@ -45,6 +45,8 @@ For each meaningful task:
 
 `full release gate`は`review/PITWALL_RELEASE_GATE.md`を指す。`preflight.sh`の成功だけで代用してはならない。
 
+YujiのWindows／iRacing実走は、公開update経路からinstallerを取得して行う。Gate 0〜5（変更時はGate 7も）に合格し、Yujiの公開GOを受けたら、Gate 6／8の事前完了を要求して公開を止めない。公開物をfield-test candidateとして即時照合し、その後のGate 6／8結果で継続またはGate 10停止を判断する。公開前検査済みartifactと公開後field evidenceを混同しない。
+
 Do not create a new planning, review-request, response, completion-evidence, or session-log Markdown file when the information belongs in Git history or `HANDOFF.md`. Add a durable document only when it will remain useful after the current task is complete.
 
 ### Tunnel Completion Rule（入口があるなら出口を必ず作る）

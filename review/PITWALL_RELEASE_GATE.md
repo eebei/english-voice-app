@@ -6,7 +6,8 @@
 
 ## 絶対ルール
 
-- この文書の必須項目が一つでも未確認なら**出荷不可**。`該当なし`は理由を書く。
+- Gate 0〜5（変更時はGate 7も）の必須項目が一つでも未確認なら**公開不可**。`該当なし`は理由を書く。
+- YujiのWindows／iRacing実走は公開update経路で行うため、明示的な公開GO後はBuildをfield-test candidateとして公開し、Gate 6／8を公開後に確認する。この間は「実機・実走確認済み」「最終出荷署名済み」と表現しない。失敗時はGate 10で直ちに停止判断する。
 - 作業者と確認者を分ける。Codexが実装した場合はClaude Code、Claude Codeが実装した場合はCodexが確認者になる。
 - 確認者は作業者の報告を転載せず、差分・テスト・完成artifactを自分で確認する。
 - `preflight成功`、`workflow成功`、`commit成功`、`公開成功`、`Windows実機成功`、`iRacing実走成功`は別の証拠である。
@@ -94,7 +95,7 @@ Yujiのbuild GO後、最初は`publish=false`で作る。
 - [ ] artifactのbytesとSHA-256を記録した。
 - [ ] 確認者がCIログとartifact内容を独立確認した。
 
-## Gate 6 — Windows candidate確認
+## Gate 6 — Windows candidate確認（Yujiの運用では公開後）
 
 - [ ] クリーンインストールが成功する。
 - [ ] 公開中の旧exeから上書きインストールが成功する。
@@ -115,7 +116,7 @@ Yujiのbuild GO後、最初は`publish=false`で作る。
 - [ ] 本番StripeテストはYujiの明示許可後だけ行い、テスト決済と実顧客売上を混同しない。
 - [ ] public page変更時、PC / mobile、日本語 / 英語、CTA、規約、価格、決済遷移を確認した。
 
-## Gate 8 — iRacing実走スモーク
+## Gate 8 — iRacing実走スモーク（Yujiの運用では公開後）
 
 自動テストで代替できない。変更に関係する最小限をcandidateで確認する。
 
@@ -194,4 +195,3 @@ Yuji public GO:
 - GAP質問直前に`gapBehind`があるのに、`router_missing` / `unhandled` / server no-dataへ落ちた場合は失敗する。
 - Lunaがdebriefでは値を読めるがlive回答で読めない場合は、保存成功で合格にせずlive動線を不合格にする。
 - 現在の路面温度を「昨日」「前回」の値として返した場合は失敗する。
-

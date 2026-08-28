@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-28 JST
 
-## Build 290候補 — 8/28 RBR実走会話・個人成績・デブリーフ修正（private artifact済み・未公開）
+## Build 290公開完了 — 8/28 RBR実走会話・個人成績・デブリーフ修正
 
 - RBR実走ログで、保存名`spielberg gp`と表示名`Red Bull Ring`が別コース扱いになり、過去走行があるのに「今回初めて」と案内した。GPレイアウトだけを明示alias `spielberg:gp`へ統合し、履歴あり／なしの双方でLLMが「初めて」を推測しないtruth instructionを追加した。別レイアウトを広く統合しない。
 - レース中の「直近Nレースのインシデント平均」は、ログイン中の本人`userId`と一致する`pw_raceHistory`だけから最大10件を決定論集計する。指定件数不足または本人identity不明は推測せず不足を返す。Build 289実走の5レース質問は、5件あれば合計と平均を即答する。
@@ -10,10 +10,10 @@
 - デブリーフは表彰台以外でも、結果値より先に短く労う。質問は最大1問とし、今回の実測incident、実pit entry lap、前後半pace差がある時は定型poolより優先して、そのレース固有の分岐を聞く。Lunaの誤案内への抗議（「初めてじゃない」「前にも走った」「回答を持っていない」等）は回答として保存せず、通常会話／訂正経路へ返す。
 - 危険車両機能は削除されていない。現在も同クラス隣接車を`iRating <= 1300`または`1.0 <= SR <= 2.0`でsession動的判定する。`nyaji`氏の名前／IDを永続保存したGit履歴はなく、個人watch記憶は未実装。名前だけの永久ラベルは誤認・同名・訂正不能のため追加しない。実装する場合は本人申告→iRacing customer ID照合→確認→期限→訂正／削除まで一単位とする。
 - 機械確認: Local Intent Router 53/53、Session Memory tunnel 121/121相当（RBR alias 2件と初走行truth gateを含む）、Memory Action Layer 27件、Evidence Debrief 47/47、GAP answer queue 49/49、Python compile、`git diff --check`、sandbox外の`./preflight.sh`は全項目合格して`✅ 出荷可`。外部有料AI API呼出なし。
-- 明日の耐久について、公開Build 289の燃料pit-now guardは8/28実走でholdを維持したが、事故により予定戦略pitそのものは未検証。既存の耐久燃料／Chief handoff回帰はpreflight合格。ただし3宅3PCの実relay、実機音声、計画pit完遂は機械試験では保証できない。次期候補もWindows/iRacing実走未確認で、まだBuildしない。
+- 明日の耐久について、Build 289実走では燃料pit-now guardがholdを維持したが、事故により予定戦略pitそのものは未検証。既存の耐久燃料／Chief handoff回帰はpreflight合格。ただし3宅3PCの実relay、実機音声、計画pit完遂は機械試験では保証できない。公開Build 290でWindows／iRacing実走確認する。
 - Claude Code初回独立確認commit `739959f`はRBR aliasの閉じた集合を実挙動5/5で反証し、コード変更後もBuild 289表記のままだったP1を1件検出した。CodexはBridge正本を**Build 290**へ採番し、版番号テストも289残存を拒否するよう更新した。
 - Claude Code再確認は、個人成績6/6、leader lap 5/5、抗議と通常回答13/13、事実ベース質問20/20、Build 290採番一意性に合格し、**P0/P1/P2 0件、Gate 4合格**。Codexも追跡コード差分が採番commit以降ゼロであること、Local Router 53/53、Evidence Debrief 47/47、PTT 15/15、Bridge compile、diff checkを再確認した。この時点ではartifact以降を未実施として停止し、その後のYujiのBuild GOを次項で記録する。
-- YujiのBuild 290 GO後、対象SHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`を`build/290`へpush。private workflow `33142893350`はsuccess、Publish skipped。artifact `OMORAY-PITWALL-Desktop-Build-290-20260828-0449`（302,061,490 bytes）をCodexが全量取得して`verify-artifact.sh`で検査した。installer 3本は100,684,282 bytes / SHA-256 `3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5`で同一。app.asarは4,292,914 bytes / `96d3e1058daaffeb469d647c8159e9f805557f9892d56f4bbf0c779f36fb3c5d`、同梱Bridgeは17,027,639 bytes / `cc102c33e3a2b80d76e41c2cd0be3c3abafe588bf17d16af1cadbfbdd23b4616`。runtime 10/10、対象SHA一致、build-info 290、Bridge内Build 290・旧289なし、pygame 52件を実測。Claude Codeも別作業領域へ独立取得・再計算し全値一致、**P0/P1/P2 0件でGate 5署名済み**。Windows手順は`review/BUILD290_GATE6_WINDOWS_HANDOFF.md`。Yujiの公開GOは2026-08-28 JSTに受領済みだが、Gate 6 WindowsとGate 8 iRacing実走が未確認のため公開操作は停止中。server差分なしのためGate 7はN/A。両ゲート合格後は新たな公開GOを取り直さず、同一SHAを公開する。
+- private candidate `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`はworkflow `33142893350`とClaude Code独立再取得でGate 5合格、P0/P1/P2 0件。公開後照合でBridge単体workflowだけpygame未同梱を検出し、Desktopと同じ依存・`--hidden-import pygame`へ修正したcommit `7c1ad59facd98702bad648b378953e8c90ecd1b8`を最終公開SHAとした。Desktop workflow `33152767207`、Bridge workflow `33152765158`は同SHAでsuccess。Desktop Releaseは**Build 290**、公開installer 3本は100,684,274 bytes / SHA-256 `5d6d343179bc2d4094ee09131aa0293b2860105ad71206eec64f1391211892ee`で一致。公開installerを実取得・展開し、`buildNum=290`、runtime 10/10、app.asar 4,292,914 bytes / `431c94ffbbb1d7c7b0e5d7a22a6f395428b3d2367ecd277a0f9bbad201b8fcaf`、同梱Bridge 17,027,723 bytes / `d07e8fd1986d71ca6f73ca27daf3d4f975568cd0cf28a3d981071158ff81edf3`を確認。Bridge単体は17,027,111 bytes / `80fdb41dbc79f563ef07d3e4e5db5b7014be1e0464b75a8b17f00cf42109bdf8`、installerは16,321,781 bytes / `d0c0b22101a345a77ade4ad941a5eea6a44b5b0a7b86ee1e757985bda56f2dd8`で、pygame／SDL DLL群を確認した。server差分なしでGate 7はN/A。Gate 6 WindowsとGate 8 iRacingは公開Build 290で確認待ち。
 
 ## Build 289公開完了 — 会話/STT揺れ・Truth Gate修正
 
