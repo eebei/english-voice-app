@@ -48,8 +48,12 @@ check('Electron STT経路も一時障害を3回まで再試行',
 check('INACTIVE中もSTT結果・診断配送を許可',
   bridge.includes("'ptt', 'ptt_text', 'ptt_audio', 'ptt_error', 'ptt_diagnostic'"));
 check('実走語彙をSTTヒントへ追加',
-  ['ベストラップ','コースデータ','データ入ってる','セットアップ','アンダーステア','オーバーステア','ダンパー','リアウイング']
-    .every(term=>server.includes(`'${term}'`)));
+  ['ベストラップ','コースデータ','データ入ってる','セットアップ','アンダーステア','オーバーステア','ダンパー','トー角','リアウイング']
+    .every(term=>server.includes(`'${term}'`))
+  && !server.includes("'トー',"));
+check('会話品質修正はBuild 288と番号衝突せず289へ採番',
+  bridge.includes('BUILD_VERSION = "Build 289 (voice question resilience and STT diagnostics)"')
+  && !bridge.includes('BUILD_VERSION = "Build 288'));
 check('Google confidenceを会話本文と分離して診断へ返す',
   server.includes('res.json(parseGoogleSttResponse(data))')
   && renderer.includes("diagnosticLog('PTT_STT_RESULT'"));

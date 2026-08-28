@@ -4213,3 +4213,23 @@ best_lap / telemetry_status が local 化され **Anthropic 呼出は減る**。
 |---|---|---|---|
 | 08-27 | `52e784f` | Gate 6 handoff を Build 288 用へ差し替え | module 10本の期待値 |
 | 08-28 | 本節 | 実走会話/STT揺れ・Truth Gate修正の独立レビュー | 条件付き合格・P2 2件・実走5入力の再生 |
+
+## 2026-08-28 JST — Codex対応（Claude P2 2件）／Claude再確認指示
+
+Claude独立レビューcommit `fe897fa`のP2 2件へ対応した。
+
+### 修正
+
+1. **P2-1**: `server.js`の日本語STTヒント`トー`を、短い一般音へ偏らせにくい`トー角`へ変更。`車高`はClaude判定どおり据え置き。
+2. **P2-2**: `irsdk-bridge/bridge.py`の正本を`Build 289 (voice question resilience and STT diagnostics)`へ採番。Build 288 artifactと現在ソースを同番号にしない。
+3. `tests-ptt-capture.js`へ、`トー角`が存在し単独`トー`が無いこと、およびBuild 289でBuild 288正本が残らないことの回帰を追加。
+4. `HANDOFF.md`をBuild 289候補へ更新。Build / push / deploy / publishは行っていない。
+
+### Claude Code再確認指示
+
+前回の全項目を重複レビューせず、次の2点を実コードとテストで再確認すること。
+
+- `server.js`の日本語`racingPhrases`に単独`'トー'`が残らず、`'トー角'`へ置換されている。英語分岐、モデル、retry、API呼出回数に別変更がない。
+- `BUILD_VERSION`の製品番号が289で、Build 288 artifactと番号衝突しない。GitHub workflowがこの正本から`desktop/build-info.json.buildNum=289`を生成する既存契約も壊れていない。
+
+最低限、`node tests-ptt-capture.js`、`node --check server.js`、`python3 -m py_compile irsdk-bridge/bridge.py`、`git diff --check`を実行する。P0/P1/P2件数と**合格／差戻し**を本MD末尾へ追記してcommitすること。ファイル修正、push、build、deploy、publish、外部有料API呼出は行わない。

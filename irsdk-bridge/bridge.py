@@ -56,7 +56,7 @@ import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 288 (fuel timing authority and confirmed driving-style coaching v1)"
+BUILD_VERSION = "Build 289 (voice question resilience and STT diagnostics)"
 PORT = 8765
 connected_clients = set()
 loop = None

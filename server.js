@@ -1510,7 +1510,7 @@ app.post('/api/stt', ttsLimiter, express.json({ limit: '4mb' }), async (req, res
          'セクター', 'ラップタイム', 'ベスト', '自己ベスト', '順位', 'アンダーカット', 'オーバーカット',
          'ベストラップ', 'コースデータ', 'データ入ってる', 'セットアップ', 'セッティング',
          'アンダーステア', 'オーバーステア', 'ダンパー', '車高', 'スプリング', 'スタビ',
-         'アンチロールバー', 'キャンバー', 'トー', 'リアウイング', 'ブレーキバランス',
+         'アンチロールバー', 'キャンバー', 'トー角', 'リアウイング', 'ブレーキバランス',
          'セーフティカー', 'イエローフラッグ']
       : ['fuel', 'fuel level', 'fuel remaining', 'tyre', 'tyres', 'tire', 'tires',
          'tyre pressure', 'tire pressure', 'tyre temperature', 'tire temperature',
