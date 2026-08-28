@@ -4539,3 +4539,66 @@ run SHA、Publish skipped、artifact名/bytes、installer 3本同一、installer
 |---|---|---|---|
 | 08-28 | `3648a76` | P2 2件の対応の再確認 | 合格 |
 | 08-28 | 本節 | Build 289 Gate 5 独立確認 | 確認者署名・Codex 値と全17項目一致・Gate 7 必須 |
+
+## 2026-08-28 Claude Code — Gate 6 handoff を Build 289 用へ差し替え
+
+前節 §8 の未完了項目の解消。
+
+`BUILD288_GATE6_WINDOWS_HANDOFF.md` は Build 288 向けで、**installer SHA と run が違う**。
+**module は同じ10本なので数では区別できず**、288 の SHA で照合すると必ず不一致になる。
+`BUILD289_GATE6_WINDOWS_HANDOFF.md` を新設し、288 側には supersede 注記を入れた。
+
+### Build 289 用の期待値（実物 artifact から取った）
+
+| 項目 | 値 |
+|---|---|
+| installer | `OMORAY-PITWALL-Setup-20260828-0049.exe` / 100,680,483 bytes |
+| SHA-256 | `03A5F08158819CBBB69594D031F9B6BFA81A6B6603BFEB5C235AD6939A525C7A` |
+| 対象SHA | `5f9ef109fd10430bcee0764dd68633fb9e343c6c` |
+| run | `33130906223` |
+| module | **10本**（288 と同数） |
+
+**288 との見分け方を明記した。** module 数が同じなので、`RUNTIME_MODULE_STATUS` だけでは
+288 を掴んでいても合格に見える。**タイトルバー／Bridge ログの Build 番号で見る**。
+
+### 更新バナーの判定を実データで裏取り
+
+```
+公開 latest の最新 versioned asset : 20260826-1250  → remoteN = 202608261250
+Build 289                          : 20260828-0049  → localN  = 202608280049
+remoteN > localN は false → バナーは出ないのが正しい
+```
+
+### Build 289 の新機能を触る場合の予行（Gate 8 の下見）
+
+実走ログ由来の修正なので、**PTT で声に出して**確認するのが要点。
+
+| 言うこと | 期待 |
+|---|---|
+| 「ベストラップ いくつ？」 | `ベスト7分50秒356。`（`了解。`にならない） |
+| 「ルナ データいってる？」「コースデータは空いてる？」 | `データは来ている。…` |
+| 「コースは空いてる？」 | **data-status に寄らない** |
+| `PTT_STT_RESULT` | `chars`/`confidence`/`duration_s`/`language` のみ。**発話全文・音声は出ない** |
+
+### ★Gate 7 が必須である旨を handoff にも明記した
+
+Build 289 は `server.js` に +19/-5 を含むため、**Build 288 の「Gate 7 N/A」は流用できない**。
+deploy 後の `./verify-deploy.sh` は必須で、**SHA 一致だけでは合格にしない**。
+
+### 変更ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `review/BUILD289_GATE6_WINDOWS_HANDOFF.md` | **新規** |
+| `review/BUILD288_GATE6_WINDOWS_HANDOFF.md` | supersede 注記 |
+
+### Gate は変わらない
+
+**Gate 6・7・8・9 は未実施。** 本追記は**手順であって結果ではない。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | `0d39f73` | Build 289 Gate 5 独立確認 | 確認者署名・全17項目一致 |
+| 08-28 | 本節 | Gate 6 handoff を Build 289 用へ差し替え | 288 との見分け方・更新バナー判定・Gate 7 必須の明記 |

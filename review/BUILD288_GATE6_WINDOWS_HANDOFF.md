@@ -1,3 +1,8 @@
+> **⚠️ この文書は superseded。** 対象は Build 288（installer SHA `B6BE060B…` / run `32911905149`）。
+> 現在の候補は **Build 289**。**module は同じ10本**なので数では区別できず、
+> この文書の SHA で照合すると**必ず不一致になる**。
+> → [BUILD289_GATE6_WINDOWS_HANDOFF.md](BUILD289_GATE6_WINDOWS_HANDOFF.md)
+
 # Build 288 — Gate 6 Windows handoff
 
 次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
