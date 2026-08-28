@@ -4366,3 +4366,47 @@ productBuild : 289
 |---|---|---|---|
 | 08-28 | `fe897fa` | 実走会話/STT揺れ・Truth Gate修正の独立レビュー | 条件付き合格・P2 2件 |
 | 08-28 | 本節 | P2 2件の対応の再確認 | 合格・変異3件検出・workflow契約の実測 |
+
+## 2026-08-28 JST — Build 289 private artifact / Codex Gate 5実測・Claude独立確認指示
+
+Yujiから`Build 289 GO`あり。Codexは対象SHA `5f9ef109fd10430bcee0764dd68633fb9e343c6c`をprivate branch `build/289`へpushし、push eventのDesktop workflowだけを実行した。公開・server deployは行っていない。
+
+### Workflow
+
+| 項目 | 値 |
+|---|---|
+| run | `33130906223` |
+| URL | `https://github.com/eebei/english-voice-app/actions/runs/33130906223` |
+| head SHA | `5f9ef109fd10430bcee0764dd68633fb9e343c6c` |
+| conclusion | `success` |
+| Publish to Release | `skipped` |
+| artifact | `OMORAY-PITWALL-Desktop-Build-289-20260828-0049` |
+| artifact bytes | `302,051,442` |
+
+### Codex独立実測（Gate 5作業者側）
+
+`./verify-artifact.sh 33130906223 5f9ef109fd10430bcee0764dd68633fb9e343c6c 289 --keep --dir /tmp/pw-build289-codex`を実行。CI manifestの転載ではなく、artifactを全量取得しinstallerを展開して再計算した。
+
+| 対象 | bytes | SHA-256 |
+|---|---:|---|
+| installer 3本（同一） | `100,680,483` | `03a5f08158819cbbb69594d031f9b6bfa81a6b6603bfeb5c235ad6939a525c7a` |
+| `app.asar` | `4,287,837` | `207a3fc96664bc3b3d0f2a2192810e638ae6e49ba6f08d69ccdbf2f7ee0e0b46` |
+| 同梱Bridge | `17,025,547` | `ce6791affef8af92e37174dbd660effa0ad383f4c5c5dd00b8222a1893407a4b` |
+
+- runtime moduleはartifact側rendererから派生して10/10、欠落なし。
+- rendererと10 moduleは対象SHAとCRLF正規化後一致。
+- `build-info.json.buildNum=289`。
+- Bridge圧縮内部に`Build 289`と`active_decision_id`が実在し、同じ箇所に旧`Build 288`なし。pygame 52件。
+- Codex側Gate 5検査は合格。ただし作業者自身の検査なので、Claude署名前はGate 5最終合格にしない。
+
+### Claude Code独立確認指示
+
+Codexの`/tmp/pw-build289-codex`、上記ハッシュ、CI manifestを証拠として流用せず、別ディレクトリで次を実行する。
+
+```bash
+./verify-artifact.sh 33130906223 5f9ef109fd10430bcee0764dd68633fb9e343c6c 289 --keep --dir /tmp/pw-build289-claude
+```
+
+run SHA、Publish skipped、artifact名/bytes、installer 3本同一、installer/app.asar/Bridgeのbytes・SHA、artifact renderer由来runtime module、対象SHAとの中身一致、build-info 289、Bridge内Build 289・旧288なし、pygameを独立再計算する。Codex値と一致したかを項目別に明記し、Gate 5確認者署名を本MD末尾へ追記してcommitする。
+
+ファイル修正、push、再build、deploy、publish、外部有料API呼出は禁止。Gate 6 Windows、Gate 7 server、Gate 8 iRacing実走、Gate 9公開は未実施のままと明記する。
