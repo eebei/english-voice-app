@@ -60,7 +60,19 @@ def build_timing_authority(fuel_strategy, strategy_options, *, current_lap,
     }
     lap_int = int(current_lap) if _finite(current_lap) and current_lap >= 0 else None
     ep = endurance_plan if isinstance(endurance_plan, dict) else {}
-    if ep.get('available') is True and ep.get('multi_stop') is True:
+    # A selected A/B/C one-stop plan is more specific than the generic
+    # endurance horizon.  Do not let a stale/misclassified horizon replace a
+    # concrete target lap with “lap 0 / now”.  True multi-stop authority has
+    # at least two projected future services and is used only when no
+    # executable selected plan owns the current stint.
+    plan_id, plan = _selected_plan(strategy_options)
+    has_selected_window = (plan is not None
+                           and isinstance(plan.get('target_lap'), int)
+                           and plan.get('target_lap') > 0)
+    if (not has_selected_window and ep.get('available') is True
+            and ep.get('multi_stop') is True
+            and isinstance(ep.get('future_stop_count'), int)
+            and ep.get('future_stop_count') >= 2):
         until = ep.get('next_fuel_stop_in_laps')
         if isinstance(until, int) and until >= 0 and lap_int is not None:
             latest = lap_int + until
@@ -70,7 +82,6 @@ def build_timing_authority(fuel_strategy, strategy_options, *, current_lap,
                     'laps_until_latest_safe_pit': until,
                     'reason': ('current_stint_window_due' if ep.get('box_this_lap')
                                else 'current_stint_window_reachable')}
-    plan_id, plan = _selected_plan(strategy_options)
     windows = {}
     if isinstance(strategy_options, dict):
         for pid in ('A', 'B', 'C'):

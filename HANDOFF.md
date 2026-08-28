@@ -2,6 +2,13 @@
 
 最終更新: 2026-08-28 JST
 
+## 次候補作業中 — RBR 8/28 実走の誤回答是正（未Build・未公開）
+
+- RBR実走の「後ろの方がペース早いな」に、総燃料不足だけを根拠として「ピット優先」と返した。`engineer-card`は`pit_timing_authority.decision==='pit_now'`以外では早期ピットを言えないようにし、`hold/pit_later`では「前後の相対ペースは未確定、Planを維持」と返す。RBR値（28.7L / 必要50.4L / Plan A / 10周）を回帰化。
+- 同実走の燃料質問で出た「最終目安0周目、あと0周」は、具体的な選択A/B/C windowよりgeneric endurance horizonを優先した誤り。選択済みの実行可能Planをtiming authorityの正本とし、真のmulti-stop（future stop 2以上）だけが代替する。
+- スタート時の履歴／Plan A/B/C一括説明は161文字・約38秒で後続案内を約26秒滞留させた。gridでは一文だけに短縮し、詳細条件はクリーン3周後の実測更新で扱う。
+- 機械確認済み: Engineer Card 113/113、Plan Fuel Authority 23/23、Strategy Playbook 39、Local Intent Router 53/53、Python compile、`git diff --check`。外部有料API呼出なし。未解決のまま作業継続: ドライバー証言と矛盾したRBRの後方GAP 0.1秒の入力正本、前後（将来は全同クラス）相対ペースauthority、実走結果と5レース平均の成績正本。Build／push／公開は未実施。
+
 ## Build 290公開完了 — 8/28 RBR実走会話・個人成績・デブリーフ修正
 
 - RBR実走ログで、保存名`spielberg gp`と表示名`Red Bull Ring`が別コース扱いになり、過去走行があるのに「今回初めて」と案内した。GPレイアウトだけを明示alias `spielberg:gp`へ統合し、履歴あり／なしの双方でLLMが「初めて」を推測しないtruth instructionを追加した。別レイアウトを広く統合しない。

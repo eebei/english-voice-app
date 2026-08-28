@@ -316,16 +316,12 @@
         + (live ? '' : ' I will update after three clean laps.');
     }
     const rememberedSessions = Math.max(0, Math.trunc(finite(playbook.evidence && playbook.evidence.historical_session_count) || 0));
-    return `${live
-      ? `当日実測${playbook.evidence.live_fuel_l_per_lap.toFixed(2)}L/周で基準案を再計算。`
-      : `${rememberedSessions ? `保存履歴${rememberedSessions}セッション、` : ''}過去実測${playbook.evidence.historical_fuel_l_per_lap.toFixed(2)}L/周を基準にした暫定案。`}`
-      + `開始はPlan Aを基準にする。`
-      + `Plan Bは燃料ウィンドウ、前との相対ペース、復帰位置がそろった時だけ。`
-      + `Plan Cは節約燃費と次周の復帰が成立した時だけ。`
-      + (qualifier != null
-        ? `予選P${Math.trunc(qualifier)}、${undercutFirst ? 'Plan Bの成立を優先確認する。' : 'Plan Aを開始優先にする。'}`
-        : '予選順位は未確定なので、開始優先は暫定Plan A。')
-      + (live ? '' : `当日クリーン3周で、成立条件を更新する。`);
+    // Grid radio is deliberately one sentence.  Detailed B/C conditions are
+    // retained in the playbook and are announced only after live clean-lap
+    // evidence exists; front-loading them created a 38-second queue at RBR.
+    return live
+      ? `実測${playbook.evidence.live_fuel_l_per_lap.toFixed(2)}L/周でPlan Aを更新。`
+      : `${rememberedSessions ? `履歴${rememberedSessions}件あり。` : ''}Plan Aで開始、クリーン3周で更新。`;
   }
 
   return { durationSeconds, normalizeFormat, buildPlaybook, updateWithLive, evaluateSwitch, briefing };

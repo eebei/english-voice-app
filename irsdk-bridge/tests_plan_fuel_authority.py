@@ -86,6 +86,17 @@ class Monza35EventOrder(unittest.TestCase):
         self.assertGreater(verdict['reach_pit_margin_l'], 0,
                            'plan window must be reachable with margin > 0')
 
+    def test_timing_prefers_selected_one_stop_over_stale_endurance_horizon(self):
+        timing = plan_fuel_authority_mod.build_timing_authority(
+            {'avg_fuel_per_lap': 2.7, 'required_fuel_l': 50.4}, self.options,
+            current_lap=5, fuel_level_l=40.2,
+            endurance_plan={'available': True, 'multi_stop': True,
+                            'future_stop_count': 2, 'next_fuel_stop_in_laps': 0,
+                            'box_this_lap': False})
+        self.assertEqual(timing['selected_plan'], 'A')
+        self.assertEqual(timing['latest_safe_pit_lap'], self.options['plan_a']['target_lap'])
+        self.assertGreater(timing['laps_until_latest_safe_pit'], 0)
+
     # --- Frame 2: at plan A target lap ---------------------------------------
     def test_lap15_plan_decision_fires_once(self):
         # Reaching the target lap consumes ~ (14-5) * 3.641 = 32.8L from the

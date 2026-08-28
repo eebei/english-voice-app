@@ -23,10 +23,10 @@ check('undercut does not add a stop', monza.plans.B.available === true);
 check('overcut first stop is lap 6', monza.plans.C.first_pit_lap === 6);
 check('overcut labels required saving', monza.plans.C.required_fuel_saving_pct > 0);
 check('rear-half qualifying prioritises undercut review', monza.opening_priority[0] === 'B');
-check('briefing labels historical evidence provisional', /過去実測.*暫定案.*クリーン3周/.test(playbook.briefing(monza, 'ja')));
-check('briefing never voices historical pit-lap schedules',
-  /Plan Bは燃料ウィンドウ.*復帰位置.*Plan Cは節約燃費/.test(playbook.briefing(monza, 'ja'))
-  && !/ベースラインは.*周目|アンダーカットは.*周目|オーバーカットは.*周目/.test(playbook.briefing(monza, 'ja')));
+check('grid briefing is a one-sentence historical handoff',
+  /^(?:履歴\d+件あり。)?Plan Aで開始、クリーン3周で更新。$/.test(playbook.briefing(monza, 'ja')));
+check('grid briefing defers all alternate-plan detail',
+  !/Plan B|Plan C|周目|給油設定/.test(playbook.briefing(monza, 'ja')));
 check('planned first add never exceeds tank', monza.plans.A.first_service.estimated_add_l <= 20.14);
 check('historical start-fuel assumption stays internal until bridge authority exists',
   !/スタート燃料は.*前提|給油設定.*L/.test(playbook.briefing(monza,'ja')));
@@ -49,9 +49,8 @@ check('self-memory provenance is retained in the playbook evidence',
 const live = playbook.updateWithLive(monza, { fuel_strategy: { clean_laps_sampled: 3, avg_fuel_per_lap: 3.7 } });
 check('three clean laps replace historical source', live.source === 'live_clean_laps');
 check('live sample count is retained', live.evidence.live_fuel_samples === 3);
-check('live briefing no longer calls itself historical provisional',
-  /当日実測3\.70L\/周で基準案を再計算/.test(playbook.briefing(live, 'ja'))
-  && !/暫定案|クリーン3周で更新/.test(playbook.briefing(live, 'ja')));
+check('live briefing stays one short measured update',
+  playbook.briefing(live, 'ja') === '実測3.70L/周でPlan Aを更新。');
 check('two live laps do not replace history', playbook.updateWithLive(monza, {
   fuel_strategy: { clean_laps_sampled: 2, avg_fuel_per_lap: 3.7 },
 }) === monza);

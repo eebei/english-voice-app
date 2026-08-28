@@ -433,6 +433,14 @@ reply = cards.build(cards.classify('プッシュしていい？大丈夫？'), {
 }, 'ja');
 check('explicit Bridge push permission is required before a push call',
   reply === '燃料は1.5L余裕。ペースを上げていい。', reply);
+reply = cards.build(cards.classify('後ろの方がペース早いな。'), {
+  session_type:'Race', fuel:28.7,
+  fuel_strategy:{required_fuel_l:50.4, margin_l:-21.7, add_fuel_l:21.7, pit_required:true,
+    pit_timing_authority:{available:true, decision:'hold', selected_plan:'A',
+      latest_safe_pit_lap:19, laps_until_latest_safe_pit:10}},
+}, 'ja');
+check('RBR rear-pace comment never turns total fuel shortfall into an early pit call',
+  /相対ペースはまだ確定できない.*Plan Aを維持.*あと10周/.test(reply) && !/ピット優先/.test(reply), reply);
 check('8/14 spoken pit wording routes to the pit-decision handler',
   cards.classify('ピット 入る？').topic === cards.TOPIC.PIT_DECISION);
 check('8/14 STT 周/州 wording routes to the pit-decision handler',

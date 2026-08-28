@@ -654,6 +654,14 @@ function buildPlanStatus(live, lang, card = {}) {
 function buildPace(live, lang) {
   const { fs, current, required, add } = fuelPlan(live || {});
   const endurance = fs.endurance_plan || live.endurance_fuel_plan || {};
+  // A total-to-finish shortfall says that a service will be needed, not that
+  // it is needed now.  The Bridge timing contract is the only authority that
+  // may turn a pace conversation into a box-now instruction.  This prevents
+  // the RBR replay failure where “the cars behind look faster” was answered
+  // with a premature fuel lecture while Plan A was still reachable.
+  const timing = fs.pit_timing_authority && typeof fs.pit_timing_authority === 'object'
+    ? fs.pit_timing_authority : null;
+  const pitNow = timing && timing.available === true && timing.decision === 'pit_now';
   // `required_fuel_l` is evaluated at an S/F crossing.  Subtracting it from
   // the *current* tank later in the same lap double-counts burned fuel and
   // produced the 8/14 false “0.1L margin, push” call.  Only the Bridge's
@@ -677,7 +685,13 @@ function buildPace(live, lang) {
     : (add != null && add > 0
       ? `Fuel shortfall ${add.toFixed(1)}L. Do not push; box again next lap.`
       : `Stop complete. ${margin != null && margin >= 0 ? `Projected finish margin ${margin.toFixed(1)}L. ` : ''}Build the tyres and hold pace.`);
-  if (fs.pit_required === true || (add != null && add > 0)) return ja(lang) ? `今はペースアップよりピット優先。現在${current != null ? current.toFixed(1) : '不明'}L、必要総量${required != null ? required.toFixed(1) : '未確定'}L。` : `Prioritise the stop, not a pace increase. Current ${current != null ? current.toFixed(1) : 'unknown'}L; ${required != null ? required.toFixed(1) + 'L required' : 'requirement unconfirmed'}.`;
+  if (pitNow) return ja(lang) ? `今周ピット。現在${current != null ? current.toFixed(1) : '不明'}L、必要総量${required != null ? required.toFixed(1) : '未確定'}L。` : `Pit this lap. Current ${current != null ? current.toFixed(1) : 'unknown'}L; ${required != null ? required.toFixed(1) + 'L required' : 'requirement unconfirmed'}.`;
+  if (timing && timing.available === true && (timing.decision === 'hold' || timing.decision === 'pit_later')) {
+    const until = finite(timing.laps_until_latest_safe_pit);
+    return ja(lang)
+      ? `前後の相対ペースはまだ確定できない。燃料はPlan ${timing.selected_plan || 'A'}を維持、次の判断は${until != null ? `あと${Math.max(0, Math.trunc(until))}周` : '次のウィンドウ'}。`
+      : `Front-and-rear relative pace is not confirmed yet. Hold Plan ${timing.selected_plan || 'A'}; next decision ${until != null ? `in ${Math.max(0, Math.trunc(until))} laps` : 'at the next window'}.`;
+  }
   if (margin != null && margin >= 0 && pushAllowed) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースを上げていい。` : `${margin.toFixed(1)}L fuel margin. You can push.`;
   if (margin != null && margin >= 0) return ja(lang) ? `燃料は${margin.toFixed(1)}L余裕。ペースキープ。` : `${margin.toFixed(1)}L fuel margin. Hold pace.`;
   return ja(lang) ? 'ペースアップ可否を決める燃料余裕がまだ確定していない。' : 'Fuel margin is not confirmed, so I cannot clear a push yet.';
