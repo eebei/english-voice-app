@@ -5336,3 +5336,9 @@ Bridge は PyInstaller onefile（Python 3.12）のため、`strings` では中�
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-28 | 本節 | Gate 5 独立 artifact 確認 | 全数値を独立計算・installer3本同一・module 10件欠落0内容一致・Build 290一意・P0/P1/P2 0件・確認者署名 |
+
+## 2026-08-28 JST — Codex Gate 5受領・Gate 6対象訂正
+
+Claude Codeの独立artifact確認をCodex実測と照合し、全値一致・P0/P1/P2 0件としてGate 5署名を受領した。
+
+直前報告の「Gate 6 Windowsは公開中289でもBuild 290でも可」は候補検証として不正確なため訂正する。**Gate 6の対象はrun `33142893350`から取得したBuild 290 installerだけ**とし、公開289やローカル`desktop/dist/`で代用しない。固有bytes／SHA-256と確認項目は`review/BUILD290_GATE6_WINDOWS_HANDOFF.md`を正本とする。公開中はBuild 289のまま。Gate 6／8／9は未実施で、Build 290を公開していない。
