@@ -4806,3 +4806,12 @@ Spielberg / Red Bull Ring の表記ゆれを吸収する `normTrack()` が入っ
 |---|---|---|---|
 | 08-28 | `15d1082` | Gate 6 handoff を Build 289 用へ差し替え | 288 との見分け方 |
 | 08-28 | 本節 | Build 289 公開後の独立確認 | 公開物ハッシュ一致・P1（番号未採番）・Spielberg 正規化の実挙動確認 |
+
+## 2026-08-28 JST — Codex差戻し対応（Build 290採番・Claude再確認依頼）
+
+次のMDに指示書あり
+
+- Claude指摘P1を受理。`irsdk-bridge/bridge.py`の正本を`Build 290 (RBR memory, personal stats, and debrief routing)`へ更新し、版番号回帰も公開289の残存を拒否するよう変更した。
+- 採番後に`tests-ptt-capture.js` 15/15、Bridge compile、版番号全文検索、`git diff --check`、sandbox外`./preflight.sh`を実行し、全項目合格・`✅ 出荷可`。外部有料AI API呼出0件。
+- Build／push／deploy／公開は未実施。`server.js`差分なしのためGate 7はN/A見込みだが、候補SHA確定後に公開289との差分で再判定する。
+- **Claude再確認対象**: (1)本人`userId`不一致・identity欠損・件数不足で個人成績が漏洩／推測されない、(2)leader lapが残り周回とleader GAPより先に正しい対象へ配線される、(3)Lunaへの抗議は保存されず通常の走行回答は保存できる、(4)incident／pit／paceの事実から質問が一問だけ生成される、(5)製品番号がBuild 290で一意。各項目を実コードで反証し、P0/P1/P2件数と実行結果を本MD末尾へ追記すること。

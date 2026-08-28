@@ -51,9 +51,9 @@ check('実走語彙をSTTヒントへ追加',
   ['ベストラップ','コースデータ','データ入ってる','セットアップ','アンダーステア','オーバーステア','ダンパー','トー角','リアウイング']
     .every(term=>server.includes(`'${term}'`))
   && !server.includes("'トー',"));
-check('会話品質修正はBuild 288と番号衝突せず289へ採番',
-  bridge.includes('BUILD_VERSION = "Build 289 (voice question resilience and STT diagnostics)"')
-  && !bridge.includes('BUILD_VERSION = "Build 288'));
+check('次期会話・記憶修正は公開289と衝突せず290へ採番',
+  bridge.includes('BUILD_VERSION = "Build 290 (RBR memory, personal stats, and debrief routing)"')
+  && !bridge.includes('BUILD_VERSION = "Build 289'));
 check('Google confidenceを会話本文と分離して診断へ返す',
   server.includes('res.json(parseGoogleSttResponse(data))')
   && renderer.includes("diagnosticLog('PTT_STT_RESULT'"));

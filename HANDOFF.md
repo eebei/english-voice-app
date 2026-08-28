@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-28 JST
 
-## 次期Build候補 — 8/28 RBR実走会話・個人成績・デブリーフ修正（未Build・未公開）
+## Build 290候補 — 8/28 RBR実走会話・個人成績・デブリーフ修正（未Build・未公開）
 
 - RBR実走ログで、保存名`spielberg gp`と表示名`Red Bull Ring`が別コース扱いになり、過去走行があるのに「今回初めて」と案内した。GPレイアウトだけを明示alias `spielberg:gp`へ統合し、履歴あり／なしの双方でLLMが「初めて」を推測しないtruth instructionを追加した。別レイアウトを広く統合しない。
 - レース中の「直近Nレースのインシデント平均」は、ログイン中の本人`userId`と一致する`pw_raceHistory`だけから最大10件を決定論集計する。指定件数不足または本人identity不明は推測せず不足を返す。Build 289実走の5レース質問は、5件あれば合計と平均を即答する。
@@ -11,7 +11,8 @@
 - 危険車両機能は削除されていない。現在も同クラス隣接車を`iRating <= 1300`または`1.0 <= SR <= 2.0`でsession動的判定する。`nyaji`氏の名前／IDを永続保存したGit履歴はなく、個人watch記憶は未実装。名前だけの永久ラベルは誤認・同名・訂正不能のため追加しない。実装する場合は本人申告→iRacing customer ID照合→確認→期限→訂正／削除まで一単位とする。
 - 機械確認: Local Intent Router 53/53、Session Memory tunnel 121/121相当（RBR alias 2件と初走行truth gateを含む）、Memory Action Layer 27件、Evidence Debrief 47/47、GAP answer queue 49/49、Python compile、`git diff --check`、sandbox外の`./preflight.sh`は全項目合格して`✅ 出荷可`。外部有料AI API呼出なし。
 - 明日の耐久について、公開Build 289の燃料pit-now guardは8/28実走でholdを維持したが、事故により予定戦略pitそのものは未検証。既存の耐久燃料／Chief handoff回帰はpreflight合格。ただし3宅3PCの実relay、実機音声、計画pit完遂は機械試験では保証できない。次期候補もWindows/iRacing実走未確認で、まだBuildしない。
-- **Claude Code独立確認**: 上記差分について、(1) RBR aliasが別layoutを混ぜない、(2)個人成績が別userへ漏れない、(3)leader lapが残り周回／GAPへ誤配線されない、(4)抗議が保存されず通常回答は保存できる、(5)デブリーフが事実一問になる、を反証する。P0/P1/P2と実行テスト結果をこの節へ追記する。Codexが差戻し対応と最終確認を行う。Build番号採番・build・push・公開はYujiの別GOまで禁止。
+- Claude Code初回独立確認commit `739959f`はRBR aliasの閉じた集合を実挙動5/5で反証し、コード変更後もBuild 289表記のままだったP1を1件検出した。CodexはBridge正本を**Build 290**へ採番し、版番号テストも289残存を拒否するよう更新した。
+- **Claude Code再確認待ち**: (1)個人成績が別userへ漏れない、(2)leader lapが残り周回／GAPへ誤配線されない、(3)抗議が保存されず通常回答は保存できる、(4)デブリーフが事実一問になる、(5)Build 290採番が全経路で一意、を実挙動で反証し、P0/P1/P2と件数をこの節へ追記する。Codexが最終確認する。build・push・公開はYujiの別GOまで禁止。
 
 ## Build 289公開完了 — 会話/STT揺れ・Truth Gate修正
 
