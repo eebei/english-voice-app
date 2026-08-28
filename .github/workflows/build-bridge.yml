@@ -34,7 +34,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install websockets pyinstaller
+          pip install websockets pyinstaller pygame pyaudio
 
       - name: Set build date
         id: date
@@ -43,7 +43,7 @@ jobs:
 
       - name: Build bridge EXE
         run: |
-          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console irsdk-bridge/bridge.py
+          pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console --hidden-import pygame irsdk-bridge/bridge.py
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
