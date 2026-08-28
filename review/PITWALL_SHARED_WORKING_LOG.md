@@ -5086,3 +5086,253 @@ Codexはartifact `OMORAY-PITWALL-Desktop-Build-290-20260828-0449`（302,061,490 
 renderer由来runtime moduleは10/10、app.asar内容は対象SHAとCRLF正規化後一致、`build-info.json buildNum=290`、Bridge内にBuild 290と`active_decision_id`が実在し同じstreamに旧Build 289なし、pygame 52件。CI manifestの3値とも一致した。
 
 **Claude Code確認指示**: Codexの一時ディレクトリや上記申告値を証拠として流用せず、別作業ディレクトリへrun `33142893350`のartifactを独立取得すること。run SHA／Publish skipped／artifact名とbytes／installer 3本同一／installer・app.asar・BridgeのbytesとSHA／artifact側rendererから派生したruntime全件／対象SHAとの中身一致／build-info 290／Bridge内Build 290・旧289なし／pygameを再計算し、各項目が一致したかを列挙する。P0/P1/P2件数とGate 5確認者署名を本MD末尾へ追記する。Windows・iRacing・公開を実施済みと扱わない。
+
+## 2026-08-28 JST — Build番号の通史（採番の正本と2つの時代）
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+「今まで何番から何回更新したか」を git 実測で確定した。**コード変更は一切していない。**
+
+### 4つの時代
+
+| 時代 | 期間 | 番号 | 正本 | 更新回数 |
+|---|---|---|---|---|
+| ① 日付連番 | 2026-06-17 〜 07-04 | `2026-06-19-001` 〜 `2026-07-04-039` | `irsdk-bridge/bridge.py` に手書き | **39** |
+| ② 中間 | 07-07 / 07-30 | `2026-07-07-B` / `2026-07-30-TEST` | 同（番号なしの日付タグ） | **2** |
+| ③ CI連番 | 07月中 〜 07-30 | **040 〜 237（概算）** | GitHub Actions `github.run_number` | **git に記録なし** |
+| ④ 製品連番 | 07-30 〜 08-28 | **Build 238 〜 290** | `irsdk-bridge/bridge.py:58` | **53** |
+
+### 数え方で答えが変わる（混同しない）
+
+| 指標 | 値 |
+|---|---|
+| git で実証できる `BUILD_VERSION` の更新 | **55回**（② 2 + ④ 53） |
+| ① も含めた手書き採番の更新 | **94回** |
+| ユーザーに見えた「Build N」の通し番号 | **001 → 290** |
+
+**94回と290は数えている対象が違う。** 外部（テスター・Discord・LP）へ数字を出す時に混ぜない。
+③は run 番号なので、**ソースを変えずに再ビルドしただけの回も含まれる＝更新回数ではない。**
+
+### ③の正体
+
+`build-desktop.yml` は当時 `Build ${{ github.run_number }}` をそのまま表示していた。
+記憶にある Build 166 / 168 / 170 / 175 / 216 はこの時代のもの。
+07-30 に **「buildNumはGitHub run番号ではなく、bridgeと同じ製品Build番号を使う」** へ切り替え、
+その時点の run 番号 238 を引き継いで ④ が始まっている。
+現在は `build-desktop.yml:57` / `build-store-msix.yml:42` が
+`BUILD_VERSION\s*=\s*"Build\s+(\d+)` を抽出し、**bridge.py が唯一の正本**になっている。
+
+### 採番規律の実測
+
+```
+④ の 238〜290 = 53個ちょうど。飛びゼロ・重複ゼロ・再利用ゼロ。
+```
+
+今回 Claude が P1 として挙げた「289 据え置きのまま出荷経路を変更」も Codex が 290 へ採番して解消済み。
+**Build 282 の証拠無効化事故以降、採番規律は破られていない。**
+
+### 更新の密度
+
+2026-06-17 〜 08-28 の **73日間で手書き94回＝1日あたり約1.3回**。
+ただし均等ではなく、**実走ログやテスター報告が返ってきた日に集中**している
+（6/18 だけで 002→012 の11回、7/4 も 030→039 の10回）。
+
+### push / deploy / 公開 / Windows / 実走
+
+すべて **なし**。commit は本報告のMD追記のみ。外部有料 API 呼出 **0件**。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | 本節 | Build番号の通史 | 4時代・手書き94回／通し番号290・③はrun番号でgit外・④は飛びゼロ |
+
+## 2026-08-28 JST — Codex確認：Gate 5独立検査は未実施、指示先を修正
+
+直前のClaude追記はBuild番号の通史であり、run `33142893350`のartifact取得・展開・hash再計算を行っていない。したがってBuild 290 Gate 5はまだ確認者未署名。
+
+`review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`先頭を現在状態へ更新し、案件1／案件2の再実装や番号通史ではなく、Build 290 Gate 5独立artifact検査だけを最優先指示に固定した。次回Claudeは同指示の7項目を完了し、P0/P1/P2と署名を本MD末尾へ記録すること。Windows／iRacing／公開は行わない。
+
+## 2026-08-28 JST — Gate 5 独立 artifact 確認（Build 290 private candidate）**合格・確認者署名**
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+指示書冒頭の最優先指示に従い、Gate 5 の確認のみを実施した。**コードは1行も変更していない。**
+**Codex の一時ファイル・展開物・申告 hash は一切流用していない。** リポジトリ外の新規作業ディレクトリへ
+artifact を独立取得し、全数値を自分で計算してから一致／不一致を記録している。
+（作業ディレクトリ: session scratchpad 配下。リポジトリ内の `desktop/dist/` `artifacts/` には触れていない）
+
+### 0. 対象
+
+| 項目 | 値 | 独立確認 |
+|---|---|---|
+| run | `33142893350` | ✅ `conclusion=success` |
+| workflow | Build OMORAY PITWALL Desktop (Windows EXE) | ✅ |
+| head SHA | `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02` | ✅ run の headSha と一致 |
+| commit | `Close Build 290 independent review`（2026-08-28 13:47:16 +0900） | ✅ |
+| 製品Build | **290** | ✅ |
+
+`a9988ec` → 現HEAD の差分は **`HANDOFF.md` と本MDのみ**。**出荷経路（`desktop/**` `irsdk-bridge/**`）に差分なし。**
+
+### 1. Publish to Release が skipped であること
+
+```
+Upload private build artifact   success
+Publish to Release              skipped   ←
+```
+
+**private candidate として正しい。** 加えて公開側も実測した。
+
+| 公開 release `desktop-latest` の latest 3本 | 100,681,743 bytes（2026-08-28T01:57:59Z） |
+|---|---|
+| 今回の Build 290 installer | **100,684,282 bytes** |
+
+**bytes が異なる＝ Build 290 は公開経路へ出ていない。公開中は Build 289 のまま。**
+
+### 2. artifact（独立取得）
+
+| 項目 | 独立計算値 |
+|---|---|
+| artifact 名 | `OMORAY-PITWALL-Desktop-Build-290-20260828-0449` |
+| artifact zip bytes | **302,061,490** |
+| artifact zip SHA-256 | `1606c78970b6477d04b309b4055894348bba45395d301c6d1e5661e825e416e2` |
+| 収録 | installer 3本 + `BUILD-290-GATE5-MANIFEST.json` の4件のみ |
+
+### 3. installer 3本の同一性（独立計算）
+
+```
+100684282  3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5  OMORAY-PITWALL-Setup-20260828-0449.exe
+100684282  3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5  OMORAY-PITWALL-Setup-latest.exe
+100684282  3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5  OMORAY-PITWALL-Desktop-latest.exe
+```
+
+**3本とも bytes・SHA-256 完全一致。日付版／latest／旧互換の取り違えは起こらない。**
+
+### 4. installer 内部（NSIS → app-64.7z を展開して独立計算）
+
+| 対象 | bytes（独立） | SHA-256（独立） | CI manifest 申告との照合 |
+|---|---|---|---|
+| installer | 100,684,282 | `3427273eafca…d28ce5` | **一致** |
+| `app.asar` | 4,292,914 | `96d3e1058daa…fb3c5d` | **一致** |
+| 同梱 Bridge | 17,027,639 | `cc102c33e3a2…3b4616` | **一致** |
+
+manifest の値は**照合相手として後から突き合わせただけ**で、上記は先に自分で計算した値である。
+
+### 5. runtime module（artifact 側 renderer から派生 → 欠落0 → 対象SHAと内容一致）
+
+`app.asar` を展開し、**artifact 内の `renderer.html` の `<script src>` から**一覧を派生させた
+（CI の申告リストではなく artifact 実物から派生している）。
+
+```
+派生モジュール数 = 10   欠落 = 0   内容不一致 = 0
+```
+
+| module | SHA-256（改行正規化後・artifact = 対象SHA） |
+|---|---|
+| cost-meter.js | `458f41ff0eba1f1b63861de98e33ea00c07789ea38fa54daaf2917f81afc5bee` |
+| decision-memory.js | `78e26182ad68d33f6d5b3b99d5194e701066d4515b0a88581a4cdf96063f58b5` |
+| driving-style-v1.js | `78bec6e37e8c28fc8efd59230aa6f6ce2431655dd571d84fb493f886a97726be` |
+| fuel-plan-guard.js | `06b57f4db99215f1ddfb978a1cd554af11840f57ce4d8e2975e58177d3a10a7e` |
+| gap-freshness.js | `2267aa2efeec77441d50a5dabeb62a3352a56b71e5bdb363ff7a5a9cba178175` |
+| local-intent-router.js | `f2a82f91a6ad6a06c9dd59e6da3dbdd5765c2335193e7e755c76b0b386328e11` |
+| luna-self-memory.js | `457eb4d800cc79b3638cc60baf5e11fd559eff8338881599bc99517d03e642f3` |
+| memory-action-layer.js | `79ae10127001f2dae8144b6c8cad1e18c38fcc7ae0a296456a979389955f3b4f` |
+| session-memory.js | `b683ed6846f44722e67ebd4b84375437a8827eb119a5d0937e77db6cdf156b2b` |
+| strategy-playbook.js | `9f7b203b37e2dd5f662b066c757d38b767dbb56e7da9eda35cca0c75c79434de` |
+
+本体も同様に一致した。
+
+```
+renderer.html  806646a334f7f4d99a556cbf36a96a7acc3e091db592d9d8ba4a0d4b0f1c51ec
+main.js        b12172a66f8f7231e53d09751b5f8818d7d266245aa2d6300c2715bb2b65c927
+preload.js     08d7e4f98f0e22805be953a516043a841ba20a032d1b3f6f836360dcffadd5bb
+overlay.html   b60b7d1e33df15ae4f9daabdfc34154034631b89fbd705376eaeb8256871bed3
+```
+
+**artifact 内のコードは対象SHAそのもの。ビルド時の差し替えは無い。**
+
+※ 素の bytes は git blob と異なる（例 `cost-meter.js` 9,912 → 10,141）。
+**Windows runner の checkout による CRLF 変換であり、内容差ではない。** 上表は CR 除去後の照合。
+
+### 6. build-info / Bridge 内部
+
+```
+build-info.json : {"buildDate":"2026-08-28T04:49:45.1298365+00:00","buildTag":"20260828-0449","buildNum":290}
+```
+
+| 確認 | 結果 |
+|---|---|
+| `buildNum` = **290** | ✅ |
+| `buildTag` = artifact 名の `20260828-0449` と一致 | ✅ |
+| 同梱 Bridge 内の Build 文字列 | **`Build 290 (RBR memory, personal stats, and debrief routing)` のみ** |
+| 旧 **Build 289 の残存** | **0件** |
+| `active_decision_id` | ✅ 存在 |
+| pygame 同梱 | ✅ `pygame` 本体 + SDL2 / SDL2_mixer / SDL2_ttf / SDL2_image DLL を同梱 |
+
+Bridge は PyInstaller onefile（Python 3.12）のため、`strings` では中身が見えない。
+**PyInstaller CArchive を展開して `bridge.pyc` を取り出し、その中で確認した。**
+
+さらに同梱 Bridge が対象SHAの `bridge.py` 由来であることを文字列定数で裏取りした。
+
+```
+対象SHA bridge.py の文字列リテラル(16字以上・単一行) 459件
+  → 同梱 bridge.pyc 内に存在 433件
+  → 不在 26件はすべて %書式文字列。CPython 3.12 が %-formatting を分割定数へ最適化するため。
+     分割後の断片は 26/26 すべて存在を確認。
+実質 459/459 説明済み。未説明の欠落・混入なし。
+```
+
+### 7. 判定：**P0 0件 / P1 0件 / P2 0件**
+
+記録のみ（欠陥ではない）:
+
+- `app.asar` 内の `package.json` は対象SHAの `desktop/package.json` と異なる（`scripts` / `devDependencies` / `build` が無い）。
+  **electron-builder が production 用に書き直す標準動作。** 実行に使う `main` / `name` / `version` は一致。
+
+### 8. Gate 5 確認者署名
+
+> **Gate 5（独立 artifact 確認）合格。**
+> run `33142893350` / SHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02` / 製品Build 290 について、
+> artifact を独立取得し、installer 3本の同一性、installer・`app.asar`・同梱 Bridge の bytes と SHA-256、
+> runtime module 10件の欠落0と対象SHAとの内容一致、`buildNum=290`、Bridge 内 Build 290・旧289なし・
+> `active_decision_id`・pygame 同梱を、**すべて自分で計算した値で**確認した。
+> Publish to Release は skipped であり、公開経路は Build 289 のままである。
+> **確認者: Claude Code（2026-08-28 JST）**
+
+### 9. Gate 0〜9（Build 290 private candidate）
+
+| Gate | 状態 |
+|---|---|
+| 0〜3 | **合格** |
+| 4 P0/P1 | **合格**（5項目の再確認完了済み） |
+| 5 artifact | **合格 — 本節で確認者署名** |
+| 6 Windows | **未実施** |
+| 7 server | **N/A 見込み**（`server.js` 差分なし。公開時に再判定） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **未実施**（Publish to Release skipped を実測） |
+
+**Build 290 は Windows 実機起動も iRacing 実走も未確認である。未実走を合格扱いしていない。**
+
+### 10. push / deploy / 公開 / Windows / 実走
+
+| 操作 | 実施 |
+|---|---|
+| commit | **本報告のMD追記のみ** |
+| push / build / deploy / 公開 | **なし** |
+| Windows 実機確認 / iRacing 実走 | **なし** |
+| 外部有料 API 呼出 | **0件** |
+| 環境変更 | **`brew install sevenzip` のみ**（installer 展開に必要。ローカル CLI。リポジトリ無変更） |
+
+### 11. 次の担当
+
+| # | 項目 | 担当 |
+|---|---|---|
+| 1 | Gate 6 Windows | **Yuji**（公開中 289 でも Build 290 でも可） |
+| 2 | Gate 8 実走 | **Yuji**（8/29 耐久・指示書の確認項目9点） |
+| 3 | Build 290 の公開判断（Gate 9） | **Yuji の GO 後** |
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | 本節 | Gate 5 独立 artifact 確認 | 全数値を独立計算・installer3本同一・module 10件欠落0内容一致・Build 290一意・P0/P1/P2 0件・確認者署名 |

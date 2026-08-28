@@ -2,7 +2,7 @@
 
 最終更新: 2026-08-28 JST
 
-## Build 290候補 — 8/28 RBR実走会話・個人成績・デブリーフ修正（未Build・未公開）
+## Build 290候補 — 8/28 RBR実走会話・個人成績・デブリーフ修正（private artifact済み・未公開）
 
 - RBR実走ログで、保存名`spielberg gp`と表示名`Red Bull Ring`が別コース扱いになり、過去走行があるのに「今回初めて」と案内した。GPレイアウトだけを明示alias `spielberg:gp`へ統合し、履歴あり／なしの双方でLLMが「初めて」を推測しないtruth instructionを追加した。別レイアウトを広く統合しない。
 - レース中の「直近Nレースのインシデント平均」は、ログイン中の本人`userId`と一致する`pw_raceHistory`だけから最大10件を決定論集計する。指定件数不足または本人identity不明は推測せず不足を返す。Build 289実走の5レース質問は、5件あれば合計と平均を即答する。
@@ -12,8 +12,8 @@
 - 機械確認: Local Intent Router 53/53、Session Memory tunnel 121/121相当（RBR alias 2件と初走行truth gateを含む）、Memory Action Layer 27件、Evidence Debrief 47/47、GAP answer queue 49/49、Python compile、`git diff --check`、sandbox外の`./preflight.sh`は全項目合格して`✅ 出荷可`。外部有料AI API呼出なし。
 - 明日の耐久について、公開Build 289の燃料pit-now guardは8/28実走でholdを維持したが、事故により予定戦略pitそのものは未検証。既存の耐久燃料／Chief handoff回帰はpreflight合格。ただし3宅3PCの実relay、実機音声、計画pit完遂は機械試験では保証できない。次期候補もWindows/iRacing実走未確認で、まだBuildしない。
 - Claude Code初回独立確認commit `739959f`はRBR aliasの閉じた集合を実挙動5/5で反証し、コード変更後もBuild 289表記のままだったP1を1件検出した。CodexはBridge正本を**Build 290**へ採番し、版番号テストも289残存を拒否するよう更新した。
-- Claude Code再確認は、個人成績6/6、leader lap 5/5、抗議と通常回答13/13、事実ベース質問20/20、Build 290採番一意性に合格し、**P0/P1/P2 0件、Gate 4合格**。Codexも追跡コード差分が採番commit以降ゼロであること、Local Router 53/53、Evidence Debrief 47/47、PTT 15/15、Bridge compile、diff checkを再確認した。Build 290は内部テスト・独立確認済みだが、artifact／Windows／iRacing実走は未実施。build・push・公開はYujiの別GOまで禁止。
-- YujiのBuild 290 GO後、対象SHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`を`build/290`へpush。private workflow `33142893350`はsuccess、Publish skipped。artifact `OMORAY-PITWALL-Desktop-Build-290-20260828-0449`（302,061,490 bytes）をCodexが全量取得して`verify-artifact.sh`で検査した。installer 3本は100,684,282 bytes / SHA-256 `3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5`で同一。app.asarは4,292,914 bytes / `96d3e1058daaffeb469d647c8159e9f805557f9892d56f4bbf0c779f36fb3c5d`、同梱Bridgeは17,027,639 bytes / `cc102c33e3a2b80d76e41c2cd0be3c3abafe588bf17d16af1cadbfbdd23b4616`。runtime 10/10、対象SHA一致、build-info 290、Bridge内Build 290・旧289なし、pygame 52件を実測。**Gate 5はClaude Codeによる独立再取得・再計算待ち**。Windows／iRacing／公開は未実施、server差分なしのためGate 7はN/A。
+- Claude Code再確認は、個人成績6/6、leader lap 5/5、抗議と通常回答13/13、事実ベース質問20/20、Build 290採番一意性に合格し、**P0/P1/P2 0件、Gate 4合格**。Codexも追跡コード差分が採番commit以降ゼロであること、Local Router 53/53、Evidence Debrief 47/47、PTT 15/15、Bridge compile、diff checkを再確認した。この時点ではartifact以降を未実施として停止し、その後のYujiのBuild GOを次項で記録する。
+- YujiのBuild 290 GO後、対象SHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`を`build/290`へpush。private workflow `33142893350`はsuccess、Publish skipped。artifact `OMORAY-PITWALL-Desktop-Build-290-20260828-0449`（302,061,490 bytes）をCodexが全量取得して`verify-artifact.sh`で検査した。installer 3本は100,684,282 bytes / SHA-256 `3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5`で同一。app.asarは4,292,914 bytes / `96d3e1058daaffeb469d647c8159e9f805557f9892d56f4bbf0c779f36fb3c5d`、同梱Bridgeは17,027,639 bytes / `cc102c33e3a2b80d76e41c2cd0be3c3abafe588bf17d16af1cadbfbdd23b4616`。runtime 10/10、対象SHA一致、build-info 290、Bridge内Build 290・旧289なし、pygame 52件を実測。Claude Codeも別作業領域へ独立取得・再計算し全値一致、**P0/P1/P2 0件でGate 5署名済み**。Windows手順は`review/BUILD290_GATE6_WINDOWS_HANDOFF.md`。Windows／iRacing／公開は未実施、server差分なしのためGate 7はN/A。
 
 ## Build 289公開完了 — 会話/STT揺れ・Truth Gate修正
 
