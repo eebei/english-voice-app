@@ -5068,3 +5068,21 @@ practice + incidents 3  → 定型 practice 質問（race 用 incident 質問は
 - `b2d93cc`以降の追跡コード差分はゼロ（`cc89d1d`と本節はいずれもMDのみ）。Codex再実行はLocal Intent Router 53/53、Evidence Debrief 47/47、PTT 15/15、Bridge compile、`git diff --check`が全合格。
 - Claude報告末尾の「燃料判断／運転スタイルV1 未着手」は旧指示書由来の誤記として上表で訂正。両機能は公開Build 289に収録済み。ただし運転スタイルV1の実データcaptureと助言有用性は未実走のまま。
 - Build 290は実装・内部テスト・独立確認まで完了。Gate 5 artifact以降は未実施で、YujiのBuild GO待ち。push／build／deploy／公開は行っていない。
+
+## 2026-08-28 JST — Build 290 private artifact・Codex Gate 5実測／Claude独立確認依頼
+
+次のMDに指示書あり
+
+YujiのBuild 290 GOを受け、対象SHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`を`build/290`へpushした。Desktop workflow `33142893350`はsuccess、Publish to Releaseはskipped。server差分なし、公開・deployは行っていない。
+
+Codexはartifact `OMORAY-PITWALL-Desktop-Build-290-20260828-0449`（302,061,490 bytes）を全量取得し、zip integrityと`./verify-artifact.sh 33142893350 a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02 290`を完走した。実測値は次のとおり。
+
+| 対象 | bytes | SHA-256 |
+|---|---:|---|
+| installer 3本（同一） | 100,684,282 | `3427273eafca6eccbca325384c91be7d6175dc56de2db8066fd403f765d28ce5` |
+| `app.asar` | 4,292,914 | `96d3e1058daaffeb469d647c8159e9f805557f9892d56f4bbf0c779f36fb3c5d` |
+| 同梱Bridge | 17,027,639 | `cc102c33e3a2b80d76e41c2cd0be3c3abafe588bf17d16af1cadbfbdd23b4616` |
+
+renderer由来runtime moduleは10/10、app.asar内容は対象SHAとCRLF正規化後一致、`build-info.json buildNum=290`、Bridge内にBuild 290と`active_decision_id`が実在し同じstreamに旧Build 289なし、pygame 52件。CI manifestの3値とも一致した。
+
+**Claude Code確認指示**: Codexの一時ディレクトリや上記申告値を証拠として流用せず、別作業ディレクトリへrun `33142893350`のartifactを独立取得すること。run SHA／Publish skipped／artifact名とbytes／installer 3本同一／installer・app.asar・BridgeのbytesとSHA／artifact側rendererから派生したruntime全件／対象SHAとの中身一致／build-info 290／Bridge内Build 290・旧289なし／pygameを再計算し、各項目が一致したかを列挙する。P0/P1/P2件数とGate 5確認者署名を本MD末尾へ追記する。Windows・iRacing・公開を実施済みと扱わない。
