@@ -8,7 +8,7 @@
 - Bridge権威の`best`とライブ接続状態をlocal intentへ追加し、`ベストラップ わかります。`の質問符号欠落、`コースデータは空いてる？`の`入ってる→空いてる`揺れも同じ決定論経路で回答する。通常の`コースは空いてる？`やデータ分析依頼、`than。`は誤って運用intentへ寄せない。Truth Gateへ到達した場合もbest/dataを最新Bridge値から再構成し、未知の数値質問を無関係な`了解。`へ変えず短い再質問を返す。
 - Google STTの日本語ヒントへベスト／データ状態／setup主要語を追加し、Googleが返したconfidence・文字数・録音秒数・言語だけを`PTT_STT_RESULT`へ記録する。新たな個人別発話全文・音声・癖は保存しない。confidence欠損は0と偽装せずnull。API呼出回数とSTT秒数は増えず、best/data即答はAnthropic呼出を削減、TTS経路は従来どおり。
 - 機械確認: `tests-local-intent-router.js` 46/46、`tests-telemetry-truth-gate.js` 60/60、`tests-ptt-capture.js` 14/14、`tests-gap-answer-queue.js` 49/49、関連燃料/GAP/キャラクター回帰、`node --check server.js`、`git diff --check`は合格。変更途中の全`preflight.sh`も外部有料AI呼出なしで合格し、その後のSTT response parser分離は上記14/14と構文検査で再確認した。
-- Claude Code独立レビューcommit `fe897fa`はP0/P1 0件、P2 2件で条件付き合格。P2-1の短いSTTヒント`トー`は`トー角`へ狭め、P2-2の番号衝突はBridge正本を`Build 289 (voice question resilience and STT diagnostics)`へ採番した。`server.js`変更を含むためGate 7対象。Build 288 artifact（SHA `2ba8ce4...`）には本修正が入らず、同番号で再Buildしない。ClaudeのP2再確認→Codex確認→YujiのBuild GO後にprivate artifact→Windows/iRacing実走の順。push / build / deploy / publishは未実施。
+- Claude Code独立レビューcommit `fe897fa`はP0/P1 0件、P2 2件で条件付き合格。P2-1の短いSTTヒント`トー`は`トー角`へ狭め、P2-2の番号衝突はBridge正本を`Build 289 (voice question resilience and STT diagnostics)`へ採番した。Claude再確認commit `3648a76`は変異3/3を含めP0/P1/P2 0件で合格。Codexも同commitがMD追記だけでコード差分ゼロ、PTT回帰15/15、server構文、Bridge compileを再確認した。`server.js`変更を含むためGate 7対象。Build 288 artifact（SHA `2ba8ce4...`）には本修正が入らず、同番号で再Buildしない。次はYujiのBuild 289 GO後にprivate artifact→Gate 5独立確認→Gate 7→Windows/iRacing実走。push / build / deploy / publishは未実施。
 
 ## Build 288候補 — 燃料timing権威／運転スタイルV1（未公開）
 
