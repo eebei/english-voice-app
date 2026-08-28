@@ -4233,3 +4233,136 @@ Claude独立レビューcommit `fe897fa`のP2 2件へ対応した。
 - `BUILD_VERSION`の製品番号が289で、Build 288 artifactと番号衝突しない。GitHub workflowがこの正本から`desktop/build-info.json.buildNum=289`を生成する既存契約も壊れていない。
 
 最低限、`node tests-ptt-capture.js`、`node --check server.js`、`python3 -m py_compile irsdk-bridge/bridge.py`、`git diff --check`を実行する。P0/P1/P2件数と**合格／差戻し**を本MD末尾へ追記してcommitすること。ファイル修正、push、build、deploy、publish、外部有料API呼出は行わない。
+
+## 2026-08-28 JST — Claude Code 再確認結果（P2 2件の対応）**合格**
+
+次のMDに指示書あり: `review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`
+
+対象: Codex commit `1ce9092`。指示どおり**前回の全項目は重複レビューせず、指定の2点に絞った**。
+**ファイルは1つも修正していない。**
+
+### 判定
+
+**合格。P0 0件 / P1 0件 / P2 0件。**
+
+---
+
+### ① `トー` → `トー角`（P2-1 解消）
+
+日本語 `racingPhrases` を列挙して確認した。
+
+```
+日本語ヒント語数 : 61
+単独 'トー' が残る : false
+'トー角' がある    : true
+2文字以下の語     : 燃料, 内圧, 順位, 車高
+```
+
+残る2文字語（`燃料` `内圧` `順位` `車高`）はいずれも**レース語として一意**で、
+`トー` のような一般音との衝突がない。**P2-1 は解消。**
+
+#### 別変更が混ざっていないか
+
+`ac518e6..1ce9092` の `server.js` 差分は **1行のみ**。
+
+```
+-         'アンチロールバー', 'キャンバー', 'トー', 'リアウイング', 'ブレーキバランス',
++         'アンチロールバー', 'キャンバー', 'トー角', 'リアウイング', 'ブレーキバランス',
+```
+
+**英語分岐・モデル・retry・API呼出回数に変更なし**（差分がこの1行だけである事実で確認）。
+
+---
+
+### ② Build 289 採番（P2-2 解消）
+
+```
+BUILD_VERSION = "Build 289 (voice question resilience and STT diagnostics)"
+bridge.py に残る "Build 288" : 0 件
+```
+
+| | |
+|---|---|
+| Build 288 artifact の出所SHA | `2ba8ce4`（BUILD_VERSION=288） |
+| 現在ソース | `1ce9092`（BUILD_VERSION=289） |
+| 同番号・中身違いの衝突 | **解消** |
+
+#### workflow の既存契約が壊れていないか（実際に当てて確認）
+
+`.github/workflows/build-desktop.yml:57` の抽出パターンを、**実物の `BUILD_VERSION` 文字列へ当てた**。
+
+```
+パターン : BUILD_VERSION\s*=\s*"Build\s+(\d+)
+マッチ   : 成功
+productBuild : 289
+→ desktop/build-info.json.buildNum : 289
+→ artifact 名 : ...Build-289-...
+```
+
+**契約は壊れていない。** workflow は `throw 'BUILD_VERSION product number not found'` を持つので、
+正本が読めなければ build 自体が止まる形も維持されている。
+
+---
+
+### 回帰テストが落ちるべき時に落ちるか（変異試験）
+
+`tests-ptt-capture.js` の新規2項目を変異で検査した。
+
+| 変異 | 結果 |
+|---|---|
+| Z1 単独 `トー` へ戻す | ✅ 検出 |
+| Z2 `Build 288` へ戻す（番号衝突） | ✅ 検出 |
+| Z3 `トー角` ごと削除する | ✅ 検出 |
+
+**3件すべて検出。** 文字列の存在だけでなく、**非存在（`'トー',` が無いこと）**も見ているため、
+戻す変異が素通りしない。
+
+---
+
+### 実行したテストと件数
+
+| 検査 | 件数 | exit |
+|---|---|---|
+| `node tests-ptt-capture.js` | **15/15** | 0 |
+| `node --check server.js` | — | 0 |
+| `python3 -m py_compile irsdk-bridge/bridge.py` | — | 0 |
+| `git diff --check` | — | 0 |
+| JS 全スイープ | 失敗0 | — |
+| Python discover | 308 tests | 0 |
+| `./preflight.sh` | 出荷可 | 0 |
+| Claude 変異試験 | **3/3 検出** | — |
+
+外部有料API呼出 **0件**。**ファイル修正・push・build・deploy・公開は行っていない。**
+
+---
+
+### Gate の状態（変わっていない）
+
+| Gate | 状態 |
+|---|---|
+| 0〜4 | **合格**（P0/P1/P2 すべて 0件） |
+| 5 artifact | **未実施**（Build 289 は未ビルド） |
+| 6 Windows | **未実施** |
+| 7 server | **必須・未実施**（`server.js` 変更あり。Build 288 の N/A は流用不可） |
+| 8 iRacing 実走 | **未実施** |
+| 9 公開 | **未実施** |
+
+### 次の担当と手順
+
+| # | 項目 | 担当 |
+|---|---|---|
+| 1 | commit → build（Build 289 private candidate） | Codex（**Yuji の build GO 後**） |
+| 2 | Gate 5 独立確認 | Claude（`./verify-artifact.sh <run> <sha> 289`） |
+| 3 | **Gate 7**（server 変更あり）→ `./verify-deploy.sh` | **Yuji の deploy GO** |
+| 4 | Gate 6 Windows | Yuji（handoff は 289 用に差し替えが要る） |
+| 5 | Gate 8 実走 / Gate 9 公開 | Yuji |
+
+**この再確認合格だけでは Build 289 GO、Windows 合格、実走合格、公開GO にならない。**
+**Gate 5・6・7・8・9 はいずれも未実施である。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-28 | `fe897fa` | 実走会話/STT揺れ・Truth Gate修正の独立レビュー | 条件付き合格・P2 2件 |
+| 08-28 | 本節 | P2 2件の対応の再確認 | 合格・変異3件検出・workflow契約の実測 |
