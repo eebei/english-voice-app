@@ -156,6 +156,9 @@
     const snapshotAgeMs = finite(input && input.snapshotAgeMs);
     const sessionAuthority = input && input.sessionAuthority
       && typeof input.sessionAuthority === 'object' ? input.sessionAuthority : null;
+    const raceHistory = input && Array.isArray(input.raceHistory) ? input.raceHistory : [];
+    const currentUserId = input && input.currentUserId !== undefined && input.currentUserId !== null
+      ? String(input.currentUserId) : '';
     if (!text || !live) return { handled:false };
 
     if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
@@ -213,7 +216,8 @@
       if (plan.kind === 'laps' && total !== null) return answer('race_format', isJP(lang) ? `全${total}周。` : `${total} laps total.`);
       return answer('race_format_unavailable', isJP(lang) ? 'このレースの時間・周回ルールはまだ確定できない。' : 'The race duration and lap rule are not confirmed yet.');
     }
-    if (/残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(text)) {
+    if (!/(?:トップ|首位|P1|leader)/i.test(text)
+        && /残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(text)) {
       const crossings = integer(live.finish_crossings_authority);
       if (crossings !== null && crossings >= 1 && crossings <= 10) return answer('laps_remaining', isJP(lang) ? `残り${crossings}周。` : `${crossings} lap${crossings === 1 ? '' : 's'} remaining.`);
       const remaining = finite(live.session_time_remaining_s);
@@ -248,6 +252,23 @@
     }
     if (/(?:ちゃんと|さっき).{0,10}(?:ギャップ|GAP).{0,10}(?:答えた|言えた|出た)/i.test(text)) {
       return answer('gap_reply_acknowledgement', isJP(lang) ? '了解。' : 'Copy.');
+    }
+    const incidentAverage = text.match(/(?:ここ|直近|最近|過去)?\s*(\d{1,2})\s*(?:レース|戦|走行).{0,14}(?:インシデント|incident).{0,10}(?:平均|アベレージ|average)|(?:インシデント|incident).{0,14}(?:ここ|直近|最近|過去)?\s*(\d{1,2})\s*(?:レース|戦|走行).{0,10}(?:平均|アベレージ|average)/i);
+    if (incidentAverage) {
+      const requested = Math.min(10, Math.max(1, Number(incidentAverage[1] || incidentAverage[2])));
+      if (!currentUserId) return answer('incident_average_unavailable', isJP(lang)
+        ? '本人の成績記録を確認できない。ログイン状態を確認して。'
+        : 'I cannot identify the driver record. Check the signed-in account.');
+      const rows = raceHistory.filter(row => row && String(row.userId ?? '') === currentUserId
+        && integer(row.incidents) !== null).slice(-requested);
+      if (rows.length < requested) return answer('incident_average_unavailable', isJP(lang)
+        ? `本人記録は${rows.length}レース分。直近${requested}レースの平均には足りない。`
+        : `Only ${rows.length} personal race records are available; ${requested} are required.`);
+      const total = rows.reduce((sum, row) => sum + integer(row.incidents), 0);
+      const average = total / rows.length;
+      return answer('incident_average', isJP(lang)
+        ? `直近${requested}レースは合計${total}、平均${average.toFixed(1)}インシデント。`
+        : `Across the last ${requested} races: ${total} incidents, ${average.toFixed(1)} on average.`);
     }
     if (/(?:走り始め|走行(?:中|開始)|グリーン).{0,12}(?:ギャップ|GAP).{0,12}(?:教えて|言って|コール)|(?:when|once).{0,12}(?:driving|green).{0,12}(?:gap|difference)/i.test(text)) {
       return answer('gap_reporting_acknowledgement', isJP(lang)
@@ -312,6 +333,14 @@
       return answer('nearest_gap_unavailable',
         isJP(lang) ? '前後のGAPはまだ取れていない。' : 'The nearest gaps are not available yet.');
     }
+    if (/(?:トップ|首位|P1|leader).{0,10}(?:何周|何ラップ|周回|ラップ数|lap)|(?:何周|何ラップ|周回|ラップ数).{0,10}(?:トップ|首位|P1|leader)/i.test(text)) {
+      const wantsOverall = /総合|GTP|gdp|overall/i.test(text);
+      const leader = wantsOverall ? live.leaders && live.leaders.overall : live.leaders && live.leaders.player_class;
+      const lap = integer(leader && leader.lap);
+      return answer('leader_lap', lap !== null && lap > 0
+        ? (isJP(lang) ? `${wantsOverall ? '総合首位' : 'クラス首位'}は${lap}周目。` : `The ${wantsOverall ? 'overall' : 'class'} leader is on lap ${lap}.`)
+        : (isJP(lang) ? `${wantsOverall ? '総合首位' : 'クラス首位'}の周回数は取得できない。` : `The ${wantsOverall ? 'overall' : 'class'} leader lap is unavailable.`));
+    }
     if (/トップ|首位|P1|何秒|ギャップ|差|leader|gap/i.test(text)) {
       const wantsOverall = /総合|GTP|gdp|overall/i.test(text);
       const leader = wantsOverall ? live.leaders && live.leaders.overall : live.leaders && live.leaders.player_class;
@@ -321,7 +350,7 @@
         : (isJP(lang) ? `${wantsOverall ? '総合首位' : 'クラス首位'}とのGAPは取得できない。直前車のGAPでは代用しない。` : `Gap to the ${wantsOverall ? 'overall' : 'class'} leader is unavailable; I will not substitute the nearest-car gap.`));
     }
     if (/(?:今|現在).{0,6}(?:順位|ポジション)|(?:順位|ポジション).{0,6}(?:何|どこ|いくつ)|current (?:position|place)/i.test(text)) {
-      const position = integer(live.player_class_position ?? live.class_position);
+      const position = integer(live.player_class_position ?? live.class_position ?? live.class_pos);
       return answer('current_position', position !== null && position > 0
         ? (isJP(lang) ? `現在P${position}。` : `Currently P${position}.`)
         : (isJP(lang) ? '現在順位の権威データがない。' : 'Authoritative current position is unavailable.'));

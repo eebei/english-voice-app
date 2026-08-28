@@ -29,9 +29,16 @@
     'autodromo nazionale monza grand prix',
     'autodromo nazionale monza full',
   ]);
+  const SPIELBERG_GP_ALIASES = new Set([
+    'red bull ring',
+    'red bull ring gp',
+    'spielberg',
+    'spielberg gp',
+  ]);
   function normalizeTrack(value) {
     const text = plain(value);
     if (!text) return '';
+    if (SPIELBERG_GP_ALIASES.has(text)) return 'spielberg:gp';
     if (/\bmonza\b/.test(text)) {
       if (MONZA_FULL_ALIASES.has(text)) return 'monza:full';
       // 追加サフィックス(gpsecondchicane / nochicane / oval / junior など)を残す。

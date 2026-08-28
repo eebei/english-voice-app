@@ -27,6 +27,8 @@ const stored = {
 
 check('Monza display and iRacing short names have one identity',
   memoryLayer.normalizeTrack('Autodromo Nazionale Monza') === memoryLayer.normalizeTrack('monza full'));
+check('Red Bull Ring display name and iRacing Spielberg GP share one explicit identity',
+  memoryLayer.normalizeTrack('Red Bull Ring') === memoryLayer.normalizeTrack('spielberg gp'));
 const resolved = memoryLayer.resolve(stored, 'Autodromo Nazionale Monza', 'Mercedes-AMG GT3 2020', 'GT3');
 check('split Monza records are both recovered', resolved && resolved.memoryRecordCount === 2, JSON.stringify(resolved));
 check('historical session count survives the alias merge', resolved.sessions === 20, JSON.stringify(resolved));

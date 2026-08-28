@@ -2306,6 +2306,8 @@ async function sendMsg(inputSource){
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
       live:lastTelemetry,
       sessionAuthority:(typeof lastSessionAuthority!=='undefined'?lastSessionAuthority:null),
+      raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[]),
+      currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null),
       // ★G3：GAP は数秒で意味が変わる。接続判定(12秒)のままだと、
       //   queue では破棄される古さの値を質問回答で喋ってしまう。
       snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null)
@@ -4646,7 +4648,7 @@ async function scheduleAutoBriefing(){
 「レースかテストか」は状況に関係なく質問するな。現在のSession種別をこちらから宣言し、未知なら接続待ちとして数字や種別を作るな。
 SOF・iRating・SRと、下記の直近同条件レースを自然に使え。良い根拠がある時は、レーサーが誇れる具体的成果を一言だけ先に褒めろ。根拠がない美辞麗句は禁止。
 ${previousRaceBriefing}
-${memoryLine?`前回同条件の確定事実は決定論radioで既に伝達済み。数字を言い直さず、現在の戦略だけを続けよ。参照用事実: ${memoryLine}`:'前回同条件の確定事実なし。過去の数字を作るな。'}
+${memoryLine?`前回同条件の確定事実は決定論radioで既に伝達済み。「初めて」「過去データなし」と絶対に言うな。数字を言い直さず、現在の戦略だけを続けよ。参照用事実: ${memoryLine}`:'前回同条件の確定事実なし。ただし「初めて」とは断定せず、過去の数字を作るな。'}
 ${_decLine?`前回の戦略判断とその結果も決定論radioで既に伝達済み。周回・順位・Plan名を言い直すな。参照用: ${_decLine}`:'前回の戦略判断の採点結果なし。過去の戦略の成否を作るな。'}
 最後の質問は、今日の目標などテレメトリで分からない主観を一つだけ聞け。マークダウン禁止。`}],
       character:sel, mode:'strategy', level:'C2', userName,
@@ -4873,23 +4875,23 @@ function scheduleAutoDebrief(data){
     const st=(lastSessionType||'').toLowerCase();
     const sessJP = st.includes('race')?'レース':st.includes('qualif')?'予選':st.includes('practice')?'練習':'セッション';
     const sessEN = st.includes('race')?'race':st.includes('qualif')?'qualifying':st.includes('practice')?'practice':'session';
-    // ⚠️2026/7/5緊急追加：チェッカー直後に順位を伝えるのが完全に抜けていた重大な穴。
-    // F1TVの無線のように、結果次第でテンションを変える（表彰台級は本気で喜ぶ、それ以外も前向きに）。
+    // 結果を読む前に必ず一言労う。表彰台だけを祝って下位や荒れたレースを
+    // 無感情に処理すると、デブリーフの入口として成立しない。
     const posJP = pos ? (pos<=3 ? `P${pos}！表彰台だ！` : pos<=10 ? `P${pos}。上出来だ。` : `P${pos}。`) : '';
     const posEN = pos ? (pos<=3 ? `P${pos}! That's a podium!` : pos<=10 ? `P${pos}. Solid result.` : `P${pos}.`) : '';
     // 岡山弁(官兵衛)専用の語尾「じゃ」を全日本語キャラに使い回してた誤り。
     // 大石/HajimeJP=標準語、LunaJP=タメ口標準語、官兵衛だけ岡山弁、で語尾を分ける。
     const jpEnding = (sel==='Kanbe')
         ? (pos&&pos<=3 ? `${sessJP}終了じゃ！${posJP}見事な走りじゃったで！${laps}周、ベスト${best}。デブリーフを始めようか？`
-                  : `${sessJP}終了じゃ。${posJP}${laps}周、ベスト${best}。デブリーフを始めようか？`)
+                  : `お疲れさん。まずはよう戻ってきた。${sessJP}終了じゃ。${posJP}${laps}周、ベスト${best}。一緒に振り返ろうか？`)
       : (sel==='LunaJP')
         ? (pos&&pos<=3 ? `${userName||'ドライバー'}、${sessJP}終わったよ！${posJP}やったね！${laps}周、ベスト${best}。デブリーフ始めよっか？`
-                  : `${userName||'ドライバー'}、${sessJP}終わったよ。${posJP}${laps}周、ベスト${best}。デブリーフ始めよっか？`)
+                  : `${userName||'ドライバー'}、お疲れ。まずは無事に戻ってきたね。${posJP}${laps}周、ベスト${best}。一緒に振り返ろっか？`)
         : (pos&&pos<=3 ? `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}見事な結果だ。${laps}周、ベスト${best}。デブリーフを始めようか。`
-                  : `${userName||'ドライバー'}、${sessJP}終了だ。${posJP}${laps}周、ベスト${best}。デブリーフを始めようか。`);
+                  : `${userName||'ドライバー'}、お疲れさま。まずは戻ってきたな。${posJP}${laps}周、ベスト${best}。一緒に振り返ろう。`);
     const enEnding = pos&&pos<=3
         ? `${userName||'Driver'}, that's the ${sessEN}! ${posEN} Great drive out there. ${laps} laps, best ${best}. Ready for the debrief?`
-        : `${userName||'Driver'}, that's the ${sessEN}. ${posEN} ${laps} laps, best ${best}. Ready for the debrief?`;
+        : `${userName||'Driver'}, good work bringing it back. That's the ${sessEN}. ${posEN} ${laps} laps, best ${best}. Let's review it together.`;
     switchMode('debrief');   // チェッカー→自動でデブリーフモードへ（ラップ読み上げOFF・じっくり会話）
     const msg=isJP?jpEnding:enEnding;
     addMsg('ai',msg);
@@ -5004,6 +5006,9 @@ function isEvidenceAnswerCandidate(text){
   if(s.length<2) return false;
   // A question/objection to the engineer is not an answer to the guided review.
   if(/[?？]\s*$/.test(s) || /質問に答|どういうこと|何を言|なぜ|なんで|どう思う|説明して|分析して|確認して/i.test(s)) return false;
+  // Lunaへの抗議・訂正は、直前のデブリーフ質問への回答ではない。Build 289では
+  // 「前にも走った」がそのまま走行記憶へ保存されたため、質問を開いたまま通常会話へ返す。
+  if(/(?:ルナ|君|あなた|回答|案内|記憶|さっき|今の).{0,18}(?:違う|違うだろ|ちゃう|おかしい|間違|誤認|通じて|覚えて|忘れ|持っていない)|(?:初めてじゃない|前にも走|前回も走|回答持っていない)/i.test(s)) return false;
   const feedback=evidenceDebrief && evidenceDebrief.index===evidenceDebrief.feedbackIndex;
   if(feedback) return true; // harsh product feedback is still valid evidence
   // Commands to end/replace the engineer were previously stored as driving evidence.
@@ -5087,8 +5092,28 @@ function buildEvidenceQuestions(data){
   const st=String(data.event_type||lastSessionType||'').toLowerCase();
   const practice=st.includes('practice');
   const qualify=st.includes('qualif');
-  // Practice/Qualifyingでも、同条件の申告があれば同じ質問を繰り返す代わりに
-  // 一点だけ継続確認する。記憶が無い初回だけ従来の候補を使う。
+  // 今回の実測に明確な分岐がある時は、それを先に一問だけ聞く。
+  // 定型質問をランダムに選ぶより、当日の事故・pit・ペースへ頭を使って接続する。
+  const incidents=Number(data.incidents);
+  const pitEvents=Array.isArray(data.pit_events)?data.pit_events.filter(e=>e&&Number.isInteger(Number(e.entry_lap))):[];
+  if(!practice&&!qualify&&Number.isFinite(incidents)&&incidents>0){
+    const pitPart=pitEvents.length?`、その後${Number(pitEvents[0].entry_lap)}周目にピットへ入っている`:'';
+    return [evidenceLanguage()==='ja'
+      ? `今回はインシデント${Math.trunc(incidents)}${pitPart}。結果が動いた最初の分岐は、接触そのもの、避けた後のペース、それとも戦略変更のどれだった？`
+      : `There were ${Math.trunc(incidents)} incidents${pitEvents.length?` and a stop on lap ${Number(pitEvents[0].entry_lap)}`:''}. What first changed the race: the contact, the pace afterwards, or the strategy response?`];
+  }
+  if(!practice&&!qualify&&pitEvents.length){
+    return [evidenceLanguage()==='ja'
+      ? `${Number(pitEvents[0].entry_lap)}周目のピットは、予定どおり、前倒し、それとも事故対応のどれだった？`
+      : `Was the lap ${Number(pitEvents[0].entry_lap)} stop planned, brought forward, or damage-related?`];
+  }
+  if(data.pace_first_half&&data.pace_last_half&&Number(data.pace_last_half)>Number(data.pace_first_half)+0.3){
+    const loss=(Number(data.pace_last_half)-Number(data.pace_first_half)).toFixed(1);
+    return [evidenceLanguage()==='ja'
+      ? `後半は前半より平均${loss}秒落ちている。主因はタイヤ、集中力、それともトラフィックだった？`
+      : `The second half averaged ${loss} seconds slower. Was that mainly tyres, concentration, or traffic?`];
+  }
+  // 明確な当日分岐が無ければ、同条件の前回申告を一点だけ継続確認する。
   const memoryFollowup=buildMemoryAwareDebriefFollowup(data);
   if(memoryFollowup){
     rememberDebriefFollowup(memoryFollowup.key);
@@ -5096,19 +5121,10 @@ function buildEvidenceQuestions(data){
       confidence:memoryFollowup.confidence,track:data.track||lastTrack,car:data.car_model||lastCarModel||lastCarClass}));
     return [memoryFollowup.question];
   }
-  if(practice||qualify) return [pickRotatingQuestion(practice?c.practice:c.qualify)].filter(Boolean);
+  if(practice||qualify) return [pickRotatingQuestion(practice?c.practice:c.qualify)].filter(Boolean).slice(0,1);
   const pos=validFinishPosition(data.finish_pos);
   const resultPool=pos&&pos<=3?c.raceTop:pos&&pos<=10?c.raceMid:c.raceLow;
-  const qs=[pickRotatingQuestion(resultPool)].filter(Boolean);
-  if(Number(data.incidents)>0) qs.push(c.raceLow[1]);
-  else if(data.pace_first_half&&data.pace_last_half&&Number(data.pace_last_half)>Number(data.pace_first_half)+0.3){
-    qs.push(evidenceLanguage()==='ja'
-      ? `スティント後半は前半より平均${(Number(data.pace_last_half)-Number(data.pace_first_half)).toFixed(1)}秒落ちている。タイヤ、集中力、それともトラフィックの影響に近かった？`
-      : `Your second-half average was ${(Number(data.pace_last_half)-Number(data.pace_first_half)).toFixed(1)} seconds slower. Was that mainly tyres, concentration, or traffic?`);
-  } else if(data.avg_fuel_per_lap!=null) qs.push(c.fuelQ);
-  // 初回でも最大2問。走行後に毎回3〜4問を要求しない。
-  if(shouldAskProductFeedback()) qs.push(c.productFeedback);
-  return qs.filter(Boolean).slice(0,2);
+  return [pickRotatingQuestion(resultPool)].filter(Boolean).slice(0,1);
 }
 function beginEvidenceDebrief(data){
   const isRestart=arguments[1]===true;

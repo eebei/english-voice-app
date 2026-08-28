@@ -150,8 +150,11 @@ check('ブリーフィング本文にも確定事実を参照として渡す', /
 check('ブリーフィングの確定事実をLLM任せにせず、先に直接queueへ入れる',
   /if\(memoryLine\)\{[\s\S]{0,500}speak\(memoryLine,\{prio:SPEAK_PRIO\.P2_PROCEDURE,kind:'memory_strategy_briefing'/.test(renderer));
 check('LLMには同じ数字を言い直さないよう指示する',
-  /決定論radioで既に伝達済み。数字を言い直さず/.test(renderer));
-check('事実が無い時は「作るな」と明示する', /前回同条件の確定事実なし。過去の数字を作るな。/.test(renderer));
+  /決定論radioで既に伝達済み。[^']*数字を言い直さず/.test(renderer));
+check('履歴ありでも無しでも初走行を推測しない',
+  renderer.includes('「初めて」「過去データなし」と絶対に言うな')
+  && renderer.includes('「初めて」とは断定せず'));
+check('事実が無い時は「作るな」と明示する', /前回同条件の確定事実なし。[^']*過去の数字を作るな。/.test(renderer));
 check('identity は Bridge権威だけで作る（会話・推測から作らない）',
   /function currentMemoryIdentity\(\)\{[\s\S]{0,400}lastSessionAuthority/.test(renderer));
 
@@ -399,4 +402,19 @@ if (fail) process.exit(1);
 }
 
 console.log(`\n(スライス4c含む累計) ${pass}/${pass + fail}`);
+if (fail) process.exit(1);
+
+// 8/28 RBR実走: iRacing保存名 `spielberg gp` と表示名 `Red Bull Ring` は
+// 同じGPレイアウト。別名のため「初めて」と誤案内しない。
+{
+  const M4 = require('./desktop/session-memory');
+  const now = Date.parse('2026-08-28T12:00:00Z');
+  const row = {date:'2026-08-27',recordedAt:'2026-08-27T12:00:00Z',userId:'u1',
+    track:'spielberg gp',car:'Mercedes-AMG GT3 2020',finishPos:7,incidents:2};
+  const facts = M4.briefingFacts([row],{userId:'u1',track:'Red Bull Ring',car:'Mercedes-AMG GT3 2020'},now);
+  check('RBR/Spielberg GP alias retrieves the prior personal run', facts.available===true && facts.finishPos===7);
+  check('RBR alias produces a prior-run line instead of first-time silence', /前回/.test(M4.briefingLine(facts,'ja')));
+}
+
+console.log(`\n(RBR alias含む累計) ${pass}/${pass + fail}`);
 if (fail) process.exit(1);

@@ -49,8 +49,15 @@ check('同条件の過去申告は次回の一点確認になり、質問票を�
   && renderer.includes('DEBRIEF_FOLLOWUP_HISTORY_KEY')
   && renderer.includes("phase:'debrief_followup_selected'")
   && renderer.includes('return [memoryFollowup.question];'));
-check('初回デブリーフも最大2問でドライバー負担を固定する',
-  renderer.includes('return qs.filter(Boolean).slice(0,2);'));
+check('今回の事故・pit・ペースを定型質問より先に一問だけ使う',
+  renderer.includes('今回はインシデント${Math.trunc(incidents)}')
+  && renderer.includes('pitEvents[0].entry_lap')
+  && renderer.includes('後半は前半より平均${loss}秒落ちている'));
+check('デブリーフ質問は一度に一問だけ',
+  renderer.includes("return [pickRotatingQuestion(resultPool)].filter(Boolean).slice(0,1);"));
+check('表彰台以外も結果の前に労う',
+  renderer.includes('お疲れ。まずは無事に戻ってきたね。')
+  && renderer.includes('good work bringing it back'));
 check('製品評価は低頻度で提示し回答有無だけ中央計測',
   renderer.includes('function shouldAskProductFeedback()')
   && renderer.includes('7*24*60*60*1000')
@@ -81,6 +88,31 @@ check('抗議やエンジニア交換は走行申告として保存しない',
   renderer.includes('function isEvidenceAnswerCandidate(text)')
   && renderer.includes('エンジニア.*(?:交換|変え|解雇)')
   && renderer.includes("evidenceResult==='not_answer'"));
+check('Lunaの誤案内への抗議をデブリーフ回答として保存しない',
+  renderer.includes('初めてじゃない|前にも走|前回も走|回答持っていない'));
+const candidateFn=renderer.match(/function isEvidenceAnswerCandidate\(text\)\{[\s\S]*?\n\}/);
+if(candidateFn){
+  const candidateContext={evidenceDebrief:{index:0,feedbackIndex:-1},String};
+  vm.runInNewContext(candidateFn[0],candidateContext);
+  check('実コードで「初めてじゃない」は回答候補にならない',
+    candidateContext.isEvidenceAnswerCandidate('ルナ、今回初めてじゃない。前にも走ったよ')===false);
+  check('実コードで通常の走行回答は引き続き保存候補になる',
+    candidateContext.isEvidenceAnswerCandidate('接触を避けた後にタイヤを傷めた')===true);
+}else{
+  check('実コードで抗議と通常回答を分離する',false);
+}
+const questionsFn=renderer.match(/function buildEvidenceQuestions\(data\)\{[\s\S]*?\n\}/);
+if(questionsFn){
+  const questionContext={lastSessionType:'Race',Array,Number,Math,
+    evidenceCopy:()=>({raceLow:[],raceMid:[],raceTop:[]}),evidenceLanguage:()=> 'ja'};
+  vm.runInNewContext(questionsFn[0],questionContext);
+  const contextual=questionContext.buildEvidenceQuestions({event_type:'Race',incidents:4,
+    pit_events:[{entry_lap:8}]});
+  check('実コードで事故と実pit周を一問へ接続する',
+    contextual.length===1 && /インシデント4/.test(contextual[0]) && /8周目/.test(contextual[0]));
+}else{
+  check('実コードで事実ベース質問を生成する',false);
+}
 check('過去申告は絶対API URLで取得しローカル確認後にACKを待つ',
   renderer.includes("fetch(API_BASE+'/api/memory/import-seeds'")
   && renderer.includes("await fetch(API_BASE+'/api/memory/import-seeds/ack'")

@@ -5719,6 +5719,10 @@ def poll_iracing():
                                 'class_pos': _spos,
                                 # Positive=behind the player; negative=ahead.
                                 'gap_s': round(_f2_arr[_si] - _player_f2, 1),
+                                'lap': (car_laps_all[_si]
+                                        if car_laps_all and _si < len(car_laps_all)
+                                        and isinstance(car_laps_all[_si], int)
+                                        and car_laps_all[_si] > 0 else None),
                                 # iRacing exposes a completed lap for rivals,
                                 # not their controls.  This supports a pace
                                 # comparison but must never be narrated as a
@@ -6606,16 +6610,25 @@ def poll_iracing():
                         'class_name': car_class_name_map.get(overall_leader_idx),
                         'overall_pos': 1,
                         'gap_s': overall_leader_gap_s,
+                        'lap': (car_laps_all[overall_leader_idx]
+                                if car_laps_all and overall_leader_idx < len(car_laps_all)
+                                and isinstance(car_laps_all[overall_leader_idx], int)
+                                and car_laps_all[overall_leader_idx] > 0 else None),
                     } if overall_leader_idx is not None else None),
                     'player_class': next(({
                         'car_idx': c.get('car_idx'), 'name': c.get('name'),
                         'car_number': c.get('car_number'),
                         'class_pos': c.get('class_pos'), 'gap_s': c.get('gap_s'),
+                        'lap': c.get('lap'),
                     } for c in competitor_status if c.get('class_pos') == 1),
                     ({'car_idx': player_car_idx,
                       'name': car_name_map.get(player_car_idx),
                       'car_number': car_number_map.get(player_car_idx),
-                      'class_pos': 1, 'gap_s': 0.0}
+                      'class_pos': 1, 'gap_s': 0.0,
+                      'lap': (car_laps_all[player_car_idx]
+                              if car_laps_all and player_car_idx < len(car_laps_all)
+                              and isinstance(car_laps_all[player_car_idx], int)
+                              and car_laps_all[player_car_idx] > 0 else None)}
                      if class_pos == 1 else None)),
                 },
             })

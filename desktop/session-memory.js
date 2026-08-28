@@ -22,6 +22,13 @@
     return Number.isFinite(n) ? n : null;
   };
   const norm = value => String(value == null ? '' : value).trim().toLowerCase();
+  const SPIELBERG_GP_ALIASES = new Set([
+    'red bull ring', 'red bull ring gp', 'spielberg', 'spielberg gp'
+  ]);
+  function normTrack(value) {
+    const text = norm(value).replace(/[^a-z0-9]+/g, ' ').trim();
+    return SPIELBERG_GP_ALIASES.has(text) ? 'spielberg:gp' : text;
+  }
   const isJP = lang => String(lang || '').toLowerCase().startsWith('ja');
   const MAX_RECORD_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -44,8 +51,8 @@
     //   まで一切使わない。天候・順位・setup・pit すべて同じ規律にする。
     if (record.disputed === true) return false;
     if (!isFreshRecord(record, nowMs)) return false;
-    if (!norm(identity.track)) return false;
-    if (norm(record.track) !== norm(identity.track)) return false;
+    if (!normTrack(identity.track)) return false;
+    if (normTrack(record.track) !== normTrack(identity.track)) return false;
     const wantUser = identity.userId;
     if (wantUser !== null && wantUser !== undefined && wantUser !== '') {
       if (String(record.userId ?? '') !== String(wantUser)) return false;

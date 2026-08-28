@@ -6,6 +6,7 @@
 const router = require('./desktop/local-intent-router.js');
 const fs = require('fs');
 const renderer = fs.readFileSync('./desktop/renderer.html', 'utf8');
+const bridge = fs.readFileSync('./irsdk-bridge/bridge.py', 'utf8');
 let pass = 0, fail = 0;
 function check(label, condition) {
   (condition ? console.log : console.error)((condition ? '✅ ' : '❌ ') + label);
@@ -20,7 +21,7 @@ const live = {
   player_class_position: 8,
   session_time_remaining_s: 465 * 60,
   finish_crossings_authority: 4,
-  leaders: { player_class: { gap_s: 12.8 }, overall: { gap_s: 44.1 } },
+  leaders: { player_class: { gap_s: 12.8, lap:22 }, overall: { gap_s: 44.1, lap:23 } },
   gap_ahead: 4.6,
   gap_behind: 5.8,
   race_plan: { kind:'timed', configured_duration_s: 7200 },
@@ -39,6 +40,9 @@ r = route('残り時間は？', live);
 check('long remaining time is spoken in hours and minutes', r.handled && r.reply==='残り7時間45分。');
 r = route('トップとの差は？', live);
 check('class leader gap is not substituted with a nearest-car gap', r.handled && r.reply==='クラス首位まで12.8秒。');
+r = route('トップは今何周目？', live);
+check('leader-lap question is answered before the broad leader-gap route',
+  r.handled && r.intent==='leader_lap' && r.reply==='クラス首位は22周目。');
 r = route('後ろとの差は？', live);
 check('behind gap is answered locally from the current Bridge snapshot', r.handled && r.intent==='nearest_gap' && r.reply==='後ろ5.8秒。');
 r = route('パンで後ろとの差。', live);
@@ -59,6 +63,22 @@ r = route('後ろとの差は？', { gap_ahead:4.6 });
 check('missing rear-gap evidence names the unavailable fact instead of generic refusal', r.handled && r.intent==='nearest_gap_unavailable' && r.reply==='後ろのGAPはまだ取れていない。');
 r = route('今ポジション何位？', live);
 check('current class position is answered locally', r.handled && r.reply==='現在P8。');
+r = route('今ポジション何位？', {class_pos:15});
+check('Bridge class_pos field is accepted as the authoritative current position',
+  r.handled && r.reply==='現在P15。');
+const personalHistory=[1,0,2,4,3].map((incidents,index)=>({userId:77,incidents,date:`2026-08-${20+index}`}));
+r = router.route({text:'俺のここ5レースでのインシデント平均教えて',lang:'ja',live,
+  raceHistory:personalHistory,currentUserId:77});
+check('8/28 personal five-race incident average is computed locally from matching records',
+  r.handled && r.intent==='incident_average' && r.reply==='直近5レースは合計10、平均2.0インシデント。');
+r = router.route({text:'直近5レースのインシデント平均は？',lang:'ja',live,
+  raceHistory:personalHistory.slice(0,3),currentUserId:77});
+check('personal average fails closed when fewer than the requested races exist',
+  r.handled && r.intent==='incident_average_unavailable' && /3レース分/.test(r.reply));
+r = router.route({text:'直近5レースのインシデント平均は？',lang:'ja',live,
+  raceHistory:personalHistory,currentUserId:null});
+check('personal average never crosses an unknown driver identity',
+  r.handled && r.intent==='incident_average_unavailable' && /ログイン状態/.test(r.reply));
 r = route('了解', live);
 check('acknowledgement bypasses cloud', r.handled && r.intent==='acknowledgement' && r.reply==='了解。');
 r = route('ベストラップ いくつ？', {...live,best:470.356});
@@ -143,6 +163,12 @@ check('renderer arms and delivers the one-shot fuel-window monitor from telemetr
   renderer.includes("type==='arm_fuel_window_watch'")
   && renderer.includes('maybeDeliverFuelWindowWatch(lastTelemetry)')
   && renderer.includes('ウィンドウ開いた。今周から入れる。'));
+check('renderer supplies personal history and identity to the deterministic router',
+  renderer.includes("raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[])")
+  && renderer.includes("currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null)"));
+check('Bridge exports an authoritative lap with both leader records',
+  bridge.includes("'lap': (car_laps_all[overall_leader_idx]")
+  && bridge.includes("'lap': c.get('lap')"));
 check('Bridge gap-trend event has a Japanese radio template', renderer.includes("case 'gap_trend':") && renderer.includes("const side=d.direction==='behind' ? '後ろ' : '前';"));
 console.log(`\nLocal Intent Router: ${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);
