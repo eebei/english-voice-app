@@ -5342,3 +5342,9 @@ Bridge は PyInstaller onefile（Python 3.12）のため、`strings` では中�
 Claude Codeの独立artifact確認をCodex実測と照合し、全値一致・P0/P1/P2 0件としてGate 5署名を受領した。
 
 直前報告の「Gate 6 Windowsは公開中289でもBuild 290でも可」は候補検証として不正確なため訂正する。**Gate 6の対象はrun `33142893350`から取得したBuild 290 installerだけ**とし、公開289やローカル`desktop/dist/`で代用しない。固有bytes／SHA-256と確認項目は`review/BUILD290_GATE6_WINDOWS_HANDOFF.md`を正本とする。公開中はBuild 289のまま。Gate 6／8／9は未実施で、Build 290を公開していない。
+
+## 2026-08-28 JST — Build 290公開GO受領・必須ゲート待ち
+
+YujiからBuild 290の公開GOを受領した。ただし`review/PITWALL_RELEASE_GATE.md`の絶対ルールに対し、Build 290 private candidate固有のGate 6 Windows実機確認とGate 8 iRacing実走スモークが未確認であるため、公開workflow・Release差し替え・Bridge公開は実行していない。公開中はBuild 289のまま。
+
+公開承認は受領済みとして保持する。`review/BUILD290_GATE6_WINDOWS_HANDOFF.md`の同一installerでGate 6とGate 8の結果を記録し、停止条件が0件なら新たな公開GOを取り直さず、検査済みSHA `a9988ec790f0b3ca569d5f7a067e81ef3e0e9b02`をGate 9へ進める。
