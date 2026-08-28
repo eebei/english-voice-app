@@ -4602,3 +4602,22 @@ deploy 後の `./verify-deploy.sh` は必須で、**SHA 一致だけでは合格
 |---|---|---|---|
 | 08-28 | `0d39f73` | Build 289 Gate 5 独立確認 | 確認者署名・全17項目一致 |
 | 08-28 | 本節 | Gate 6 handoff を Build 289 用へ差し替え | 288 との見分け方・更新バナー判定・Gate 7 必須の明記 |
+
+## 2026-08-28 JST — Build 289 Gate 7 server deploy（Codex）
+
+Yujiの明示的なDeploy GO後、`main`をpushし、Railway本番を機械検証した。
+Desktop / Bridgeの公開Release操作は行っていない。
+
+| 項目 | 実測結果 |
+|---|---|
+| deploy対象SHA | `a587940edd52af69cd09abbc75bafe909042b14f` |
+| 本番 `/api/version` SHA | `a587940edd52af69cd09abbc75bafe909042b14f` — 一致 |
+| 本番起動時刻 | `2026-08-28T01:51:27.799Z` |
+| 保護経路 | `/api/memory/decisions` → **401**（未認証拒否＝経路・認証とも正常） |
+| 検証 | `./verify-deploy.sh a587940edd52af69cd09abbc75bafe909042b14f` → exit 0 |
+| 公開 | **未実施**（公開中はBuild 287） |
+
+起動直後の初回probeではSHA一致後に503（DB初期化中）を観測したが、再確認で401へ復帰した。
+SHA一致だけで合格にせず、経路復帰まで確認したため **Gate 7合格**。
+
+残りは **Gate 6 Windows、Gate 8 iRacing実走、Gate 9公開**。

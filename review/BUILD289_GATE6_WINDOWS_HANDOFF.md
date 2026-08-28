@@ -130,7 +130,7 @@ Build番号・起動時刻・`RUNTIME_MODULE_STATUS` の実際の1行・各項�
 
 ---
 
-## 8. ★Gate 7 が必須（Build 288 と違う点）
+## 8. Gate 7（2026-08-28 合格済み）
 
 Build 289 は **`server.js` に +19/-5 の変更を含む**（STT ヒント・`parseGoogleSttResponse`）。
 **Build 288 の「Gate 7 N/A」は流用できない。**
@@ -138,7 +138,12 @@ Build 289 は **`server.js` に +19/-5 の変更を含む**（STT ヒント・`p
 deploy 後は `./verify-deploy.sh` が必須で、**SHA 一致だけでは合格にしない**
 （経路の応答まで見る。401=正常 / 404=未反映 / 503=DB失敗 / 200=認証欠落）。
 
+YujiのDeploy GO後、`main`の `a587940edd52af69cd09abbc75bafe909042b14f` をRailwayへ反映。
+本番 `/api/version` のSHA一致と、未認証 `/api/memory/decisions` の **401** を
+`./verify-deploy.sh`で実測したため、**Gate 7は合格**。起動直後の初回確認はDB初期化中の503だったが、
+再確認で401へ復帰した。公開Releaseは変更していない。
+
 ## 9. この文書で言えないこと
 
 本書は **Gate 6 の手順**であり、結果ではない。
-**Windows 実機での起動は未確認、iRacing 実走も未実施、server も未反映、公開もしていない。**
+**Windows 実機での起動は未確認、iRacing 実走も未実施、公開もしていない。serverはGate 7合格済み。**
