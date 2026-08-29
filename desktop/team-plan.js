@@ -434,13 +434,75 @@
     };
   }
 
+  // ★Phase F3（2026-08-29）単一の authority snapshot。
+  //
+  // 初期Plan・3クリーン周の実測・燃料質問・pit推奨・Chief handoff が、
+  // それぞれ別の場所で数字を作ると、同じレースで違うピット窓を喋る。
+  // ここが唯一の合流点で、id を付けて配る。id が違えば別の事実と分かる。
+  //
+  // 重要：`pit_now` を決めるのはこのモジュールではない。Bridge の
+  // `pit_timing_authority`（Plan Fuel Authority 側）の判定をそのまま映すだけ。
+  function snapshotId(live, evidence) {
+    const l = live && typeof live === 'object' ? live : {};
+    return ['s', intOrNull(l.session_num), 'l', intOrNull(l.lap),
+      'f', evidence.fuel_l === null ? 'na' : evidence.fuel_l,
+      'c', evidence.clean_laps_sampled === null ? 'na' : evidence.clean_laps_sampled].join(':');
+  }
+
+  function strategyAuthoritySnapshot(input) {
+    const state = normalize(input && input.state);
+    const live = (input && input.live && typeof input.live === 'object') ? input.live : {};
+    const evidence = evidenceSnapshot(live);
+    const fs = (live.fuel_strategy && typeof live.fuel_strategy === 'object') ? live.fuel_strategy : {};
+    const timingRaw = (fs.pit_timing_authority && typeof fs.pit_timing_authority === 'object')
+      ? fs.pit_timing_authority : null;
+    const timingAvailable = !!(timingRaw && timingRaw.available === true);
+    const decision = timingAvailable ? String(timingRaw.decision || '') : null;
+    const confirmed = state.confirmed;
+    const planLap = confirmed ? plannedPitLap(confirmed) : null;
+    const measuredLap = evidence.projected_pit_window_lap;
+    const enoughLaps = evidence.clean_laps_sampled !== null
+      && evidence.clean_laps_sampled >= MIN_CLEAN_LAPS && evidence.clean_fuel_burn_l !== null;
+    let verdict;
+    if (decision === 'pit_now') verdict = 'pit_now';
+    else if (!enoughLaps) verdict = 'insufficient_evidence';
+    else if (planLap !== null && measuredLap !== null
+      && Math.abs(planLap - measuredLap) > PIT_WINDOW_TOLERANCE_LAPS) verdict = 'minor_change_candidate';
+    else if (planLap === null && measuredLap !== null) verdict = 'minor_change_candidate';
+    else verdict = 'on_plan';
+    return {
+      schema: SCHEMA,
+      snapshot_id: snapshotId(live, evidence),
+      session_num: intOrNull(live.session_num),
+      current_lap: intOrNull(live.lap),
+      plan_status: confirmed ? 'confirmed' : 'none',
+      plan_revision: confirmed ? confirmed.revision : null,
+      plan_pit_lap: planLap,
+      measured_pit_window_lap: measuredLap,
+      measured: evidence,
+      // pit now の権威はここではない。判定を持ち回るだけで、作らない。
+      pit_timing: {
+        available: timingAvailable,
+        source: 'bridge_pit_timing_authority',
+        decision: decision || null,
+        selected_plan: timingAvailable ? (timingRaw.selected_plan || null) : null,
+        laps_until_latest_safe_pit: timingAvailable
+          ? intOrNull(timingRaw.laps_until_latest_safe_pit) : null
+      },
+      verdict,
+      candidate_pending: !!state.candidate
+    };
+  }
+
   // 3クリーン周が揃った時だけ「維持」か「小変更候補」を出す。pit now は出さない。
   function compareLiveEvidence(input) {
     const state = normalize(input && input.state);
     const lang = isJa(input && input.lang) ? 'ja' : 'en';
-    const evidence = evidenceSnapshot(input && input.live);
+    const snapshot = strategyAuthoritySnapshot({ state, live: input && input.live });
+    const evidence = snapshot.measured;
     const minLaps = intOrNull(input && input.minCleanLaps) || MIN_CLEAN_LAPS;
-    const out = { available: false, verdict: 'insufficient_evidence', evidence, changes: [], reply: '' };
+    const out = { available: false, verdict: 'insufficient_evidence', evidence, changes: [], reply: '',
+      snapshot_id: snapshot.snapshot_id, authority_verdict: snapshot.verdict };
 
     if (evidence.clean_laps_sampled === null || evidence.clean_laps_sampled < minLaps
         || evidence.clean_fuel_burn_l === null) {
@@ -556,8 +618,12 @@
     const evidence = input && input.evidence ? input.evidence : null;
     const stint = input && input.stintSummary ? input.stintSummary : null;
     const confirmed = state.confirmed;
+    const snapshot = (input && input.snapshot) || null;
     return {
       schema: SCHEMA,
+      // F3：交代先が読むのは、こちらの発話と同じ authority snapshot の値。
+      snapshot_id: snapshot ? snapshot.snapshot_id : null,
+      authority_verdict: snapshot ? snapshot.verdict : null,
       plan_revision: confirmed ? confirmed.revision : null,
       plan_confirmed_at: confirmed ? confirmed.updated_at : null,
       plan_fields: confirmed ? confirmed.fields : null,
@@ -695,7 +761,7 @@
     emptyState, normalize, describe, missingFields,
     isExplicitConfirmation, isAmbiguousCorrection, isBriefingStart, isPlanQuery,
     startBriefing, ingestHumanInput, confirmCandidate,
-    evidenceSnapshot, compareLiveEvidence, proposeFromEvidence, tyreChangeReview,
+    evidenceSnapshot, strategyAuthoritySnapshot, compareLiveEvidence, proposeFromEvidence, tyreChangeReview,
     buildHandoffTeamSection, applyReceivedTeamSection,
     summarizeStint, buildRaceLearning, answerFromRaceLearning
   };

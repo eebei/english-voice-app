@@ -212,8 +212,75 @@
     return ja ? parts.join('、') + '。' : parts.join(', ') + '.';
   }
 
+  // ══ Phase F2（2026-08-29）ドライバー訂正後の保留台帳 ══
+  //
+  // 実走の形：後方1秒以上あるのに 0.1 秒と言い、ドライバーが「実際はもっと
+  // 後ろ」と訂正した。ここで壊れやすいのは二方向で、両方やってはいけない。
+  //   ① 訂正の自由文（「1秒以上」）を新しい実測値へ昇格させる
+  //   ② 誤った既存値を、そのまま確定事実として言い続ける
+  // 取るべきは第三の道＝**その方向のソースを保留し、再観測まで未確認と言う**。
+  const HOLD_SCHEMA = 'gap_hold_v1';
+
+  function emptyHolds() { return { schema: HOLD_SCHEMA, ahead: null, behind: null }; }
+
+  function normalizeHolds(holds) {
+    if (!holds || typeof holds !== 'object' || holds.schema !== HOLD_SCHEMA) return emptyHolds();
+    const one = record => (record && typeof record === 'object') ? record : null;
+    return { schema: HOLD_SCHEMA, ahead: one(holds.ahead), behind: one(holds.behind) };
+  }
+
+  /**
+   * ドライバー訂正を受けて、その方向のGAPソースを再観測待ちにする。
+   * 訂正の中の数値は保存しない（発話は実測ではない）。
+   */
+  function disputeGap(holds, direction, live, nowMs) {
+    const next = normalizeHolds(holds);
+    if (direction !== 'ahead' && direction !== 'behind') return { holds: next, held: false };
+    const record = authorityFor(direction, live);
+    next[direction] = {
+      // 「この世代・この対象の値」を保留する。次の世代が来れば自動で解ける。
+      generation: record ? record.generation : null,
+      target_car_idx: record ? record.target_car_idx : null,
+      session_key: record ? record.session_key : null,
+      disputed_value_s: liveGapFor(direction, live),
+      at: finite(nowMs) === null ? Date.now() : nowMs,
+      reason: 'driver_disputed'
+    };
+    return { holds: next, held: true };
+  }
+
+  /**
+   * 保留中か。新しい観測（generation か対象車の変化）が来ていれば解除する。
+   * 解除は「観測が更新された」時だけで、時間経過だけでは解かない。
+   */
+  function gapHoldStatus(holds, direction, live) {
+    const state = normalizeHolds(holds);
+    const record = state[direction];
+    if (!record) return { held: false, released: false, holds: state };
+    const current = authorityFor(direction, live);
+    const generation = current ? current.generation : null;
+    const target = current ? current.target_car_idx : null;
+    const reobserved = (generation !== null && generation !== undefined && generation !== record.generation)
+      || (target !== null && target !== undefined && target !== record.target_car_idx);
+    if (reobserved) {
+      const released = normalizeHolds(state);
+      released[direction] = null;
+      return { held: false, released: true, holds: released };
+    }
+    return { held: true, released: false, holds: state };
+  }
+
+  function holdReply(direction, lang) {
+    const ja = String(lang || '').toLowerCase().startsWith('ja');
+    const side = direction === 'ahead' ? (ja ? '前' : 'ahead') : (ja ? '後ろ' : 'behind');
+    return ja
+      ? `${side}の車間は未確認。前の値は保留にした。次の観測で言い直す。`
+      : `The gap ${side} is unconfirmed; the previous value is on hold until the next observation.`;
+  }
+
   return {
     MAX_AGE_MS, FATE_PLAY, FATE_REBUILD, FATE_DISCARD,
+    HOLD_SCHEMA, emptyHolds, normalizeHolds, disputeGap, gapHoldStatus, holdReply,
     REASON_NOT_GAP, REASON_NO_LIVE, REASON_SESSION, REASON_TARGET,
     REASON_DIRECTION, REASON_GENERATION, REASON_STALE, REASON_VALUE,
     REASON_LIVE_STALE, REASON_DROPPED,

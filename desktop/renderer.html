@@ -720,6 +720,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="luna-self-memory.js"></script>
 <script src="driving-style-v1.js"></script>
 <script src="team-plan.js"></script>
+<script src="relative-pace.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -1282,6 +1283,8 @@ let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = false, autoDebriefData = null;
 let evidenceDebrief = null;
+// Phase F：前後相対ペースの標本台帳と、訂正で保留中のGAP方向。
+let relativePaceStore=null, gapHolds=null;
 // Team Plan のセッション内状態（合意済み Plan 自体は localStorage 側が正本）。
 let teamPlanEvidenceAnnounced=false;
 let teamStintLaps=[], teamStintPitEvents=[], teamStintStartLap=null, teamStintLastLap=null;
@@ -1308,6 +1311,8 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   // 合意済み Plan はセッションを跨いで残す。実測の読み上げ済みフラグとスティント
   // 集計だけを新セッション用に戻す（前セッションの周回を混ぜない）。
   teamPlanEvidenceAnnounced=false;
+  // 前セッションのラップ標本と保留は持ち越さない。
+  relativePaceStore=null; gapHolds=null;
   if(typeof resetTeamStint==='function') resetTeamStint();
   strategyPlaybookRefreshKey='';
   strategyPlaybookDecisionKeys=new Set();
@@ -2311,6 +2316,16 @@ async function sendMsg(inputSource){
     usageCount(inputSource==='ptt'?'ptt':'typed');
     return;
   }
+  // ★F1/F2：相対ペースの問いは相対ペースの実測で答え、GAP訂正はソースを
+  //   保留にする。どちらも燃料経路へ落とさない（RBRの pit now 誤答の再発防止）。
+  if(typeof handleGapDispute==='function' && handleGapDispute(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    return;
+  }
+  if(typeof handleRelativePaceQuestion==='function' && handleRelativePaceQuestion(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    return;
+  }
   // Live-race facts have priority over every conversational state, including
   // a debrief panel left open from a prior session.  A driver asking for the
   // gap must never be routed to an LLM/no-data template while the Bridge has
@@ -2328,7 +2343,9 @@ async function sendMsg(inputSource){
       currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null),
       // ★G3：GAP は数秒で意味が変わる。接続判定(12秒)のままだと、
       //   queue では破棄される古さの値を質問回答で喋ってしまう。
-      snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null)
+      snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null),
+      // ★F2：訂正で保留中の方向は、古い値を今の事実として言い直さない。
+      gapHeld:(typeof currentGapHeld==='function'?currentGapHeld():null)
     }) : null;
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;
@@ -3666,6 +3683,7 @@ function connectBridge(){
         updateStrategyPlaybookFromLive(lastTelemetry);
         if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         evaluateLiveStrategySwitch(lastTelemetry);
+        observeRelativePace(lastTelemetry);
         captureTeamStintLap(lastTelemetry);
         evaluateTeamPlanLiveEvidence(lastTelemetry);
         maybeDeliverFuelWindowWatch(lastTelemetry);
@@ -5626,6 +5644,69 @@ async function pollChiefTeamHandoff(force){
 }
 setInterval(()=>pollChiefTeamHandoff(false),10000);
 
+// ══ Phase F1/F2：前後相対ペース authority と、訂正されたGAPの保留 ══════
+function relativePaceModule(){
+  return (window.PitwallRelativePace&&typeof window.PitwallRelativePace.observe==='function')
+    ? window.PitwallRelativePace : null;
+}
+function gapFreshnessModule(){
+  return (window.PitwallGapFreshness&&typeof window.PitwallGapFreshness.disputeGap==='function')
+    ? window.PitwallGapFreshness : null;
+}
+// 同クラス近傍の実測ラップを積む。相手のペダルは取得できない＝走り方は語らない。
+function observeRelativePace(live){
+  const m=relativePaceModule(); if(!m||!live) return;
+  const r=m.observe({store:relativePaceStore,live,now:Date.now()});
+  relativePaceStore=r.store;
+}
+// 「後ろの方が速い？」に、燃料でも運転スタイルでもなく実測ラップで答える。
+function handleRelativePaceQuestion(text){
+  const m=relativePaceModule(); if(!m||!text) return false;
+  if(selMode!=='race'||!iracingLive||!lastTelemetry) return false;
+  const lang=isJapaneseEngineer()?'ja':'en';
+  const out=m.answerQuestion({store:relativePaceStore,live:lastTelemetry,text,lang,now:Date.now()});
+  if(!out.handled) return false;
+  diagnosticLog('RELATIVE_PACE',JSON.stringify({
+    results:out.results.map(r=>({direction:r.direction,verdict:r.verdict,
+      target_car_idx:r.target?r.target.car_idx:null,delta_s:r.delta_s,
+      own_samples:r.own_samples,target_samples:r.target_samples,window_s:r.window_s})),
+    coverage:out.coverage}));
+  addMsg('ai',out.reply); pushMsg({role:'assistant',content:out.reply});
+  speak(out.reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'relative_pace',
+    dedupeKey:'relative_pace|'+out.reply});
+  return true;
+}
+// ドライバーのGAP訂正。数値そのものは実測へ昇格させず、ソースを再観測待ちにする。
+const GAP_DISPUTE_RE=/(?:後ろ|後方|前).{0,12}(?:もっと|実際|本当).{0,10}(?:離れ|後ろ|前|ある)|(?:そんな|そこまで).{0,6}(?:近く|接近).{0,6}(?:ない|無い)|(?:ギャップ|GAP|車間).{0,10}(?:違う|ちがう|おかしい|間違)|(?:gap).{0,16}(?:wrong|not right|more like)/i;
+function handleGapDispute(text){
+  const g=gapFreshnessModule(); if(!g||!text) return false;
+  if(!GAP_DISPUTE_RE.test(text)||!lastTelemetry) return false;
+  const direction=/前|ahead/i.test(text)&&!/後ろ|後方|behind/i.test(text)?'ahead':'behind';
+  const r=g.disputeGap(gapHolds,direction,lastTelemetry,Date.now());
+  gapHolds=r.holds;
+  const lang=isJapaneseEngineer()?'ja':'en';
+  const reply=g.holdReply(direction,lang);
+  diagnosticLog('GAP_DISPUTE',JSON.stringify({direction,
+    disputed_value_s:(gapHolds[direction]||{}).disputed_value_s??null,
+    stored_driver_number:false}));
+  addMsg('ai',reply); pushMsg({role:'assistant',content:reply});
+  speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'gap_disputed',dedupeKey:'gap_dispute|'+direction});
+  return true;
+}
+// 現在の保留状態。再観測（generation/対象車の更新）が来ていれば自動で解ける。
+function currentGapHeld(){
+  const g=gapFreshnessModule();
+  if(!g||!gapHolds||!lastTelemetry) return {ahead:false,behind:false};
+  const out={};
+  ['ahead','behind'].forEach(direction=>{
+    const status=g.gapHoldStatus(gapHolds,direction,lastTelemetry);
+    gapHolds=status.holds;
+    if(status.released) diagnosticLog('GAP_DISPUTE','released direction='+direction);
+    out[direction]=status.held===true;
+  });
+  return out;
+}
+
 // ══ Team Plan：ブリーフィング合意 → 実測 → 交代 → レース後 ══════════════
 // 入口（人の発話）だけ作って終わらせない。confirmed になった内容が
 // 交代 packet・次ドライバーの画面・レース後の確定回答まで同じ形で届く。
@@ -5731,8 +5812,10 @@ function buildTeamHandoffSection(){
   const m=teamPlanModule(); if(!m||!teamModeActive()) return null;
   const state=loadTeamPlanState(); if(!state) return null;
   const stint=currentTeamStintSummary();
-  const section=m.buildHandoffTeamSection({state,
-    evidence:m.evidenceSnapshot(lastTelemetry),stintSummary:stint});
+  // F3：発話と交代先が同じ authority snapshot を見る。
+  const snapshot=m.strategyAuthoritySnapshot({state,live:lastTelemetry});
+  const section=m.buildHandoffTeamSection({state,snapshot,
+    evidence:snapshot.measured,stintSummary:stint});
   if(stint&&stint.laps_completed){ teamRaceStints.push(stint); resetTeamStint(); }
   diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'handoff_section',
     plan_revision:section.plan_revision,has_stint:!!section.stint_summary}));

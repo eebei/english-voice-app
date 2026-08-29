@@ -152,3 +152,52 @@ Codex環境では `node tests-chat-http.js` が `listen EPERM 0.0.0.0:3901` で�
 - 実装はcommitする。Build、署名、公開、push、deployは引き続き禁止。
 
 この是正がCodex確認で合格するまで、Phase Fを受け取ったものとして作業を始めないこと。
+
+---
+
+## Phase F — Trackside Strategy Intelligence V1（開始許可）
+
+上記の Team Plan／Chief Engineer Mode／preflight是正をCodexが独立再実行し合格と確認した。ここからは、耐久中の Luna が**実測に基づく短い判断を正しく返し、確定Planを壊さずに使える**ための Phase F を実装する。
+
+Build、署名、公開、push、deployは禁止のまま。実装・テスト・commit・共有ログ報告までで返すこと。既存 Team Plan を作り直したり、自由文の会話記憶を新しい事実源にしないこと。
+
+### F1. 前後相対ペースの専用 authority
+
+「前の方がペースが速い」「後ろが迫っている」への回答は、燃料不足・自車の60 Hz運転スタイル・古いGapを代理根拠にしてはならない。
+
+- 同一クラスの前後ドライバーを、CarIdx／時点／freshnessを固定して実測比較する dedicated authority を作る。
+- 可能な限り近傍10台、将来全同クラスへ拡張できるデータ形を採用する。ただしデータ欠損時に全車分析を装わない。
+- 回答は「相手・前後・比較した有効周／時間窓・差分」を根拠として短く返す。材料不足なら `未確認` と返す。
+- 燃料／pit回答は既存の Plan Fuel Authority へ任せる。相対ペース質問から total fuel shortfall を理由に `pit now` を出さない。
+
+### F2. Gap truth とドライバー訂正の扱い
+
+`F2Time`等のGap入力は、対象CarIdx・観測時点・鮮度・値の連続性を検査してから応答へ使うこと。別車両や古い0.1秒を、現在の後方車間として言わない。
+
+ドライバーが「実際は1秒以上後ろ」と訂正した場合、自由文記憶を新しい実測値に昇格させない。一方で、誤った既存値を以後の確定事実として繰り返さず、該当ソースを保留／再観測へ戻す導線を作ること。
+
+### F3. 燃料・Plan・live小変更の一元化
+
+初期Plan、3 clean lapsの実測、燃料質問、pit推奨、Chief handoffで、異なるpit窓や燃料目標を発話しないこと。
+
+- 確定Team PlanとBridge実測を同じ authority snapshot から参照する。
+- 計画どおり／小変更候補／pit now の条件を明確に分ける。
+- 小変更は人の明示確認まで候補のまま。交代先にはconfirmed revisionだけを引き継ぐ。
+- 最初の3 clean lapsは燃費と平均ラップを同じ有効周集合で使い、残時間→予測周回→必要燃料／pit窓を再計算する既存契約を壊さない。
+
+### F4. Chief Engineer Modeでの耐久実戦導線
+
+Chief Modeでは、F1〜F3の確定／未確認状態と根拠が、次Driverへのhandoffと短い再確認に届くこと。Chief無効の単独走行を壊さないこと。
+
+タイヤ・天候・損傷は、計測値と必要材料が揃わない限り「交換不要」「修理不要」と断定しない。70%固定ルールは禁止のまま。
+
+### 必須受入テスト
+
+1. 前後それぞれの相対ペース、欠損、古いデータ、別CarIdx、同クラス外を固定再生する。
+2. 相対ペース質問が燃料shortfall由来のpit nowにならないこと。
+3. Gapの対象取り違え・古い値・ドライバー訂正後の再観測を固定再生する。
+4. Team Plan／Bridge／fuel質問／handoffで同じauthority snapshotを使い、未確認候補がconfirmedへ漏れないこと。
+5. Chief有効のPC間handoffとChief無効の単独走行を実経路で検査する。
+6. 既存 Engineer Card、Plan Fuel Authority、Fuel Timing Authority、Strategy Playbook、Local Intent Router、Team Plan、Chief cross-PC、preflight全体を再実行する。
+
+完了報告には、authorityの入力・鮮度条件・fail-closed時の発話、変更ファイル、全テスト、commit、P0/P1/P2を `review/PITWALL_SHARED_WORKING_LOG.md` 末尾へ記録すること。Codexが独立確認する。

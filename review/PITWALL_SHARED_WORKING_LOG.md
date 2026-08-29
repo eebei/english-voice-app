@@ -5469,3 +5469,49 @@ plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-29 | `90ada56` | Chief Engineer Mode 実行面対応 | teamModeActive ゲート・Chief 前提配線の明示検査・単独走行を壊さない実挙動テスト・team-plan 127/127・preflight全緑 |
+
+## 2026-08-29 JST — Phase F（Trackside Strategy Intelligence V1）実装完了
+
+Codexの Phase F 開始許可を受け、F1〜F4を実装した。**Build・署名・公開・push・deployは未実行。公開中はBuild 290のまま。** 既存 Team Plan は作り直していない。会話の自由文を新しい事実源にしていない。
+
+### authority の入力・鮮度条件・fail-closed 時の発話
+
+**F1 相対ペース（`desktop/relative-pace.js` 新規 / `PitwallRelativePace`）**
+
+| 項目 | 内容 |
+|---|---|
+| 入力 | `competitors[]`（同クラスのみ・`car_idx` / `class_pos` / `last_lap_s`）と自車の `last`＋`lap_valid_clean` |
+| 対象固定 | 現在 snapshot の `class_pos±1` から **CarIdx を確定**。名前や順位表示で後から取り違えない |
+| スコープ | 近傍10台（`nearest_10`）。全同クラスへ広げられる形。`fieldCoverage` は**クラス総数が渡されない限り `complete_field:false`**（`competitors` は F2Time 有効車だけで、クラス全エントリーではない） |
+| 鮮度 | 標本は5分以内、1台5周まで保持、最小2周。10分見えない車は台帳から落とす。セッションが変われば全消去 |
+| 比較 | 双方の中央値。回答に「相手・前後・比較周数・時間窓・差分」を持つ。0.15秒未満は互角 |
+| fail-closed | `unconfirmed` + 理由（`no_target` / `no_rival_laps` / `no_own_laps` / `stale`）。発話は「後ろの相対ペースは未確認。相手の有効ラップがまだ足りない。」相手ペースを推測で作らない |
+| 禁止 | 燃料・pit を語らない。燃料/ピット語を含む質問は受け取らない（`isRelativePaceQuestion`→false）。相手のペダル・舵角は取得不能＝走り方を主張しない |
+
+**F2 GAP訂正の保留（`desktop/gap-freshness.js` に追加）**
+
+`disputeGap()` は方向ごとに `{generation, target_car_idx, session_key, disputed_value_s, reason:'driver_disputed'}` を保留台帳へ置く。**ドライバー発話の数値は保存しない**（自由文を実測へ昇格させない）。`gapHoldStatus()` は generation か対象CarIdxが変わった時＝再観測でのみ解除する（時間経過では解けない）。保留中の発話は「後ろの車間は未確認。前の値は保留にした。次の観測で言い直す。」で、誤った旧値を繰り返さない。`local-intent-router` は `gapHeld` を受け、保留方向だけ `nearest_gap_held` を返し、もう一方は従来どおり答える。
+
+**F3 単一 authority snapshot（`desktop/team-plan.js` に `strategyAuthoritySnapshot`）**
+
+一つの `live` と確定Planから `snapshot_id`（session:lap:fuel:clean_laps）を作り、`compareLiveEvidence` と `buildHandoffTeamSection` の両方がその id と判定を名乗る。判定は `on_plan` / `minor_change_candidate` / `insufficient_evidence`（3クリーン周未満）/ `pit_now`。**`pit_now` は Bridge の `pit_timing_authority` の判定を映すだけで、Team Plan 側では決して生成しない**（`pit_required`＋`add_fuel_l` があっても `pit_now` にしない）。小変更は人の明示確認まで候補のままで、交代先へは confirmed revision だけが渡り、候補の存在は `candidate_pending` という事実として載る。
+
+**F4 Chief 導線**：交代 packet は snapshot から作る。Chief 無効の単独走行は Team Plan 側の `teamModeActive()` ゲートで不作動のまま（`tests-team-plan.js` ⑥-b）。相対ペースは Chief に依存せずレースモード時のみ作動。タイヤ・天候・損傷の断定禁止と70%固定ルール禁止は既存のまま維持。
+
+### 変更ファイル
+
+`desktop/relative-pace.js`（新規）、`desktop/gap-freshness.js`、`desktop/local-intent-router.js`、`desktop/team-plan.js`、`desktop/renderer.html`、`tests-phase-f-trackside.js`（新規）、`preflight.sh`。
+
+### 実行した全テスト
+
+- `node tests-phase-f-trackside.js` … **64/64 合格**（F1固定再生：前後・欠損・古いデータ・別CarIdx・同クラス外／F1-b：燃料shortfall下でも相対ペース質問がpit nowにならない／F2：対象取り違え・世代・訂正・再観測・router保留／F3：4判定とsnapshot id一致・候補の非漏洩／F4：renderer本番関数をvmで実走）
+- `./preflight.sh` … **81スイート全合格・「✅ 出荷可」**
+- 個別再実行：Engineer Card／Plan Fuel Authority／Fuel Timing Authority／Strategy Playbook／Local Intent Router／Team Plan／Chief cross-PC／gap-freshness／gap-answer-queue／Build280 replay／named-rival／live-pace-repetition／`tests_plan_fuel_authority.py`／`tests_gap_authority.py` … 全PASS
+- 外部API・本番Team Link Codeは不使用。
+
+### 未解決
+
+- **P1**：ライバルの標本源は `CarIdxLastLapTime`（完了ラップ1本）で、こちらにはクリーン判定が無い。相手の黄旗周・トラフィック周が中央値に混じり得る。中央値と最小2周で緩和しているが、相手側のラップ有効性は iRacing が出さない＝**実測の限界として残る**。回答は必ず「直近N周の中央値」と根拠付きで述べる。
+- **P2**：`fieldCoverage` の `classEntryCount` は SessionInfo 側にある事実で、現状 renderer からは渡していない（常に `complete_field:false`＝安全側）。全同クラス分析を名乗るには配線が要る。
+- **P2**：相対ペースは自発コールを出さない。質問への回答のみ。
+- **未到達**：`auth.js` を含むサーバー側は push＋deploy が別途必要。exe反映にはBuildが必要。

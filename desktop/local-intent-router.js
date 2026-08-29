@@ -157,6 +157,11 @@
     const sessionAuthority = input && input.sessionAuthority
       && typeof input.sessionAuthority === 'object' ? input.sessionAuthority : null;
     const raceHistory = input && Array.isArray(input.raceHistory) ? input.raceHistory : [];
+    // ★F2：ドライバー訂正で保留中の方向。保留中の値は「今の事実」として
+    //   言い直さない（訂正の自由文も実測へ昇格させない）。再観測で解ける。
+    const gapHeld = (input && input.gapHeld && typeof input.gapHeld === 'object')
+      ? { ahead: input.gapHeld.ahead === true, behind: input.gapHeld.behind === true }
+      : { ahead: false, behind: false };
     const currentUserId = input && input.currentUserId !== undefined && input.currentUserId !== null
       ? String(input.currentUserId) : '';
     if (!text || !live) return { handled:false };
@@ -289,8 +294,15 @@
           ? 'いまのGAPは取れていない。少し待って。'
           : 'I do not have a current gap right now. Give me a moment.');
       }
-      const ahead = finite(live.gap_ahead);
-      const behind = finite(live.gap_behind);
+      const ahead = gapHeld.ahead ? null : finite(live.gap_ahead);
+      const behind = gapHeld.behind ? null : finite(live.gap_behind);
+      if ((wantsAhead && gapHeld.ahead && !(wantsBehind && !gapHeld.behind))
+          || (wantsBehind && gapHeld.behind && !(wantsAhead && !gapHeld.ahead))) {
+        const heldDirection = (wantsBehind && gapHeld.behind) ? 'behind' : 'ahead';
+        return answer('nearest_gap_held', isJP(lang)
+          ? `${heldDirection === 'ahead' ? '前' : '後ろ'}の車間は未確認。前の値は保留にした。次の観測で言い直す。`
+          : `The gap ${heldDirection} is unconfirmed; the previous value is on hold until the next observation.`);
+      }
       const parts = [];
       const identities = [];
       if (wantsAhead && ahead !== null) {

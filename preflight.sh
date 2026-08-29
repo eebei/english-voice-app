@@ -274,6 +274,9 @@ if python3 irsdk-bridge/tests_driving_style.py >/dev/null 2>&1 && node tests-dri
 echo "── Team Plan：ブリーフィング合意→実測→交代→受信→レース後（2026-08-29）"
 if node tests-team-plan.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-team-plan.js 2>&1|grep "❌"|head -10; fail=1; fi
 
+echo "── Phase F：前後相対ペース authority・GAP訂正保留・単一snapshot（2026-08-29）"
+if node tests-phase-f-trackside.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-phase-f-trackside.js 2>&1|grep "❌"|head -10; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
