@@ -5468,4 +5468,4 @@ plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_
 
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
-| 08-29 | 本節 | Chief Engineer Mode 実行面対応 | teamModeActive ゲート・Chief 前提配線の明示検査・単独走行を壊さない実挙動テスト・team-plan 127/127・preflight全緑 |
+| 08-29 | `90ada56` | Chief Engineer Mode 実行面対応 | teamModeActive ゲート・Chief 前提配線の明示検査・単独走行を壊さない実挙動テスト・team-plan 127/127・preflight全緑 |
