@@ -316,12 +316,15 @@
         + (live ? '' : ' I will update after three clean laps.');
     }
     const rememberedSessions = Math.max(0, Math.trunc(finite(playbook.evidence && playbook.evidence.historical_session_count) || 0));
+    // The number spoken here is the session count, not the record count:
+    // `historical_session_count` and `memory_record_count` are different
+    // facts and "件" read as the latter.
     // Grid radio is deliberately one sentence.  Detailed B/C conditions are
     // retained in the playbook and are announced only after live clean-lap
     // evidence exists; front-loading them created a 38-second queue at RBR.
     return live
       ? `実測${playbook.evidence.live_fuel_l_per_lap.toFixed(2)}L/周でPlan Aを更新。`
-      : `${rememberedSessions ? `履歴${rememberedSessions}件あり。` : ''}Plan Aで開始、クリーン3周で更新。`;
+      : `${rememberedSessions ? `履歴${rememberedSessions}セッション。` : ''}Plan Aで開始、クリーン3周で更新。`;
   }
 
   return { durationSeconds, normalizeFormat, buildPlaybook, updateWithLive, evaluateSwitch, briefing };

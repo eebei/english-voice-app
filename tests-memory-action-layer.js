@@ -108,8 +108,17 @@ const provisional = playbook.buildPlaybook({
 check('resolved history produces a pre-start Plan A/B/C', provisional.available === true, JSON.stringify(provisional));
 check('playbook trace identifies both recovered records',
   provisional.evidence.memory_record_count === 2 && provisional.evidence.historical_session_count === 20);
-check('proactive briefing says that stored session history was used',
-  /保存履歴20セッション/.test(playbook.briefing(provisional, 'ja')));
+// Build 277 shortened the grid radio to one sentence (the long version built a
+// 38-second speech queue at RBR).  What must survive is the *fact* that stored
+// history was used and how much of it — not the old wording.  Assert both the
+// evidence and the brevity so neither can regress alone.
+{
+  const grid = playbook.briefing(provisional, 'ja');
+  check('proactive briefing says that stored session history was used',
+    /履歴20セッション/.test(grid), grid);
+  check('proactive briefing stays one short grid sentence',
+    grid.length <= 40 && !/Plan B|Plan C|周目|給油設定/.test(grid), grid);
+}
 
 const revised = playbook.updateWithLive(provisional, {
   fuel_strategy: { clean_laps_sampled: 3, avg_fuel_per_lap: 3.7 },

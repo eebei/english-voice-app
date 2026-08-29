@@ -24,7 +24,7 @@ check('overcut first stop is lap 6', monza.plans.C.first_pit_lap === 6);
 check('overcut labels required saving', monza.plans.C.required_fuel_saving_pct > 0);
 check('rear-half qualifying prioritises undercut review', monza.opening_priority[0] === 'B');
 check('grid briefing is a one-sentence historical handoff',
-  /^(?:履歴\d+件あり。)?Plan Aで開始、クリーン3周で更新。$/.test(playbook.briefing(monza, 'ja')));
+  /^(?:履歴\d+セッション。)?Plan Aで開始、クリーン3周で更新。$/.test(playbook.briefing(monza, 'ja')));
 check('grid briefing defers all alternate-plan detail',
   !/Plan B|Plan C|周目|給油設定/.test(playbook.briefing(monza, 'ja')));
 check('planned first add never exceeds tank', monza.plans.A.first_service.estimated_add_l <= 20.14);

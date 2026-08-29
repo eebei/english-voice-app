@@ -5431,3 +5431,25 @@ plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-29 | `3e96cf1` / `5b7dec3` | 2026-08-29 Team Plan縦一機能 | 変更6ファイルと到達点・state schemaと確認条件・handoff追加データと未取得時挙動・永続化先と参照経路・全テスト結果（team-plan 112/112、cross-PC 19/19、preflight 79件合格・既存不良1件）・commit hash・未解決P1/P2 |
+
+## 2026-08-29 JST — preflight既存不良（Memory Action Layer）解消・全緑
+
+前節で「本変更前からの既存不良」として残した `tests-memory-action-layer.js` の失敗を潰した。
+
+**原因**：Build 277 でグリッド無線を一文へ短縮した（長文版がRBRで38秒の発話キューを作った件）際、`desktop/strategy-playbook.js` の日本語 briefing は `保存履歴20セッション…` から短文へ変わったが、`tests-memory-action-layer.js` だけが旧文言のまま残っていた。`tests-strategy-playbook.js` は新文言で更新済みで、**同じ関数に対して2本のテストが別の文言を要求している状態**だった。コード側の不具合ではなく、Build 277 の取りこぼし。
+
+**対応**：
+- 短い一文（＝現行の意図した挙動・耐久ディレクティブの受入条件「ブリーフィングが音声キューを詰まらせない」にも一致）を正とし、旧文言のテストを更新した。
+- 併せて文言を `履歴20件あり。` → `履歴20セッション。` へ訂正。`historical_session_count`（20）と `memory_record_count`（2）は別の事実で、「件」は後者と読める。長さは変えていない（グリッド無線は一文のまま）。
+- テストは文言の写経ではなく**事実と簡潔さの両方**を検査する形にした（`履歴20セッション` を含む／40字以下かつ Plan B・Plan C・周目・給油設定を含まない）。
+
+**結果**：`./preflight.sh` は **80スイート全合格・「✅ 出荷可」**。不合格0件。
+実文言：`履歴20セッション。Plan Aで開始、クリーン3周で更新。`（実測後は `実測3.70L/周でPlan Aを更新。`）
+
+変更ファイル：`desktop/strategy-playbook.js`、`tests-memory-action-layer.js`、`tests-strategy-playbook.js`。Build・公開・push・deployは未実行。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-29 | 本節 | preflight既存不良解消 | Build 277取りこぼしの特定・短文を正とした判断・件→セッションの訂正・preflight 80件全合格 |
