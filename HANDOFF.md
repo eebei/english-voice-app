@@ -1,8 +1,15 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-28 JST
+最終更新: 2026-08-29 JST
 
-## 次候補作業中 — RBR 8/28 実走の誤回答是正（未Build・未公開）
+## Build 291公開候補 — Team Plan / Chief Mode / Phase F（Build・公開GO受領）
+
+- 公開中は **Build 290**。今回の製品番号は **Build 291**（`Build 291 (Team Plan, Chief Mode, and trackside authority)`）へ採番した。同じ番号で中身の違うinstallerを作らない。
+- Team Plan は、明示開始→2〜3項目の確認→人の明示確定→3 clean laps実測による小変更候補→明示承認→Chief relay handoff→Driver別の構造化結果保存まで接続した。裸の「はい」はPlanを確定・変更しない。候補をhandoff確定事項にしない。
+- Chief Engineer Mode 有効時だけTeam Planを動かす。各PCの`このPC: Driver N`／roster／現在担当を使用し、確定Plan・実測・stint summaryを次Driverへ渡す。Chief無効の単独走行は既存挙動と保存領域を触らない。
+- Phase F は、前後相対ペースを同クラス・CarIdx固定・freshな有効ラップだけで回答し、燃料shortfallからpit nowを作らない。Gap訂正はドライバー数値を実測として保存せず、対象／世代が変わる再観測まで保留する。Plan・実測・handoffは同じauthority snapshotを使う。
+- 機械確認（Codex独立再実行）: Phase F 64/64、Team Plan 127/127、Chief cross-PC 19/19、Memory Action 28、Strategy Playbook 39が合格。`preflight.sh`の製品内スイートは合格したが、この実行環境ではHTTP server bind（`EPERM 0.0.0.0:3901`）と外部deploy確認が不可。外部有料API呼出なし。
+- Gate 7対象: `auth.js`変更あり。push後にRailway反映と`./verify-deploy.sh`で同一SHAを確認する。Gate 5 artifact確認、公開後のGate 6 WindowsとGate 8 iRacingは別証拠であり、未確認を合格扱いしない。
 
 - RBR実走の「後ろの方がペース早いな」に、総燃料不足だけを根拠として「ピット優先」と返した。`engineer-card`は`pit_timing_authority.decision==='pit_now'`以外では早期ピットを言えないようにし、`hold/pit_later`では「前後の相対ペースは未確定、Planを維持」と返す。RBR値（28.7L / 必要50.4L / Plan A / 10周）を回帰化。
 - 同実走の燃料質問で出た「最終目安0周目、あと0周」は、具体的な選択A/B/C windowよりgeneric endurance horizonを優先した誤り。選択済みの実行可能Planをtiming authorityの正本とし、真のmulti-stop（future stop 2以上）だけが代替する。
