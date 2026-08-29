@@ -5369,3 +5369,59 @@ Yujiから「公開しないと実機テストできない」という恒久運�
 - 未確認: 公開Build 290でのGate 6 Windows、Gate 8 iRacing実走
 
 公開URL実取得値はGitHub Release APIのsize／digestと全件一致。Build 290を公開済みfield-test candidateとし、Windows／実走結果にGate 10停止条件があれば直ちに新規配布停止を判断する。
+
+## 2026-08-29 JST — Team Plan縦一機能（ブリーフィング合意→実測→交代→レース後）実装完了
+
+`review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md`の指示に対し、実装・全テスト・commitまでを行った。**Build／署名／公開／push／deployは実行していない。**公開中はBuild 290のまま。
+
+### 変更ファイルと、各配線がどこまで実到達するか
+
+| ファイル | 変更 | 到達点 |
+|---|---|---|
+| `desktop/team-plan.js`（新規） | Team Plan台帳の純関数モジュール（UMD `PitwallTeamPlan`）。state／確認判定／実測比較／packet組立／受信適用／stint要約／レース後学習 | LLMを介さない決定論。renderer・auth・テストが同じ実物を使う |
+| `desktop/renderer.html` | script追加、`pw_team_plan_v1`永続化、発話入口`handleTeamPlanUtterance`（LLMより前）、`evaluateTeamPlanLiveEvidence`／`captureTeamStintLap`をtelemetry_liveへ、交代時`buildTeamHandoffSection`→publish＋同内容をradioへ、受信側`applyReceivedTeamPlan`、session_summaryで`persistTeamRaceLearning`、デブリーフ`teamStintResultAnswer` | 発話→合意→実測→交代送信→**別PCの受信・再確認発話**→レース後の確定回答まで一本 |
+| `auth.js` | `cleanChiefTeamPlan`を新設し`cleanChiefPacket`へ`team_plan`を追加。exportに両関数 | 中継サーバーがTeam Planを黙って捨てない。ホワイトリスト外は破棄 |
+| `tests-team-plan.js`（新規） | 112ケース。モジュール実物＋renderer本番関数をvmで実行 | — |
+| `tests-chief-cross-pc.js` | packet enrich後の送信確認へ更新＋relayスキーマ6件追加 | — |
+| `preflight.sh` | Team Planスイートを恒久ゲートへ追加 | — |
+
+### Team Plan state schemaと確認条件
+
+`{schema:'team_plan_v1', revision, confirmed, candidate, briefing{active,step,asked,awaiting_confirmation}, pending_proposal, updated_at, log[]}`。
+plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_order／handover_intent／initial_pit_plan／fuel_policy／three_clean_lap_rule／review_conditions`の6項目のみ。各fieldは`{value, source:'human'|'bridge_evidence'|'team_handoff', at}`を持ち、**未入力の項目はキーごと存在しない（不明は不明のまま）**。
+
+- ブリーフィングは明示開始（「作戦会議を開始」等）でのみ進み、一度に2〜3項目だけ聞く。
+- `confirmed`へ昇格するのは明示確認のみ（「確定」「はい、確定」「confirm the plan」等）。**裸の「はい」「OK」「了解」「yes」はPlanの中身にも確定にもならない**。
+- 「違う」「修正」だけでは確定Planを変えず、直す項目を短く聞き返す。
+- 事実質問（`？`／何周／何リットル等）はTeam Planが飲み込まず、既存のlocal router／LLMへ通す。
+
+### handoffに追加した実データと未取得時の挙動
+
+`packet.team_plan` = 確定Planのrevision・確定時刻・6項目本文（**candidateは`candidate_pending`フラグだけで本文は渡さない**）、`evidence`（現在燃料／clean燃費／サンプル数／平均ラップ／予測残周／予測ピット窓／完走マージン／天候／4輪計測タイヤ／損傷）、`stint_summary`（identity・best・average・clean average・clean laps・燃費・incidents＋対象範囲・pit/repair events・plan revision）。
+
+未取得は全て`null`。走行中はタイヤを`available:false`／`corners:{}`とし計測値扱いにしない。修理要否は`repair_required:null`。インシデント観測が無いstintは`incidents:null` + `incident_scope:'unknown'`で、0と断定しない。受信側は`plan_status!=='confirmed'`、未知schema、同一以下のrevisionを適用しない。対象ドライバー照合（`next_driver_index`）とstale破棄は既存のまま前段に維持。
+
+### 永続化先と次回参照経路
+
+- 確定Plan: `localStorage pw_team_plan_v1`（`PERSISTENT_SETTING_KEYS`に追加＝走行中クラッシュでも失わない）。
+- レース後: `localStorage pw_team_race_learning_v1`（直近20レース）。driver別best/average/clean/燃費/incidents/pit・repair、確定Planと実際の差分（`planned_first_pit_lap` vs `actual_pit_events`／`first_pit_delta_laps`）。
+- 参照: デブリーフの成績質問は`teamStintResultAnswer`→`answerFromRaceLearning`が確定構造から回答。該当ドライバーの記録が無ければ「推測では答えない」と返す。既存の個人成績（session-memory／decision-memory）には触れていない。
+
+### 実行した全テストと結果
+
+- `node tests-team-plan.js` … 112/112 合格
+- `node tests-chief-cross-pc.js` … 19/19 合格
+- `./preflight.sh` … Team Plan含む全スイート合格。**唯一の不合格は`tests-memory-action-layer.js`（"proactive briefing says that stored session history was used"）で、`a47bf21`を`git stash`で確認した結果、本変更前から失敗している既存不良**。
+- 個別再確認: chief-engineer-mode／engineer-card／fuel-plan-authority／fuel-timing-authority／strategy-playbook／local-intent-router／gap-answer-queue／evidence-debrief／decision-memory(server,tunnel)／runtime-module-status／speak-priority／speak-async／radio-brevity／endurance-radio／desktop-state／`tests_driver_handoff.py` … 全PASS
+- 外部APIは呼んでいない。テストfixtureに本番Team Link Codeを使っていないことをテスト自身が検査する。
+
+### commit
+
+`f21d9d6 Carry the confirmed Team Plan from briefing to handoff and results` — 変更は上表の6ファイルのみ。無関係な未追跡物（`artifacts/`、`desktop/dist/`等）はstageしていない。
+
+### 未解決事項
+
+- **P1**: `tests-memory-action-layer.js`の既存失敗（本変更の範囲外・耐久前に別途要調査）。
+- **P2**: 実測との突き合わせによる小変更候補は現状「ピット窓の周回差>1周」と「Planに数値が無い」の2条件のみ。天候急変・タイヤ計測を起点にした候補生成は未実装。
+- **P2**: タイヤ交換判断は材料（4輪計測・次スティント長・天候・修理時間）が揃うまで`insufficient_evidence`で止まる仕様。固定しきい値は持たない＝耐久本番でも「交換すべき」と断定はしない。
+- **耐久前に使えない機能**: なし（Buildしていないため、exe側へ反映するにはBuild／公開が別途必要）。renderer変更のみでサーバー側は`auth.js`のみ＝本番反映にはpush＋deployが要る。**現状は交代のTeam Plan中継はローカル実装のみで本番サーバーには未到達。**

@@ -719,6 +719,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="gap-freshness.js"></script>
 <script src="luna-self-memory.js"></script>
 <script src="driving-style-v1.js"></script>
+<script src="team-plan.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -727,6 +728,8 @@ const PERSISTENT_SETTING_KEYS = [
   'pw_beta_code','pw_auth_token','pw_auth_user','pw_username','pw_device_id',
   'pw_ui_lang','pw_volume','pw_voice_on'
   ,'pw_chief_enabled','pw_chief_driver_1','pw_chief_driver_2','pw_chief_driver_3','pw_chief_current_driver'
+  // 合意済みのTeam Planは、走行中にアプリが落ちても失われてはいけない。
+  ,'pw_team_plan_v1'
 ];
 function persistentSet(key,value){
   try{
@@ -1279,6 +1282,10 @@ let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = false, autoDebriefData = null;
 let evidenceDebrief = null;
+// Team Plan のセッション内状態（合意済み Plan 自体は localStorage 側が正本）。
+let teamPlanEvidenceAnnounced=false;
+let teamStintLaps=[], teamStintPitEvents=[], teamStintStartLap=null, teamStintLastLap=null;
+let teamRaceStints=[];
 let practiceRun = null;
 let fuelCapacityConfirmedThisSession = null;
 let lastFuelCapacityContext = null;
@@ -1298,6 +1305,10 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   strategyPlaybookBriefedKey='';
   strategyPlaybookLiveUpdateKey='';
   strategyLivePromotionAnnounced=false;
+  // 合意済み Plan はセッションを跨いで残す。実測の読み上げ済みフラグとスティント
+  // 集計だけを新セッション用に戻す（前セッションの周回を混ぜない）。
+  teamPlanEvidenceAnnounced=false;
+  if(typeof resetTeamStint==='function') resetTeamStint();
   strategyPlaybookRefreshKey='';
   strategyPlaybookDecisionKeys=new Set();
   enduranceForecastAnnouncedKey='';
@@ -2291,6 +2302,13 @@ async function sendMsg(inputSource){
       ? '走行中は必要な数字と行動だけ短く伝える。詳しい振り返りは走行後。'
       : 'Short, useful calls while driving. Detailed review after the run.';
     addMsg('ai',reply);pushMsg({role:'assistant',content:reply});speak(reply,true);
+    return;
+  }
+  // Team Plan は「合意」であって会話文言ではない。明示開始・明示確定・
+  // ブリーフィング中の回答・プラン照会だけをここで受け、LLM へ落とさない。
+  // 走行中の相槌や事実質問は下の local router / LLM 側へそのまま通す。
+  if(typeof handleTeamPlanUtterance==='function' && handleTeamPlanUtterance(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
     return;
   }
   // Live-race facts have priority over every conversational state, including
@@ -3588,8 +3606,12 @@ function connectBridge(){
         // The outgoing driver's Bridge is the only authoritative source for
         // this snapshot.  Publish it for the named next driver's separate PC;
         // the local radio is retained for same-PC development/replay use.
-        publishChiefTeamHandoff(data.packet||{});
-        injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet:data.packet||{}});
+        // 交代 packet に confirmed Team Plan・実測・送信側スティント要約を載せる。
+        // 手元表示だけで終わらせず、同じ内容が次ドライバーの PC まで到達する。
+        const teamSection=buildTeamHandoffSection();
+        const outgoingPacket={...(data.packet||{}),team_plan:teamSection};
+        publishChiefTeamHandoff(outgoingPacket);
+        injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet:outgoingPacket});
         return;
       }
       // ★スライス2：提案の保存は発話の可否と独立させる。injectRadio は
@@ -3644,6 +3666,8 @@ function connectBridge(){
         updateStrategyPlaybookFromLive(lastTelemetry);
         if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         evaluateLiveStrategySwitch(lastTelemetry);
+        captureTeamStintLap(lastTelemetry);
+        evaluateTeamPlanLiveEvidence(lastTelemetry);
         maybeDeliverFuelWindowWatch(lastTelemetry);
         maybeAnnounceEnduranceFuelForecast(lastTelemetry);
         updatePracticeRun(data);
@@ -3674,6 +3698,8 @@ function connectBridge(){
         // ★スライス2：完走時だけでなく、途中終了・DNF でも同じ判断へ追記する。
         //   ここを落とすと「実行されなかった」と「事故で終わった」が区別できない。
         recordDecisionStage('closure',data);
+        // レース後に「誰が何周・何秒だったか」を確定値で答えるための構造化保存。
+        persistTeamRaceLearning(data);
         // 判断が閉じた時点で正本へ送る（opt-in の時だけ）。失敗しても cache は残す。
         syncDecisionsToServer();
         reconcileEvidenceSummary(data);
@@ -3901,7 +3927,10 @@ function oishiRadio(d, forSpeech=false){
       const splashAdd=Number(splash.projected_final_service_l), splashWindow=Number(splash.final_stint_window_in_laps);
       const splashLine=(Number.isFinite(splashAdd)&&Number.isFinite(splashWindow))
         ?`終盤スプラッシュ${splashAdd.toFixed(1)}L、最終給油窓あと${Math.trunc(splashWindow)}周。`:'';
-      return `${who}Plan ${p.selected_plan}。${pit}${fuel}${margin}${splashLine}${damage}${tyre}`;
+      // 確定 Team Plan の revision は「人が合意した版」の識別子。候補は載せない。
+      const tpRev=Number(p.team_plan&&p.team_plan.plan_status==='confirmed'?p.team_plan.plan_revision:NaN);
+      const teamRev=Number.isFinite(tpRev)?`チームPlan rev${Math.trunc(tpRev)}。`:'';
+      return `${who}${teamRev}Plan ${p.selected_plan}。${pit}${fuel}${margin}${splashLine}${damage}${tyre}`;
     }
     // ★Build 266 Codex差戻し#5：strategy_recalculation の日本語ケース。
     //   これが無いと injectRadio が bridge の英語 driver_message をそのまま
@@ -5591,9 +5620,158 @@ async function pollChiefTeamHandoff(force){
     persistentSet('pw_chief_current_driver',String(cfg.this_driver_index));
     hydrateChiefEngineerSettings(); chiefShareStatus('チーム引き継ぎを受信しました。');
     injectRadio({type:'radio',trigger:'chief_engineer_handoff',packet});
+    // 受信は表示で終わらない。確定 Plan を手元の台帳へ入れ、短く再確認させる。
+    applyReceivedTeamPlan(packet.team_plan);
   }catch(_){ if(force) chiefShareStatus('チーム引き継ぎを確認できませんでした。'); }
 }
 setInterval(()=>pollChiefTeamHandoff(false),10000);
+
+// ══ Team Plan：ブリーフィング合意 → 実測 → 交代 → レース後 ══════════════
+// 入口（人の発話）だけ作って終わらせない。confirmed になった内容が
+// 交代 packet・次ドライバーの画面・レース後の確定回答まで同じ形で届く。
+const TEAM_PLAN_KEY='pw_team_plan_v1';
+const TEAM_RACE_LEARNING_KEY='pw_team_race_learning_v1';
+// 状態変数は resetSessionScopedReviewState（この上流で呼ばれる）より前で宣言する。
+// usageSessionId の TDZ 事故と同型の失敗を繰り返さない。
+function teamPlanModule(){
+  return (window.PitwallTeamPlan&&typeof window.PitwallTeamPlan.normalize==='function')?window.PitwallTeamPlan:null;
+}
+function loadTeamPlanState(){
+  const m=teamPlanModule(); if(!m) return null;
+  try{ return m.normalize(JSON.parse(localStorage.getItem(TEAM_PLAN_KEY)||'null')); }
+  catch(_){ return m.emptyState(); }
+}
+function saveTeamPlanState(state){
+  const m=teamPlanModule(); if(!m||!state) return;
+  try{ persistentSet(TEAM_PLAN_KEY,JSON.stringify(m.normalize(state))); }catch(_){}
+}
+function teamPlanLang(){ return (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en'; }
+function teamPlanSay(reply,kind){
+  if(!reply) return;
+  addMsg('ai',reply); pushMsg({role:'assistant',content:reply});
+  speak(reply,{prio:SPEAK_PRIO.P4_INFO,kind:kind||'team_plan',dedupeKey:'team_plan|'+reply});
+}
+// 走行中の相槌で Plan が動かないよう、入口を「明示開始・明示確定・
+// ブリーフィング中の回答・プラン照会」に限定する。それ以外は通常会話へ返す。
+function handleTeamPlanUtterance(text){
+  const m=teamPlanModule(); if(!m||!text) return false;
+  const lang=teamPlanLang(); const state=loadTeamPlanState(); if(!state) return false;
+  if(m.isBriefingStart(text)){
+    const r=m.startBriefing({state,lang,roster:chiefEngineerSettings().roster,now:new Date().toISOString()});
+    saveTeamPlanState(r.state);
+    diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'briefing_started',questions:r.questions.length}));
+    teamPlanSay(r.reply,'team_plan_briefing'); return true;
+  }
+  if(m.isPlanQuery(text)){ teamPlanSay(m.describe(state,lang),'team_plan_status'); return true; }
+  const structured=teamStintResultAnswer(text);
+  if(structured){ teamPlanSay(structured,'team_stint_result'); return true; }
+  // ブリーフィング中でも「質問」は Plan の回答として飲み込まない（事実質問は
+  // local router / LLM の担当）。飲み込むと燃料やタイヤの質問が Plan 本文になる。
+  if(/[？?]$|どうなって|どうだ|教えて|何周|何リットル/.test(text)) return false;
+  if(!state.briefing.active && !m.isExplicitConfirmation(text) && !m.isAmbiguousCorrection(text)) return false;
+  const r=m.ingestHumanInput({state,text,lang,now:new Date().toISOString()});
+  if(!r.handled) return false;
+  saveTeamPlanState(r.state);
+  diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'human_input',confirmed:r.confirmed===true,
+    revision:r.state.revision,changed:r.changed===true}));
+  teamPlanSay(r.reply,r.confirmed?'team_plan_confirmed':'team_plan_update');
+  return true;
+}
+// 3クリーン周が揃うまで Plan を動かさない。揃っても confirmed は人の確認だけ。
+function evaluateTeamPlanLiveEvidence(live){
+  const m=teamPlanModule(); if(!m) return null;
+  const state=loadTeamPlanState(); if(!state) return null;
+  const cmp=m.compareLiveEvidence({state,live,lang:teamPlanLang()});
+  if(!cmp.available||teamPlanEvidenceAnnounced) return cmp;
+  teamPlanEvidenceAnnounced=true;
+  const proposed=m.proposeFromEvidence({state,comparison:cmp,now:new Date().toISOString()});
+  saveTeamPlanState(proposed.state);
+  diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'live_evidence',verdict:cmp.verdict,
+    clean_laps:cmp.evidence.clean_laps_sampled}));
+  teamPlanSay(cmp.reply,'team_plan_live_evidence');
+  return cmp;
+}
+function captureTeamStintLap(live){
+  if(!live||typeof live!=='object') return;
+  const lap=Number(live.lap);
+  if(!Number.isInteger(lap)||lap<=0) return;
+  if(teamStintStartLap===null) teamStintStartLap=lap;
+  if(teamStintLastLap===lap) return;
+  teamStintLastLap=lap;
+  const t=Number(live.last);
+  const burn=Number(live.fuel_strategy&&live.fuel_strategy.avg_fuel_per_lap);
+  teamStintLaps.push({lap,
+    lap_time_s:(Number.isFinite(t)&&t>0)?t:null,
+    valid_clean:live.lap_valid_clean===true,
+    // 観測できなかったインシデントを 0 と書かない（null のまま集計へ渡す）。
+    incidents:Number.isInteger(live.incidents_this_lap)?live.incidents_this_lap:null,
+    fuel_used_l:Number.isFinite(burn)?burn:null});
+  if(live.pit_in_this_lap===true){
+    teamStintPitEvents.push({entry_lap:lap,repair:Number(live.damage_s)>0});
+  }
+  if(teamStintLaps.length>500) teamStintLaps.shift();
+}
+function currentTeamStintSummary(){
+  const m=teamPlanModule(); if(!m) return null;
+  const cfg=chiefEngineerSettings(); const state=loadTeamPlanState();
+  return m.summarizeStint({driver_name:cfg.roster[cfg.current_index]||null,
+    driver_index:cfg.current_index,start_lap:teamStintStartLap,end_lap:teamStintLastLap,
+    laps:teamStintLaps,pit_events:teamStintPitEvents,
+    plan_revision:(state&&state.confirmed)?state.confirmed.revision:null});
+}
+function resetTeamStint(){ teamStintLaps=[];teamStintPitEvents=[];teamStintStartLap=null;teamStintLastLap=null; }
+// 交代時に載せる team section。confirmed Plan・実測・送信側スティント要約。
+function buildTeamHandoffSection(){
+  const m=teamPlanModule(); if(!m) return null;
+  const state=loadTeamPlanState(); if(!state) return null;
+  const stint=currentTeamStintSummary();
+  const section=m.buildHandoffTeamSection({state,
+    evidence:m.evidenceSnapshot(lastTelemetry),stintSummary:stint});
+  if(stint&&stint.laps_completed){ teamRaceStints.push(stint); resetTeamStint(); }
+  diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'handoff_section',
+    plan_revision:section.plan_revision,has_stint:!!section.stint_summary}));
+  return section;
+}
+// 受信側の出口：確定 Plan を手元へ入れ、次ドライバーが短く再確認できる形で読む。
+function applyReceivedTeamPlan(section){
+  const m=teamPlanModule(); if(!m) return false;
+  const state=loadTeamPlanState(); if(!state) return false;
+  const r=m.applyReceivedTeamSection({state,section,lang:teamPlanLang(),now:new Date().toISOString()});
+  if(r.applied){ saveTeamPlanState(r.state); teamPlanEvidenceAnnounced=false; resetTeamStint(); }
+  chiefShareStatus(r.reply);
+  diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'received',applied:r.applied===true,
+    revision:(section&&section.plan_revision)||null}));
+  teamPlanSay(r.reply,'team_plan_received');
+  return r.applied===true;
+}
+function loadTeamRaceLearning(){
+  try{ const v=JSON.parse(localStorage.getItem(TEAM_RACE_LEARNING_KEY)||'[]'); return Array.isArray(v)?v:[]; }
+  catch(_){ return []; }
+}
+function persistTeamRaceLearning(summary){
+  const m=teamPlanModule(); if(!m) return null;
+  const state=loadTeamPlanState(); if(!state) return null;
+  const current=currentTeamStintSummary();
+  const stints=teamRaceStints.concat((current&&current.laps_completed)?[current]:[]);
+  if(!stints.length) return null;
+  const entry=m.buildRaceLearning({state,stints,result:summary||{},now:new Date().toISOString()});
+  try{
+    localStorage.setItem(TEAM_RACE_LEARNING_KEY,JSON.stringify(loadTeamRaceLearning().concat([entry]).slice(-20)));
+  }catch(_){}
+  teamRaceStints=[]; resetTeamStint();
+  diagnosticLog('TEAM_PLAN',JSON.stringify({phase:'race_learning_saved',stints:stints.length}));
+  return entry;
+}
+// デブリーフの成績・インシデントは LLM 要約ではなく、この構造から答える。
+function teamStintResultAnswer(text){
+  const m=teamPlanModule(); if(!m||!text) return null;
+  if(!/(?:スティント|走行|周回|ラップ).{0,8}(?:結果|どうだった|何周|ベスト|平均)|stint (?:result|summary|report)/i.test(text)) return null;
+  const hist=loadTeamRaceLearning(); const entry=hist[hist.length-1];
+  if(!entry) return null;
+  const roster=chiefEngineerSettings().roster;
+  const who=roster.find(name=>name&&String(text).includes(name))||null;
+  return m.answerFromRaceLearning({entry,driverName:who,lang:teamPlanLang()});
+}
 function buildContractNote(isJ){
   // LLMへ渡すシステム指示テキスト。未契約時は"最小限モード"と明示。
   const c = loadContract();

@@ -1726,6 +1726,112 @@ function chiefTeamKey(raw) {
   return crypto.createHash('sha256').update('pitwall-chief-team:v1:' + code).digest('hex');
 }
 
+// Team Plan section of a handoff packet.  Deny by default: only the six known
+// plan fields, bounded measured evidence and a numeric stint summary survive.
+// A candidate (unconfirmed) plan is never relayed as a confirmed one.
+const CHIEF_PLAN_FIELDS = ['driver_order', 'handover_intent', 'initial_pit_plan',
+  'fuel_policy', 'three_clean_lap_rule', 'review_conditions'];
+function cleanChiefTeamPlan(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.schema !== 'team_plan_v1') return null;
+  const str = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : null;
+  const finite = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const int = value => Number.isInteger(value) && value >= 0 && value <= 100000 ? value : null;
+  const confirmed = raw.plan_status === 'confirmed';
+  const revision = int(raw.plan_revision);
+  const fields = {};
+  if (confirmed && raw.plan_fields && typeof raw.plan_fields === 'object') {
+    CHIEF_PLAN_FIELDS.forEach(name => {
+      const entry = raw.plan_fields[name];
+      if (!entry || typeof entry !== 'object') return;
+      const value = str(entry.value, 240);
+      if (!value) return;
+      fields[name] = {
+        value,
+        source: ['human', 'bridge_evidence', 'team_handoff'].includes(entry.source) ? entry.source : 'human',
+        at: str(entry.at, 40),
+      };
+    });
+  }
+  const ev = raw.evidence && typeof raw.evidence === 'object' && !Array.isArray(raw.evidence)
+    ? raw.evidence : null;
+  const weather = ev && ev.weather && typeof ev.weather === 'object' ? ev.weather : null;
+  const tires = ev && ev.tires && typeof ev.tires === 'object' ? ev.tires : null;
+  const damage = ev && ev.damage && typeof ev.damage === 'object' ? ev.damage : null;
+  const corners = {};
+  if (tires && tires.available === true && tires.corners && typeof tires.corners === 'object') {
+    ['lf', 'rf', 'lr', 'rr'].forEach(c => {
+      const corner = tires.corners[c];
+      if (!corner || typeof corner !== 'object') return;
+      const wear = finite(corner.wear_min_pct);
+      const temp = finite(corner.temp_c);
+      if (wear === null && temp === null) return;
+      corners[c] = { wear_min_pct: wear, temp_c: temp };
+    });
+  }
+  const evidence = ev ? {
+    fuel_l: finite(ev.fuel_l),
+    clean_fuel_burn_l: finite(ev.clean_fuel_burn_l),
+    clean_laps_sampled: int(ev.clean_laps_sampled),
+    avg_lap_s: finite(ev.avg_lap_s),
+    projected_laps_remaining: int(ev.projected_laps_remaining),
+    projected_pit_window_lap: int(ev.projected_pit_window_lap),
+    finish_margin_l: finite(ev.finish_margin_l),
+    weather: weather ? {
+      track_temp_c: finite(weather.track_temp_c),
+      air_temp_c: finite(weather.air_temp_c),
+      track_wetness_code: int(weather.track_wetness_code),
+    } : null,
+    tires: {
+      available: !!(tires && tires.available === true),
+      measured_at_session_s: tires ? finite(tires.measured_at_session_s) : null,
+      corners,
+    },
+    damage: damage ? {
+      observed: damage.observed === true,
+      damage_s: finite(damage.damage_s),
+      // 修理要否は送信側でも未確定。true/false へ丸めない。
+      repair_required: damage.repair_required === true ? true
+        : damage.repair_required === false ? false : null,
+    } : null,
+  } : null;
+  const rawStint = raw.stint_summary && typeof raw.stint_summary === 'object'
+    && !Array.isArray(raw.stint_summary) ? raw.stint_summary : null;
+  const stint = rawStint ? {
+    driver_name: str(rawStint.driver_name, 30),
+    driver_index: int(rawStint.driver_index),
+    start_lap: int(rawStint.start_lap),
+    end_lap: int(rawStint.end_lap),
+    laps_completed: int(rawStint.laps_completed),
+    clean_laps: int(rawStint.clean_laps),
+    best_lap_s: finite(rawStint.best_lap_s),
+    average_lap_s: finite(rawStint.average_lap_s),
+    clean_average_lap_s: finite(rawStint.clean_average_lap_s),
+    fuel_burn_l_per_lap: finite(rawStint.fuel_burn_l_per_lap),
+    incidents: int(rawStint.incidents),
+    incident_scope: ['observed_laps_in_stint', 'unknown'].includes(rawStint.incident_scope)
+      ? rawStint.incident_scope : 'unknown',
+    pit_events: Array.isArray(rawStint.pit_events)
+      ? rawStint.pit_events.slice(0, 12)
+        .filter(p => p && typeof p === 'object')
+        .map(p => ({ entry_lap: int(p.entry_lap), repair: p.repair === true }))
+      : [],
+    repairs: int(rawStint.repairs),
+    plan_revision: int(rawStint.plan_revision),
+  } : null;
+  if (!Object.keys(fields).length && !evidence && !stint) return null;
+  return {
+    schema: 'team_plan_v1',
+    plan_status: (confirmed && Object.keys(fields).length) ? 'confirmed' : 'none',
+    plan_revision: (confirmed && Object.keys(fields).length) ? revision : null,
+    plan_confirmed_at: str(raw.plan_confirmed_at, 40),
+    plan_fields: Object.keys(fields).length ? fields : null,
+    candidate_pending: raw.candidate_pending === true,
+    evidence,
+    stint_summary: stint,
+  };
+}
+
 function cleanChiefPacket(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const str = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : null;
@@ -1760,6 +1866,10 @@ function cleanChiefPacket(raw) {
   return {
     handoff_id: handoffId,
     roster,
+    // 2026-08-29: the confirmed Team Plan, the measured evidence behind it and
+    // the outgoing driver's stint summary travel with the handoff.  Everything
+    // is whitelisted and bounded here; free conversation text never relays.
+    team_plan: cleanChiefTeamPlan(raw.team_plan),
     selected_plan: selectedPlan.toUpperCase(),
     current_lap: int(raw.current_lap),
     class_position: int(raw.class_position),
@@ -1995,6 +2105,8 @@ module.exports = {
   recordApiUsage, getApiUsageStats, recordGoogleUsage, recordUsageSessionCheckpoint, getUsageSessionStats,
   enrollShadowCreditAccount, enrollEnforcedCreditAccount, recordCreditLedgerEvent, recordAnthropicCreditDebit, recordGoogleCreditDebit, reconcileCreditLedger, getCreditAccountStats,
   publishChiefTeamHandoff, getChiefTeamHandoff,
+  // 中継スキーマは DB を立てずに単体検査できるようにする（relay の出口検証）。
+  cleanChiefPacket, cleanChiefTeamPlan,
   FOUNDING_CAP,
   _pool: () => pool,
 };
