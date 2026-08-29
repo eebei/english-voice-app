@@ -5417,7 +5417,7 @@ plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_
 
 ### commit
 
-`f21d9d6 Carry the confirmed Team Plan from briefing to handoff and results` — 変更は上表の6ファイルのみ。無関係な未追跡物（`artifacts/`、`desktop/dist/`等）はstageしていない。
+`3e96cf1 Carry the confirmed Team Plan from briefing to handoff and results` — 変更は上表の6ファイルのみ。無関係な未追跡物（`artifacts/`、`desktop/dist/`等）はstageしていない。
 
 ### 未解決事項
 
