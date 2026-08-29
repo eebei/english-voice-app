@@ -289,7 +289,7 @@ console.log('══ ⑥ renderer 配線（片側だけで終わっていない�
   };
   box.window.localStorage = box.localStorage;
   vm.createContext(box);
-  const code = ['teamPlanModule', 'loadTeamPlanState', 'saveTeamPlanState', 'teamPlanLang',
+  const code = ['teamModeActive', 'teamPlanModule', 'loadTeamPlanState', 'saveTeamPlanState', 'teamPlanLang',
     'teamPlanSay', 'handleTeamPlanUtterance', 'evaluateTeamPlanLiveEvidence', 'captureTeamStintLap',
     'currentTeamStintSummary', 'resetTeamStint', 'buildTeamHandoffSection', 'applyReceivedTeamPlan',
     'loadTeamRaceLearning', 'persistTeamRaceLearning', 'teamStintResultAnswer'].map(grab).join('\n');
@@ -343,6 +343,35 @@ console.log('══ ⑥ renderer 配線（片側だけで終わっていない�
   ck('本番導線：受信側で再確認の発話が出る', /rev1/.test(spoken[spoken.length - 1]), spoken[spoken.length - 1]);
   ck('本番導線：同じ packet の再受信は適用しない',
     box.applyReceivedTeamPlan(JSON.parse(JSON.stringify(section))) === false);
+
+  // Chief Engineer Mode を切った単独走行：Team Plan は一切作動しない。
+  box.chiefEngineerSettings = () => ({ enabled: false, roster: [], current_index: 0, this_driver_index: 0, team_code: '' });
+  const soloBefore = JSON.stringify(store2);
+  ck('単独走行：ブリーフィング開始を横取りしない', box.handleTeamPlanUtterance('作戦会議を開始') === false);
+  ck('単独走行：確定語も横取りしない', box.handleTeamPlanUtterance('その内容で確定') === false);
+  ck('単独走行：実測評価を出さない', box.evaluateTeamPlanLiveEvidence(live) === null);
+  ck('単独走行：交代 section を作らない', box.buildTeamHandoffSection() === null);
+  ck('単独走行：レース後保存をしない', box.persistTeamRaceLearning({ is_race: true }) === null);
+  box.captureTeamStintLap(Object.assign({}, live, { lap: 40 }));
+  ck('単独走行：保存領域を一切触らない', JSON.stringify(store2) === soloBefore);
+}
+
+// ── ⑥-b Chief Engineer Mode が実行面であること／単独走行を壊さないこと ──
+console.log('══ ⑥-b Chief Engineer Mode 前提 ══');
+{
+  ck('Chief の roster / 現在担当から stint identity を取る',
+    /chiefEngineerSettings\(\);[\s\S]{0,200}driver_name:cfg\.roster\[cfg\.current_index\]/.test(html));
+  ck('Chief の relay へ team_plan を載せて送る',
+    /publishChiefTeamHandoff\(outgoingPacket\)/.test(html));
+  ck('受信は Chief の share status（次 Driver の UI）へ出る',
+    /chiefShareStatus\(r\.reply\)/.test(html));
+  ck('Chief が無効な単独走行では Team Plan を作動させない',
+    /function teamModeActive\(\)\{[\s\S]{0,220}cfg\.enabled===true && cfg\.roster\.length>=2/.test(html));
+  ['handleTeamPlanUtterance', 'evaluateTeamPlanLiveEvidence', 'captureTeamStintLap',
+    'persistTeamRaceLearning', 'buildTeamHandoffSection'].forEach(fn => {
+    const body = html.slice(html.indexOf('function ' + fn + '('), html.indexOf('function ' + fn + '(') + 260);
+    ck('  ' + fn + ' が Chief 無効時に早期 return する', /!teamModeActive\(\)/.test(body), body.slice(0, 120));
+  });
 }
 
 // ── ⑦ レース後：確定した構造化ソースから答える ────────────────────────

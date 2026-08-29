@@ -5651,10 +5651,16 @@ function teamPlanSay(reply,kind){
   addMsg('ai',reply); pushMsg({role:'assistant',content:reply});
   speak(reply,{prio:SPEAK_PRIO.P4_INFO,kind:kind||'team_plan',dedupeKey:'team_plan|'+reply});
 }
+// Team Plan は Chief Engineer Mode（耐久チーム）の機能。Chief が無効な単独走行では
+// 一切作動させず、既存の通常会話・戦略・個人成績へ手を出さない。
+function teamModeActive(){
+  try{ const cfg=chiefEngineerSettings(); return cfg.enabled===true && cfg.roster.length>=2; }
+  catch(_){ return false; }
+}
 // 走行中の相槌で Plan が動かないよう、入口を「明示開始・明示確定・
 // ブリーフィング中の回答・プラン照会」に限定する。それ以外は通常会話へ返す。
 function handleTeamPlanUtterance(text){
-  const m=teamPlanModule(); if(!m||!text) return false;
+  const m=teamPlanModule(); if(!m||!text||!teamModeActive()) return false;
   const lang=teamPlanLang(); const state=loadTeamPlanState(); if(!state) return false;
   if(m.isBriefingStart(text)){
     const r=m.startBriefing({state,lang,roster:chiefEngineerSettings().roster,now:new Date().toISOString()});
@@ -5679,7 +5685,7 @@ function handleTeamPlanUtterance(text){
 }
 // 3クリーン周が揃うまで Plan を動かさない。揃っても confirmed は人の確認だけ。
 function evaluateTeamPlanLiveEvidence(live){
-  const m=teamPlanModule(); if(!m) return null;
+  const m=teamPlanModule(); if(!m||!teamModeActive()) return null;
   const state=loadTeamPlanState(); if(!state) return null;
   const cmp=m.compareLiveEvidence({state,live,lang:teamPlanLang()});
   if(!cmp.available||teamPlanEvidenceAnnounced) return cmp;
@@ -5692,7 +5698,7 @@ function evaluateTeamPlanLiveEvidence(live){
   return cmp;
 }
 function captureTeamStintLap(live){
-  if(!live||typeof live!=='object') return;
+  if(!live||typeof live!=='object'||!teamModeActive()) return;
   const lap=Number(live.lap);
   if(!Number.isInteger(lap)||lap<=0) return;
   if(teamStintStartLap===null) teamStintStartLap=lap;
@@ -5722,7 +5728,7 @@ function currentTeamStintSummary(){
 function resetTeamStint(){ teamStintLaps=[];teamStintPitEvents=[];teamStintStartLap=null;teamStintLastLap=null; }
 // 交代時に載せる team section。confirmed Plan・実測・送信側スティント要約。
 function buildTeamHandoffSection(){
-  const m=teamPlanModule(); if(!m) return null;
+  const m=teamPlanModule(); if(!m||!teamModeActive()) return null;
   const state=loadTeamPlanState(); if(!state) return null;
   const stint=currentTeamStintSummary();
   const section=m.buildHandoffTeamSection({state,
@@ -5749,7 +5755,7 @@ function loadTeamRaceLearning(){
   catch(_){ return []; }
 }
 function persistTeamRaceLearning(summary){
-  const m=teamPlanModule(); if(!m) return null;
+  const m=teamPlanModule(); if(!m||!teamModeActive()) return null;
   const state=loadTeamPlanState(); if(!state) return null;
   const current=currentTeamStintSummary();
   const stints=teamRaceStints.concat((current&&current.laps_completed)?[current]:[]);

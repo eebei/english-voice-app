@@ -22,6 +22,16 @@
 
 ## 実装対象：Briefing → Team Plan → Live evidence → Handoff → Result memory
 
+### Chief Engineer Mode は本案件の必須実行面
+
+本案件の Team Plan は、単体の会話台帳やローカル画面だけでは完成ではありません。**Chief Engineer Mode の設定・交代・relay・受信画面を通って初めて有効**です。
+
+- Chief Engineer Mode を有効にした各 PC の `このPC: Driver N`、roster、`現在担当` を正しく使うこと。
+- ここで保存・確定した Plan、実測、stint summary が、Chief の handoff packet を通って次 Driver の Chief UI／短い再確認発話へ届くこと。
+- Chief Mode が無効な通常の単独走行では、既存の通常会話・戦略・個人成績を壊さないこと。
+
+これは新しい別Phaseではなく、上記「Briefing → Team Plan → Live evidence → Handoff → Result memory」を成立させる現行案件の受入条件です。
+
 ### 1. 人間主導の初期 Team Plan と段階ブリーフィング
 
 初めての 4 時間ニュル北耐久で、Luna が根拠なく完成戦略を発明してはならない。
@@ -109,3 +119,36 @@
 - 未解決事項があれば P0/P1/P2 と、耐久前に使えない機能を明記
 
 Codex が独立再確認します。テスト未実行、片側だけの UI、会話文言だけの実装は完成として返さないでください。
+
+---
+
+## 追指示 — Codex独立再実行で判明した完成ゲートの是正（Phaseはまだ開始しない）
+
+上記 Team Plan 実装の完了報告は受領したが、Codex の独立再実行で `./preflight.sh` が成功終了していないことを確認した。**新しいPhaseの実装には入らず、この是正だけを完了させること。**
+
+### A. `tests-memory-action-layer.js` を赤のまま残さない
+
+現在の失敗は次です。
+
+`proactive briefing says that stored session history was used`
+
+1. `a47bf21` を含む実装前基準でも同じ失敗か、同じコマンド・出力で再現して記録する。
+2. 既存不良であっても、公開候補を赤のまま返さない。期待値が古いのか、本番の briefing から履歴利用の根拠が脱落したのかを調べ、正しい製品契約を実装とテストで一致させる。
+3. assertion の削除、常時true化、単なるskipで通すことは禁止。履歴未取得時に「使った」と言わない fail-closed も維持する。
+
+### B. HTTP統合テストとdeploy確認を、コード失敗と実行環境制約に分離する
+
+Codex環境では `node tests-chat-http.js` が `listen EPERM 0.0.0.0:3901` で止まった。この環境固有のポート制限を、`auth.js`変更によるサーバー起動失敗と混同しないこと。
+
+- bindできる通常ローカル環境で HTTP統合テストを実行し、Team Plan relay schema追加後も server起動・既存API契約が通る証拠を出す。
+- bind不能環境では、無断で本番ポート・外部サービスへ逃がさない。テスト用の安全な設定注入／明確な環境skipの扱いが既存方針に合うかを確認し、必要な最小修正とそのテストを追加する。
+- deploy確認は実deployをしない。資格情報やネットワークが無い場合、コードテスト失敗として偽装せず、何が未実行かを明記する。
+
+### C. 完了条件
+
+- Team Plan 112/112、chief cross-PC 19/19だけでなく、`preflight.sh`がコード／テスト起因の赤を残さず完走すること。
+- どうしても外部環境が必要なものは、ローカル製品テストと分離した上で、未実行理由・再現手順・P番号を正確に報告すること。既存不良の「報告だけ」は不可。
+- 修正後に全関連テストを再実行し、実行できた／できないものを分けて共有ログ末尾へ追記する。
+- 実装はcommitする。Build、署名、公開、push、deployは引き続き禁止。
+
+この是正がCodex確認で合格するまで、Phase Fを受け取ったものとして作業を始めないこと。

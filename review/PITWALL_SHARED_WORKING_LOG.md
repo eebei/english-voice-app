@@ -5453,3 +5453,19 @@ plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-29 | `cd11d64` | preflight既存不良解消 | Build 277取りこぼしの特定・短文を正とした判断・件→セッションの訂正・preflight 80件全合格 |
+
+## 2026-08-29 JST — ディレクティブ追記「Chief Engineer Mode は必須実行面」への対応
+
+`review/NEXT_CHAT_20260827_UPDATE_DIRECTIVE.md` に追記された受入条件（Chief Engineer Mode の設定・交代・relay・受信画面を通って初めて有効／Chief 無効の単独走行では既存挙動を壊さない）へ対応した。
+
+**元から満たしていた点**：stint identity は Chief の `roster[current_index]`、送信は Chief の relay（`/api/chief/handoff`）、受信は対象 Driver 照合の後に Chief の share status（次 Driver の UI）＋短い再確認発話。
+
+**追加した点**：`teamModeActive()`（`chief-mode-enabled` かつ roster 2名以上）を新設し、`handleTeamPlanUtterance` / `evaluateTeamPlanLiveEvidence` / `captureTeamStintLap` / `buildTeamHandoffSection` / `persistTeamRaceLearning` の全入口を早期 return でゲートした。**Chief が無効な単独走行では Team Plan が一切作動せず、保存領域にも触らない**（テストで実挙動を確認）。
+
+テスト追加：`tests-team-plan.js` に ⑥-b 節（Chief 前提の配線5件＋関数ごとのゲート5件）と、単独走行での実挙動6件。合計 **127/127 合格**。`./preflight.sh` は **80スイート全合格・「✅ 出荷可」**。Build・公開・push・deploy は未実行。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-29 | 本節 | Chief Engineer Mode 実行面対応 | teamModeActive ゲート・Chief 前提配線の明示検査・単独走行を壊さない実挙動テスト・team-plan 127/127・preflight全緑 |
