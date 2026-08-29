@@ -5515,3 +5515,9 @@ Codexの Phase F 開始許可を受け、F1〜F4を実装した。**Build・署�
 - **P2**：`fieldCoverage` の `classEntryCount` は SessionInfo 側にある事実で、現状 renderer からは渡していない（常に `complete_field:false`＝安全側）。全同クラス分析を名乗るには配線が要る。
 - **P2**：相対ペースは自発コールを出さない。質問への回答のみ。
 - **未到達**：`auth.js` を含むサーバー側は push＋deploy が別途必要。exe反映にはBuildが必要。
+
+### MD更新台帳への追記（Phase F）
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-29 | `4a89cd4` | 2026-08-29 Phase F | F1相対ペースauthority（入力・対象固定・スコープ・鮮度・fail-closed・禁止事項）／F2 GAP訂正の保留と再観測解除／F3単一snapshotと4判定／F4 Chief導線・変更ファイル・phase F 64/64・preflight 81件全合格・P1/P2 |
