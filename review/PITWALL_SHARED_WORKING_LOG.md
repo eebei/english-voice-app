@@ -5452,4 +5452,4 @@ plan body は `{revision,status,source,updated_at,fields{}}`、fieldsは`driver_
 
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
-| 08-29 | 本節 | preflight既存不良解消 | Build 277取りこぼしの特定・短文を正とした判断・件→セッションの訂正・preflight 80件全合格 |
+| 08-29 | `cd11d64` | preflight既存不良解消 | Build 277取りこぼしの特定・短文を正とした判断・件→セッションの訂正・preflight 80件全合格 |
