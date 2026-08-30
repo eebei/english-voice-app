@@ -283,7 +283,7 @@ if node tests-build291-20260830-replay.js >/dev/null 2>&1; then echo "   ✅ 全
 echo "── Build 291 修正2：会話成立・反射イベント統合（2026-08-30）"
 if node tests-build291-fix2.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build291-fix2.js 2>&1|grep "❌"|head -10; fail=1; fi
 
-echo "── PDDP ドライバー成長プログラム（実測→重点→次レース）"
+echo "── PDDP v1：実測→主因一つ→次レース／欠損非捏造・訂正反映・横取り禁止"
 if node tests-pddp.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-pddp.js; fail=1; fi
 
 echo ""
