@@ -596,6 +596,23 @@ function buildPitDecision(live, lang) {
       : `Fuel shortfall remains. Do not push; box again next lap.`;
     return ja(lang) ? 'ピット完了。アウトラップはタイヤを作ってペースキープ。' : 'Stop complete. Build the tyres and hold pace on the out-lap.';
   }
+  // A negative total-to-finish margin does not mean "box this lap" when the
+  // owned timing authority says the planned window is still ahead.  Keep the
+  // response aligned with the same authority used by the bridge warning gate.
+  const timing = live && live.fuel_strategy && live.fuel_strategy.pit_timing_authority;
+  if (p.action === 'box' && timing && timing.available === true
+      && timing.decision && timing.decision !== 'pit_now') {
+    const latest = finite(timing.latest_safe_pit_lap);
+    const until = finite(timing.laps_until_latest_safe_pit);
+    if (ja(lang)) {
+      return latest != null && until != null
+        ? `今はステイアウト。Plan ${timing.selected_plan || 'A'}を継続、最終目安は${Math.trunc(latest)}周目、あと${Math.trunc(until)}周。`
+        : '今はステイアウト。ピットウィンドウまで走れる。';
+    }
+    return latest != null && until != null
+      ? `Stay out for now. Continue Plan ${timing.selected_plan || 'A'}; latest target lap ${Math.trunc(latest)}, ${Math.trunc(until)} laps away.`
+      : 'Stay out for now; the pit window is still reachable.';
+  }
   if (p.action === 'box') {
     const f = live && live.pit_exit_forecast || {};
     const cycle = f.pit_cycle && f.pit_cycle.if_pack_stops && f.pit_cycle.if_pack_stops.likely;

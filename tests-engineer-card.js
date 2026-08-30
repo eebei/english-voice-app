@@ -441,6 +441,19 @@ reply = cards.build(cards.classify('後ろの方がペース早いな。'), {
 }, 'ja');
 check('RBR rear-pace comment never turns total fuel shortfall into an early pit call',
   /相対ペースはまだ確定できない.*Plan Aを維持.*あと10周/.test(reply) && !/ピット優先/.test(reply), reply);
+reply = cards.build(cards.classify('この周に入ったら後方の車とブレンドしちゃうか？'), {
+  session_type:'Race', lap:14, fuel:16.1,
+  race_plan:{kind:'timed',configured_duration_s:2400},
+  fuel_strategy:{required_fuel_l:37.96, margin_l:-21.8, add_fuel_l:22.3,
+    estimated_crossings_to_finish:14,
+    pit_required:true,
+    pit_timing_authority:{available:true, decision:'hold', selected_plan:'A',
+      latest_safe_pit_lap:19, laps_until_latest_safe_pit:5}},
+  strategy_plan:{action:'box', reason:'fuel_shortfall', set_fuel_l:23},
+}, 'ja');
+check('pit decision never converts a planned future stop into pit-now',
+  /今はステイアウト.*Plan Aを継続.*19周目.*あと5周/.test(reply)
+    && !/ピットを推奨/.test(reply), reply);
 check('8/14 spoken pit wording routes to the pit-decision handler',
   cards.classify('ピット 入る？').topic === cards.TOPIC.PIT_DECISION);
 check('8/14 STT 周/州 wording routes to the pit-decision handler',
