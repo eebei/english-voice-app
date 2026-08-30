@@ -5714,4 +5714,4 @@ Codex指定の受入テストは全て新規スイートに含めた：null GAP�
 
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
-| 08-30 | 本節 | P0-1/P0-2修正完了報告 | 変更ファイル・テスト合格数・null→0再発なしの実測前後比較・分類再生表・commit hash・Build/公開/push/deploy未実施・Codexへの確認2件・preflight赤1件の保留 |
+| 08-30 | `dc8b57d` | P0-1/P0-2修正完了報告 | 変更ファイル・テスト合格数・null→0再発なしの実測前後比較・分類再生表・commit hash・Build/公開/push/deploy未実施・Codexへの確認2件・preflight赤1件の保留 |
