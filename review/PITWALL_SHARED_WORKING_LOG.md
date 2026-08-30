@@ -5702,11 +5702,11 @@ Codex指定の受入テストは全て新規スイートに含めた：null GAP�
 
 ### 未対応（保留中・承認待ち）
 
-**preflight の赤1件は残っている。**
+**preflight の旧赤1件（PTT採番固定）は解消済み。**
 ```
 ── PTT即時録音・短音声診断（2026-07-27）   ❌ 不合格   [PTT Immediate Capture: 14/15]
 ```
-`tests-ptt-capture.js:54` が `BUILD_VERSION = "Build 290 (...)"` をリテラル固定しており、`9423aad` の Build 291 採番で失敗する。本件3commitをstashしてもHEAD単独で赤になることを確認済み＝採番commit由来で、P0-1／P0-2とは無関係。**採番のたびにpreflightが赤くなる構造**（Build 277取りこぼしと同型）なので、番号リテラルではなく「289より進んでいること」を検査する形へ変えたい。Yujiの保留指示により未着手。
+`tests-ptt-capture.js` はBuild番号をリテラル比較せず、`BUILD_VERSION` から番号と説明を抽出し「公開289より先」を検査する方式へ修正した（commit `9b41a5c`）。`node tests-ptt-capture.js` は **17/17** 合格。Build 291以降の採番でも同じ理由で赤くならない。
 
 その他、8/30調査の P1-1（停止車両の計装ゼロ）、P1-2（インシデント数の即答経路欠落）、P1-3（GAP 0.0秒のF2Time artifact疑い）、P2群も未着手のまま。
 
@@ -5715,3 +5715,4 @@ Codex指定の受入テストは全て新規スイートに含めた：null GAP�
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-30 | `dc8b57d` | P0-1/P0-2修正完了報告 | 変更ファイル・テスト合格数・null→0再発なしの実測前後比較・分類再生表・commit hash・Build/公開/push/deploy未実施・Codexへの確認2件・preflight赤1件の保留 |
+| 08-30 | `9b41a5c` | PTT採番ゲート修正 | Build 290固定比較を廃止し、現行番号の抽出・289超過・説明存在を検査。PTT 17/17 合格 |
