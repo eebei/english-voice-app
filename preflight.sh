@@ -277,6 +277,9 @@ if node tests-team-plan.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格
 echo "── Phase F：前後相対ペース authority・GAP訂正保留・単一snapshot（2026-08-29）"
 if node tests-phase-f-trackside.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-phase-f-trackside.js 2>&1|grep "❌"|head -10; fail=1; fi
 
+echo "── 8/30 RB Ring実走：null→0根絶・交通/ブレンドのpit誤爆（Build 291 replay）"
+if node tests-build291-20260830-replay.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build291-20260830-replay.js 2>&1|grep "❌"|head -10; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
