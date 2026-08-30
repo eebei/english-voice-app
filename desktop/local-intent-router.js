@@ -13,13 +13,28 @@
   'use strict';
 
   const isJP = lang => lang === 'ja';
-  const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+  // ★2026-08-30 P0-1：`Number(null) === 0` かつ `Number.isFinite(0) === true`。
+  //   以前の実装は Number() へ直接渡していたため、**未取得の値が 0 という
+  //   確定値に化けた**。8/30 RB Ring 実走では「最終目安は0周目、あと0周」を
+  //   喋り、GAP が取れていない場面では「前0.0秒、後ろ0.0秒」＝真後ろに
+  //   張り付かれていると断言し得た。この router は GAP・燃料・残り周回・
+  //   天候の即答を全部持っているので、緩い変換は全回答に効く毒になる。
+  //   リポジトリの他モジュール（team-plan / fuel-plan-guard / gap-freshness /
+  //   engineer-card / server.js）は全て先に null 系を弾いており、ここだけが
+  //   例外だった。欠損は欠損のまま null で返し、各回答の「取得できない」
+  //   分岐へ落とす。
+  const finite = value => {
+    if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
+    return Number.isFinite(Number(value)) ? Number(value) : null;
+  };
   const integer = value => {
     const n = finite(value);
     return n !== null && Number.isInteger(n) ? n : null;
   };
   const formatDuration = (seconds, lang) => {
-    const total = Math.max(0, Math.round(seconds));
+    const value = finite(seconds);
+    if (value === null) return '';
+    const total = Math.max(0, Math.round(value));
     const h = Math.floor(total / 3600);
     const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
@@ -112,7 +127,9 @@
         ? (isJP(lang)?'今周ピット。':'Pit this lap.')
         : (until!==null&&latest!==null
           ? (isJP(lang)?`今は${timing.decision==='hold'?'待てる':'次のウインドウ'}。最終目安は${latest}周目、あと${until}周。`:`${timing.decision==='hold'?'Hold':'Pit later'}. Latest target lap ${latest}, ${until} laps away.`)
-          : (isJP(lang)?'今すぐのピット根拠はない。':'There is no pit-now evidence.'));
+          : (isJP(lang)
+            ? `ごめん、最終目安の周はまだ確定できない。Plan ${timing.selected_plan || 'A'}を継続、次のクリーン周で詰める。`
+            : `Sorry — the latest target lap is not confirmed yet. Continue Plan ${timing.selected_plan || 'A'}; I will tighten it on the next clean lap.`));
       return isJP(lang)
         ? `現燃料で約${range.toFixed(1)}周。完走まで${shortfall!==null?shortfall.toFixed(1)+'L不足':'不足量は未確定'}。${when}`
         : `About ${range.toFixed(1)} laps of fuel remain. ${shortfall!==null?shortfall.toFixed(1)+'L short to finish':'Finish shortfall is not confirmed'}. ${when}`;
@@ -343,7 +360,8 @@
       if (parts.length) return gapAnswer('nearest_gap',
         isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`, identities);
       return answer('nearest_gap_unavailable',
-        isJP(lang) ? '前後のGAPはまだ取れていない。' : 'The nearest gaps are not available yet.');
+        isJP(lang) ? 'ごめん、前後のGAPはまだ取れていない。次の計測で言う。'
+          : 'Sorry — the nearest gaps are not available yet. I will call them at the next measurement.');
     }
     if (/(?:トップ|首位|P1|leader).{0,10}(?:何周|何ラップ|周回|ラップ数|lap)|(?:何周|何ラップ|周回|ラップ数).{0,10}(?:トップ|首位|P1|leader)/i.test(text)) {
       const wantsOverall = /総合|GTP|gdp|overall/i.test(text);
