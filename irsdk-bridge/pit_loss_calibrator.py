@@ -98,6 +98,17 @@ def _fuel_service_summary(record):
     }
 
 
+def _pit_exclusion_reason(sample):
+    """Return a stable reason for a pit sample not entering calibration."""
+    if sample.get("reference_only", False):
+        return "reference_only"
+    if sample.get("classification") != "calibration":
+        return str(sample.get("classification") or "missing_classification")
+    if sample.get("service_profile_version") != SERVICE_PROFILE_VERSION:
+        return "service_profile_version_mismatch"
+    return "unknown"
+
+
 def crossed_forward(previous_pct, current_pct, target_pct, max_step=0.08):
     """Reject reverse movement/teleports; accept a forward crossing including S/F wrap."""
     previous_pct, current_pct, target_pct = (
@@ -144,10 +155,16 @@ def summarize_record(record):
         "error_q1_positions": _quartile(errors, 0.25) if len(errors) >= 3 else None,
         "error_q3_positions": _quartile(errors, 0.75) if len(errors) >= 3 else None,
     }
+    excluded = [s for s in record.get("pit_samples", []) if s not in pits]
+    excluded_reasons = {}
+    for sample in excluded:
+        reason = _pit_exclusion_reason(sample)
+        excluded_reasons[reason] = excluded_reasons.get(reason, 0) + 1
     return {
         "pit_sample_count": len(pits),
         "excluded_pit_sample_count": max(
             0, len(record.get("pit_samples", [])) - len(pits)),
+        "excluded_pit_sample_reasons": excluded_reasons,
         "normal_sample_count": len(normals),
         "usable_sample_count": usable,
         "confidence": "medium" if usable >= 3 else "low",
