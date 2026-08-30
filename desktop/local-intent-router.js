@@ -164,8 +164,20 @@
   //   queue では破棄される古さの値を質問回答では喋ってしまう。
   const GAP_ANSWER_MAX_AGE_MS = 5000;
 
+  // ★2026-08-30 修正2：STT の表記揺れを**入口で一度だけ**正す。
+  //   Road Atlanta では「GTP」が gdp に化け、同一レースで3回連続して intent へ
+  //   届かなかった（「gdpのコード教えて」がプログラミング依頼と誤解され、
+  //   「ごめん、わたしはレースエンジニア。」で拒否された）。各正規表現へ gdp を
+  //   足して回るのは破綻するので、ここで一度だけ正規化する。
+  function normalizeSttText(raw) {
+    return String(raw || '')
+      .replace(/gdp|GDP|ジーディーピー|ジーティーピー/g, 'GTP')
+      .replace(/GTP.{0,4}コード/g, 'GTPのギャップ')
+      .replace(/シュピート|シューピット/g, 'ピット');
+  }
+
   function route(input) {
-    const text = String(input && input.text || '').trim();
+    const text = normalizeSttText(String(input && input.text || '').trim());
     const lang = input && input.lang === 'en' ? 'en' : 'ja';
     const live = input && input.live && typeof input.live === 'object' ? input.live : null;
     // PTT の直接質問も snapshot 時刻を検査する。渡されない場合は従来どおり
@@ -271,6 +283,32 @@
       return answer('weather_status', parts.length
         ? `${parts.join(isJP(lang) ? '、' : ', ')}。`
         : (isJP(lang) ? '現在の天候テレメトリは取得できない。' : 'Current weather telemetry is unavailable.'));
+    }
+    // ★修正2：上位クラス接近の照会。クラス名だけで推測せず、実測 competitors から
+    //   「どの車が・何秒」を答える。無ければ理由を言う（汎用拒否へ落とさない）。
+    if (/(?:GTP|上位クラス|速いクラス|別クラス).{0,10}(?:来て|きて|どこ|どう|近い|後ろ|接近|ギャップ|差|何秒)|(?:来て|接近).{0,8}(?:GTP|上位クラス)/i.test(text)) {
+      const list = Array.isArray(live.competitors) ? live.competitors : [];
+      const behind = list
+        .map(c => ({ idx: integer(c && c.car_idx), num: c && c.car_number, gap: finite(c && c.gap_s) }))
+        .filter(c => c.idx !== null && c.gap !== null && c.gap > 0)
+        .sort((a, b) => a.gap - b.gap);
+      const nearest = behind[0];
+      if (nearest) {
+        const who = nearest.num ? '#' + nearest.num : 'CarIdx ' + nearest.idx;
+        return answer('faster_class_status', isJP(lang)
+          ? who + '、' + nearest.gap.toFixed(1) + '秒後方。'
+          : 'Nearest behind is ' + who + ' at ' + nearest.gap.toFixed(1) + ' seconds.');
+      }
+      return answer('faster_class_unavailable', isJP(lang)
+        ? '上位クラスの接近は今の実測では確定できない。推測では言わない。'
+        : 'I cannot confirm a faster-class approach from the current measurement; I will not guess.');
+    }
+    // ★修正2：接近コール／GAPへの訂正は「質問」ではなく記録への操作。
+    //   汎用の拒否文へ落とさず、保留にする意思表示を返す。
+    if (/(?:まだ|全然)[^。]{0,10}秒以内[^。]{0,8}(?:入って|来て)ない|(?:その|そんな)[^。]{0,6}(?:差|ギャップ|距離)[^。]{0,6}(?:じゃない|違う|ちがう)/i.test(text)) {
+      return answer('measurement_disputed', isJP(lang)
+        ? '了解。その値は保留にする。次の計測で言い直す。'
+        : 'Copy. I am holding that value and will re-report it at the next measurement.');
     }
     if (/(?:ちゃんと|さっき).{0,10}(?:ギャップ|GAP).{0,10}(?:答えた|言えた|出た)/i.test(text)) {
       return answer('gap_reply_acknowledgement', isJP(lang) ? '了解。' : 'Copy.');

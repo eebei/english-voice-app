@@ -163,10 +163,14 @@ check('truth-gateデフォルト分岐から無関係な定型文が消えてい
 check('truth-gateはドライバーの目標やフィーリングを否定しない',
   renderer.includes('うん、完走しよう。インシデントゼロでいこう。')
   && renderer.includes('了解。無理に押さず、次の確認でフロントの状態を見よう。')
-  && renderer.includes("return looksLikeQuestion?'その数値は確認できない。質問をもう一度短く教えて。':'了解。';"));
+  // ★2026-08-30 修正2：質問でない発話は従来どおり「了解。」。質問には汎用拒否では
+  //   なく「何が未確定か」を返す契約へ変わった（BUILD291_FIX2_SCOPE.md P0 会話成立）。
+  && renderer.includes("if(!looksLikeQuestion) return '了解。';")
+  && !renderer.includes("その数値は確認できない。質問をもう一度短く教えて。"));
 check('truth-gateの最終fallbackは無関係な燃料/GAP説明を足さない',
   !renderer.includes('了解。いまは数値が揃った時だけコールする。')
-  && renderer.includes("? 'I cannot confirm that value. Ask me again in one short phrase.' : 'Copy.';"));
+  && renderer.includes("if(!/[?]|\\b(?:what|where|when|how|which|can you|do you|is it|are we)\\b/i.test(asked)) return 'Copy.';")
+  && !renderer.includes('I cannot confirm that value.'));
 check('STT診断は全文を重複保存せずconfidenceと長さを記録',
   renderer.includes("diagnosticLog('PTT_STT_RESULT'")
   && renderer.includes('confidence:sttConfidence===null?null')

@@ -499,6 +499,8 @@ def record_ptt_audio():
 PRIORITY = {
     # P0 安全・即時（0.1秒が命。絶対に落とさない）
     'stopped_ahead': 0, 'side_by_side': 0, 'crash_check': 0, 'incident': 0, 'damage_report': 0,
+    # 黄旗はコース閉塞の宣言そのもの。停止車両と同格で扱う（2026-08-30 修正2）。
+    'yellow_flag': 0,
     # P1 安全・文脈（Yuji仕様：GT3は最も遅いクラス＝速い車の接近は危険。必ず報告する）
     'multiclass': 1, 'multi_car_straight': 1, 'pit_box_here': 1,   # pit_box_hereは期限が極端に短い
     # ↓Codex提案で格下げ：低SR/iRは物理的な即時危険ではない
@@ -2390,6 +2392,11 @@ def poll_iracing():
     _pending_summary = None
     _pending_non_race_summary = None
     _pending_checker_notice = None
+    # ★2026-08-30 修正2：黄旗を反射イベントとして持つ。今までコース上の
+    #   イエローは一度も無線になっておらず、停止車両との到着順も比較できなかった。
+    #   立ち上がり（green -> caution）でだけ発火し、時刻を必ず記録する。
+    yellow_flag_active = False
+    yellow_flag_timestamp = None
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
@@ -3515,7 +3522,12 @@ def poll_iracing():
                     side_by_side_last_fired[_side] = _now3
                     if True:  # サイドコールは安全直結＝短めのクールダウン。側ごとにdedup済み。
                         _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
-                        broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side, 'message': _side_msg})
+                        # CarLeftRight はスカラーで car_idx を持たない。identity は
+                        # side だけ＝存在しない車番を作らない。観測時刻は必ず送る。
+                        broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side,
+                                   'source_timestamp': round(_now3, 3),
+                                   'car_left_right': car_left_right,
+                                   'message': _side_msg})
                         last_battle_global = _now3
             # ストレートでも、追い抜き直後の横並びは公式spotter値をそのまま一度だけ伝える。
             # ただし formation/grid の誤案内を避け、Race が実際に開始済みの場合だけに限定する。
@@ -3527,7 +3539,9 @@ def poll_iracing():
                     side_by_side_last_fired[_side] = _now3
                     _side_msg = {'left': 'Car left.', 'right': 'Car right.'}[_side]
                     broadcast({'type': 'radio', 'trigger': 'side_by_side',
-                               'side': _side, 'message': _side_msg})
+                               'side': _side, 'source_timestamp': round(_now3, 3),
+                               'car_left_right': car_left_right,
+                               'message': _side_msg})
                     last_battle_global = _now3
             # ストレート(ゾーン外)で3台以上並走の検知。CarLeftRight=4(両側)/5/6(片側2台)を代用
             # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。
@@ -5265,6 +5279,25 @@ def poll_iracing():
                             nearest_behind_gap = _gd
                             nearest_behind_idx = _ei
 
+            # ── 黄旗（同一ポーリングで記録し、停止車両と到着順を比較可能にする）──
+            # 0xC000 = caution 系ビット。green -> caution の立ち上がりだけを事象とし、
+            # 継続中の黄旗を毎ポーリング喋らない。時刻(flag_timestamp)は必ず持たせる。
+            _yf_flags = reader.read_int('SessionFlags') or 0
+            _yf_caution = bool(_yf_flags & 0xC000)
+            if _yf_caution and not yellow_flag_active:
+                yellow_flag_active = True
+                yellow_flag_timestamp = time.time()
+                if is_race_session and session_racing_started:
+                    broadcast({'type': 'radio', 'trigger': 'yellow_flag',
+                               'flag_timestamp': round(yellow_flag_timestamp, 3),
+                               'source_timestamp': round(yellow_flag_timestamp, 3),
+                               'session_time': round(_session_time_now, 3)
+                               if isinstance(_session_time_now, (int, float)) else None,
+                               'message': 'Yellow flag.'})
+            elif not _yf_caution and yellow_flag_active:
+                yellow_flag_active = False
+                yellow_flag_timestamp = None
+
             # ── 停止/クラッシュ車両検知（コース上・オフトラックで動きが止まってる車）──
             # 1秒おきにLapDistPctの変化をサンプリングし、ほぼ動いてなければ「停止」とみなす。
             car_dist_pct = reader.read_float_array('CarIdxLapDistPct', 64)
@@ -5351,8 +5384,20 @@ def poll_iracing():
                                 # now-irrelevant number.
                                 gap_call_policy.suppress(_now2, 8.0)
                                 _invalidate_gap_live_context('stopped_ahead')
+                                # ★2026-08-30 修正2：反射イベントは identity と
+                                #   観測時刻を必ず持つ。desktop 側が期限・順序・
+                                #   訂正保留を判定するための最小の材料。
+                                #   track_side は SDK から確実に取れないので送らない
+                                #   （取れない側を推測で作らない＝発話でも省く）。
                                 broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
                                     'delta': round(_sdist, 1) if _has_lap_time else None,
+                                    'car_idx': idx,
+                                    'car_number': car_number_map.get(idx),
+                                    'distance': round(_sdist, 1) if _has_lap_time else None,
+                                    'stopped_timestamp': round(car_stopped_since.get(idx, _now2), 3),
+                                    'source_timestamp': round(_now2, 3),
+                                    'session_time': round(_session_time_now, 3)
+                                    if isinstance(_session_time_now, (int, float)) else None,
                                     'message': ('Stopped car ahead, ' + _fmt_gap(_sdist) + '.'
                                                 if _has_lap_time else 'Stopped car ahead. Caution.')})
                                 stopped_armed[idx] = False

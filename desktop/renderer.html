@@ -699,6 +699,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="driving-style-v1.js"></script>
 <script src="team-plan.js"></script>
 <script src="relative-pace.js"></script>
+<script src="reflex-events.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -1261,6 +1262,9 @@ let sessionBestLapSeconds = null;
 let briefingKicked = false;   // 戦略モード：iRacing接続時の能動ブリーフィングを一度だけ発火するフラグ
 let lastSessionSummary = null, autoDebriefTimer = null, autoDebriefStarted = false, autoDebriefData = null;
 let evidenceDebrief = null;
+// 修正2：反射イベント（左右車・停止車両・黄旗・危険車両・重大インシデント・
+// 緊急燃料）の最新値と、ドライバー訂正で保留中のイベント。
+let reflexLatestByKind={}, reflexHolds=null, reflexLastSpoken=null, reflexPendingHazards={yellow:null,stopped:null};
 // Phase F：前後相対ペースの標本台帳と、訂正で保留中のGAP方向。
 let relativePaceStore=null, gapHolds=null;
 // Team Plan のセッション内状態（合意済み Plan 自体は localStorage 側が正本）。
@@ -2287,6 +2291,12 @@ async function sendMsg(inputSource){
     addMsg('ai',reply);pushMsg({role:'assistant',content:reply});speak(reply,true);
     return;
   }
+  // ★修正2：反射コールへの訂正（「左は壁しかない」等）は、そのイベントだけを
+  //   取り下げる。種別ごと黙らせない＝次に本当に来た車は警告できる。
+  if(typeof handleReflexDispute==='function' && handleReflexDispute(text)){
+    usageCount(inputSource==='ptt'?'ptt':'typed');
+    return;
+  }
   // Team Plan は「合意」であって会話文言ではない。明示開始・明示確定・
   // ブリーフィング中の回答・プラン照会だけをここで受け、LLM へ落とさない。
   // 走行中の相槌や事実質問は下の local router / LLM 側へそのまま通す。
@@ -2602,12 +2612,32 @@ function telemetryTruthFallback(live, userText, isJP){
     if(/完走|finish|チェッカー|checkered/i.test(String(userText||''))) return 'うん、完走しよう。インシデントゼロでいこう。';
     if(/フロント.*(?:食わ|入ら|ない)|曲がら|アンダー|オーバー|ステア|grip|understeer|oversteer/i.test(String(userText||''))) return '了解。無理に押さず、次の確認でフロントの状態を見よう。';
     const looksLikeQuestion=/[?？]|(?:いくつ|何|どう|どこ|いつ|わかる|分かる|わかります|分かります|教えて|入って|来て|取れて|届いて)/i.test(asked);
-    return looksLikeQuestion?'その数値は確認できない。質問をもう一度短く教えて。':'了解。';
+    if(!looksLikeQuestion) return '了解。';
+    // ★2026-08-30 修正2 P0：汎用の「その数値は確認できない」を標準応答にしない。
+    //   何を聞かれたのか・なぜ未確定なのかを、実測の言葉で返す。
+    //   Road Atlanta では GTP 接近への訂正とGAP質問がこの定型文に落ちた。
+    const subject=
+      /GTP|GT3|上位クラス|マルチクラス|別クラス/i.test(asked) ? '上位クラスの接近' :
+      /ギャップ|GAP|差|前|後ろ|後方/i.test(asked) ? '前後の車間' :
+      /順位|ポジション|何番手/i.test(asked) ? '順位' :
+      /燃料|給油|リットル/i.test(asked) ? '燃料' :
+      /タイヤ|温度|内圧|ダメージ|損傷/i.test(asked) ? '車両の状態' : null;
+    if(!subject) return '今の質問、聞き取れた範囲では答えを持っていない。もう一度短く言って。';
+    return `${subject}は今この瞬間の実測が取れていない。推測では答えない。次の計測で言う。`;
   }
   if(live && live.on_pit_road===true) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
-  return /[?]|\b(?:what|where|when|how|which|can you|do you|is it|are we)\b/i.test(asked)
-    ? 'I cannot confirm that value. Ask me again in one short phrase.' : 'Copy.';
+  // ★2026-08-30 修正2 P0：英語側も汎用拒否を標準応答にしない。何が未確定かを言う。
+  if(!/[?]|\b(?:what|where|when|how|which|can you|do you|is it|are we)\b/i.test(asked)) return 'Copy.';
+  const enSubject=
+    /GTP|GT3|faster class|multiclass/i.test(asked) ? 'the faster-class approach' :
+    /gap|ahead|behind/i.test(asked) ? 'the nearest gap' :
+    /position|place|P\d/i.test(asked) ? 'the current position' :
+    /fuel|litre|liter/i.test(asked) ? 'fuel' :
+    /tyre|tire|temp|pressure|damage/i.test(asked) ? 'the car state' : null;
+  return enSubject
+    ? `I do not have a live measurement for ${enSubject} right now, and I will not guess. I will call it at the next measurement.`
+    : 'I do not have an answer for that from what I heard. Say it again in one short phrase.';
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -2737,6 +2767,16 @@ async function callAPI(inputSource, memoryStatus=''){
           + full.replace(/\s+/g,' ').trim());
       } else if(!truthBlocked && bubble) {
         bubble.textContent = full.replace(/\[JA:[\s\S]*\]$/,'').trim();
+      }
+      // ★2026-08-30 修正2：安全コールの発生源は決定論経路ひとつだけ。
+      //   LLM が「左に車」「イエロー」等を書いたら、その文だけを落とす
+      //   （返答全体は殺さない）。Road Atlanta で実際に捏造が再生された。
+      if(!truthBlocked && window.PitwallReflexEvents
+         && window.PitwallReflexEvents.containsReflexClaim(full.slice(spokenLen))){
+        const _stripped=window.PitwallReflexEvents.stripReflexClaims(full);
+        diagnosticLog('REFLEX_CLAIM_STRIPPED',JSON.stringify({removed:_stripped.removed}));
+        full=_stripped.text;
+        if(bubble) bubble.textContent=full;
       }
       flushSentences(false);
     }
@@ -4242,6 +4282,33 @@ function resetLapReadoutCounter(){
 function injectRadio(data){
   if(selMode!=='race') return;
   if(data.trigger==='pit_exit') return;  // limiter_off直後の重複コールは全キャラクターで廃止
+  // ★2026-08-30 修正2：反射系は共通モデルへ正規化し、発話直前に
+  //   「期限内か」「より新しい同種イベントが来ていないか」「訂正で保留中でないか」を
+  //   再検証する。落とした理由は必ず残す（黙った理由が消えないように）。
+  const _reflex=toReflexEvent(data);
+  if(_reflex){
+    reflexLatestByKind={...reflexLatestByKind,[_reflex.kind]:_reflex};
+    const _decision=reflexSpeakDecision(_reflex);
+    if(!_decision.speak){
+      diagnosticLog('REFLEX_SUPPRESSED',JSON.stringify({kind:_reflex.kind,
+        event_id:_reflex.event_id,reason:_decision.reason}));
+      return;
+    }
+    reflexLastSpoken=_reflex;
+    diagnosticLog('REFLEX_EVENT',JSON.stringify({kind:_reflex.kind,event_id:_reflex.event_id,
+      source:_reflex.source,source_timestamp:_reflex.source_timestamp,
+      session_time:_reflex.session_time,valid_until:_reflex.valid_until,
+      estimated_timestamp:_reflex.source_timestamp_estimated===true}));
+    const _hazardLines=reflexHazardLines(_reflex);
+    if(_hazardLines&&_hazardLines.length){
+      // 黄旗と停止車両が同時に立った時は、到着順に沿った決定論の文だけを喋る。
+      _hazardLines.forEach(line=>{
+        addMsg('ai',line);
+        speak(line,{prio:SPEAK_PRIO.P0_SAFETY,kind:'reflex_hazard',dedupeKey:'reflex|'+line});
+      });
+      return;
+    }
+  }
   // ★Build 265/266 fix — Lap Readout 契約 gate（UI保存 → 実 dispatch 接続）。
   //   Codex 差戻し⑦：候補ごとの運命（発話／policy抑止／P0延期／破棄）を必ず trace する。
   //   candidate だけ作って無言で消えることを禁止する。
@@ -4264,6 +4331,17 @@ function injectRadio(data){
   //   総不足＝planned fuel to add に等しい＝「この周ボックス」は事実と矛盾する。
   //   その時は速記トレースだけ残して発話は抑止する。真の緊急は override_reason を持つ。
   if(data.trigger==='fuel_strategy_warning' && window.PitwallFuelPlanGuard){
+    // ★2026-08-30 修正2 P1：fuel_warning と pit_decision を単一の判断権威へ。
+    //   engineer-card の pit 回答は既に pit_timing_authority に従う（4be413a）。
+    //   警告側だけが総不足で「今周ピット」を出すと、同じレースで相反する指示になる。
+    //   決定は Bridge の timing authority ひとつに寄せる。
+    const _timing=lastTelemetry&&lastTelemetry.fuel_strategy&&lastTelemetry.fuel_strategy.pit_timing_authority;
+    if(_timing&&_timing.available===true&&_timing.decision&&_timing.decision!=='pit_now'){
+      diagnosticLog('FUEL_PIT_AUTHORITY_UNIFIED',JSON.stringify({suppressed:'fuel_strategy_warning',
+        decision:_timing.decision,selected_plan:_timing.selected_plan||null,
+        laps_until_latest_safe_pit:_timing.laps_until_latest_safe_pit??null}));
+      return;
+    }
     const guardVerdict = evaluateFuelPlanGuard(data);
     diagnosticLog('FUEL_PLAN_GUARD', JSON.stringify(guardVerdict));
     if(guardVerdict.allow_p0_pit_now === false){
@@ -4316,7 +4394,13 @@ function injectRadio(data){
   if(data.trigger==='final_lap_notice') finalLapNoticeSeen = true;
   if(data.trigger==='checker_out_notice') checkerOutNoticeSeen = true;
   addMsg('ai',text);
-  pushMsg({role:'assistant',content:text});
+  // ★2026-08-30 修正2 P0：無線を LLM 会話履歴へ入れない。
+  //   Road Atlanta 実走で LLM が「左に車。」を自分で書き、reply_chunk(P2) として
+  //   再生された（同時刻に side_by_side(P0) は無い＝捏造）。原因は無線を
+  //   assistant 発言として履歴に積み、LLM が自分の直前発話として継続したこと。
+  //   LLM が知るべきは *事実*（GAP・順位・燃料）であって *自分が喋った文面* ではない。
+  //   事実は telemetry snapshot から別途注入されるので、ここでは積まない。
+  diagnosticLog('RADIO_HISTORY_EXCLUDED','trigger='+String(data.trigger||''));
   // ★2026-07-20 Codexレビュー P0-1：bridgeが決めた優先度をそのまま使う。
   //   旧実装は crash_check だけ boolean で昇格させ、他は既定のP4に落ちていたため、
   //   停止車両・速いクラス接近・ピット手順まで「情報」と同列に扱われていた。
@@ -5621,6 +5705,69 @@ async function pollChiefTeamHandoff(force){
   }catch(_){ if(force) chiefShareStatus('チーム引き継ぎを確認できませんでした。'); }
 }
 setInterval(()=>pollChiefTeamHandoff(false),10000);
+
+// ══ 修正2：反射イベントの統一経路（決定論のみ・LLMは生成しない）═══════
+function reflexModule(){
+  return (window.PitwallReflexEvents&&typeof window.PitwallReflexEvents.build==='function')
+    ? window.PitwallReflexEvents : null;
+}
+const REFLEX_TRIGGERS={side_by_side:'side_by_side',stopped_ahead:'stopped_ahead',
+  yellow_flag:'yellow_flag',danger:'dangerous_car',incident:'major_incident',
+  fuel_strategy_warning:'fuel_emergency'};
+// bridge の radio を反射イベントへ正規化する。反射でなければ null。
+function toReflexEvent(data){
+  const m=reflexModule(); if(!m||!data) return null;
+  const kind=REFLEX_TRIGGERS[String(data.trigger||'')];
+  if(!kind) return null;
+  // bridge の source_timestamp は秒。ミリ秒へ揃える（欠損なら受信時刻で代用）。
+  const observedS=Number(data.source_timestamp);
+  return m.build({kind,source:'bridge_telemetry',
+    source_timestamp:Number.isFinite(observedS)?observedS*1000:null,
+    session_time:Number(data.session_time),
+    now:Date.now(),
+    payload:{side:data.side||null,car_idx:data.car_idx??null,car_number:data.car_number??null,
+      track_side:data.track_side||null,distance:Number(data.distance ?? data.delta),
+      stopped_timestamp:Number.isFinite(Number(data.stopped_timestamp))?Number(data.stopped_timestamp)*1000:null,
+      flag_timestamp:Number.isFinite(Number(data.flag_timestamp))?Number(data.flag_timestamp)*1000:null,
+      range_laps:Number(data.range_laps)}});
+}
+// 発話直前の再検証。期限切れ・より新しい同種イベント・訂正保留は喋らない。
+function reflexSpeakDecision(event){
+  const m=reflexModule(); if(!m||!event) return {speak:false,reason:'no_module'};
+  return m.validateForSpeech({event,now:Date.now(),
+    latestByKind:reflexLatestByKind,holds:reflexHolds});
+}
+// 黄旗と停止車両が同一ポーリングで届いた時だけ、到着順で1〜2文にする。
+function reflexHazardLines(event){
+  const m=reflexModule(); if(!m) return null;
+  if(event.kind===m.KIND.YELLOW_FLAG) reflexPendingHazards.yellow=event;
+  if(event.kind===m.KIND.STOPPED_AHEAD) reflexPendingHazards.stopped=event;
+  const y=reflexPendingHazards.yellow, st=reflexPendingHazards.stopped;
+  if(!y||!st) return null;
+  const ordered=m.orderHazards({yellow:y,stopped:st,lang:isJapaneseEngineer()?'ja':'en'});
+  reflexPendingHazards={yellow:null,stopped:null};
+  diagnosticLog('REFLEX_HAZARD_ORDER',JSON.stringify({order:ordered.order,merged:ordered.merged,
+    yellow_at:y.payload.flag_timestamp,stopped_at:st.payload.stopped_timestamp,lines:ordered.lines.length}));
+  return ordered.lines;
+}
+// ドライバーの「そんな車いない」等の訂正。**そのイベントだけ**を保留する。
+const REFLEX_DISPUTE_RE=/(?:左|右|両側?).{0,6}(?:車).{0,8}(?:いない|無い|ない)|(?:そんな|そこに).{0,6}(?:車).{0,6}(?:いない|無い)|ウォールしかない|壁しかない|(?:停止車|止まってる車).{0,8}(?:いない|無い)|(?:no|nothing).{0,10}(?:on (?:my |the )?(?:left|right)|there)/i;
+function handleReflexDispute(text){
+  const m=reflexModule(); if(!m||!text) return false;
+  if(!REFLEX_DISPUTE_RE.test(text)||!reflexLastSpoken) return false;
+  const r=m.disputeEvent(reflexHolds,reflexLastSpoken,Date.now());
+  reflexHolds=r.holds;
+  const lang=isJapaneseEngineer()?'ja':'en';
+  const reply=lang==='ja'
+    ? 'そのコールは取り下げる。次の計測で言い直す。'
+    : 'Withdrawing that call. I will re-report it at the next measurement.';
+  diagnosticLog('REFLEX_DISPUTE',JSON.stringify({event_id:reflexLastSpoken.event_id,
+    kind:reflexLastSpoken.kind,scope:'single_event'}));
+  reflexLastSpoken=null;
+  addMsg('ai',reply); pushMsg({role:'assistant',content:reply});
+  speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'reflex_disputed',dedupeKey:'reflex_dispute|'+Date.now()});
+  return true;
+}
 
 // ══ Phase F1/F2：前後相対ペース authority と、訂正されたGAPの保留 ══════
 function relativePaceModule(){
