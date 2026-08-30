@@ -700,6 +700,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="team-plan.js"></script>
 <script src="relative-pace.js"></script>
 <script src="reflex-events.js"></script>
+<script src="pddp.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -4746,6 +4747,19 @@ async function scheduleAutoBriefing(){
       diagnosticLog('SETUP_MEMORY','queue=queued kind=setup_comparison_briefing');
       noteMemoryUtterance('race',_setupCmp.previousDate);
     }
+    // PDDP: 直近実測から次レースの重点を一つだけ提示する。
+    // 戦略・燃料・反射の判断を横取りしないよう、briefing局面でのみ発話する。
+    const _pddp=(window.PitwallPddp&&typeof window.PitwallPddp.analyze==='function')
+      ? window.PitwallPddp.analyze(loadRaceHistory(),{limit:10}) : null;
+    const _pddpLine=(window.PitwallPddp&&_pddp&&typeof window.PitwallPddp.briefingLine==='function')
+      ? window.PitwallPddp.briefingLine(_pddp,_decLang==='ja'?'八木さん':'Driver') : '';
+    diagnosticLog('PDDP_BRIEFING',JSON.stringify({available:!!_pddpLine,
+      sample_size:_pddp&&_pddp.sample_size||0,focus:_pddp&&_pddp.primary_focus||null}));
+    if(_pddpLine){
+      addMsg('ai',_pddpLine);
+      speak(_pddpLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pddp_briefing',
+        dedupeKey:'pddp_briefing|'+String(_pddp.sample_size)+'|'+String(_pddp.primary_focus)});
+    }
     if(_decAdvice.reply){
       addMsg('ai',_decAdvice.reply);
       speak(_decAdvice.reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'decision_plan_advice',
@@ -5247,6 +5261,19 @@ function beginEvidenceDebrief(data){
   const c=evidenceCopy();
   const safeData=sanitizeSessionEvidence(data||buildFallbackSessionSummary());
   const questions=buildEvidenceQuestions(safeData);
+  // PDDPの最初の質問は、実測事実を一つ示して答えやすくする。
+  // 既存の証拠デブリーフは残し、PDDPが利用可能な時だけ先頭に追加する。
+  try{
+    const p=window.PitwallPddp;
+    if(p&&typeof p.primaryIssue==='function'&&typeof p.debriefQuestion==='function'){
+      const rows=loadRaceHistory();
+      const issue=p.primaryIssue(rows,{limit:10});
+      const q=p.debriefQuestion(safeData,issue);
+      if(q&&q.speak&&q.line) questions.unshift(q.line);
+      diagnosticLog('PDDP_DEBRIEF',JSON.stringify({available:!!(q&&q.speak),
+        issue:issue&&issue.category||null,question:q&&q.kind||null}));
+    }
+  }catch(err){ diagnosticLog('PDDP_DEBRIEF','error='+String(err&&err.message||err)); }
   evidenceDebrief={active:true,index:0,data:safeData,questions,answers:[],acceptAfter:0,
     recordId:existingRecordId,autoSaved:false,
     feedbackIndex:questions.indexOf(c.productFeedback)};
