@@ -5521,3 +5521,78 @@ Codexの Phase F 開始許可を受け、F1〜F4を実装した。**Build・署�
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-29 | `4a89cd4` | 2026-08-29 Phase F | F1相対ペースauthority（入力・対象固定・スコープ・鮮度・fail-closed・禁止事項）／F2 GAP訂正の保留と再観測解除／F3単一snapshotと4判定／F4 Chief導線・変更ファイル・phase F 64/64・preflight 81件全合格・P1/P2 |
+
+## 2026-08-30 JST — Codexアップデートの受領・commit分割と、8/30実走ログ調査の差分提言
+
+`9423aad`（Build 291採番）以降、作業ツリーに未コミットで残っていたCodexのアップデート4ファイルを検証し、独立した3件としてcommitした。**Build・署名・公開・push・deployは未実行。**
+
+| commit | 内容 | 検証 |
+|---|---|---|
+| `4be413a` | pit decision：総燃料不足だけで`box`と答えず、pit timing authorityが`hold`/`pit_later`なら「今はステイアウト。Plan A継続、最終目安◯周目、あと◯周」 | tests-engineer-card / fuel-timing-authority / fuel-plan-authority / build236-race-authority 全PASS |
+| `17ee8c2` | pit loss calibration：除外サンプルの理由内訳（`excluded_pit_sample_reasons`）を要約へ追加 | tests_pit_loss_calibrator / tests_pit_loss_wiring 全PASS |
+| `63c0045` | desktop在アプリの価格表をStarter Pass（一回払い$9.99・30日・自動更新なし）へ統一。LP（`public/pitwall.html`）は既に移行済みで、アプリ側だけ旧Founding 3段表のままだった | tests-starter-pass-contract / tests-desktop-state 全PASS |
+
+`4be413a` は 8/30 RB Ring 実走 09:37:35「ピットを推奨。燃料不足が根拠。給油設定は22L。」の直接の是正にあたる。当時 `pit_timing_authority` は `pit_later`（09:38:05 の回答が「今は次のウインドウ」）だったため、この修正が入っていれば同じ問いにステイアウトを返していた。
+
+### preflight 現状：赤1件（Codexアップデート起因ではない）
+
+```
+── PTT即時録音・短音声診断（2026-07-27）   ❌ 不合格   [PTT Immediate Capture: 14/15]
+```
+
+`tests-ptt-capture.js:54` が `BUILD_VERSION = "Build 290 (...)"` をリテラル固定しており、`9423aad` の Build 291 採番で失敗している。上記3commitをstashしてもHEAD単独で赤になることを確認済み＝**採番commit `9423aad` 由来**。Build 277 の取りこぼし（2026-08-29に是正）と同型で、**採番のたびにpreflightが赤くなる構造**。番号リテラルではなく「289より進んでいること」を検査する形へ変えるのが筋だが、Yujiの保留指示によりこのcommitでは触っていない。
+
+### 8/30実走ログ調査のうち、Codexアップデートに含まれていない項目（Codexへの提言）
+
+Build 291 実走ログ `OMORAY-bridge-debug-20260830-0901.log` の調査結果のうち、上記3commitで手当てされていないもの。着手可否をCodexに判断してほしい。
+
+**P0-1 未取得値が「0」として断定される（`desktop/local-intent-router.js:16`）**
+```js
+const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+```
+`Number(null)===0` かつ `Number.isFinite(0)===true` のため **null が 0 に化ける**。同リポジトリの team-plan / fuel-plan-guard / gap-freshness / engineer-card / server.js は全て `value === null || undefined || '' || boolean` を先に弾く厳格版を持ち、**このファイルだけが緩い**。実走の発現：
+
+```
+[09:38:05] LunaJP 現燃料で約5.3周。完走まで23.5L不足。今は次のウインドウ。最終目安は0周目、あと0周。
+```
+「0周目」はレースに存在しない。`plan_fuel_authority.py` を追うと `latest_safe_pit_lap=0` かつ `decision=pit_later` はBridge側から構造上出せない（0なら必ず`pit_now`）ため、null→0で確定。手元再現でより重い発現も確認：`gap_ahead`/`gap_behind` が null の時に **「前0.0秒、後ろ0.0秒」** と断言する（＝データが無い時に真後ろへ張り付かれていると言う）。routerは燃料・GAP・残り周回・天候の即答を担うため影響範囲は全回答。なお `4be413a` の新規文言も同じ「◯周目、あと◯周」形だが、engineer-cardの`finite`は厳格＋null判定付きで安全＝**routerだけが例外**であることの裏付けになる。
+
+**P0-2後半 pit_decision分類の暴発（`engineer-card.js:114`）**
+`4be413a` は「誤った助言」を是正したが、**分類そのものの誤爆は残っている**。
+```
+この(?:ラップ|周|週|州).*(?:入|ピット|判断)
+```
+`.*` が無制限で、STTが「この周」を「この**週**」と書いた 09:37:34「俺、この週に入ったら後方の方の車とブレンドしちゃうか？」で、文末の「**入**ったら」に到達して `pit_decision (0.97)` になった。他の選択肢は全て `.{0,8}` で距離を縛っている。トラフィックの質問がピットの話として返る構図は `4be413a` 後も残る（内容が誤指示から妥当な保留に変わるだけ）。
+
+**P0-2前半 相対ペースauthorityの語彙不足（`desktop/relative-pace.js`・Phase F実装者の設計漏れ）**
+`QUESTION_RE` が「ペース／速い／遅い／迫っ／追いつ」を要求するため、「ブレンド」「集団にハマる」「トラフィック」を取りこぼす。本ログでは `RELATIVE_PACE` 診断が**0件**＝Phase F1が一度も発火していない。
+
+**P1-1 停止車両の見落とし（計装ゼロ）**
+```
+[09:39:04] USER   最終コーナーで止まってて…それコールして欲しかった。
+[09:39:05] LunaJP 停止車両、見落とした。ごめん。注視する。
+```
+ログ全体で `stopped_ahead` の発火**0件**。2026-07-13に「周回フィルターで一度も発火しない構造的欠陥」を是正し、07-19に穴を2つ塞いだ機能が再び鳴っていない。ただし**検知側に診断ログが一行も無く、原因を事後特定できない**（候補：1秒サンプリング＋2秒静止要件により目前で停止した直後は対象外／`CarIdxTrackSurface`が対象外値／徐行で停止判定に入らず）。推測で3度目のパッチを当てるより、先に計装を入れる提案。
+
+**P1-2 インシデント数の即答経路が無い**
+```
+[09:19:30] TELEMETRY_TRUTH_GATE blocked LLM vehicle-state claim: 「インシデント4件か。…今はP16、前0.3秒。」
+[09:19:30] LunaJP その数値は確認できない。質問をもう一度短く教えて。
+```
+LLMは正答していたがTruth Gateが正しく遮断し、結果は役に立たない返答になった。Gateは正常。欠けているのは**local intent**で、Build 287で`best_lap`を追加したのと同じ形で即答経路を作れば、LLMに触らせず確定値で答えられる。
+
+**P1-3 GAP「後ろ0.0秒」（Bridge側のF2Time artifact疑い）**
+```
+[09:25:01] USER 後ろのギャップは？ → LunaJP 後ろ0.0秒。   DATA CHECK gapBehind:0.0（20秒後には1.9）
+```
+これはrouterのnull→0ではなく、Bridgeが権威確定値として0.0を出している。当時サイドバイサイドのコールは無く（左右コールは09:22/09:23台）、P8で真に0.0秒＝並走だった可能性は低い。相手の`F2Time`が未成立で差が0になるartifactが疑わしい。`|gap| < 0.05` を未確認扱いにするのが安全側と考える。
+
+**P2（軽微）**：ピット復帰直後の順位連呼（`09:41:59 P9 → 09:42:01 P10 → 09:42:11 P11`＝12秒で3回。ブレンド中の順位乱高下は抑制候補）／左右コール16回・うち3連発クラスタ3組／`CHIEF ENGINEER CONFIG enabled=True roster=[]`（空rosterでChief有効化を許容。Team Plan側のゲートで不作動は正しい）／09:06:39「走る前にPITWALLを再起動して」は不要（iRacing再起動のみでPITWALLは自力復帰した）。
+
+**効いていたもの**：実測燃費2.62L/周の成立宣言、ベスト更新3回、GAPのトレンド付きコール、リミッターオフ／ボックスここ、STT誤変換「全部店で行きますよ」→「全開でいこう」の解釈、デブリーフでの前回発言引用。Telemetry Truth Gateも設計どおり誤主張を止めている。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-30 | 本節 | Codexアップデート受領＋8/30ログ差分提言 | 3commitの内容と検証／preflight赤1件の原因が採番commitであること／未手当て項目 P0-1・P0-2前後半・P1-1〜P1-3・P2 と根拠ログ行 |
