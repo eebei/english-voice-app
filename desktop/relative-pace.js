@@ -258,7 +258,12 @@
     };
   }
 
-  const QUESTION_RE = /(?:前|後ろ|後方|相手|ライバル).{0,10}(?:ペース|速い|はやい|遅い|おそい|詰め|迫っ|追いつ|離れ)|(?:ペース).{0,10}(?:前|後ろ|後方)|(?:car |driver )?(?:ahead|behind).{0,16}(?:pace|faster|quicker|slower|catching|closing)|(?:pace).{0,16}(?:ahead|behind)/i;
+  // ★2026-08-30：8/30 RB Ring 実走で F1 が一度も発火しなかった。語彙が
+  //   「ペース／速い／遅い／迫っ／追いつ」に閉じていて、実際の言い回し
+  //   （速さ・タイム差・どっちが速い・離されてる・詰められてる）を取りこぼす。
+  //   なお「ブレンド」「集団」「トラフィック」は**ここでは扱わない**。あれは
+  //   相対ペースではなく復帰位置／交通の問いで、rejoin / traffic の担当。
+  const QUESTION_RE = /(?:前|後ろ|後方|相手|ライバル).{0,12}(?:ペース|速さ|速い|はやい|遅い|おそい|詰め|迫っ|追いつ|離さ|離れ|タイム差|ペース差)|(?:ペース|速さ|タイム差|ペース差).{0,12}(?:前|後ろ|後方|相手|ライバル)|どっち.{0,8}(?:が)?(?:速い|はやい)|(?:car |driver )?(?:ahead|behind).{0,16}(?:pace|faster|quicker|slower|catching|closing|pulling away)|(?:pace|lap time).{0,16}(?:ahead|behind)/i;
   const AHEAD_RE = /前|ahead|in front/i;
   const BEHIND_RE = /後ろ|後方|behind|catching/i;
 

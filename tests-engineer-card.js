@@ -441,7 +441,12 @@ reply = cards.build(cards.classify('後ろの方がペース早いな。'), {
 }, 'ja');
 check('RBR rear-pace comment never turns total fuel shortfall into an early pit call',
   /相対ペースはまだ確定できない.*Plan Aを維持.*あと10周/.test(reply) && !/ピット優先/.test(reply), reply);
-reply = cards.build(cards.classify('この周に入ったら後方の車とブレンドしちゃうか？'), {
+// ★2026-08-30：入力を実際の pit 質問へ差し替えた。Codex指示（同日）は
+//   「ブレンド／集団／トラフィックの相談を pit_decision へ分類しない」と定めており、
+//   元の入力はその指示に従うと rejoin へ送られる（tests-build291-20260830-replay.js
+//   が分類側を検査する）。ここで守りたい契約は**pit質問に対して**総燃料不足だけで
+//   今周ピットと言わないことなので、入力だけを正しい pit 質問へ替えて維持する。
+reply = cards.build(cards.classify('この周でピット入る？'), {
   session_type:'Race', lap:14, fuel:16.1,
   race_plan:{kind:'timed',configured_duration_s:2400},
   fuel_strategy:{required_fuel_l:37.96, margin_l:-21.8, add_fuel_l:22.3,
