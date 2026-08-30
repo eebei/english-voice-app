@@ -5818,3 +5818,15 @@ Claude報告の「preflight 83件全合格」は、実行環境を明記して�
 | `./verify-deploy.sh` | **不一致**（本番 `f647722`、期待 `98b565d`） |
 
 結論：コードと内部テストは合格。preflightのHTTP 2件はコード不具合ではなく、通常サンドボックスのポート制限による実行環境差だった。本番はまだBuild 291修正2のHEADへ更新されておらず、Build／公開／deploy完了とは判定しない。
+
+## 2026-08-30 JST — PDDP Desktop配線
+
+PDDP基盤（`b56190f`）がテスト専用になっていたため、`d78d779` でDesktopへ接続した。
+
+- `renderer.html` が `pddp.js` をランタイムロード
+- 次回strategy briefingで直近実測から重点を一つだけ発話
+- debrief開始時に事実付き・答えやすいPDDP質問を先頭へ追加
+- race／radio／reflex／fuel／strategyの局面では横取りしない
+- renderer構文、PDDP 57/57、Build291修正2 63/63を再確認
+
+この時点ではBuild／公開／deploy未実施。次はPDDP配線を含むartifactでGate 5を実施する。
