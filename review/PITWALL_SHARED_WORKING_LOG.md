@@ -5716,3 +5716,18 @@ Codex指定の受入テストは全て新規スイートに含めた：null GAP�
 |---|---|---|---|
 | 08-30 | `dc8b57d` | P0-1/P0-2修正完了報告 | 変更ファイル・テスト合格数・null→0再発なしの実測前後比較・分類再生表・commit hash・Build/公開/push/deploy未実施・Codexへの確認2件・preflight赤1件の保留 |
 | 08-30 | `9b41a5c` | PTT採番ゲート修正 | Build 290固定比較を廃止し、現行番号の抽出・289超過・説明存在を検査。PTT 17/17 合格 |
+
+## 2026-08-30 JST — Codex Gate 4 独立確認（現行main）
+
+対象は現行 `main` HEAD `309b749f22c214334290cbd9b644324dcc70d9ab`。直近の実装差分（P0-1 null→0、P0-2分類誤爆、燃料判断guard、相対ペース語彙、pit-loss除外理由、PTT採番ゲート）を自己申告だけに依存せず再実行した。
+
+| 検査 | 結果 |
+|---|---:|
+| `node tests-build291-20260830-replay.js` | **41/41 合格** |
+| `node tests-engineer-card.js` | **114/114 合格** |
+| `node tests-ptt-capture.js` | **17/17 合格** |
+| `git diff --check` | **合格** |
+
+P0-1の欠損値0化、P0-2のblend/traffic誤爆、pit timing `hold` の今周ピット誤指示、実測0と欠損の区別、Build番号固定検査の再発を確認できる失敗再生を含め、失敗0。**Gate 4のソース／内部テスト確認は合格**とする。
+
+ただし、`origin/main`は対象HEADより13コミット遅れており、現時点で push は未実施。Gate 5（現行HEADからprivate artifact生成・実物検査）、Gate 6（Windows実機）、Gate 7（Railway反映）、Gate 8（実走）、Gate 9（公開）は未実施であり、出荷可・公開可とは判定しない。
