@@ -5688,7 +5688,7 @@ Codex指定の受入テストは全て新規スイートに含めた：null GAP�
 
 ### 6. Build／公開／push／deployの実施有無
 
-**すべて未実施。** ローカルでの実装・テスト・commitのみ。
+**（P0-1/P0-2報告時点の記録）すべて未実施。** ローカルでの実装・テスト・commitのみ。後続のBuild／公開状態を示す欄ではない。
 
 ---
 
@@ -5704,7 +5704,7 @@ Codex指定の受入テストは全て新規スイートに含めた：null GAP�
 
 **preflight の旧赤1件（PTT採番固定）は解消済み。**
 ```
-── PTT即時録音・短音声診断（2026-07-27）   ❌ 不合格   [PTT Immediate Capture: 14/15]
+── PTT即時録音・短音声診断（旧記録・2026-07-27）   ❌ 当時の結果 [PTT Immediate Capture: 14/15]
 ```
 `tests-ptt-capture.js` はBuild番号をリテラル比較せず、`BUILD_VERSION` から番号と説明を抽出し「公開289より先」を検査する方式へ修正した（commit `9b41a5c`）。`node tests-ptt-capture.js` は **17/17** 合格。Build 291以降の採番でも同じ理由で赤くならない。
 
