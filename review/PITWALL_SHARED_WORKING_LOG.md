@@ -5755,3 +5755,53 @@ Yuji評価「改善という言葉は当てはまらない。全くダメ」を�
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 08-30 | `ea1f4e2` | Road Atlanta無線失敗分析 | 新規MD `review/ROAD_ATLANTA_20260830_RADIO_FAILURE_ANALYSIS.md`。発話110回の内訳・LLMスポッター捏造の実測証拠と根本原因・マルチクラス毎周ループの機構・訂正受け皿の欠落・約束不履行・設計原則5つ・着手順8項目 |
+
+## 2026-08-30 JST — Build 291 修正2（会話成立・反射イベント統合）実装完了
+
+仕様 `review/BUILD291_FIX2_SCOPE.md` に対応した。commit `4c8c878`。**Build・署名・公開・push・deployは未実施。**
+
+### P0 会話成立
+
+| 仕様 | 実装 |
+|---|---|
+| 反射無線をLLM会話履歴へassistant発言として投入しない | `injectRadio()` の `pushMsg({role:'assistant'})` を削除。`RADIO_HISTORY_EXCLUDED` を記録。**これがRoad Atlantaの捏造の根本原因**（LLMが自分の直前発話として「左に車。」を継続していた） |
+| LLM生成の未検証な安全コールを発話させない | `PitwallReflexEvents.stripReflexClaims()` をストリーム中に適用。スポッター語彙を含む**文だけ**落とし、返答は殺さない。実走の2文（`次のラップは白紙。リセットしよ。左に車。` / `わかった。…集中して。左に車。`）で確認 |
+| GAP・GTP・順位・燃料・車両状態を汎用拒否へ落とさない | `その数値は確認できない。質問をもう一度短く教えて。` を廃止（英語 `I cannot confirm that value.` も同様）。質問でない発話は従来どおり `了解。`、質問には**対象を名指しした未確定理由**を返す |
+| 実測値がある場合はLocal Intentで即答 | 上位クラス照会 `faster_class_status` を新設。`competitors` から車番付きで即答（`#7、2.9秒後方。`） |
+| STT表記揺れ | `normalizeSttText()` を router 入口へ新設。`gdp`/`GDP`/`ジーティーピー`→`GTP`、`GTP…コード`→`GTPのギャップ`、`シュピート`→`ピット`。**実走で3回失敗した発話が全て intent へ届く** |
+
+### P0 反射イベントの統一（新規 `desktop/reflex-events.js`）
+
+左右車・停止車両・黄旗・危険車両・重大インシデント・緊急燃料を同一モデルで扱う。各イベントは `event_id` / `source` / `source_timestamp` / `session_time` / `valid_until` を持つ。
+
+- **発話直前の再検証**：期限切れ（`expired`）、より新しい同種イベント（`superseded_by_newer_event`）、訂正保留（`driver_disputed_event`）、`source=llm`（`llm_generated_reflex_forbidden`）を全て抑止し、理由を `REFLEX_SUPPRESSED` へ記録
+- **訂正の範囲は1イベント**：`disputeEvent()` は `event_id` 単位で保留する。種別ごと永久ミュートにしない＝次に本当に来た車は警告できる
+- **文言は決定論**：`describe()` がモジュール側に持つ。LLMには生成させない
+- bridge 側：`side_by_side` に `source_timestamp`／`car_left_right`、`stopped_ahead` に `car_idx`／`car_number`／`distance`／`stopped_timestamp`／`source_timestamp`／`session_time` を追加。**`track_side` は SDK から確実に取れないため送らない**（取れない側を推測で作らない）
+
+### 黄旗と停止車両の順序
+
+**黄旗は今まで無線として存在しなかった**（`SessionFlags` は driving style 等でしか読まれていなかった）。`yellow_flag` を新設し、`green→caution` の立ち上がりだけで発火、`flag_timestamp` を必ず持たせ、PRIORITY へ P0 登録。停止車両と同一ポーリングで記録されるため到着順を比較できる。`orderHazards()` が：黄旗先行／停止車両先行／1.5秒以内は一文へ統合（側が取れている時だけ side を添える）／**時刻が欠けていれば順序を推測せず保守的な一文**。順序は `REFLEX_HAZARD_ORDER` へ記録。
+
+### P1 戦略と会話契約
+
+- `prompts.js` の悪い例から `給油量、一緒に決めよう` を削除し、**曖昧な投げかけの禁止**を明文化（推奨を一つ出す／「次周ピット」は実行・変更・中止のいずれかを必ず自分から回収する）
+- `fuel_strategy_warning` を `pit_timing_authority` へ従わせた（`FUEL_PIT_AUTHORITY_UNIFIED`）。engineer-card の pit 回答は `4be413a` で既に同権威に従っており、**警告と判断が単一権威になった**＝相反する燃料コールが出ない
+
+### 固定再生テスト（仕様6項目）
+
+`tests-build291-fix2.js` 新規 **63/63 合格**。6項目すべてを実物のモジュールと本番 renderer 関数で検査：①LLM由来「左に車」が出ない ②iRacing由来 side_by_side は残る ③汎用拒否がGAP質問の標準応答にならない ④黄旗・停止車両の到着順がログで確認できる ⑤否定は1イベントのみ停止し新規は復活 ⑥ピット判断が一つに決まる。
+
+`./preflight.sh` … **83スイート全合格・「✅ 出荷可」**。
+
+`tests-telemetry-truth-gate.js` は旧文言（廃止した汎用拒否）をリテラルで要求していたため、新契約（質問でなければ `了解。`／質問には対象を名指し）を検査する形へ更新した。
+
+### 未対応（分析MD §9 のうち本仕様外）
+
+マルチクラス接近の CarIdx キー化・周回予算（29回連呼の本体）、サイドコールの局面束ね（33回）、順位コールのブレンド中抑制、crash_check の一問化、約束の follow-up 台帳（プロンプト規律のみで機構は未実装）。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-30 | `4c8c878` | Build 291 修正2実装完了 | P0会話成立5項目・反射イベント統一モデル・黄旗新設と到着順・P1単一権威・固定再生63/63・preflight 83件全合格・未対応項目 |
