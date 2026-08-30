@@ -51,9 +51,19 @@ check('実走語彙をSTTヒントへ追加',
   ['ベストラップ','コースデータ','データ入ってる','セットアップ','アンダーステア','オーバーステア','ダンパー','トー角','リアウイング']
     .every(term=>server.includes(`'${term}'`))
   && !server.includes("'トー',"));
-check('次期会話・記憶修正は公開289と衝突せず290へ採番',
-  bridge.includes('BUILD_VERSION = "Build 290 (RBR memory, personal stats, and debrief routing)"')
-  && !bridge.includes('BUILD_VERSION = "Build 289'));
+// ★2026-08-30：以前はここが `Build 290 (RBR memory, ...)` という完成文字列の
+//   写経で、**正しく採番するたびに落ちる**テストだった（Build 291 の採番commit
+//   `9423aad` で実際に赤くなった）。守りたい契約は特定の号数ではなく
+//   「公開済み 289 と衝突せず、それより先へ進んでいること」なので、
+//   BUILD_VERSION から号数を取り出して比較する。Build 277 の取りこぼしと同型の
+//   腐り方をここで断つ。
+const buildVersionLine = bridge.match(/^BUILD_VERSION\s*=\s*"Build (\d+)\b([^"]*)"/m);
+check('BUILD_VERSION を実コードから取り出せる', !!buildVersionLine);
+const buildNumber = buildVersionLine ? Number(buildVersionLine[1]) : null;
+check('次期会話・記憶修正は公開289と衝突せず、それより先へ採番',
+  Number.isInteger(buildNumber) && buildNumber >= 290);
+check('採番には内容が分かる説明が付いている',
+  !!buildVersionLine && buildVersionLine[2].trim().length > 0);
 check('Google confidenceを会話本文と分離して診断へ返す',
   server.includes('res.json(parseGoogleSttResponse(data))')
   && renderer.includes("diagnosticLog('PTT_STT_RESULT'"));
