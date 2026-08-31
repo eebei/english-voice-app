@@ -120,9 +120,20 @@ function classify(text, options = {}) {
   //   距離を縛るだけでは「この週に入」が近すぎて残るため、ブレンド／集団／
   //   トラフィック語が混ざる文は pit 判断から明示的に外し、下の rejoin /
   //   traffic ハンドラーへ送る。
+  // ★2026-08-31：ドライバーの「決定」と「質問」を分ける。
+  //   8/31 RBR実走で「いや、もうこの周で入るよ」「ボックス。」に対し
+  //   `今はステイアウト。ピットウィンドウまで走れる。`を2回返した。
+  //   前の集団の動きが見えているのはドライバーであり、決定は覆さない。
+  //   疑問符・疑問語があれば質問、無くて決定の言い回しなら命令として扱う。
+  const isDriverPitCommand = (txt) => {
+    const q = String(txt || '');
+    if (/[？?]/.test(q)) return false;
+    if (/いつ|何周|どう|べき|かな|ますか|でしょうか|判断してくれ|or\s|should|when\b|how many/i.test(q)) return false;
+    return /^(?:ボックス|box\s*box|box)[。.!！\s]*$|ボックス(?:する|入る|入れ|だ|で)|(?:この|次の|今)(?:の)?(?:周|ラップ|週|州|lap)[でに]?.{0,4}(?:入る|入るよ|入るわ|入ります|ピット|ボックス)|もう.{0,6}入る|入るよ|入るわ|入ります|ピットイン(?:する|だ|して)|ピットする|box this lap|boxing|coming in|pitting|pit now|stay ?out(?:\s*now)?[。.!！]*$|ステイアウト(?:で|だ|する)/i.test(q);
+  };
   const blendOrTrafficTalk = /ブレンド|集団|車群|トラフィック|クリアエア|blend|pack\b|traffic|clear ?air/i.test(t);
   if (!blendOrTrafficTalk
-      && /^(?:ボックス|box)[。.!！?？]*$|次のピット.{0,6}(?:タイミング|いつ|何周)|(?:次|この)(?:の)?(?:周|ラップ).{0,8}(?:ピット|ボックス)|ピット.{0,8}(?:入ろう|入るかな|タイミング|いつ)|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).{0,10}(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97 };
+      && /^(?:ボックス|box)[。.!！?？]*$|次のピット.{0,6}(?:タイミング|いつ|何周)|(?:次|この)(?:の)?(?:周|ラップ).{0,8}(?:ピット|ボックス)|ピット.{0,8}(?:入ろう|入るかな|タイミング|いつ)|ボックス\s*(?:する|入る|入れ)|ピット\s*(?:する|入る|入れ|判断)|ピットに(?:入れ|行け|向か)|今\s*ピットに[。.!！?？]*$|入れなかった|入れなかっ|入れない|入るべき|ステイアウト|もう(?:1|一)周|この(?:ラップ|周|週|州).{0,10}(?:入|ピット|判断)|(?:この|ディス|this)(?:ラップ|周|週|州|lap).{0,8}(?:ボックス|box)|判断してくれ|box or|pit or|stay out|should .*pit|もう.{0,4}入る|ピットイン(?:して|する|だ)|box this lap|boxing|pitting|coming in|pit now/i.test(t)) return { topic: TOPIC.PIT_DECISION, confidence: 0.97, driverCommand: isDriverPitCommand(t) };
   if (/アンダー\s*カット|オーバー\s*カット|復帰|戻れ|戻る|ブレンド|サイクル後|暫定.{0,12}(?:何位|何番手|順位|ポジション)|予測.{0,12}(?:何位|何番手|順位|ポジション)|(?:何位|何番手|順位|ポジション).{0,12}予測|ピット.*(?:何位|何番手|どこ)|(?:何位|何番手).*(?:ピット|戻|復帰)|undercut|overcut|rejoin|blend|cycle position/i.test(t)) return { topic: TOPIC.REJOIN, confidence: 0.99 };
   if (/戦略.{0,8}(?:は|どう|確認|ある|何|教)|作戦.{0,8}(?:は|どう|確認|ある|何|教)|プラン.{0,8}(?:は|どう|確認|ある|何|教)|プラン\s*[ABCＡＢＣ]|次の判断|strategy status|what(?:'s| is) the plan|plan status|plan\s*[abc]/i.test(t)) {
     const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
@@ -587,7 +598,29 @@ function derivedAction(live) {
   return { action: 'hold', reason: 'insufficient_data' };
 }
 
-function buildPitDecision(live, lang) {
+function buildPitDecision(live, lang, card) {
+  // ★2026-08-31：ドライバーが決めた時は従う。前の集団の動きが見えているのは
+  //   ドライバーであり、こちらのtiming authorityより判断材料が多い場面がある。
+  //   反論があっても「ステイアウト」で上書きせず、入れながら一言添えるだけにする。
+  if (card && card.driverCommand === true) {
+    const phaseNow = pitPhase(live);
+    if (phaseNow === 'pit_lane') return ja(lang)
+      ? '了解、ピットレーン内。作業を完了する。' : 'Copy, in the lane. Completing the stop.';
+    if (phaseNow === 'finished') return ja(lang)
+      ? 'レース終了。ここでのピットは無い。' : 'Race is over; there is no stop to make.';
+    const add = finite(fuelPlan(live || {}).add);
+    const t = live && live.fuel_strategy && live.fuel_strategy.pit_timing_authority;
+    const planLap = t && t.available === true ? finite(t.latest_safe_pit_lap) : null;
+    const differs = t && t.available === true && t.decision && t.decision !== 'pit_now';
+    if (ja(lang)) {
+      const head = add != null ? `了解、ボックス。給油${add.toFixed(1)}Lで最後まで持つ。` : '了解、ボックス。';
+      return head + (differs && planLap != null
+        ? `Plan ${t.selected_plan || 'A'}の目安は${Math.trunc(planLap)}周目だったけど、判断は任せる。` : '');
+    }
+    const head = add != null ? `Copy, box. ${add.toFixed(1)} litres takes you to the finish.` : 'Copy, box.';
+    return head + (differs && planLap != null
+      ? ` Plan ${t.selected_plan || 'A'} had lap ${Math.trunc(planLap)}, but it is your call.` : '');
+  }
   const endurance = live && ((live.fuel_strategy || {}).endurance_plan
     || live.endurance_fuel_plan) || {};
   if (endurance.available === true && endurance.multi_stop === true) {
