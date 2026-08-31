@@ -496,14 +496,15 @@ def test_post_contact_ok_unpacked_in_both_reset_paths():
         check("sig経路で post_contact_speed_ok = _sig_reset['post_contact_speed_ok'] がある",
               "post_contact_speed_ok = _sig_reset['post_contact_speed_ok']" in block)
     # SessionNum経路
-    # Build 266: SessionNum reset 経路にセッションスコープ変数が増え、6000字窓では
-    # ブロック末尾まで届かなくなった。sig 経路側の窓（8000）と揃える。
-    # 検証しているのは「両経路で unpack されていること」であって窓幅ではない。
-    m_snum = re.search(
-        r"if _changed:[\s\S]{0,8000}?last_session_num = cur_snum", src)
+    # 検証対象は「両経路で unpack されていること」。固定文字数の窓は、
+    # コメントや安全な計装を足しただけで検査が落ちるため使わない。
+    snum = src.find('last_session_num = cur_snum')
+    changed = src.rfind('if _changed:', 0, snum) if snum >= 0 else -1
+    block_end = snum + len('last_session_num = cur_snum') if snum >= 0 else -1
+    m_snum = re.search(r"if _changed:", src[changed:block_end]) if changed >= 0 and block_end > changed else None
     check('SessionNum経路のunpackブロックが見つかる', m_snum is not None)
     if m_snum:
-        block = m_snum.group(0)
+        block = src[changed:block_end]
         check("SessionNum経路で post_contact_watch_start = _reset['post_contact_watch_start'] がある",
               "post_contact_watch_start = _reset['post_contact_watch_start']" in block)
         check("SessionNum経路で post_contact_speed_ok = _reset['post_contact_speed_ok'] がある",

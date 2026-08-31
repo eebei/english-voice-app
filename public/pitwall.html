@@ -1631,7 +1631,7 @@ function saveMemory(){
 function saveSessionSummary(data){
   try{
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',bestLap:data.bestLap||'',avgLap:data.avgLap||'',totalLaps:data.totalLaps||0,incidents:data.incidents||0});
+    history.push({date:new Date().toISOString().slice(0,10),track:data.track||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:Number.isInteger(data.total_laps)?data.total_laps:null,incidents:Number.isInteger(data.incidents)?data.incidents:null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}

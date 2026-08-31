@@ -6020,3 +6020,43 @@ Build・署名・公開・deploy は未実施。作業ツリーの未追跡フ�
 |---|---|---|---|
 | 08-31 | `aef97c4` / `3fa0fd3` | §9-1 のP0 2件を実装 | （既出・SHA確定） |
 | 08-31 | 本節 | 実装確認（自己検証） | 変異試験8/8・長さ上限の未テスト発覚と追加・残存2件（LLM文脈への自由文注入／public実働クライアントの `||0` と契約ずれ）・preflight 85件全合格・Gate 4はCodex・Build判定はその後 |
+
+## 2026-08-31 JST — Gate 4 Codex独立検証（条件付き不合格）
+
+Codexが作業者と別に検査を実施した。
+
+### 合格した検査
+
+- `node tests-conversation-truth-p0.js`: **21/21**
+- HTTP統合テスト（許可付き再実行）: **54/54**
+- `tests-require-admin.js`: **9/9**
+- `node --check server.js`: 合格
+- P0修正差分の静的確認：Bridgeの不明Incidentsを `null` として扱う2経路、rendererのlive/history経路、TTS直接echo除去を確認。
+
+### Gate 4で残った不合格
+
+1. `desktop/renderer.html` の `buildMemoryContext()` が `r.qa` のドライバー自由文をLLMプロンプトへそのまま注入している。TTS直接echoは止まっているが、LLMが自由文を言い直す隣接経路が残る。§9-1の「過去発話echoを検出できること」を満たす検査が不足。
+2. `public/pitwall.html:1634` に `incidents:data.incidents||0` が残る。公開実働ブラウザ版の不明→0経路であり、他フィールドのBridge契約ずれも併存する。扱い（撤去または契約修正）未決定。
+3. `irsdk-bridge/tests_judge_llm_gate.py:503` は `{0,8000}` の文字幅に依存し、コメント追加で検査が落ちる脆いテスト。機能実装の不合格ではないが、Gate装置として修正が必要。
+
+### 判定
+
+**Gate 4: 条件付き不合格。Build／公開判定へ進めない。**
+P0の直接経路は塞がっているが、§9-1の全経路検出と残存2件の扱いが未完了。Claudeが修正または撤去方針を確定し、Codexが再検証すること。
+
+## 2026-08-31 JST — Gate 4再検証（Codex修正・合格）
+
+残存3点を修正した。
+
+- `renderer.html` の記憶コンテキストは `r.qa` の回答本文をLLMへ注入せず、Lunaの質問と「回答済み」だけを渡す。構造化された実測証拠は従来どおり利用する。
+- `public/pitwall.html` の履歴保存をBridgeのsnake_case契約へ合わせ、Incidents不明は `null` のまま保存する。`||0` は除去した。
+- `tests_judge_llm_gate.py` のSessionNum検査を固定8000文字窓からブロック境界抽出へ変更した。
+
+### 再検証結果
+
+- `tests-conversation-truth-p0.js`: **23/23**
+- `tests_judge_llm_gate.py`: **91/91**
+- `./preflight.sh`（許可付きlocalhost統合テストを含む）: **✅ 出荷可**
+- `git diff --check`: 合格
+
+**Gate 4: 合格。** ただし、これはソースとテストの検証結果であり、本番反映確認（Build・署名・公開・deploy）はまだ別ゲートである。

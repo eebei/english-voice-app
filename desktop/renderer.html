@@ -6950,7 +6950,11 @@ function buildSessionEvidenceNote(){
         validFinishPosition(r.evidence?.finish_pos)?`P${validFinishPosition(r.evidence.finish_pos)}`:'',
         r.evidence?.avg_fuel_per_lap!=null?`${r.evidence.avg_fuel_per_lap}L/周`:''
       ].filter(Boolean).join(' / ');
-      const qa=(r.qa||[]).map(x=>`${x.question} → ${x.answer}`).join(' | ');
+      // Do not inject the driver's free-form answer into the LLM prompt.  It is
+      // retained in local memory for audit/debrief, but only Luna's question is
+      // safe conversational context; structured evidence above carries facts.
+      const qa=(r.qa||[]).map(x=>String(x?.question||'').trim()).filter(Boolean)
+        .map(question=>`${question} (回答済み)`).join(' | ');
       const memoryLabel=r.confidence==='confirmed_by_driver'?promptCopy.confirmed:promptCopy.reported;
       return `${facts}\n${memoryLabel}: ${qa}`;
     });

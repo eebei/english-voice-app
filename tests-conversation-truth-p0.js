@@ -84,6 +84,15 @@ check('renderer: 前回のドライバー回答を発話文へ埋め込まない
   && !renderer.includes('Last time you said: “${selected.answer}”')
   && !/\$\{selected\.answer\}/.test(renderer));
 
+check('renderer: 記憶コンテキストへ自由文回答を注入しない',
+  !renderer.includes('`${x.question} → ${x.answer}`')
+  && renderer.includes('const qa=(r.qa||[]).map(x=>String(x?.question||\'\').trim())'));
+
+check('public client: incidents 不明を 0 に丸めずBridge契約(snake_case)を使う',
+  !renderer.includes('incidents:data.incidents||0')
+  && fs.readFileSync('public/pitwall.html','utf8').includes('incidents:Number.isInteger(data.incidents)?data.incidents:null')
+  && !fs.readFileSync('public/pitwall.html','utf8').includes('incidents:data.incidents||0'));
+
 check('renderer: 再利用するのは Luna 自身の前回質問だけ',
   renderer.includes('const prevQuestion=sanitizeOwnFollowupQuestion(selected.question);')
   && renderer.includes('if(!prevQuestion) return null;')
