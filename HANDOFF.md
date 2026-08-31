@@ -1,6 +1,44 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-08-29 JST
+最終更新: 2026-08-30 JST
+
+## 現在地（2026-08-30 時点・次セッションはここから読む）
+
+公開中は **Build 290**。ローカルは `origin/main` より **6コミット先行**（未push）。`./preflight.sh` は **84スイート全合格・出荷可**。作業ツリーはクリーン。**Build・署名・公開・push・deployは未実施。**
+
+### 未pushの6コミット
+
+| commit | 内容 |
+|---|---|
+| `ea1f4e2` / `9e12b43` | Road Atlanta 実走の無線失敗分析（`review/ROAD_ATLANTA_20260830_RADIO_FAILURE_ANALYSIS.md`） |
+| `4c8c878` / `98b565d` | Build 291 修正2：会話成立・反射イベント統合（仕様 `review/BUILD291_FIX2_SCOPE.md`） |
+| `b56190f` | PDDP v1 の仕様差分（Codex基盤 `b948427` の上に追補） |
+
+Codex の Gate 4 独立確認は `309b749` までが対象で、**修正2 と PDDP には掛かっていない**。
+
+### 実環境で未検証の3件（コードテストでは埋まらない）
+
+1. **新規 runtime module が実バイナリに入り起動時 loaded になるか** — `reflex-events.js` / `pddp.js` を追加した。`package.json` の `files: ["*.js"]` と `renderer` の `<script src>` はソース上一致しているが、`app.asar` を展開して実数を数えていない。**Gate 5** で解消する（`verify-artifact.sh` §7 が module 欠落を検査する）。Build 281 のpackage漏れは「ソース上は正しい」まま起きた。
+2. **黄旗イベントが実際に発火するか** — 修正2で `yellow_flag` を新設したが、**手元の実走ログ2本ともに黄旗ゼロ**（`20260830-0901` / `20260830-1539` とも `yellow_flag=0`、caution遷移も0）。停止車両との到着順テストは合成タイムスタンプでしか通っていない。**Gate 8（実走）でしか埋まらず、黄旗が出ないレースを何本走っても検証は進まない**。AIレースでコーションを作って先に潰すのが確実。
+3. **`prompts.js` はサーバー側** — 修正2のP1（曖昧な投げかけ禁止・「次周ピット」の回収義務）は Railway へ deploy しない限り本番で効かない。exe の Build では届かない。**Gate 7**：push 後に `./verify-deploy.sh` で本番SHA一致を確認する。
+
+`bridge.py`（黄旗・停止車両のidentity）は `build-desktop.yml` がジョブ内で `pyinstaller irsdk-bridge/bridge.py` を実行するため desktop installer に同梱される。単体Bridgeは `build-bridge.yml` が `irsdk-bridge/bridge.py` のpushで発火する。この経路は通っている。
+
+### 作業時の必須手順（2026-08-30に2回踏みかけた）
+
+**同じリポジトリで Codex が並行して commit している。** 8/30 に `desktop/pddp.js` と `tests-pddp.js` を、既存実装がある状態で気づかず上書きした（どちらも `git checkout` で復元し、Codex のコードとアサーションは失われていない）。**ファイルを新規作成する前に必ず `git log --oneline -- <path>` と `git fetch` を実行する。** 既存があれば上書きせず追補する。
+
+### 次の行動
+
+1. push（6コミット）— 可逆。Codex が修正2とPDDPに Gate 4 を掛けられる状態にする
+2. Gate 4（Codex 独立確認）
+3. Gate 5 — private artifact を作り module 実数を確認（上記①）
+4. Gate 7 — Railway 反映と `./verify-deploy.sh`（上記③）
+5. Gate 6 / 8 — Windows実機と実走。**黄旗は意図的に検証する**（上記②）
+
+### 未着手（Road Atlanta 分析 §9 のうち仕様外）
+
+マルチクラス接近の CarIdx キー化と周回予算（**GTP連呼29回の本体**）、サイドコールの局面束ね（33回）、順位コールのブレンド中抑制、crash_check の一問化、約束回収の機構（プロンプト規律のみ実装済み）。**発話回数そのものの削減（110回→30回）は未着手で、体感への効果は最大**。
 
 ## Build 291公開候補 — Team Plan / Chief Mode / Phase F（Build・公開GO受領）
 
