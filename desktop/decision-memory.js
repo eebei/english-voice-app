@@ -149,6 +149,11 @@
       pos_in: intOrNull(event && event.pos_in),
       pos_out: intOrNull(event && event.pos_out),
       lane_total_s: finite(event && event.pit_lane_sec),
+      // GT Sprint／IMSA Fixed のアンダーカット答え合わせ用。無い値は null のまま
+      // にして、順位だけから成功を推測しない。
+      forward_pack_size: intOrNull(event && event.forward_pack_size),
+      rejoin_traffic_state: event && event.rejoin_traffic_state
+        ? String(event.rejoin_traffic_state).slice(0, 40) : null,
     };
     record.updatedAt = new Date(nowOr(nowMs)).toISOString();
     record.outcome = score_(record);
@@ -167,6 +172,13 @@
       conditional_cycle_position: intOrNull(o.conditional_cycle_position),
       condition_met: o.condition_met === true,
       closed_reason: o.closed_reason || null,
+      rival_pit_timestamps: Array.isArray(o.rival_pit_timestamps)
+        ? o.rival_pit_timestamps.slice(0, 24).map(item => ({
+            session_id: item && item.session_id != null ? String(item.session_id).slice(0, 80) : null,
+            class_position: intOrNull(item && item.class_position),
+            pit_entry_lap: intOrNull(item && item.pit_entry_lap),
+            pit_entry_time_s: finite(item && item.pit_entry_time_s),
+          })) : [],
     };
     record.updatedAt = new Date(nowOr(nowMs)).toISOString();
     record.outcome = score_(record);

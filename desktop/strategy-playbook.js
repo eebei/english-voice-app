@@ -144,6 +144,11 @@
     }
 
     const backHalf = qualifier != null && classEntries != null && classEntries > 0 && qualifier > classEntries / 2;
+    // GT Sprint / IMSA Fixed の短時間・一給油レースでは、1周違いの三択を
+    // 並べるより「通常運用」と「集団を抜ける早めのアンダーカット」を
+    // 主軸にする。C は耐久／明確なセーブ根拠がある場合だけ補助候補。
+    const sprintLike = format.kind === 'timed' && format.duration_s <= 45 * 60;
+    const midfieldUndercut = sprintLike && backHalf;
     return {
       available: true,
       reason: 'historical_reference_playbook',
@@ -151,6 +156,16 @@
       provisional: true,
       selected_plan: 'A',
       opening_priority: backHalf ? ['B', 'A', 'C'] : ['A', 'B', 'C'],
+      strategy_mode: midfieldUndercut ? 'sprint_midfield_undercut' : (sprintLike ? 'sprint' : 'endurance'),
+      primary_plan_ids: midfieldUndercut ? ['B', 'A'] : ['A', 'B'],
+      strategy_doctrine: midfieldUndercut
+        ? 'start_midfield_pack_early_undercut: pit_when_fuel_window_opens_if_clean_pace_and_clear_rejoin_are_verified'
+        : 'baseline_first_undercut_only_when_live_evidence_supports_it',
+      outcome_capture_contract: [
+        'pre_pit_class_position', 'pit_entry_lap', 'fuel_added_l', 'pit_lane_loss_s',
+        'immediate_exit_class_position', 'post_cycle_class_position', 'final_class_position',
+        'forward_pack_size', 'rejoin_traffic_state', 'rival_pit_timestamps'
+      ],
       format: { ...format, estimated_race_laps: totalLaps },
       evidence: {
         track: input.track || '', car: input.car || '',

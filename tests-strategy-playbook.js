@@ -23,6 +23,13 @@ check('undercut does not add a stop', monza.plans.B.available === true);
 check('overcut first stop is lap 6', monza.plans.C.first_pit_lap === 6);
 check('overcut labels required saving', monza.plans.C.required_fuel_saving_pct > 0);
 check('rear-half qualifying prioritises undercut review', monza.opening_priority[0] === 'B');
+check('midfield sprint declares undercut-first doctrine',
+  monza.strategy_mode === 'sprint_midfield_undercut'
+  && monza.primary_plan_ids.join(',') === 'B,A'
+  && monza.strategy_doctrine.includes('early_undercut'));
+check('playbook exposes outcome fields needed for next-race learning',
+  monza.outcome_capture_contract.includes('post_cycle_class_position')
+  && monza.outcome_capture_contract.includes('rival_pit_timestamps'));
 check('grid briefing is a one-sentence historical handoff',
   /^(?:履歴\d+セッション。)?Plan Aで開始、クリーン3周で更新。$/.test(playbook.briefing(monza, 'ja')));
 check('grid briefing defers all alternate-plan detail',
