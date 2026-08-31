@@ -286,6 +286,9 @@ if node tests-build291-fix2.js >/dev/null 2>&1; then echo "   ✅ 全ケース�
 echo "── PDDP v1：実測→主因一つ→次レース／欠損非捏造・訂正反映・横取り禁止"
 if node tests-pddp.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-pddp.js; fail=1; fi
 
+echo "── 8/31 Spielberg実走 P0：Incidents不明の捏造・ドライバー自由文のecho（型①⑤）"
+if node tests-conversation-truth-p0.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-conversation-truth-p0.js 2>&1|grep "❌"|head -10; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

@@ -4861,7 +4861,7 @@ function buildPracticeRunSummary(){
     finish_pos:null,finish_pos_confirmed:false,best_lap:times.length?Math.min(...times):(sessionBestLapSeconds||null),
     worst_lap:times.length?Math.max(...times):null,
     avg_lap:times.length?times.reduce((a,b)=>a+b,0)/times.length:null,
-    incidents:lastTelemetry?.incidents||0,laps:times.map((time,i)=>({lap:i+1,time}))
+    incidents:Number.isInteger(lastTelemetry?.incidents)?lastTelemetry.incidents:null,laps:times.map((time,i)=>({lap:i+1,time}))
   });
 }
 function practiceReviewEligible(){
@@ -5036,7 +5036,7 @@ function buildFallbackSessionSummary(){
     finish_pos:null,
     finish_pos_confirmed:false,
     best_lap:sessionBestLapSeconds||null,
-    incidents:lastTelemetry?.incidents||0,
+    incidents:Number.isInteger(lastTelemetry?.incidents)?lastTelemetry.incidents:null,
   });
 }
 function evidenceLanguage(){
@@ -5192,6 +5192,17 @@ function rememberDebriefFollowup(key){
   rows.push(String(key));
   try{ localStorage.setItem(DEBRIEF_FOLLOWUP_HISTORY_KEY,JSON.stringify(rows.slice(-24))); }catch(_){}
 }
+// 保存済みQAの「質問」側だけを、そのまま聞き直してよいかを判定する。
+// Luna が自作した質問は再利用してよいが、旧版で保存された記録には
+// ドライバーの自由文が混ざっている可能性があるため、その形を弾く。
+// 弾いた場合は followup を作らない（定型プールへ戻す）。
+function sanitizeOwnFollowupQuestion(raw){
+  const q=String(raw||'').trim().replace(/\s+/g,' ');
+  if(q.length<6 || q.length>60) return '';          // 長すぎる＝自由文混入の疑い
+  if(/[「」“”]/.test(q)) return '';                  // 引用を含む＝他人の言葉を運んでいる
+  if(!/[？?]$/.test(q)) return '';                   // 質問形でないものは聞き直さない
+  return q;
+}
 function buildMemoryAwareDebriefFollowup(data){
   const layer=(typeof window!=='undefined'&&window.PitwallMemoryActionLayer)||null;
   if(!layer||typeof layer.selectDebriefFollowUp!=='function') return null;
@@ -5204,10 +5215,16 @@ function buildMemoryAwareDebriefFollowup(data){
     driver,track,car,usedKeys:loadDebriefFollowupHistory()
   });
   if(!selected) return null;
+  // ★2026-08-31 型⑤echo：初版はドライバーの前回回答（自由文）をそのまま読み上げていた。
+  //   8/31 実走で90文字超のSTT生テキストがTTSへ流れ、途中で切れた。
+  //   ドライバーの自由文は**発話しない**。継続確認の価値は「前回と同じことを聞く」で足りる。
+  //   再利用してよいのは Luna 自身が前回発した質問だけ（自作・既に一度声に出したもの）。
+  const prevQuestion=sanitizeOwnFollowupQuestion(selected.question);
+  if(!prevQuestion) return null;   // 安全に聞き直せないなら聞かない（fail-closed）
   const isJP=evidenceLanguage()==='ja';
   const question=isJP
-    ? `前回は「${selected.answer}」と話していた。今回は同じ傾向だった？変わったなら一言で教えて。`
-    : `Last time you said: “${selected.answer}”. Did that hold true today, or did it change?`;
+    ? `前回と同じことを聞くね。${prevQuestion}`
+    : `Same question as last time. ${prevQuestion}`;
   return {key:selected.key,question,confidence:selected.confidence};
 }
 function buildEvidenceQuestions(data){
@@ -6299,7 +6316,7 @@ function saveSessionSummary(data){
     //   これが無いと「昨日の路面温度」「前回のsetup」「何番手スタート」に答える材料が存在しない。
     //   値はBridge由来のみを採用し、欠けていればnullで残す（推測で埋めない）。
     const _w=(data&&typeof data.weather==='object'&&data.weather)?data.weather:null;
-    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:data.incidents||0,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,irating:lastIrating||null,sr:lastSr||null});
+    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -6874,8 +6891,8 @@ function buildRaceHistoryContext(){
       const ir = s.irating?(isJP?` iR${s.irating}`:` iR${s.irating}`):'';
       const sr = s.sr?(isJP?` SR${s.sr}`:` SR${s.sr}`):'';
       return isJP
-        ?`${s.date} ${car}${s.track}${pos} ベスト${fmtLap(s.bestLap)} ${s.totalLaps}周 インシデント${s.incidents}${ir}${sr}`
-        :`${s.date} ${car}${s.track}${pos} best ${fmtLap(s.bestLap)} ${s.totalLaps}laps inc ${s.incidents}${ir}${sr}`;
+        ?`${s.date} ${car}${s.track}${pos} ベスト${fmtLap(s.bestLap)} ${s.totalLaps}周 インシデント${Number.isInteger(s.incidents)?s.incidents:'記録なし'}${ir}${sr}`
+        :`${s.date} ${car}${s.track}${pos} best ${fmtLap(s.bestLap)} ${s.totalLaps}laps inc ${Number.isInteger(s.incidents)?s.incidents:'not recorded'}${ir}${sr}`;
     });
     return rows.join('\n');
   }catch{return '';}
@@ -7367,7 +7384,7 @@ function dumpLearnedMemory(reason){
       lines.push('   ・'+k+' → ベスト'+(m.bestLap||'?')+' / 燃料'+(m.fuelPerLap||'?')+'L per lap / '+(m.sessions||0)+'回');
     });
     lines.push('[戦歴 '+hist.length+'件] 直近3件:');
-    hist.slice(-3).forEach(h=> lines.push('   ・'+h.date+' '+(h.car||'')+' '+h.track+' ベスト'+(h.bestLap||'?')+' '+h.totalLaps+'周 インシデント'+h.incidents));
+    hist.slice(-3).forEach(h=> lines.push('   ・'+h.date+' '+(h.car||'')+' '+h.track+' ベスト'+(h.bestLap||'?')+' '+h.totalLaps+'周 インシデント'+(Number.isInteger(h.incidents)?h.incidents:'記録なし')));
     lines.push('==========================================');
     lines.forEach(l=>{
       if(irBridge && irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'log_line', text:l}));  // bridgeは 'text' を読む

@@ -2983,7 +2983,8 @@ def poll_iracing():
                         'avg_fuel_per_lap': (
                             round(sum(fuel_per_lap_hist) / len(fuel_per_lap_hist), 2)
                             if fuel_per_lap_hist else None),
-                        'incidents': prev_incidents or 0,
+                        # ★2026-08-31 型①捏造：`or 0` は不明を0に化けさせる（8/31 Spielberg）。
+                        'incidents': prev_incidents if isinstance(prev_incidents, int) else None,
                         'laps': list(session_laps),
                         'pit_events': list(pit_events),
                         # ★スライス1：同一条件の検索キーと、その日の実測条件。
@@ -3329,7 +3330,11 @@ def poll_iracing():
                         'avg_fuel_per_lap': _avg_fuel_summary,
                         'pace_first_half': _pace_first,
                         'pace_last_half': _pace_last,
-                        'incidents': prev_incidents or 0,
+                        # ★2026-08-31 型①捏造：`or 0` は **不明を0に化けさせる**。
+                        #   Incidents を読めていない session でも「Incidents 0」と
+                        #   断定して発話していた（8/31 Spielberg 実走）。
+                        #   不明は None のまま出口まで通し、消費側で不足として扱う。
+                        'incidents': prev_incidents if isinstance(prev_incidents, int) else None,
                         'laps': session_laps,
                         'pit_events': list(pit_events),
                         # ★スライス1：同一条件の検索キーと、その日の実測条件。
@@ -3383,6 +3388,17 @@ def poll_iracing():
                         + ' pace_last_half=' + str(_summary_snapshot.get('pace_last_half'))
                         + ' incidents=' + str(_summary_snapshot.get('incidents'))
                         + ' ======================')
+                    # ★2026-08-31：8/31 Spielberg 実走で「Incidents 0」と発話したが、
+                    #   ドライバー申告は4〜5だった。`or 0` による None→0 は上で塞いだが、
+                    #   **iRacing が実際に何を返していたか**はログに無く判別できない。
+                    #   0 が本物の読み値なのか、変数が見つかっていないのかを次走で確定する。
+                    _inc_probe = reader.find_var('PlayerCarMyIncidentCount')
+                    log('INCIDENTS DIAG: summary=' + str(_summary_snapshot.get('incidents'))
+                        + ' prev_incidents=' + repr(prev_incidents)
+                        + ' live_read=' + repr(reader.read_int('PlayerCarMyIncidentCount'))
+                        + ' var_found=' + ('yes' if _inc_probe else 'no')
+                        + ' team=' + repr(reader.read_int('PlayerCarTeamIncidentCount'))
+                        + ' driver=' + repr(reader.read_int('PlayerCarDriverIncidentCount')))
                 checkered_pending = False
 
         if driver_state != prev_driver_state:
