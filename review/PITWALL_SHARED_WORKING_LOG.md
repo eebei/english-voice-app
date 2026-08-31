@@ -5896,3 +5896,64 @@ Yujiの指示により、`review/CONVERSATION_QUALITY_CONVERGENCE_V1.md` へ **�
 | 08-30 | `dc8b57d` | Build 291 修正2実装完了 | （既出・SHA確定） |
 | 08-31 | 本節 | 会話品質の収束計画 v1 | 新規MD `CONVERSATION_QUALITY_CONVERGENCE_V1.md`。5ビルド繰り返しの記録・失敗の型カタログ9型・3層モデルと実測証拠・収束判定と7〜9本の見積もり・作業順序D→A→C+B・SPEECH_LATENCY計装欠落・レイテンシ誤読の訂正・Codexへの依頼6項目 |
 | 08-31 | `3ba4875` | Codex追加必須項目 §9 | P0を範囲内化・第1層の項目別判定表・7〜9本を仮説値化・6 KPI・受入条件（連続2本で新型0/再発0まで収束完了と報告しない）・本文3箇所の訂正 |
+
+## 2026-08-31 JST — §9-1 のP0 2件を実装（commit `aef97c4`・Codex確認待ち）
+
+`review/CONVERSATION_QUALITY_CONVERGENCE_V1.md` §9-1 で「範囲内」と定めた2件を実装した。
+**型①の実例を1件、型⑤の実例を1件潰しただけであり、収束したとは主張しない（§9-5）。**
+
+### 型①捏造：Incidents 不明を 0 と断定していた経路を入口から出口まで塞いだ
+
+`or 0` は1箇所ではなく**4箇所**あった。§9-2 の「`or 0` `||0` `??0` を全経路で洗い出す」の先行実施にあたる。
+
+| 場所 | 役割 | 変更 |
+|---|---|---|
+| `irsdk-bridge/bridge.py:2986` | 非レース session summary | `prev_incidents or 0` → `isinstance(int) else None` |
+| `irsdk-bridge/bridge.py:3333` | レース session summary | 同上 |
+| `desktop/renderer.html:4864` | practice run summary | `lastTelemetry?.incidents||0` → `Number.isInteger` 判定 |
+| `desktop/renderer.html:5039` | fallback session summary | 同上 |
+| `desktop/renderer.html:6319` | **`pw_raceHistory` への保存＝PDDPの正本** | `data.incidents||0` → `Number.isInteger` 判定 |
+| `desktop/renderer.html:6894` / `:7387` | 戦歴の読み上げ・表示 | null を `記録なし` / `not recorded` と述べる |
+
+消費側 `desktop/pddp.js` は `finite()` が null を保つため変更不要だが、実挙動で反証した。
+不明なら「Incidents 0」と言わず、順位が確定していれば順位の軸へ寄せ、事実が一つも無ければ発話しない。
+**実測の 0 は従来どおり 0 と言える**（不明と 0 を混同しない）。
+
+**未解明として残す：** 8/31 に iRacing が本当に 0 を返していたのか、変数を読めていなかったのかは
+当時のログに情報が無く**判別できない**。`or 0` は確実な欠陥なので塞いだが、これで捏造が解決したとは言えない。
+レース結果ログへ `INCIDENTS DIAG`（summary値／prev_incidents／live read／var_found／team／driver）を追加し、
+**次の実走で確定させる**。`find_var` / `read_int` はいずれも失敗時 None を返し、テレメトリ切断後でも例外にならない。
+
+### 型⑤echo：ドライバーの自由文を発話しない
+
+`desktop/renderer.html:5215` はドライバーの前回回答を `${selected.answer}` で文へ埋め込んでいた。
+8/31 実走で90文字超のSTT生テキストがTTSへ流れ、途中で切断された（`11:59:28` と `12:03:02` の2回）。
+
+再利用してよいのは **Luna 自身が前回発した質問だけ**（自作・既に一度声に出したもの）へ変更。
+`sanitizeOwnFollowupQuestion()` を新設し、6〜60文字・引用符を含まない・疑問符で終わる、を満たさない記録は
+**followup を作らずに定型プールへ戻す**（fail-closed）。旧版で保存済みの記録に自由文が混ざっていても発話しない。
+
+### 検証
+
+`node tests-conversation-truth-p0.js` **19/19**（新規・`preflight.sh` へ登録）。
+回帰は PDDP 57/57、Evidence debrief 47/47、Session memory tunnel 121/121、Runtime module 16/16、
+Memory Action Layer 28、Build 291 修正2 63/63、`python3 -m py_compile`、`git diff --check` が合格。
+`./preflight.sh` は **85スイート全合格・✅ 出荷可**。外部有料API呼出なし。
+Build・署名・公開・deploy は未実施。作業ツリーの未追跡ファイル（`artifacts/` 等）は触っていない。
+
+### Codexへの確認依頼（2件）
+
+1. **`irsdk-bridge/tests_judge_llm_gate.py:503` の窓幅が脆い。** `if _changed:` ブロックを
+   `[\s\S]{0,8000}` で拾っているため、**そのブロックにコメントを1つ足すと落ちる**（今回実際に落ちた。
+   コメントを1行へ削って回避した）。Build 266 でも同じ理由で6000→8000へ広げている。
+   検証対象は「両経路で unpack されていること」であって窓幅ではない、とテスト自身が書いている。
+   窓幅に依存しない形へ変えるべきか判断してほしい（Codexのテストなので当方では書き換えない）。
+2. **`INCIDENTS DIAG` の変数選定。** `PlayerCarMyIncidentCount` が正本で合っているか、
+   AIレース／ホストセッションで挙動が違わないか。team／driver 側を並記したのはその切り分けのため。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-31 | `d5b965a` | Codex追加必須項目 §9 | （既出・SHA確定） |
+| 08-31 | 本節 | §9-1 のP0 2件を実装 | `or 0` 4箇所＋表示2箇所の入口→出口・PDDP実挙動反証・未解明点とINCIDENTS DIAG・echoのfail-closed化・19/19と preflight 85件全合格・Codexへの確認2件 |
