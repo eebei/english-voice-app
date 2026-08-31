@@ -5957,3 +5957,66 @@ Build・署名・公開・deploy は未実施。作業ツリーの未追跡フ�
 |---|---|---|---|
 | 08-31 | `d5b965a` | Codex追加必須項目 §9 | （既出・SHA確定） |
 | 08-31 | 本節 | §9-1 のP0 2件を実装 | `or 0` 4箇所＋表示2箇所の入口→出口・PDDP実挙動反証・未解明点とINCIDENTS DIAG・echoのfail-closed化・19/19と preflight 85件全合格・Codexへの確認2件 |
+
+## 2026-08-31 JST — 実装確認（作業者による自己検証・commit `41d0539`）
+
+`aef97c4` の2件について、テストが飾りでないことを変異試験で確かめ、経路の取りこぼしを掃き出した。
+**これは作業者自身の確認であり、Gate 4（独立確認）ではない。** 次はCodexの独立検証。
+
+### 変異試験 8/8 検出
+
+修正を1つずつ元へ戻し、テストが赤くなることを確認した。
+
+| 変異 | 検出 |
+|---|---|
+| `bridge.py` を `prev_incidents or 0` へ戻す | ✅ |
+| race history 保存を `data.incidents||0` へ戻す | ✅ |
+| live summary を `lastTelemetry?.incidents||0` へ戻す | ✅ |
+| 前回回答のecho（`${selected.answer}`）を復活させる | ✅ |
+| `sanitizeOwnFollowupQuestion` の60文字上限を無効化 | ✅（**初回は生存。下記**） |
+| 同・引用符ガードを無効化 | ✅ |
+| 同・疑問符ガードを無効化 | ✅ |
+| `if(!prevQuestion) return null;` の fail-closed を無効化 | ✅ |
+
+**長さ上限の変異が最初は生き残った。** 8/31の流出文は「？で終わらない」ため疑問符ガードで弾かれており、
+**長さ規則は一度もテストされていなかった**。疑問符で終わる長文＝自由文が質問形で保存された場合、
+そのままTTSへ流れる。境界2件（59+？は通す／60+？は弾く）を追加して塞いだ（`41d0539`）。
+テストを書いた本人が気づけなかった型であり、§9-5 の「装置は作業者に甘く書ける」の実例として記録する。
+
+### 経路の掃き出しで見つかった残存2件（いずれも今回は変更していない）
+
+1. **`desktop/renderer.html:6953`** — `(r.qa||[]).map(x=>` + "`${x.question} → ${x.answer}`" + `)`。
+   ドライバーの自由文を**LLMプロンプト文脈へ注入**している（実走ログの `MEMORY_CONTEXT injected=3`）。
+   TTSへの直接echoではなく、記憶注入としては設計どおり（プロンプト側で「ドライバー申告＝作業仮説」と枠付け済み）。
+   ただしRoad Atlantaの捏造は「無線履歴をLLM会話履歴へ積んだ」ことが原因だったため、
+   **LLMが自由文を言い直す経路として隣接している**。型⑤の再発面としてCodexの判断を仰ぐ。当方では変更しない。
+2. **`public/pitwall.html:1634`** — `incidents:data.incidents||0`。
+   このページは `ws://localhost:8765` へ接続する**実働ブラウザ版クライアント**であり（`server.js:218` で `/` から配信）、
+   同じ型①の欠陥を持つ。ただし同関数は `data.bestLap` / `data.avgLap` / `data.totalLaps` を読んでおり、
+   Bridgeが送るのは `best_lap` / `avg_lap` / `total_laps` ＝ **契約が既にずれていて他フィールドは空で保存される**。
+   incidents だけが偶然キー一致し、0を捏造して保存している。
+   **1行だけ直すと「他は壊れたまま incidents だけ正しい」状態を作るため、今回は直さずに報告する。**
+   公開ページの変更はGate 7対象でもある。扱い（stale codeとして撤去するか、契約を合わせるか）はYuji／Codex判断。
+   `public/index.html:755` も同型だが旧RaceVoiceページ（最終更新 2026-06-29）で別スキーマ。
+3. 上記以外に incidents を 0 や既定値へ丸める箇所は、製品コード（desktop / bridge / server）に**残っていない**。
+
+### 検証結果
+
+`node tests-conversation-truth-p0.js` **21/21**、変異 8/8 検出。
+`python3 -m py_compile irsdk-bridge/bridge.py`、`node --check server.js`、`git diff --check` 合格。
+`./preflight.sh` **85スイート全合格・✅ 出荷可**。外部有料API呼出なし。
+
+### 次
+
+- **Gate 4（独立確認）＝ Codex。** `aef97c4` / `41d0539` の差分に対し、
+  §9-1の2件が実際に塞がったか、上記残存2件の扱い、`tests_judge_llm_gate.py:503` の窓幅を反証してほしい。
+- **Build判定は Gate 4 の後。** 現時点でBuild・署名・公開・deployは未実施。
+  なお `INCIDENTS DIAG` は**実走ログでしか読めない**ため、Build 292 を出さない限り
+  「8/31の0が本物か未読か」は確定しない。ここはGate 8依存であり、機械確認では埋まらない。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 08-31 | `aef97c4` / `3fa0fd3` | §9-1 のP0 2件を実装 | （既出・SHA確定） |
+| 08-31 | 本節 | 実装確認（自己検証） | 変異試験8/8・長さ上限の未テスト発覚と追加・残存2件（LLM文脈への自由文注入／public実働クライアントの `||0` と契約ずれ）・preflight 85件全合格・Gate 4はCodex・Build判定はその後 |
