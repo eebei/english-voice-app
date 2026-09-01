@@ -6452,3 +6452,29 @@ Gate 0〜5 と Gate 7 は合格。**残るは Yuji の公開GO（Gate 9）のみ
 |---|---|---|---|
 | 09-01 | `2d1b7ae` | Gate 4 差戻し対応（positive contract） | （既出・SHA確定） |
 | 09-01 | 本節 | Build 292 Gate 5 独立確認 | 対象SHA `2d1b7ae`・installer/asar/Bridgeのbytes・SHA-256をCI申告と独立突合・asarヘッダ自前パースでmodule 14/14・build-info buildNum 292・修正5点のasar実物での実在確認・zlib復元によるBridge内Build 292と新診断2件の確認・pygame同梱・採番前artifact 2本の除外・P0/P1/P2 0件で合格 |
+
+## 2026-09-01 JST — Codex独立再計算（Build 292 Gate 5 最終署名）
+
+Claude Codeの自己検査値を転載せず、GitHub Actionsの指定runからartifactを別作業ディレクトリへ取得して再計算した。
+
+| 項目 | Codex実測 | 判定 |
+|---|---:|---|
+| Desktop run | `33467780133` / success / head `2d1b7ae573434c129ddb85c15604c2a1a2fcecd6` | ✅ |
+| Bridge run | `33467786983` / success / head `2d1b7ae573434c129ddb85c15604c2a1a2fcecd6` | ✅ |
+| Desktop artifact ZIP | 302,164,037 bytes | ✅ |
+| Desktop installer（3本同一） | 100,718,834 bytes / `6f395056ef33925546fb5d5bc9ede94432690b4cb932fde2d71483c4b6bed30d` | ✅ |
+| `app.asar` | 4,415,023 bytes / `7053728623111e0e519397e6b32a27a9a27c20829ff636d1b3038967ea5efc60` | ✅ |
+| Desktop同梱Bridge | 17,030,583 bytes / `9303387d02cc9d3037d0445395545b2a2435db1e4aa41fe3fce14aa103218f77` | ✅ |
+| Bridge単体EXE | 17,029,959 bytes / `89c88900147e29d0e2b12b7386ee778769fe9791be4e2764c3043e314e842f32` | ✅ |
+| Bridge単体installer | 16,325,420 bytes / `7cffdcf6b85bb0bd2d746ee4b47d6c39380b0bbb5a410e9c37bf049812b003eb` | ✅ |
+| runtime module | renderer参照 **14/14**、欠落0、0 byteなし | ✅ |
+| `build-info.json` | `buildNum: 292` | ✅ |
+| Bridge埋込Build | Build 292あり、Build 291なし | ✅ |
+
+Desktop artifactは `verify-artifact.sh` で、Bridge単体artifactはZIPを個別取得して、zlib復元（417ストリーム）で再確認した。Bridge単体にも `RACE SUMMARY GATE` / `INCIDENTS DIAG` が存在し、pygame同梱を確認した。
+
+### Gate 5判定
+
+**Gate 5 独立確認済み・合格。** 作業者（Claude Code）と確認者（Codex）が分離され、指定run・対象SHA・bytes・SHA-256・runtime module 14本・`buildNum=292` の全項目が一致した。
+
+この署名はprivate artifactの検査に限る。Windows実機（Gate 6）、本番server反映（Gate 7の公開直前再確認）、実走（Gate 8）、公開（Gate 9）は別ゲートとして未完了である。
