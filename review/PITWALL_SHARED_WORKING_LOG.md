@@ -6483,3 +6483,9 @@ Desktop artifactは `verify-artifact.sh` で、Bridge単体artifactはZIPを個�
 **Gate 5 独立確認済み・合格。** 作業者（Claude Code）と確認者（Codex）が分離され、指定run・対象SHA・bytes・SHA-256・runtime module 14本・`buildNum=292` の全項目が一致した。
 
 この署名はprivate artifactの検査に限る。Windows実機（Gate 6）、本番server反映（Gate 7の公開直前再確認）、実走（Gate 8）、公開（Gate 9）は別ゲートとして未完了である。
+
+## 2026-09-01 JST — Gate 7 公開前server確認
+
+`./verify-deploy.sh` を現行 `main` のSHA `aff1f447f692e0e8e827acedb05e48aa6b9479b1` で実行。
+本番 `https://omoraypitwall.com/api/version` は同一SHAで起動し、未認証の `/api/memory/decisions` は401を返した。
+したがってserver反映と認証保護経路は合格。Build 292 artifact対象SHA `2d1b7ae` の後続は記録MDのみで、製品コード差分はない。
