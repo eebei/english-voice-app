@@ -6127,3 +6127,108 @@ timing authority には見えていない。
 |---|---|---|---|
 | 08-31 | `41d0539` / `c576704` | 実装確認（自己検証） | （既出・SHA確定） |
 | 09-01 | 本節 | 実戦戦略ドクトリンと「ボックス」追従 | Yuji口述の一次資料5項目・Codex `dbfb4e3` がレース後実装である訂正・prompts.js追記5点と官兵衛の参謀個性・driverCommand分岐と後置き反論・29/29と変異4/4・preflight 86件全緑・push済みdeploy未実施・未着手5件 |
+
+## 2026-09-01 JST — Build 292 出荷ゲート Gate 0/1/2/3（作業者記録・Gate 4はCodex）
+
+対象SHA `d25a69fb187cee98125a1acb7e486b03f0371523`。製品Build **292**
+（`Build 292 (driver-led pit calls and race-result diagnostics)`）。
+公開中は Desktop Release **Build 291**。同じ番号で中身の違うinstallerは作らない。
+
+### Gate 0 — 変更範囲と出荷対象
+
+| 記録項目 | 値 |
+|---|---|
+| 公開中Build | Desktop Release **Build 291** |
+| 対象Git SHA | `d25a69f` |
+| Railway本番SHA | `3e2ab17`（`./verify-deploy.sh` でSHA一致・保護経路401を実測） |
+
+公開291以降の変更ファイル（`git diff --name-status`）:
+`desktop/decision-memory.js` / `desktop/renderer.html` / `desktop/strategy-playbook.js` /
+`engineer-card.js` / `irsdk-bridge/bridge.py` / `preflight.sh` / `prompts.js` /
+`tests-conversation-truth-p0.js` / `tests-driver-pit-command.js`(新規) / `tests-strategy-playbook.js`
+
+影響領域の分類:
+
+- **Desktop（Build必要）**: `renderer.html`（followupの測定値ガード）、`decision-memory.js` / `strategy-playbook.js`（Codex `dbfb4e3`）
+- **Bridge（Build必要）**: `bridge.py`（RACE SUMMARY GATE計装、INCIDENTS DIAG、incidents null保持、採番）
+- **Server（deploy済み）**: `prompts.js`（戦略ドクトリン）、`engineer-card.js`（driverCommand）
+- **Auth / Payment / Public page**: 該当なし（変更ゼロ）
+
+出荷二系統: Desktop同梱Bridge と Bridge単体、両方を292で出す。
+未追跡ファイル（`artifacts/` `desktop/dist/` `docs/PITWALL_CATEGORY_RUNTIME_GUIDE.md` 等）は
+一切commitへ混ぜていない（8/31に `git add -A` で巻き込みかけ、push前に `reset --soft` で是正済み）。
+
+状態の分離: **実装済み・機械検証済み**まで。artifact検証／Windows／実走は未実施。
+
+### Gate 1 — 失敗の固定と受入条件
+
+8/31夜 RBR実走（公式 subsession 88367382：P13→P4、incidents 3、iRating 1845→1910）から3件を固定した。
+
+| 実走の失敗 | 時刻 | 実際の回答 | 回帰テスト |
+|---|---|---|---|
+| ドライバーの決定を覆した | `19:31:37` / `19:32:36` | `今はステイアウト。ピットウィンドウまで走れる。` | `tests-driver-pit-command.js` 29件 |
+| 前日の質問を測定値ごと復唱 | `19:57:32` | `前回と同じことを聞くね。今回はIncidents 0。…` | `tests-conversation-truth-p0.js` 28件 |
+| レース結果がデブリーフへ届かない | 全域 | `RACE RESULT` ログが実走3本すべてで0件 | GATE計装（実走でのみ確定） |
+
+音声認識揺れ（`この週`／`この周`）、短い追質問（`ボックス`単独）、肯定・否定、
+データなし（`fuel_strategy` 空）を各テストに含めた。
+推測禁止値のfail-closed（給油量が無い時に数字を作らない）、
+過去値の現在値化を禁じる規則（測定値を含む質問の再利用禁止）を確認した。
+
+### Gate 2 — 完全な動線
+
+- **driverCommand**: PTT音声 → STT → `engineer-card.classify`（`driverCommand`付与）→ `buildPitDecision` →
+  renderer dispatch → speech queue（P2）→ TTS。ピットレーン内・レース終了は局面ガードで分岐。
+  質問（`ボックス？`含む）は従来の timing authority 経路のまま＝LLMとローカルの境界は不変。
+- **followup**: `pw_debrief_followup_history_v1` → `selectDebriefFollowUp` → `sanitizeOwnFollowupQuestion` →
+  弾かれたら**followupを作らず定型プールへ戻す**（黙ってLLMへ落とさない）。
+- **RACE SUMMARY GATE**: telemetry → `_should_fire` / `_lap_time_settled` / `_latest_lap_recorded` の三値 →
+  変化時のみログ。summary本体の条件式は意味を変えていない。
+- session変更・pit cycle・checker・driver交代のreset経路は今回変更していない。
+
+### Gate 3 — ソースと機械検証
+
+- `python3 -m py_compile irsdk-bridge/bridge.py` / `node --check` (`prompts.js` `engineer-card.js`) 合格
+- 新規: `tests-driver-pit-command.js` **29/29**、`tests-conversation-truth-p0.js` **28/28**
+- **変異試験**: driverCommand 4/4、followup・GATE計装 4/4 を検出
+- 回帰: Engineer cards 114、8/30 replay 41、Local Intent Router 53、Evidence debrief 47、PDDP 57、
+  Session memory tunnel 121、Memory Action 28、judge_llm_gate 91、phase_ab_integration 28、PTT 17、strategy playbook 41
+- `./preflight.sh` **86スイート全合格・✅ 出荷可**、`git diff --check` 合格
+- **外部有料API呼出 0件**（Anthropic / Google STT / Google TTS）
+- 原価影響: LLM呼出回数・token量・STT/TTS秒数は増えない。`driverCommand` は決定論経路で
+  **LLMを1回減らす方向**。GATE計装は変化時のみのローカルログでRailway負荷ゼロ。
+- テストが製品package経路を飛ばしていないか: `tests-runtime-module-status.js` 16/16 に加え、
+  rendererが `<script src>` で参照する**14本すべてが `desktop/` に実在**し、
+  `package.json` の `build.files: ["*.js", ...]` で確実に同梱されることを確認（Build 281の同梱漏れ型の反証）。
+
+### Gate 4 — Codexへ（作業者からの引き渡し）
+
+**目的**: 8/31夜実走のP0 3件（決定の上書き・stale factの再放送・結果の不達）。
+**原因**: (1) `pit_decision` が質問と決定を区別していなかった (2) followupガードが測定値の有無を見ていなかった
+(3) summary gateの3条件に診断が無く3レース連続で原因不明のまま。
+**変更diff**: `d25a69f`（および `9380bb4` `3e2ab17` `bc00fd6`）。
+**未確認事項**: 下記。
+
+確認者への反証依頼:
+
+1. `driverCommand` の**過剰検出**。STT揺れで質問が決定に化ける形は無いか（8/30のブレンド相談の回帰は維持済み）。
+2. `sanitizeOwnFollowupQuestion` の**過剰拒否**。数字ガードで正当な質問プールが全滅していないか。
+3. `RACE SUMMARY GATE` が実走でログを溢れさせないか（変化時のみだが、`lapTime` が毎frame動く局面での挙動）。
+4. Build 292 の採番一意性と、`build-info.json` の `buildNum` が `BUILD_VERSION` から正しく導かれること。
+
+**未確認（機械検証では埋まらない）**: Windows実機（Gate 6）、iRacing実走（Gate 8）、
+`RACE SUMMARY GATE` と `INCIDENTS DIAG` の実データ、黄旗の実発火（実走3本連続でcaution 0）。
+
+### 疑問（Yujiへ）
+
+8/31夜のログは `BUILD Build 291`／`up to date (local=20260831-0919)` だが、
+**その夜の発話に 17:02 commit の文字列が出ている**。Electron側をソースから起動していませんか。
+もしそうなら `renderer.html` の変更は再起動だけで届き、`bridge.py` だけがBuildを要します。
+Gate 6の手順が変わるので確認したい。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 09-01 | `a1a22c4` | 実戦戦略ドクトリンと「ボックス」追従 | （既出・SHA確定） |
+| 09-01 | 本節 | Build 292 Gate 0/1/2/3 | 対象SHA `d25a69f`・採番292・変更11ファイルと領域分類・実走失敗3件の固定と回帰・動線・86スイート全緑と変異8/8・原価影響なし・module 14本の同梱確認・Gate 4依頼4点・Yujiへの起動形態の確認 |
