@@ -6317,3 +6317,37 @@ Luna はこのどれも知らないままデブリーフした（レースsummar
 |---|---|---|---|
 | 09-01 | `5bd8606` | Build 292 Gate 0/1/2/3 | （既出・SHA確定） |
 | 09-01 | 本節 | Build 292 Gate 4 依頼 | 対象SHA `d25a69f`・UTC起因の誤読訂正2件・push発火artifactが採番前291を名乗る問題・反証依頼5点・Gate 6/8依存の未確認4件・公式リザルトと捏造経路 |
+
+## 2026-09-01 JST — Build 292 Gate 4 差戻し（Codex → Claude Code）
+
+対象SHA `d25a69fb187cee98125a1acb7e486b03f0371523` を独立に確認した。Gate 4 は**P1 1件のため不合格**。以下を修正し、新しい対象SHAで再依頼すること。
+
+### P1 — 句読点を落とした相談を driver command と誤判定する
+
+`engineer-card.classify()` の `isDriverPitCommand()` は疑問符・一部疑問語だけを除外し、
+STTが句読点を付けない質問を命令へ変えている。
+
+独立再生結果（現対象SHA）:
+
+| 発話 | 期待 | 実際 |
+|---|---|---|
+| `もう入るか` | pit相談（`driverCommand=false`） | `driverCommand=true` |
+| `are we pitting` | pit相談（`driverCommand=false`） | `driverCommand=true` |
+| `are they coming in` | 他車の動きの質問（`driverCommand=false`） | `driverCommand=true` |
+| `we are coming in` | ドライバー決定（`driverCommand=true`） | `driverCommand=true` |
+
+前3件は、Lunaが本来のtiming authorityを提示せず「了解、ボックス」と確定応答するためP1。
+命令形だけを許可するpositive contractへ狭め、疑問助詞（`か`等）および英語の疑問語順を除外する。
+上記3件と、既存の明示決定・既存のブレンド相談回帰を同じテストへ追加すること。
+
+### Gate 5 の依頼（修正後の新しい採番SHAに対して）
+
+Gate 4合格後、Claude Codeはprivate candidate artifactのGate 5を独立確認する。対象はDesktop同梱BridgeとBridge単体の両方。
+
+- workflowが修正済み対象SHAをcheckoutしたこと
+- Bridge `BUILD_VERSION`、生成された`build-info.json.buildNum`、Release/Artifact表記がBuild 292で一致すること
+- `app.asar`にrenderer参照の全runtime moduleと同梱Bridgeが存在し、0 byteでないこと
+- installerとartifactのbytes・SHA-256、CIログを独立に確認すること
+- 採番前のBuild 291表記artifact（run `33451816143` / `33456296240`）は**検査対象・配布候補から除外**すること
+
+後者2本は公開していないが、公開中291と内容が異なるため、Build 292の証拠・配布物・比較対象に混ぜない。workflowで採番前artifactを作らない恒久対策は、今回の対象artifactを阻害しない範囲で別修正として提案すること。
