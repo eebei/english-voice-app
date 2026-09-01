@@ -63,6 +63,19 @@ for (const t of ['もう入るか', 'are we pitting', 'are they coming in']) {
   const c = topicOf(t);
   check(`句読点なしのピット相談を命令にしない：「${t}」`, !!c && c.cmd !== true, c);
 }
+// Gate 4 差戻しは「命令形だけを許可する positive contract へ狭めろ」だった。
+// 否定リストへの追記では、列挙し忘れた言い回しが素通りする。同型を広く反証する。
+for (const t of ['入るか', 'ボックスするか', 'ピットインするか', 'この周で入るか',
+                 'is he pitting', 'do we box', 'will they come in', 'should we box',
+                 'can we pit now', 'are you boxing']) {
+  const c = topicOf(t);
+  check(`positive contract：相談形「${t}」は命令にしない`, !c || c.cmd !== true, c);
+}
+// Codex の表で「決定」とされた形は通ること（過剰拒否の検出）。
+for (const t of ['we are coming in', 'この周で入るよ', 'ボックスする', 'ピットインして']) {
+  const c = topicOf(t);
+  check(`positive contract：決定形「${t}」は命令のまま`, !!c && c.cmd === true, c);
+}
 {
   const r = reply('ボックス？');
   check('「ボックス？」は相談として扱い、了解で確定させない',

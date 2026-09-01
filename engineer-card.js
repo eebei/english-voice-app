@@ -125,13 +125,33 @@ function classify(text, options = {}) {
   //   `今はステイアウト。ピットウィンドウまで走れる。`を2回返した。
   //   前の集団の動きが見えているのはドライバーであり、決定は覆さない。
   //   疑問符・疑問語があれば質問、無くて決定の言い回しなら命令として扱う。
+  // ★2026-09-01 Gate 4 差戻し（Codex P1）：否定リスト方式は、STTが句読点を落とした
+  //   相談（`もう入るか` / `are we pitting` / `are they coming in`）を命令へ通していた。
+  //   ボックスは取り消せない指示なので、**命令形だけを許可する positive contract** にする。
+  //   疑問の形が一つでも見えたら相談として扱い、timing authority の判断を返す。
+  const PIT_INTERROGATIVE = [
+    /[？?]/,                                   // 明示の疑問符
+    /いつ|何周|どう|べき|かな|ますか|でしょうか|判断してくれ/,  // 日本語の疑問語
+    /(?:か|かい|の)\s*[。.!！]?\s*$/,           // 文末の疑問助詞（`もう入るか`）
+    /^\s*(?:are|is|am|do|does|did|can|could|will|would|shall|should|have|has)\b/i, // 英語の疑問語順
+    /\b(?:or|should|when|how many|what lap)\b/i,
+  ];
+  // 命令・意思表明として認める形だけを列挙する。ここに無い言い回しは相談側へ落ちる。
+  const PIT_COMMAND = [
+    /^(?:ボックス|box\s*box|box)[。.!！\s]*$/i,     // 単独のコール
+    /ボックス(?:する|入る|入れ|だ|で)/,
+    /(?:この|次の|今)(?:の)?(?:周|ラップ|週|州|lap)[でに]?.{0,4}(?:入る|入るよ|入るわ|入ります|ピット|ボックス)/,
+    /(?:もう)?.{0,4}(?:入るよ|入るわ|入ります)/,     // 意思表明の語尾
+    /もう.{0,4}入る(?![かのねぇ])/,                 // `もう入る` は可、`もう入るか` は不可
+    /ピットイン(?:する|だ|して)|ピットする/,
+    /\b(?:box this lap|boxing|coming in|pitting|pit now)\b/i,
+    /\bstay ?out(?:\s*now)?[。.!！]*$/i,
+    /ステイアウト(?:で|だ|する)/,
+  ];
   const isDriverPitCommand = (txt) => {
-    const q = String(txt || '');
-    if (/[？?]/.test(q)) return false;
-    // STT often drops punctuation.  These are consultations, not commands;
-    // never let the pit-command regex promote them to an irreversible box call.
-    if (/いつ|何周|どう|べき|かな|ますか|でしょうか|判断してくれ|or\s|should|when\b|how many|\b(?:are|is)\s+(?:we|they)\s+(?:pitting|coming\s+in|boxing)|are\s+they\s+coming\s+in|もう\s*入るか/i.test(q)) return false;
-    return /^(?:ボックス|box\s*box|box)[。.!！\s]*$|ボックス(?:する|入る|入れ|だ|で)|(?:この|次の|今)(?:の)?(?:周|ラップ|週|州|lap)[でに]?.{0,4}(?:入る|入るよ|入るわ|入ります|ピット|ボックス)|もう.{0,6}入る|入るよ|入るわ|入ります|ピットイン(?:する|だ|して)|ピットする|box this lap|boxing|coming in|pitting|pit now|stay ?out(?:\s*now)?[。.!！]*$|ステイアウト(?:で|だ|する)/i.test(q);
+    const q = String(txt || '').trim();
+    if (PIT_INTERROGATIVE.some((re) => re.test(q))) return false;
+    return PIT_COMMAND.some((re) => re.test(q));
   };
   const blendOrTrafficTalk = /ブレンド|集団|車群|トラフィック|クリアエア|blend|pack\b|traffic|clear ?air/i.test(t);
   if (!blendOrTrafficTalk
