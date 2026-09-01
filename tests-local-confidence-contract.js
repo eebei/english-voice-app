@@ -98,6 +98,38 @@ check('空データで「確定できない」と言いながら confidence=conf
     !onlyInLog, { 参照箇所: uses.length, 分岐での使用: !onlyInLog });
 }
 
+// ── 5. ★オラクル汚染の検出 ────────────────────────────────────────────
+// 9e8e904 で、このテストの SAYS_UNAVAILABLE が実装の replySignalsUnavailable へ
+// **文字単位でコピー**された。判定式が実装と共有された時点で、このテストは
+// 実装のミスを検出できない（同じ語彙を外せば両方が同時に外す）。
+// 以後、実装が拾えない言い回しを **別語彙** で独立に持ち、そこで反証する。
+{
+  const fs = require('fs'), vm = require('vm');
+  const src = fs.readFileSync('desktop/local-intent-router.js', 'utf8');
+  const m = src.match(/const replySignalsUnavailable[\s\S]*?\n  };/);
+  check('実装側の confidence 判定関数を取り出せる', !!m);
+  if (m) {
+    const ctx = {}; vm.createContext(ctx);
+    vm.runInContext(m[0] + '\nthis.f = replyConfidence;', ctx);
+    const f = ctx.f;
+    // router が実際に返す文のうち、人が「無い／出せない」と読むもの。
+    // テスト側の語彙とは重ならない表現を意図的に選んでいる。
+    const REAL_REPLIES = [
+      ['nearest_gap_slow', 'いまのGAPは取れていない。少し待って。'],
+      ['fuel_plan', '不足量は未確定。'],
+      ['historical_weather', '前回の天候記録は確認できない。現在値では代用しない。'],
+      ['incident_average', '本人の成績記録を確認できない。ログイン状態を確認して。'],
+      ['incident_average', '本人記録は3レース分。直近5レースの平均には足りない。'],
+    ];
+    const wrong = REAL_REPLIES.filter(([i, r]) => f(i, r) === 'confirmed');
+    check('router が実際に返す不足の言い回しを confirmed にしない（オラクル非共有で反証）',
+      wrong.length === 0, wrong.map(([i, r]) => ({ intent: i, reply: r, got: f(i, r) })));
+  }
+  check('テストの判定語彙が実装へコピーされていない（オラクル汚染の検出）',
+    !src.includes("取得できない|確定できない|まだ.{0,6}(?:出て|無|な)い|受信していない"),
+    'tests-local-confidence-contract.js の SAYS_UNAVAILABLE と同一の正規表現が実装に存在する');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (findings.length) {
   console.log('\n【実行で見つかった不整合】');

@@ -1,0 +1,478 @@
+[
+ {
+  "log": "20260830-0901",
+  "time": "09:07:05",
+  "question": "ちょっとあの ffbの。  ソフトの方が動いてなかったような感じだったんで リセットしました。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。FFB戻ったかな。エンジンstart、アウトラップ準備。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:07:28",
+  "question": "1回 アイ レーシング ダウンさせたから、ちょっと時間かかるかも。",
+  "route": "intent=conversation authority=llm",
+  "reply": "うん、大丈夫。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:08:35",
+  "question": "OK FFB 戻った？",
+  "route": "intent=conversation authority=llm",
+  "reply": "FFB戻ってる。アウトラップ、いこう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:09:08",
+  "question": "でもなんかいつもより重いような気がするな。これなんだこれ？",
+  "route": "intent=conversation authority=llm",
+  "reply": "セッティング変わった？内圧を確認してみよう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:09:29",
+  "question": "クリッピングはしてなさそうだから大丈夫だけど。",
+  "route": "intent=conversation authority=llm",
+  "reply": "わかった。まずウォームアップ周で様子見よう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:13:38",
+  "question": "全部店で行きますよ。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。全開でいこう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:19:28",
+  "question": "あれ？なんで俺に4 バツがついてんのこれ？",
+  "route": "intent=conversation authority=llm",
+  "reply": "その数値は確認できない。質問をもう一度短く教えて。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:19:44",
+  "question": "全然体感 なかったけど、後ろのやつがこけ タッチの分かったんだけど。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。触ってないなら大丈夫。前向こう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:20:06",
+  "question": "無駄に4。バツがつくのが嫌なんだよね。これ。",
+  "route": "intent=conversation authority=llm",
+  "reply": "インシデントポイントはシステム判定。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:21:04",
+  "question": "しかも 5になってるし。",
+  "route": "intent=conversation authority=llm",
+  "reply": "SR落ちちゃったね。次のコーナー、集中しよう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:23:53",
+  "question": "前はクリアになったから当分 引っ張ってもいいね。これ、ブランaで十分かも。",
+  "route": "intent=conversation authority=llm",
+  "reply": "そうね。Plan Aで行こう。タイヤ、まだ入ってきてる。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:24:23",
+  "question": "前とのギャップは？",
+  "route": "intent=nearest_gap authority=bridge_local",
+  "reply": "前5.9秒。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:25:01",
+  "question": "後ろのギャップは？",
+  "route": "intent=nearest_gap authority=bridge_local",
+  "reply": "後ろ0.0秒。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:25:22",
+  "question": "後ろ2.0 だね。ギャップ。",
+  "route": "intent=nearest_gap authority=bridge_local",
+  "reply": "後ろ1.9秒。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:25:33",
+  "question": "近づいてきてました。",
+  "route": "intent=conversation authority=llm",
+  "reply": "そうね。じわじわ詰まってる。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:37:34",
+  "question": "俺、この週に入ったら 後方の方の車とブレンドしちゃうか？",
+  "route": "intent=pit_decision authority=deterministic",
+  "reply": "ピットを推奨。燃料不足が根拠。給油設定は22L。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:38:05",
+  "question": "燃料不足はまだ全然足りるんだけど、後方の集団に。",
+  "route": "intent=fuel_status authority=bridge_local",
+  "reply": "現燃料で約5.3周。完走まで23.5L不足。今は次のウインドウ。最終目安は0周目、あと0周。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:38:43",
+  "question": "ハマってた。車はコールしてなかったね。今",
+  "route": "intent=conversation authority=llm",
+  "reply": "クリーン。次、行こう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:39:04",
+  "question": "最終コーナーで止まってて行きバタで俺が気づいたけど、それ コールして欲しかった。",
+  "route": "intent=conversation authority=llm",
+  "reply": "停止車両、見落とした。ごめん。注視する。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:39:57",
+  "question": "お薬？",
+  "route": "intent=conversation authority=llm",
+  "reply": "その質問、聞き取れなかった。もう一度。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "09:48:23",
+  "question": "やっぱ 上位のランカー 早えーな！",
+  "route": "intent=conversation authority=llm",
+  "reply": "上位は強いね。君のペースはいい。このまま刻んでいこう。"
+ },
+ {
+  "log": "20260830-0901",
+  "time": "10:09:11",
+  "question": "接触がちょっと多かったね。あと、オフ トラックが。  4回ぐらいあったかな？ それをちょっと改善しないといけないね。 あとは ドライビング中の目線の持って行き方、コーナー 入って コーナー 出て行く時とか？  それも 課題だね。",
+  "route": null,
+  "reply": "書き込み後の再読込まで確認し、回答を実測データ付きのドライバー申告記憶として保存したよ。内容を確認するか、回答を修正してね。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:11:18",
+  "question": "ルナ 継続して gdpのコード教えて。",
+  "route": "intent=conversation authority=llm",
+  "reply": "ごめん、わたしはレースエンジニア。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:12:09",
+  "question": "いや、それは まだ来てないみたいだよ。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。そのデータ、今は来てない。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:18:40",
+  "question": "まだ3秒以内にも入ってない。",
+  "route": "intent=conversation authority=llm",
+  "reply": "その数値は確認できない。質問をもう一度短く教えて。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:21:08",
+  "question": "ちょっと強引すぎちゃった。",
+  "route": "intent=conversation authority=llm",
+  "reply": "次のラップは白紙。リセットしよ。左に車。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:21:25",
+  "question": "左は ウォールしかないです。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:22:41",
+  "question": "温度上がりすぎてるな。左フロント。",
+  "route": "intent=conversation authority=llm",
+  "reply": "左フロント、内側熱いね。荷重かかりすぎ。次のピットでキャンバー見直そ。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:23:13",
+  "question": "むしろ クラッシュしてるね。",
+  "route": "intent=conversation authority=llm",
+  "reply": "わかった。ピット前に確認する。今はドライビングに集中して。左に車。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:23:41",
+  "question": "左全然 車いないです。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:25:00",
+  "question": "正解。それ！",
+  "route": "intent=conversation authority=llm",
+  "reply": "いいね。そのペースで刻んでいこ。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:25:52",
+  "question": "次の シュピート入ろう！",
+  "route": null,
+  "reply": null
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:35:02",
+  "question": "iも苦労してるね。",
+  "route": "intent=conversation authority=llm",
+  "reply": "そうね。前、セクター2で落としてる。ペース、まだ詰められる。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:35:23",
+  "question": "了解。gdp 来てる？",
+  "route": "intent=conversation authority=llm",
+  "reply": "その数値は確認できない。質問をもう一度短く教えて。"
+ },
+ {
+  "log": "20260830-1539",
+  "time": "16:48:29",
+  "question": "タイヤが慣れて コントロールが効かなくなって。 あとオフトラックが多かったね。今回ね。",
+  "route": null,
+  "reply": "書き込み後の再読込まで確認し、回答を実測データ付きのドライバー申告記憶として保存したよ。内容を確認するか、回答を修正してね。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:12:47",
+  "question": "今日から。  目標は Road to 3系 アイ レーティング。  ok。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。3000iRating、狙おう。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:13:12",
+  "question": "まずは インシデントを減らす で必ず チェックを受ける。 できれば 上位で難しいね。このミッション。",
+  "route": "intent=conversation authority=llm",
+  "reply": "そうね。インシデント0で走り切ること——それが一番の土台。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:13:53",
+  "question": "今回のメンバーで前回とか俺と一緒に走った人いるかな？",
+  "route": "intent=conversation authority=llm",
+  "reply": "データ上は前回のエントリーリスト持ってないから、今の23台の中に誰が。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:34:47",
+  "question": "この10ビット 入ったら？  ブレンドする時 どうかな？回収 段に引っかかる？",
+  "route": "intent=rejoin authority=deterministic",
+  "reply": "今入る物理復帰P12、範囲P12〜P12。近傍9台が停止すればブレンド後P9。停止意図は未確認。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:35:09",
+  "question": "OK 入ってみる？",
+  "route": "intent=conversation authority=llm",
+  "reply": "うん、入ってみようか。ブレンドのタイミング——セクター3で判断しよう。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:35:44",
+  "question": "大丈夫だよ。 トップ 2台とか 上位入ってないもんね。",
+  "route": "intent=leader_gap authority=bridge_local",
+  "reply": "クラス首位とのGAPは取得できない。直前車のGAPでは代用しない。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:36:11",
+  "question": "オッケー ナイス クリアなとこ入れたよ。 前4秒ぐらいあるか？",
+  "route": "intent=position_gap authority=deterministic",
+  "reply": "現在P7。直前車まで1.0秒。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:36:28",
+  "question": "プランaだったら何週目に入ってた。",
+  "route": "intent=plan_status authority=deterministic",
+  "reply": "Plan Aはベースライン。現在の基準案。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:59:10",
+  "question": "1年と4か5 ついてます。確か 5だったかな？ データ入ってない？",
+  "route": "intent=conversation authority=llm",
+  "reply": "ごめん、インシデントの実値はこっちに入ってない。ドライバーの体感が正しい——5ポイントね。どの場面で付いた？覚えてる？"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "11:59:28",
+  "question": "コースの はみ出しだよ。全部",
+  "route": null,
+  "reply": "前回は「接触がちょっと多かったね。あと、オフ トラックが。 4回ぐらいあったかな？ それをちょっと改善しないといけないね。 あとは ドライビング中の目線の持って行き方、コーナー 入って コーナー 出て行く時とか？ それも 課題だね。」と話していた。今回は同じ傾向だった？変わったなら一言で教えて。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "12:00:06",
+  "question": "ドライビングはそんなすぐに進化しないから難しいけど。  内容的には良かったんじゃないのかな？アンダーカットも聞いたと思うし、かなり 順位 アップできてるね。",
+  "route": null,
+  "reply": "書き込み後の再読込まで確認し、回答を実測データ付きのドライバー申告記憶として保存したよ。内容を確認するか、回答を修正してね。"
+ },
+ {
+  "log": "20260831-1057",
+  "time": "12:03:02",
+  "question": "incidents 4. off track.",
+  "route": null,
+  "reply": "前回は「ドライビングはそんなすぐに進化しないから難しいけど。 内容的には良かったんじゃないのかな？アンダーカットも聞いたと思うし、かなり 順位 アップできてるね。」と話していた。今回は同じ傾向だった？変わったなら一言で教えて。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:21:12",
+  "question": "アンダーカット。  を考え。",
+  "route": "intent=rejoin authority=deterministic",
+  "reply": "復帰予測のライブデータが揃っていない。順位は出さない。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:21:37",
+  "question": "フューエル ウィンド 相手からでいいんだよ。",
+  "route": "intent=conversation authority=llm",
+  "reply": "わかった。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:30:22",
+  "question": "あと何州で フューエル ウィンドウ 飽きますか？",
+  "route": "intent=fuel_window_status authority=bridge_local",
+  "reply": "まだ。燃費と完走距離を確認中。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:30:57",
+  "question": "あと何週で増える？ウィンド枠？",
+  "route": "intent=race_distance authority=deterministic",
+  "reply": "残り26分22秒。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:31:18",
+  "question": "フューエル ウィンド あの燃料を継ぎ足し が満タンできるかってほど。",
+  "route": "intent=fuel_status authority=bridge_local",
+  "reply": "現燃料で約9.6周。完走まで23.0L不足。ごめん、最終目安の周はまだ確定できない。Plan Aを継続、次のクリーン周で詰める。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:31:37",
+  "question": "いや、もう この週で入るよ。",
+  "route": "intent=pit_decision authority=deterministic",
+  "reply": "今はステイアウト。ピットウィンドウまで走れる。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:31:56",
+  "question": "ピットインと空いてるよ。26。リッター以下 給油するでしょで。残りが26。",
+  "route": "intent=fuel_status authority=bridge_local",
+  "reply": "現燃料で約9.2周。完走まで24.2L不足。ごめん、最終目安の周はまだ確定できない。Plan Aを継続、次のクリーン周で詰める。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:32:31",
+  "question": "もうこの中盤になったらね。そのクリーンシューってもういらないんだよ。もう3種で 目安が出てんだから。",
+  "route": "intent=fuel_plan authority=deterministic",
+  "reply": "追加給油が必要。現在24.2L、ゴールまで47.1L必要。燃料は22.9L不足。給油設定23L。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:32:36",
+  "question": "ボックス。",
+  "route": "intent=pit_decision authority=deterministic",
+  "reply": "今はステイアウト。ピットウィンドウまで走れる。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:32:55",
+  "question": "ピットウィンドウを開いたらもうすぐ入る 入ってんだけど、もう。",
+  "route": "intent=pit_decision authority=deterministic",
+  "reply": "現在ピットレーン内。今の作業を完了する。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:33:29",
+  "question": "エアコンの3代前に入りたかったな。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。次のピット開始は、タイミング次第。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:33:53",
+  "question": "次のピットはもうないからね。",
+  "route": "intent=unresolved_operational authority=deterministic",
+  "reply": "そのピット操作は確認できない。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:47:29",
+  "question": "後ろ 離れていってる？",
+  "route": null,
+  "reply": "後ろ#22が2.72秒遅い。直近3周の中央値。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:50:28",
+  "question": "18.3秒は違うね。22番はさっきの前の週から一緒だよ。一緒。",
+  "route": "intent=conversation authority=llm",
+  "reply": "了解。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:58:00",
+  "question": "インシデント さんついてるんじゃないかな？",
+  "route": "intent=conversation authority=llm",
+  "reply": "ごめん、わたしの手元では0って出てた。3付いてたなら、一番大きかったのはどこ？"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "19:58:18",
+  "question": "全部ちょっとしたトラックオフです。",
+  "route": null,
+  "reply": "書き込み後の再読込まで確認し、回答を実測データ付きのドライバー申告記憶として保存したよ。内容を確認するか、回答を修正してね。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "20:11:54",
+  "question": "incidents 3, All off track.",
+  "route": "intent=conversation authority=llm",
+  "reply": "ありがと。オフトラック3回、書き込ん。今回の安定感、どうだった？前回と比べて。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "20:12:13",
+  "question": "ラップタイム 安定があったでしょ？",
+  "route": "intent=conversation authority=llm",
+  "reply": "うん、見えてた。ベストは前回より0.26秒速くて、26周のうち25周が1:32秒台以内。かなり揃ってたね。オフトラック3回の場所、覚えてる？"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "20:12:57",
+  "question": "覚えてるけど、あまりそれは意味がないか？  な、それよりも ブレイキングと。  ハンドルの切れ込み。  が、まあまあ ぼちぼち あの動悸。  し始めた 感はある。意識して乗ったから。",
+  "route": "intent=conversation authority=llm",
+  "reply": "いいね。ブレーキングとステアの入力、意識して変えた効果が出始めてる——それが今日の安定に繋がってたと思う。"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "20:13:25",
+  "question": "明日からは ルマン。それでサーキット。  よろしく。 知ってる？ルマンのサーキット。",
+  "route": "intent=conversation authority=llm",
+  "reply": "ル・マン・サルト・サーキット、知ってる。フル版（13.626km）とブガッティ版（4.185km）があるけど、明日はどっち？"
+ },
+ {
+  "log": "20260831-1844",
+  "time": "20:13:46",
+  "question": "四輪はフル ばんだね。猿とサーキットの。",
+  "route": "intent=conversation authority=llm",
+  "reply": "サルト・フル版、了解。次回のブリーフィングでコース特性とセクター配分を準備しとくね。今日はお疲れ様。"
+ }
+]
