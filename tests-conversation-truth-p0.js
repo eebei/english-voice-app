@@ -24,6 +24,12 @@ check('Bridge: summary の incidents が `or 0` で 0 に化けない（2箇所�
   !bridge.includes("'incidents': prev_incidents or 0")
   && (bridge.match(/'incidents': prev_incidents if isinstance\(prev_incidents, int\) else None/g) || []).length === 2);
 
+check('Bridge: レースsummaryが止まった条件を RACE SUMMARY GATE に残す',
+  bridge.includes('RACE SUMMARY GATE:')
+  && bridge.includes('should_fire=') && bridge.includes('lap_time_settled=')
+  && bridge.includes('latest_lap_recorded=')
+  && bridge.includes('_gate_state != _race_summary_gate_last'));
+
 check('Bridge: 実走で何が読めていたかを INCIDENTS DIAG に残す',
   bridge.includes('INCIDENTS DIAG:')
   && bridge.includes("var_found=")
@@ -126,6 +132,18 @@ check('renderer: 再利用するのは Luna 自身の前回質問だけ',
     f('') === '' && f(null) === '' && f(undefined) === '');
   check('sanitize: 改行を含む記録も1行へ正規化して判定する',
     f('今日は\n  どうだった？') === '今日は どうだった？');
+  // ★2026-09-01：8/31夜の実走で、朝の質問をそのまま復唱して12時間前の
+  //   「今回はIncidents 0」を今日の事実として再生した。測定値を持つ質問は再利用しない。
+  check('sanitize: 8/31夜に再放送された質問そのものを弾く',
+    f('今回はIncidents 0。一番危なかった接触は、こちらから行った側？受けた側？') === '');
+  check('sanitize: 数字を含む質問は弾く（順位・周回・タイムは次回には古い）',
+    f('スタートP5からP4。失ったのは序盤、中盤、終盤のどれ？') === ''
+    && f('19周目のピットは予定どおりだった？') === '');
+  check('sanitize: 事実文＋質問の二文構成を弾く',
+    f('後半のペースが落ちている。主因はタイヤだった？') === '');
+  check('sanitize: 測定値を持たない純粋な問いは通す',
+    f('一番危なかった接触は、こちらから行った側？受けた側？')
+      === '一番危なかった接触は、こちらから行った側？受けた側？');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

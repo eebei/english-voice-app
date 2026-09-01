@@ -5201,6 +5201,11 @@ function sanitizeOwnFollowupQuestion(raw){
   if(q.length<6 || q.length>60) return '';          // 長すぎる＝自由文混入の疑い
   if(/[「」“”]/.test(q)) return '';                  // 引用を含む＝他人の言葉を運んでいる
   if(!/[？?]$/.test(q)) return '';                   // 質問形でないものは聞き直さない
+  // ★2026-09-01：8/31夜の実走で、朝の質問「今回はIncidents 0。一番危なかった接触は…」を
+  //   そのまま夜に復唱し、12時間前の値を「今回」として再生した（型①の再放送）。
+  //   聞き直してよいのは**測定値を持たない純粋な問いだけ**。事実を含む質問は毎回作り直す。
+  if(/[0-9０-９]/.test(q)) return '';                 // 数字＝その時の実測。次回には古い
+  if(/[。.]\s*\S/.test(q)) return '';                 // 事実文＋質問の二文構成は事実側が古くなる
   return q;
 }
 function buildMemoryAwareDebriefFollowup(data){

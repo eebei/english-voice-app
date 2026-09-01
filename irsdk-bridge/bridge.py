@@ -2579,6 +2579,7 @@ def poll_iracing():
     post_contact_speed_ok    = True   # 監視窓中に Speed>30 を維持できてるかフラグ
     prev_damage_s = 0.0        # 前回計測のdamage_s（義務+任意修理秒）。増えたら1回だけダメージ報告
     prev_incidents = None
+    _race_summary_gate_last = None   # RACE SUMMARY GATE の直前状態（変化時だけログ）
     incident_times = []
     # ★Build 266 Phase E：damage_observation の incident_delta 計算専用。prev_incidents は
     #   同フレーム内の上のincidentブロックで先に更新されてしまうため、独立して追跡する。
@@ -3292,11 +3293,30 @@ def poll_iracing():
                     session_laps
                     and session_laps[-1].get('lap') == lap
                     and session_laps[-1].get('time') == round(lapTime, 3))
+                _should_fire = driver_activity_mod.should_fire_race_summary(
+                    _driver_activity_local, lifecycle_state)
+                _lap_time_settled = last_lap_time == lapTime
+                # tests_phase_ab_integration.py は、この式の末尾の形を契約文字列として
+                # 検査し、同じ形を消す変異も見ている。式の意味は変えずに括弧を保つこと。
                 _may_summary = (
-                    driver_activity_mod.should_fire_race_summary(
-                        _driver_activity_local, lifecycle_state)
-                    and last_lap_time == lapTime
-                    and _latest_lap_recorded)
+                    _should_fire and _lap_time_settled and _latest_lap_recorded)
+                # ★2026-09-01：実走ログ3本（8/30夕・8/31朝・8/31夜）すべてで
+                #   レースsummaryが一度も発行されず、最終順位・iRating・incidentsが
+                #   デブリーフへ届いていなかった。どの条件で止まったかを残す記録が
+                #   1行も無く原因を特定できなかったため、状態が変わった時だけ出す。
+                _gate_state = (_should_fire, _lap_time_settled, _latest_lap_recorded)
+                if _gate_state != _race_summary_gate_last:
+                    _race_summary_gate_last = _gate_state
+                    _last_row = session_laps[-1] if session_laps else {}
+                    log('RACE SUMMARY GATE: may=' + str(_may_summary)
+                        + ' should_fire=' + str(_should_fire)
+                        + ' lap_time_settled=' + str(_lap_time_settled)
+                        + '(last=' + repr(last_lap_time) + ' cur=' + repr(lapTime) + ')'
+                        + ' latest_lap_recorded=' + str(_latest_lap_recorded)
+                        + '(rec_lap=' + repr(_last_row.get('lap')) + ' cur_lap=' + repr(lap)
+                        + ' rec_time=' + repr(_last_row.get('time')) + ')'
+                        + ' activity=' + str(_driver_activity_local)
+                        + ' lifecycle=' + str(lifecycle_state))
             if _may_summary:
                 _times = [r['time'] for r in session_laps if r['time'] > 0]
                 if _times:
