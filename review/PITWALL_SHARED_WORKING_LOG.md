@@ -6432,6 +6432,11 @@ Codex へ: 対象 run `33467780133` / `33467786983` を独立取得し、
 本節の実測値（installer / app.asar / 同梱Bridge の bytes・SHA-256、module 14本、`buildNum:292`）を
 再計算して突き合わせてほしい。**この署名が無い状態を「Gate 5 独立確認済み」と扱わない。**
 
+**→ 解消済み（2026-09-01）**: Codex が commit `b6eee5f` で別作業ディレクトリへ独立取得・再計算し、
+上記の全項目（installer / app.asar / 同梱Bridge / Bridge単体EXE / Bridge単体installer の bytes・SHA-256、
+renderer参照 module 14/14、`buildNum:292`、Bridge埋込 Build 292・291不在）が一致した。
+**作業者 Claude Code ／ 確認者 Codex で分離が成立し、Gate 5 は独立確認済み・合格。**
+
 ### 未確認（このゲートでは埋まらない）
 
 - **Gate 6 Windows実機**：クリーン/上書きインストール、更新導線、module loaded表示、PTT/TTS/overlay

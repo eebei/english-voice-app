@@ -123,6 +123,6 @@ Select-String -Path "$env:USERPROFILE\Desktop\OMORAY-bridge-debug-*.log" -Patter
 
 ## 6. 未確認として残るもの
 
-- Gate 5 は **Claude Code 一人での検査**（発火も検査も同一担当）。Codex の再計算署名は未取得。
+- ~~Gate 5 は Claude Code 一人での検査~~ → **解消。Codex が `b6eee5f` で独立再計算し全項目一致、Gate 5 は独立確認済み・合格。**
 - `preflight.sh` 86スイート全緑は **Claude Code 側の実行環境**での結果。
 - 公開前に `./verify-deploy.sh` で本番 SHA をもう一度確認する（Codex 指摘）。
