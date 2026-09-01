@@ -65,9 +65,15 @@
   // label.  The renderer can use this contract to prevent an LLM response from
   // replacing an authoritative local answer, while unavailable/stale/held
   // results remain explicitly non-confirmed instead of looking like facts.
+  const replySignalsUnavailable = reply => /(?:取得できない|確定できない|まだ.{0,6}(?:出て|無|な)い|受信していない|届いていない|わからない|分からない|不明|データが無い|データがない|ありません|not (?:available|confirmed|received)|no data|unknown|cannot|can't|unavailable|do not have|don't have)/i.test(String(reply));
+  const replyConfidence = (intent, reply) => {
+    if (/(?:unavailable|stale|held)/i.test(String(intent)) || replySignalsUnavailable(reply)) return 'unavailable';
+    if (/(?:measuring|確認中|次の計測|あと\d+周|まだ。)/i.test(String(intent) + ' ' + String(reply))) return 'estimated';
+    return 'confirmed';
+  };
   const answer = (intent, reply, action) => reply
     ? { handled:true, intent, reply, source:'local_authority',
-      confidence: /(?:unavailable|stale|held|measuring)/i.test(String(intent)) ? 'unavailable' : 'confirmed',
+      confidence: replyConfidence(intent, reply),
       ...(action ? { action } : {}) }
     : { handled:false };
 
@@ -95,7 +101,7 @@
   };
   const gapAnswer = (intent, reply, identities) => reply
     ? { handled:true, intent, reply, source:'local_authority',
-      confidence: /(?:unavailable|stale|held)/i.test(String(intent)) ? 'unavailable' : 'confirmed',
+      confidence: replyConfidence(intent, reply),
       gapIdentities:identities }
     : { handled:false };
 

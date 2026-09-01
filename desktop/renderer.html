@@ -2338,6 +2338,12 @@ async function sendMsg(inputSource){
     }) : null;
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;
+    if(localIntent.source!=='local_authority'){
+      diagnosticLog('LOCAL_INTENT_REJECTED','unexpected_source='+String(localIntent.source||'missing'));
+      return;
+    }
+    const localPriority=localIntent.confidence==='confirmed'
+      ? SPEAK_PRIO.P2_PROCEDURE : SPEAK_PRIO.P3_INFO;
     diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=${localIntent.source||'bridge_local'} confidence=${localIntent.confidence||'unknown'}`);
     if(localIntent.action&&localIntent.action.type==='arm_fuel_window_watch'){
       fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
@@ -2347,7 +2353,7 @@ async function sendMsg(inputSource){
     pushMsg({role:'assistant',content:reply});
     // ★G5：GAP の回答は queue 待ちで陳腐化する。どの方向の・どの車の値を述べたのかを
     //   一緒に queue へ渡し、TTS 開始直前に現在値と照合する（Codex Build 284 P1）。
-    speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'local_'+localIntent.intent,
+    speak(reply,{prio:localPriority,kind:'local_'+localIntent.intent,
       dedupeKey:'local|'+localIntent.intent+'|'+reply,
       gapIdentities:(Array.isArray(localIntent.gapIdentities)&&localIntent.gapIdentities.length)
         ?localIntent.gapIdentities:null});
