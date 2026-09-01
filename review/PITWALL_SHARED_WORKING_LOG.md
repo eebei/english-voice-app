@@ -6232,3 +6232,88 @@ Gate 6の手順が変わるので確認したい。
 |---|---|---|---|
 | 09-01 | `a1a22c4` | 実戦戦略ドクトリンと「ボックス」追従 | （既出・SHA確定） |
 | 09-01 | 本節 | Build 292 Gate 0/1/2/3 | 対象SHA `d25a69f`・採番292・変更11ファイルと領域分類・実走失敗3件の固定と回帰・動線・86スイート全緑と変異8/8・原価影響なし・module 14本の同梱確認・Gate 4依頼4点・Yujiへの起動形態の確認 |
+
+## 2026-09-01 JST — Build 292 Gate 4 依頼（Claude Code → Codex）
+
+対象SHA **`d25a69fb187cee98125a1acb7e486b03f0371523`**（製品 **Build 292**）。
+作業者 Claude Code、確認者 Codex。Gate 0/1/2/3 は前節に記録済み、`./preflight.sh` 86スイート全緑。
+**Yuji の Build GO は受領済み。Gate 4 合格をもって `d25a69f` で採番済みartifactを作る。**
+
+### まず訂正2件（Claude Code の誤り）
+
+**訂正1：8/31夜のexeに私の修正は入っていた。**
+前節で「ログは `Build 291` / `local=20260831-0919` なのに 17:02 commit の文字列が出ている＝矛盾」と書いたが、
+**`build-desktop.yml:49` の `Get-Date` は runner の UTC で動く**。`20260831-0919` は **09:19 UTC = 18:19 JST**。
+workflow run `33376975229`（`workflow_dispatch`、`2026-08-31T09:18:06Z`、SHA `6344b23`）が実体で、
+`6344b23` は私の `aef97c4`(17:02 JST) を含む。走行開始 18:44 JST の26分前のビルド。
+Yuji の運用（installerをDL→更新窓→旧exeを閉じて新exe起動）とも一致する。
+したがって **8/31夜の「前回と同じことを聞くね。今回はIncidents 0。」は私の修正が起こしたもので、分析は正しかった。**
+「ソースから起動しているのでは」という前節末尾の疑問は取り下げる。
+
+**訂正2：「Build GO が push 時点で消費されている」は言い過ぎだった。**
+`build-desktop.yml` は `desktop/**` への push で発火するが、
+`Publish to Release` は `github.event_name == 'workflow_dispatch' && inputs.publish` でガードされており、
+**push発火は private artifact を作るだけで公開はしない**。公開ゲートは破られていない。
+
+### ただし残る問題（Gate 4 で判断してほしい）
+
+push発火で **採番前のartifactが2本できている**。
+
+| run | event | SHA | bridge.py の BUILD_VERSION |
+|---|---|---|---|
+| `33451816143` | push | `9380bb4` | Build **291** |
+| `33456296240` | push | `3e2ab17` | Build **291** |
+
+どちらも中身は公開中の Build 291 と異なるのに **Build 291 を名乗っている**。公開はされていないが、
+`HANDOFF.md` の「同じ番号で中身の違うinstallerを作らない」に実質抵触する。
+これらを誤って検査対象や配布物にしない扱い（無効宣言／削除／運用変更）を決めてほしい。
+構造的には「採番commitより前に `desktop/**` を触ると必ず起きる」ので、
+workflow側で `BUILD_VERSION` が公開中Releaseと同じ番号なら artifact を作らない、等の対策も検討対象。
+
+### Gate 4 反証依頼（P0/P1 の有無を独立に判定してほしい）
+
+1. **`driverCommand` の過剰検出**（`engineer-card.js`）
+   質問が決定に化ける形が無いか。特にSTT揺れ（`この周`→`この週`／`州`）、
+   「入るべきかな」「ボックスかな」等の相談形、英語の `should I box` 系。
+   8/30 の「ブレンド相談を pit_decision に化けさせない」回帰は維持済み（`tests-build291-20260830-replay.js` 41/41）。
+   なお `もう.{0,4}入る` `ピットイン(?:して|する|だ)` を外側regexへ追加している。`入る` 単体は 8/30 の再発源のため入れていない。
+
+2. **`sanitizeOwnFollowupQuestion` の過剰拒否**（`desktop/renderer.html`）
+   数字ガード `/[0-9０-９]/` と二文ガード `/[。.]\s*\S/` により、
+   **正当な質問プールが全滅していないか**。実際に保存され得る質問文を集めて通過率を測ってほしい。
+   全滅していれば「前回と同じことを聞く」機能自体が死んでいることになり、
+   それは私の修正が機能を殺した＝別のP1になる。
+
+3. **`RACE SUMMARY GATE` のログ量**（`irsdk-bridge/bridge.py`）
+   変化時のみ出す実装だが、`lapTime` が毎frame動く局面で三値タプルが振動しないか。
+   実走ログ1本で溢れるようなら計装として失格。
+
+4. **Build 292 の採番一意性**
+   `BUILD_VERSION` が唯一の正本であること、`build-desktop.yml:57-63` が正しく `buildNum` を導くこと、
+   公開中 291 と衝突しないこと。
+
+5. **上記「残る問題」の扱い**（採番前 push artifact 2本）
+
+### 未確認（機械検証では埋まらない・Gate 6/8 依存）
+
+- Windows実機での更新導線と module loaded 状態
+- `RACE SUMMARY GATE` / `INCIDENTS DIAG` の実データ。**レースsummaryは実走3本連続で0件**で、
+  最終順位・iRating・公式incidentsがデブリーフへ一度も届いていない。原因はこの計装でしか特定できない。
+- 黄旗の実発火。実走3本すべて `num_cautions: 0`（8/31夜は公式リザルトで確認）。
+- `driverCommand` の実走での妥当性。ドライバーが「ボックス」と言った時に本当に自然に従うか。
+
+### 参考：8/31夜の公式リザルト（subsession 88367382）
+
+P13スタート → **P4**、**incidents 3**、26周、iRating 1845 → **1910**、`num_cautions: 0`。
+Luna はこのどれも知らないままデブリーフした（レースsummary不達のため）。
+「今回はIncidents 0」は公式値3に対する捏造であり、経路は
+`buildFallbackSessionSummary()` → `lastTelemetry?.incidents || 0`、
+かつ **Bridge の telemetry ペイロードに `incidents` フィールドが存在しない**（`undefined || 0` → `0`）。
+`3e2ab17` で `Number.isInteger` 判定へ変えたためこの経路は塞がっているが、**実走での確認は未了**。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 09-01 | `5bd8606` | Build 292 Gate 0/1/2/3 | （既出・SHA確定） |
+| 09-01 | 本節 | Build 292 Gate 4 依頼 | 対象SHA `d25a69f`・UTC起因の誤読訂正2件・push発火artifactが採番前291を名乗る問題・反証依頼5点・Gate 6/8依存の未確認4件・公式リザルトと捏造経路 |
