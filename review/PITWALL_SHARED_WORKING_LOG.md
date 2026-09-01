@@ -6351,3 +6351,89 @@ Gate 4合格後、Claude Codeはprivate candidate artifactのGate 5を独立確�
 - 採番前のBuild 291表記artifact（run `33451816143` / `33456296240`）は**検査対象・配布候補から除外**すること
 
 後者2本は公開していないが、公開中291と内容が異なるため、Build 292の証拠・配布物・比較対象に混ぜない。workflowで採番前artifactを作らない恒久対策は、今回の対象artifactを阻害しない範囲で別修正として提案すること。
+
+## 2026-09-01 JST — Build 292 Gate 5 独立確認（確認者 Claude Code・合格）
+
+CodexのGate 4合格を受け、Yujiの Build GO / Gate 5 GO により **publish=false の private candidate** を発火し、
+**Codexの申告を転載せず、別ディレクトリへ独立取得して全数値を自分で再計算した**。
+
+| 項目 | 値 |
+|---|---|
+| 対象SHA | `2d1b7ae573434c129ddb85c15604c2a1a2fcecd6` |
+| 製品Build | **292** |
+| Desktop workflow | `33467780133`（`workflow_dispatch`・success・**Publish to Release = skipped**） |
+| Bridge workflow | `33467786983`（`workflow_dispatch`・success・**Publish to Release = skipped**） |
+| build_tag | `20260901-0354`（UTC） |
+
+### 実測（CI申告と突合）
+
+| 対象 | bytes | SHA-256 | CI申告と |
+|---|---:|---|---|
+| installer（3本とも同一） | 100,718,834 | `6f395056ef33925546fb5d5bc9ede94432690b4cb932fde2d71483c4b6bed30d` | **一致** |
+| `app.asar` | 4,415,023 | `7053728623111e0e519397e6b32a27a9a27c20829ff636d1b3038967ea5efc60` | **一致** |
+| 同梱 `OMORAY-PITWALL-Bridge.exe` | 17,030,583 | `9303387d02cc9d3037d0445395545b2a2435db1e4aa41fe3fce14aa103218f77` | **一致** |
+| Bridge単体 exe | 17,029,959 | `89c88900147e29d0…` | — |
+| Bridge単体 installer | 16,325,420 | `7cffdcf6b85bb0bd…` | — |
+
+installer 3本（`Setup-20260901-0354` / `Setup-latest` / `Desktop-latest`）はSHA-256が完全一致。
+
+### runtime module — 参照14本を1本ずつ照合（Build 281型の反証）
+
+NSIS → `$PLUGINSDIR/app-64.7z` → `resources/app.asar` を展開し、
+**CIのツールを使わず asar ヘッダを自前でパース**して実数を数えた。
+`renderer.html` が `<script src>` で参照する14本すべてが存在し、0 byteのものは無い。
+
+`cost-meter` / `decision-memory` / `driving-style-v1` / `fuel-plan-guard` / `gap-freshness` /
+`local-intent-router` / `luna-self-memory` / `memory-action-layer` / `pddp` / `reflex-events` /
+`relative-pace` / `session-memory` / `strategy-playbook` / `team-plan` — **欠落0件**。
+
+### 採番と修正内容の実在確認
+
+asar 実物の `build-info.json` は `{"buildTag":"20260901-0354","buildNum":292}`。
+`BUILD_VERSION`（Bridge）＝ 292 と一致し、artifact名も `Build-292`。**291表記の混入なし**。
+
+同梱 `renderer.html`（asarから取り出した実物）に今回の修正が入っていることを確認した。
+
+- stale question の数字ガード / 二文ガード：**あり**
+- followupは自作質問のみ（`sanitizeOwnFollowupQuestion`）：**あり**
+- incidents null保持（race history保存）：**あり**
+- 旧echo `${selected.answer}`：**不在**（正）
+
+Bridge exe は PyInstaller onefile で `strings` では読めないため、**埋め込みzlibストリームを総当たりで復元**して確認した
+（417ストリーム復元）。同梱Bridge・Bridge単体ともに:
+
+- `Build 292 (driver-led pit calls and race-result diagnostics)` **あり**
+- `Build 291` **0件**
+- `RACE SUMMARY GATE` **あり** / `INCIDENTS DIAG` **あり**
+- Bridge単体に `pygame` 40件・SDL2/pygame参照56件（**Build 290で漏れた箇所の再発なし**）
+
+### 除外したもの
+
+採番前の push発火artifact **run `33451816143`（`9380bb4`）/ `33456296240`（`3e2ab17`）** は、
+`BUILD_VERSION` が Build 291 のまま中身が公開291と異なるため、
+Codexの指示どおり**検査対象・配布候補・比較対象から除外**した。今回の証拠には一切使用していない。
+
+### 判定
+
+**Gate 5 合格。P0/P1/P2 0件。** 作業者（Codexの指示でCIが生成）と確認者（Claude Code）は分離されている。
+
+### 未確認（このゲートでは埋まらない）
+
+- **Gate 6 Windows実機**：クリーン/上書きインストール、更新導線、module loaded表示、PTT/TTS/overlay
+- **Gate 8 iRacing実走**：`RACE SUMMARY GATE` と `INCIDENTS DIAG` の実データ、
+  `driverCommand` が実走で自然に効くか、黄旗の実発火（実走3本連続 caution 0）
+- **Gate 7**：server側は `2d1b7ae` で `./verify-deploy.sh` SHA一致・保護経路401を実測済み。
+  ただしCodexの指摘どおり、**公開直前にもう一度本番SHAを確認する**。
+- preflight 86スイート全緑は**Claude Code側の実行環境での結果**であり、本番デプロイ確認とは別証拠。
+
+### 次の判断（Yuji）
+
+Gate 0〜5 と Gate 7 は合格。**残るは Yuji の公開GO（Gate 9）のみ。**
+公開後に Gate 6 / Gate 8 を field evidence として確認し、Gate 10 の停止条件に触れたら直ちに止める。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 09-01 | `2d1b7ae` | Gate 4 差戻し対応（positive contract） | （既出・SHA確定） |
+| 09-01 | 本節 | Build 292 Gate 5 独立確認 | 対象SHA `2d1b7ae`・installer/asar/Bridgeのbytes・SHA-256をCI申告と独立突合・asarヘッダ自前パースでmodule 14/14・build-info buildNum 292・修正5点のasar実物での実在確認・zlib復元によるBridge内Build 292と新診断2件の確認・pygame同梱・採番前artifact 2本の除外・P0/P1/P2 0件で合格 |
