@@ -128,7 +128,9 @@ function classify(text, options = {}) {
   const isDriverPitCommand = (txt) => {
     const q = String(txt || '');
     if (/[？?]/.test(q)) return false;
-    if (/いつ|何周|どう|べき|かな|ますか|でしょうか|判断してくれ|or\s|should|when\b|how many/i.test(q)) return false;
+    // STT often drops punctuation.  These are consultations, not commands;
+    // never let the pit-command regex promote them to an irreversible box call.
+    if (/いつ|何周|どう|べき|かな|ますか|でしょうか|判断してくれ|or\s|should|when\b|how many|\b(?:are|is)\s+(?:we|they)\s+(?:pitting|coming\s+in|boxing)|are\s+they\s+coming\s+in|もう\s*入るか/i.test(q)) return false;
     return /^(?:ボックス|box\s*box|box)[。.!！\s]*$|ボックス(?:する|入る|入れ|だ|で)|(?:この|次の|今)(?:の)?(?:周|ラップ|週|州|lap)[でに]?.{0,4}(?:入る|入るよ|入るわ|入ります|ピット|ボックス)|もう.{0,6}入る|入るよ|入るわ|入ります|ピットイン(?:する|だ|して)|ピットする|box this lap|boxing|coming in|pitting|pit now|stay ?out(?:\s*now)?[。.!！]*$|ステイアウト(?:で|だ|する)/i.test(q);
   };
   const blendOrTrafficTalk = /ブレンド|集団|車群|トラフィック|クリアエア|blend|pack\b|traffic|clear ?air/i.test(t);

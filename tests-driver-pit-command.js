@@ -57,6 +57,12 @@ for (const t of ['ボックス？', 'この周で入る？', 'もう入る?', 'b
   const c = topicOf(t);
   check(`疑問符だけで質問と判定：「${t}」`, !!c && c.cmd !== true, c);
 }
+// Build 292 Gate 4 regression: STT may remove the question mark or translate
+// the consultation into English.  These must remain questions, never commands.
+for (const t of ['もう入るか', 'are we pitting', 'are they coming in']) {
+  const c = topicOf(t);
+  check(`句読点なしのピット相談を命令にしない：「${t}」`, !!c && c.cmd !== true, c);
+}
 {
   const r = reply('ボックス？');
   check('「ボックス？」は相談として扱い、了解で確定させない',
