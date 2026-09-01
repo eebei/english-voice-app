@@ -2338,7 +2338,7 @@ async function sendMsg(inputSource){
     }) : null;
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;
-    diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=bridge_local`);
+    diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=${localIntent.source||'bridge_local'} confidence=${localIntent.confidence||'unknown'}`);
     if(localIntent.action&&localIntent.action.type==='arm_fuel_window_watch'){
       fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
       diagnosticLog('FUEL_WINDOW_WATCH','armed session='+fuelWindowWatch.sessionKey);

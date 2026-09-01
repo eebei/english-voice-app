@@ -61,8 +61,14 @@
       wet: finite(weather.track_wetness_code),
     };
   };
+  // Every local fact response carries provenance and a conservative confidence
+  // label.  The renderer can use this contract to prevent an LLM response from
+  // replacing an authoritative local answer, while unavailable/stale/held
+  // results remain explicitly non-confirmed instead of looking like facts.
   const answer = (intent, reply, action) => reply
-    ? { handled:true, intent, reply, ...(action ? { action } : {}) }
+    ? { handled:true, intent, reply, source:'local_authority',
+      confidence: /(?:unavailable|stale|held|measuring)/i.test(String(intent)) ? 'unavailable' : 'confirmed',
+      ...(action ? { action } : {}) }
     : { handled:false };
 
   // ★G5（2026-08-25）Codex Build 284 P1：GAP の回答は queue 待ちで陳腐化しうる。
@@ -88,7 +94,9 @@
     return identity;
   };
   const gapAnswer = (intent, reply, identities) => reply
-    ? { handled:true, intent, reply, gapIdentities:identities }
+    ? { handled:true, intent, reply, source:'local_authority',
+      confidence: /(?:unavailable|stale|held)/i.test(String(intent)) ? 'unavailable' : 'confirmed',
+      gapIdentities:identities }
     : { handled:false };
 
   function fuelWindowStatus(live, lang) {
