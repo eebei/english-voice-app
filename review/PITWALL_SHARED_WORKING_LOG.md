@@ -6721,3 +6721,28 @@ Build 293 で投入した `RACE SUMMARY GATE` が 35 サンプル出力し、**`
 | 日時(JST) | commit | 追記した節 | 中身 |
 |---|---|---|---|
 | 09-02 | 未commit | Build 295 実走再生 fixture | 依頼書の主張4件を機械確認・`RACE SUMMARY GATE` 35サンプルで4走行連続の原因確定（`latest_lap_recorded` が完走時に開かない）・`poll_iracing()` を回す再生fixture新設で失敗6件を再現・fixtureの誤りが当方の誤った根本原因を暴いた記録・GAP正解値がログから再計算できない限界・6方式比較は未着手 |
+
+## 2026-09-02 JST — 会話記憶ボックス再設計v2（Yuji GO）
+
+Claudeの反証で10/16となったため、`review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md`へv2を追記した。反射訂正の短期文脈保持、`disputed()`先行判定、Luna旧値の撤回、訂正状態の正本一本化、driver commandとの優先順位を追加。Claude Codeは実装前に16件を再反証し、16/16でない限り実装・commit・Buildへ進まない。
+
+### v2再反証結果
+
+Claude Codeが16件を再判定し、**16/16通過・0件差戻し**。反射訂正3件、Luna旧値撤回3件、GAP訂正、driver command併存、長期記憶移行条件を確認した。実装前に残る測定は、短期履歴のトークン／レイテンシ、`RADIO_HISTORY_EXCLUDED`解除時の旧捏造再発有無、反射イベント集約を上限適用より先に行うことの3点。紙上合格は実装合格を意味しないため、これらを確認してから実装へ進む。
+
+### 根本設計更新の適用
+
+Yuji指示により、Build 295の狙いを個別ガードの追加ではなく、会話状態・事実正本・戦略状態・発話配送・訂正状態を統合するセッション設計の更新と定義した。実装前に既存4走行・訂正16件・異常変異・holdoutを内部再生し、訂正16/16、旧値再利用0、別class/stale混入0、無音消失0を数値で確認する。設計・実装いずれもこの基準未達ならBuildへ進めない。
+
+## 2026-09-03 JST — 会話Box v2 実装GO
+
+Yujiより、内部で解決可能な範囲は実装・過去ログ再生・独立検証へ進める許可を受領した。
+設計正本は `review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md` §7。
+
+- 実装担当：Claude Code
+- 独立確認：Codex（Gate 4）
+- 実装対象：会話Box v2、反射集約→上限、`disputed()`先行、旧値撤回、`open_items`正本化、権威イベント付きtimeline復帰
+- 合格条件：8/30再生で未権威反射発話0、8/30〜9/2で訂正16/16、旧値再利用0、混入0、無音消失0
+- 現在地：実装・再生・Gate 4・commit・push・Build・公開は未実施
+
+次のMDに指示書あり
