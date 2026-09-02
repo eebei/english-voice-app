@@ -56,7 +56,7 @@ import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 292 (driver-led pit calls and race-result diagnostics)"
+BUILD_VERSION = "Build 293 (telemetry poll crash fix and race-result diagnostics)"
 PORT = 8765
 connected_clients = set()
 loop = None
