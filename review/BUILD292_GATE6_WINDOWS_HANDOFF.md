@@ -126,3 +126,42 @@ Select-String -Path "$env:USERPROFILE\Desktop\OMORAY-bridge-debug-*.log" -Patter
 - ~~Gate 5 は Claude Code 一人での検査~~ → **解消。Codex が `b6eee5f` で独立再計算し全項目一致、Gate 5 は独立確認済み・合格。**
 - `preflight.sh` 86スイート全緑は **Claude Code 側の実行環境**での結果。
 - 公開前に `./verify-deploy.sh` で本番 SHA をもう一度確認する（Codex 指摘）。
+
+
+---
+
+# ★公開版の値へ更新（2026-09-02・Claude Code）
+
+Build 292 は**公開済み**。private artifact ではなく、**公開版**を使うこと。
+上の「0. インストール前に必ずやること」の SHA と bytes は private candidate のものなので、
+**以下の公開版の値で照合する**（electron-builder は再現ビルドでないため両者は一致しない。既知）。
+
+## 取得先（更新窓からそのまま到達できる）
+
+```
+https://github.com/eebei/english-voice-app/releases/tag/desktop-latest
+→ OMORAY-PITWALL-Setup-latest.exe
+```
+
+| 項目 | 値 |
+|---|---|
+| ファイル | `OMORAY-PITWALL-Setup-latest.exe`（`Desktop-latest.exe` / `Setup-20260902-0131.exe` と同一） |
+| サイズ | **100,716,261 bytes** |
+| SHA-256 | **`89A2C7DB54E41DE9D071DA86B60B5BCA220DB4BA697AA4A741E8FD5827591EC0`** |
+| 対象SHA | `2d1b7ae573434c129ddb85c15604c2a1a2fcecd6` |
+| buildTag | `20260902-0131`（UTC） |
+
+```powershell
+Get-FileHash .\OMORAY-PITWALL-Setup-latest.exe -Algorithm SHA256
+```
+
+**Yuji の通常運用（旧exe起動 → 更新窓 → Update → 新exe起動）でそのまま到達する。**
+
+公開物を実際に取得して展開検査済み：runtime module **14/14**、`buildNum=292`、
+同梱Bridge に `Build 292` / `RACE SUMMARY GATE` / `INCIDENTS DIAG` あり、`Build 291` は0件。
+
+## ★今日のログについての注意
+
+**実名削除（`8ee6b6f`）は Build 292 に入っていない。** 今日のログの `DRIVER` 行には
+他ドライバーの実名が入る。共有する前に伏せ字化する（Claude Code 側で実施可能）。
+実名削除は Build 293 で入る。

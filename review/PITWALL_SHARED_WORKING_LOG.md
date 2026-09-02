@@ -6562,3 +6562,68 @@ Build 292 は Gate 0〜5・7 合格、artifact は run `33467780133` の1本。*
 |---|---|---|---|
 | 09-02 | `cae7965` | 発話行為の基準線 | （既出・SHA確定） |
 | 09-02 | 本節 | 実名停止と `cust_id` 決定 | public repo で実名72人分を検出し commit 前に停止・`DRIVER` ログから実名削除（機能不変）・伏せ字版corpus 105箇所置換・subsession ID の誤解を訂正・識別キーを `cust_id` と決定・`UserID` 未読取と SDK 有無の未確認 |
+
+## 2026-09-02 JST — Build 292 公開完了（Gate 9・実測照合済み）
+
+Yuji の公開GO（「君の判断に委ねる、Build GO!」）を受けて公開した。
+
+### 判断（Claude Code）
+
+**`UserID`(cust_id) 診断と実名削除は入れず、Gate 5 を通った `2d1b7ae` をそのまま公開した。**
+理由：この artifact は Gate 4（Codex）と Gate 5（Claude 実測 + Codex 独立再計算）を通った唯一の版であり、
+1行でも足せばその検証が無効になる。Build 292 の目的である診断2件は完全に入っている。
+**実名削除（`8ee6b6f`）と `UserID` 診断は Build 293 へ回す。**
+→ **今日の走行ログには他ドライバーの実名が入る。** 共有時は伏せ字化してから渡す（手順は確立済み）。
+
+### 実施
+
+| 項目 | 値 |
+|---|---|
+| 対象SHA | `2d1b7ae573434c129ddb85c15604c2a1a2fcecd6`（`build/292` ブランチを作成して dispatch） |
+| Desktop workflow | `33579671014`（`workflow_dispatch`・success・**Publish to Release = success**） |
+| Bridge workflow | `33579682570`（同上） |
+| Desktop Release 名 | **OMORAY PITWALL Desktop — Build 292** |
+
+### Gate 7（公開直前の再確認）
+
+`./verify-deploy.sh` で本番SHA一致・保護経路401を実測。
+さらに `git diff 2d1b7ae HEAD -- server.js prompts.js engineer-card.js auth.js public/` が**空**であることを確認し、
+**本番のサーバー側コードが Build 292 対象SHAと完全同一**であることを機械確認した。
+
+### Gate 9（公開物の実測照合）
+
+**公開URLから実際に取得**して全数値を再計算した。
+
+| 項目 | 実測 |
+|---|---|
+| installer 3本（`Setup-latest` / `Desktop-latest` / `Setup-20260902-0131`） | 全て **100,716,261 bytes** / SHA-256 `89a2c7db54e41de9d071da86b60b5bca220db4ba697aa4a741e8fd5827591ec0` で**同一** |
+| `app.asar` | 4,415,023 bytes |
+| 同梱Bridge | 17,029,233 bytes |
+| `build-info.json` | `{"buildTag":"20260902-0131","buildNum":292}` |
+| runtime module | **14/14**・欠落0 |
+| renderer の修正 | stale question 数字ガード **あり** / followup 自作質問のみ **あり** / 旧echo **不在**（正） |
+| 同梱Bridge 内（zlib復元） | `Build 292` **あり** / `Build 291` **0件** / `RACE SUMMARY GATE` **あり** / `INCIDENTS DIAG` **あり** |
+| Bridge単体 Release | `OMORAY-PITWALL-Bridge-20260902.exe` 17,030,012 / `Setup-20260902.exe` 16,324,492 |
+
+**private candidate（100,718,834 / `6f395056…`）と公開物のバイト数は一致しない。**
+electron-builder の出力は再現可能でなく、`build-info.json` の `buildDate` / `buildTag` が異なるため asar が変わる。
+Build 289（private `03a5f08…` → 公開 `b45a854…`）でも同じ差が出ており、既知の挙動である。
+**したがって Gate 9 は「公開物そのものを取得して中身を実測する」ことで満たした。**
+対象SHA・製品Build番号・module 14/14・診断2件の存在は公開物で直接確認済み。
+
+### 未確認（公開後に確認する）
+
+- **Gate 6 Windows**：手順は `review/BUILD292_GATE6_WINDOWS_HANDOFF.md`。
+  ただし installer 名が `20260902-0131` へ、SHA-256 が `89a2c7db…` へ変わったので、
+  同MDの「取得する installer」節の値は**公開版のこの値**を使うこと（追補済み）。
+- **Gate 8 iRacing実走**：`RACE SUMMARY GATE` と `INCIDENTS DIAG` の実データ。
+  レース結果（最終順位・iRating・公式incidents）が実走3本連続でデブリーフへ届いていない原因は、
+  この2つの計装でしか特定できない。**1レース走ってログを保存すれば目的達成。**
+- 黄旗の実発火（実走3本すべて `num_cautions: 0`）。
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 09-02 | `14b949b` | 訂正再判定への応答 | （既出・SHA確定） |
+| 09-02 | 本節 | Build 292 公開完了 | 判断理由（検証済み版をそのまま出す）・`build/292` ブランチ・workflow 2本success・Gate 7のサーバー側差分ゼロ・公開物の実測照合（bytes/SHA/module 14/14/診断2件）・private と公開のbytes差が既知であること・Gate 6手順の値更新・Gate 8で埋める3点 |
