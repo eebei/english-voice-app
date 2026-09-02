@@ -6627,3 +6627,97 @@ Build 289（private `03a5f08…` → 公開 `b45a854…`）でも同じ差が出
 |---|---|---|---|
 | 09-02 | `14b949b` | 訂正再判定への応答 | （既出・SHA確定） |
 | 09-02 | 本節 | Build 292 公開完了 | 判断理由（検証済み版をそのまま出す）・`build/292` ブランチ・workflow 2本success・Gate 7のサーバー側差分ゼロ・公開物の実測照合（bytes/SHA/module 14/14/診断2件）・private と公開のbytes差が既知であること・Gate 6手順の値更新・Gate 8で埋める3点 |
+
+## 2026-09-02 Build 295 — 実走ログ再生・会話品質共同検証依頼
+
+今回のLe Mans実走で、GTP GAPの数値不正確、Plan質問の周回未回答、残り2/1/Final欠落、終了直前の燃料ピット誤発話が確認された。Build 294は接続・反射の一部は動作したが、会話品質の合格とは扱わない。
+
+詳細なfixture作成、方式比較、採点基準、Claude Code実装／Codex独立検証の分担は `review/BUILD295_REAL_LOG_REPLAY_COLLAB_REQUEST.md` を正本とする。Claude Codeは同MDと内部シミュレーション正本を全文確認し、今回ログを再生できるfixtureと失敗を検出するテストを共有ログへ報告すること。commit / push / build / 公開はYujiの明示GOまで行わない。
+
+## 2026-09-02 JST — Build 295 実走再生 fixture（着手報告・Claude Code）
+
+依頼書 `review/BUILD295_REAL_LOG_REPLAY_COLLAB_REQUEST.md` に着手した。
+対象ログ `OMORAY-bridge-debug-20260902-1333.log`（Le Mans full・IMSA23 34台／全49台・Build 294）。
+
+**まだ実装していない。再現テストだけを作った。** 依頼書 §5 に従い、実装より先に赤を作る。
+
+### 1. 依頼書の主張を機械確認した（報告を鵜呑みにしない）
+
+| 主張 | 実測 |
+|---|---|
+| GAP権威で `direction_conflict_rank_vs_physical` が大量発生 | **301件**。確認 |
+| 残り2周・1周が欠落 | 残り5周=1 / 3周=1 / **2周=0 / 1周=0** / ファイナル=1。確認 |
+| 終了直前に燃料・ピット発話 | 再生で `fuel_warning` を再現（下記） |
+| Build 293 のクラッシュ修正 | `Traceback` **0件**、`RACE SUMMARY GATE` **35件出力**。修正は効いている |
+
+### 2. ★4走行連続の「レース結果が届かない」原因が実データで確定した
+
+Build 293 で投入した `RACE SUMMARY GATE` が 35 サンプル出力し、**`may=True` は 0 回**。
+
+```
+14:50:48 may=False should_fire=True lap_time_settled=True
+         latest_lap_recorded=False(rec_lap=12 cur_lap=13 rec_time=236.772)
+```
+
+完走の瞬間、`should_fire` と `lap_time_settled` は成立していたが
+**`latest_lap_recorded` だけが開かない**。
+`session_laps[-1]['lap']`（完了周=12）と `lap`（走行中=13）を比較しており、
+**13周目はレース終了により永遠に完了しない**ため条件が満たされない。
+
+`RACE RESULT` / `Session summary dispatched` / `pending` はいずれも **0件**。
+最終順位・iRating・公式 incidents がデブリーフへ届かない直接の原因である。
+
+### 3. 再生 fixture — `irsdk-bridge/tests_lemans_20260902_replay.py`（新規）
+
+既存の `irsdk-bridge/replay_harness.py`（Build 266・Codex差戻し#6で新設）を使い、
+**本番の `bridge.poll_iracing()` そのもの**を実走の実測値で回す。文字列検査はしない。
+
+実走の実測から起こしたもの：周3〜12のラップタイム遷移（`LastLap` の実値）、
+チェッカーが12周目走行中に出て S/F 通過で完走する順序、燃料 5.4→4.6L。
+
+**現在の結果：合格2／不合格6。赤が正しい。**
+
+| 検査 | 結果 |
+|---|---|
+| `RACE SUMMARY GATE` が再生でも出る | ✅ |
+| 完走時に `latest_lap_recorded=True` のサンプルがある | ✅（周回途中では成立する） |
+| レース summary が pending / dispatch / RACE RESULT | ❌❌❌ **実走と同じ0件** |
+| `may=True` が成立する | ❌ **0件。実走35サンプルと一致** |
+| CHECKERED 後の燃料・ピット推奨が0件 | ❌ `fuel_warning` が発火 |
+| 残り 5,3,2,1,Final をすべて発話 | ❌ 5件とも未発話 |
+
+### 4. ★再生が当方の誤った根本原因を暴いた（記録として残す）
+
+最初の fixture では **summary が発行されてしまい**、「構造的に永遠に False」という
+当方の仮説が**成立しなかった**。原因は fixture の誤りで、13周目を「完了した通常周」として
+記録していた（`rec_lap=13`）。実走では13周目は走行中に終わっており `rec_lap=12` である。
+
+13周目を通常走行ループから外したところ、実走と完全に一致した（`may=True` 0件）。
+
+**この修正が無ければ、誤った根本原因を報告していた。**
+`poll_iracing()` を実際に回したから検出できたのであり、
+静的検査でも純関数テストでも出ない種類の誤りである。
+
+### 5. 限界（依頼書 §4）
+
+- **GAPの正解値はこのログから再計算できない。** デバッグログに残るのは Bridge が
+  採用した値であり、iRacing 側の真値ではない。`direction_conflict_rank_vs_physical` 301件が
+  「破棄が正しかった」のか「破棄すべきでなかった」のかは、**このログだけでは判定できない**。
+  ログ出力を正解データとして扱わない。方式比較でも、GAP の正確性は
+  「同一クラス・同一対象車・同一取得時刻に固定されているか」という**内部整合**でしか採点できない。
+- 残り周回マイルストーンは、再生では 5/3/2/1 いずれも未発話だった。
+  実走では 5 と 3 は発話している。**fixture の周回進行が実走より粗い**ことが原因の可能性があり、
+  この項目の赤はまだ「実装の欠陥」と断定できない。fixture 側の精度を上げてから判定する。
+
+### 6. 次（未着手）
+
+依頼書 §2 の6方式比較は**未実施**。この fixture を土台に、方式ごとに
+正確性・対象クラス一致・時系列整合・反復回答・終了後誤発話・未取得時の明示応答を採点する。
+
+`commit / push / build / deploy / 公開` は Yuji の明示GOまで行わない。**現在すべて未実施。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 09-02 | 未commit | Build 295 実走再生 fixture | 依頼書の主張4件を機械確認・`RACE SUMMARY GATE` 35サンプルで4走行連続の原因確定（`latest_lap_recorded` が完走時に開かない）・`poll_iracing()` を回す再生fixture新設で失敗6件を再現・fixtureの誤りが当方の誤った根本原因を暴いた記録・GAP正解値がログから再計算できない限界・6方式比較は未着手 |
