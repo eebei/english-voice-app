@@ -175,7 +175,7 @@ def test_contaminated_locals_actually_overwritten():
 
     checker_out_notice_sent = True
     last_laps_remaining_est = 1
-    final_lap_notice_sent = {5: True, 3: True, 1: True}
+    final_lap_notice_sent = {5: True, 3: True, 2: True, 1: True}
     fuel_strategy_warned = True
     fuel_warning_band = 'critical'
     fuel_per_lap_hist = [3.1, 3.0, 2.9, 3.05]
@@ -274,9 +274,11 @@ def test_final_lap_milestones_production():
     print('\n══ final_lap.select_milestone(): 単一発火とdispatch後commit ══')
 
     # ① 通常遷移 6→5→4→3→2→1：各しきい値でちょうど1回ずつ、他は発火しない
-    sent = {5: False, 3: False, 1: False}
+    # ★2026-09-02：残り2周をマイルストーンへ追加した（BUILD295 受入条件）。
+    #   旧版は (2, None) を期待していたが、2 は発火するのが新しい正である。
+    sent = {5: False, 3: False, 2: False, 1: False}
     for laps, expect in [(6, None), (5, 5), (4, None),
-                          (3, 3), (2, None), (1, 1)]:
+                          (3, 3), (2, 2), (1, 1)]:
         fired, crossed = final_lap.select_milestone(
             laps, race_lifecycle.RACING, sent)
         check(f'①通常遷移: 残り{laps}周 → {expect}', fired == expect, fired)
@@ -299,7 +301,7 @@ def test_final_lap_milestones_production():
     sent2 = final_lap.commit_milestone_after_dispatch(
         sent2, crossed2b, 'DISPATCHED')
     check('②5周・3周も後から発話されないようsent済みになっている',
-          sent2 == {5: True, 3: True, 1: True}, sent2)
+          sent2 == {5: True, 3: True, 2: True, 1: True}, sent2)
     fired2c, _ = final_lap.select_milestone(
         1, race_lifecycle.RACING, sent2)
     check('②ジャンプ後、5周や3周の通知が遅れて発火することはない', fired2c is None, fired2c)
@@ -312,7 +314,7 @@ def test_final_lap_milestones_production():
     sent3 = final_lap.commit_milestone_after_dispatch(
         sent3, crossed3, 'DISPATCHED')
     check('③5周・3周もsent済みになっている(取り消し済みの過去として扱う)',
-          sent3 == {5: True, 3: True, 1: True}, sent3)
+          sent3 == {5: True, 3: True, 2: True, 1: True}, sent3)
 
     # ④ CHECKER_OUT/PLAYER_FINISHEDでは新規発火しない（既存の確認を維持）
     fired4, _ = final_lap.select_milestone(

@@ -116,10 +116,16 @@ def test_production_contract():
             in bridge
             and "_pending_non_race_summary = _reset['_pending_non_race_summary']"
             in bridge,
-        'race summary requires exact final lap record':
+        # ★2026-09-02：旧版は `session_laps[-1].get('lap') == lap` を契約文字列として
+        #   固定していたが、**この等号こそが不具合**だった。完了周と走行中周を比べており、
+        #   完走時は必ず1ずれるため条件が永遠に開かず、レース summary が
+        #   4走行連続で発行されなかった（9/2 Le Mans 実走で RACE SUMMARY GATE 35サンプル、
+        #   may=True 0回を実測）。バグを契約として固定していたので、契約側を正す。
+        #   守るべき契約は「最終ラップが記録されるまで待つ」であって、特定の等号ではない。
+        'race summary requires final lap recorded before dispatch':
             'and _latest_lap_recorded)' in bridge
-            and "session_laps[-1].get('lap') == lap" in bridge
-            and "session_laps[-1].get('time') == round(lapTime, 3)" in bridge,
+            and '_rec_lap in (lap, lap - 1)' in bridge
+            and "_last_rec.get('time') > 0" in bridge,
         'teammate laps excluded from user summary':
             'if _driver_activity_local == driver_activity_mod.ACTIVE:'
             in bridge[bridge.find('lap_record = {'):

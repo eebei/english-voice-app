@@ -3293,10 +3293,25 @@ def poll_iracing():
                 # lifecycle は最終S/F通過を検出したフレームで先に PLAYER_FINISHED になるが、
                 # session_laps への最終ラップ追加はこの後の lap_time_changed ブロックで行われる。
                 # last_lap_time が現値へ追いつく次フレームまで待ち、最終ラップ欠落を防ぐ。
+                # ★2026-09-02 修正：この条件は **完走時に永遠に開かない**。
+                #   `session_laps[-1]['lap']` は完了した周、`lap` は走行中の周であり、
+                #   完走の瞬間は前者=12／後者=13 のように必ず1ずれる。
+                #   走行中の周はレース終了により完了しないので、等号は成立しない。
+                #   Build 293 で入れた RACE SUMMARY GATE が 9/2 Le Mans 実走で
+                #   35サンプル出力し `may=True` 0回、`RACE RESULT` 0件を実測した
+                #   （8/30・8/31朝・8/31夜・9/2 の4走行すべて同じ）。
+                #   本来の意図は「最終ラップが session_laps へ入るまで待つ」であり、
+                #   完走時は **直前に完了した周** が入っていれば足りる。
+                _last_rec = session_laps[-1] if session_laps else None
+                _rec_lap = _last_rec.get('lap') if _last_rec else None
                 _latest_lap_recorded = bool(
-                    session_laps
-                    and session_laps[-1].get('lap') == lap
-                    and session_laps[-1].get('time') == round(lapTime, 3))
+                    _last_rec is not None
+                    and isinstance(_rec_lap, int)
+                    # 走行中の周そのもの（周回中に確定した場合）か、その直前の周
+                    # （完走で走行中の周が完了しない場合）のどちらかが入っていればよい。
+                    and _rec_lap in (lap, lap - 1)
+                    and _last_rec.get('time') is not None
+                    and _last_rec.get('time') > 0)
                 _should_fire = driver_activity_mod.should_fire_race_summary(
                     _driver_activity_local, lifecycle_state)
                 _lap_time_settled = last_lap_time == lapTime
@@ -4784,8 +4799,18 @@ def poll_iracing():
                 _fuel_ok_to_finish = (_lft >= _rem)   # 完走できる見込み＝セーブを促す必要がない
         except Exception:
             pass
+        # ★2026-09-02：チェッカー後・完走後は燃料警告を出さない。
+        #   9/2 Le Mans 実走で、終了直前に「燃料残り5リットル。この周でピット」と発話した。
+        #   もう入るピットは無く、ドライバーには意味の無い指示になる。
+        #   `_fuel_dispatch_display = 'BLOCKED_BY_FINAL_LAP_OR_CHECKER'` と同じ考えを
+        #   この経路へも適用する（そちらは帯域警告だけを止めていた）。
+        _race_over = bool(
+            checkered_pending
+            or cur_ss in (5, 6)                             # 5=checkered, 6=cooldown
+            or lifecycle_state in ('PLAYER_FINISHED', 'DEBRIEF')
+            or _driver_activity_local == driver_activity_mod.FINISHED)
         if driver_state == 'track' and fuel is not None and 0.5 < fuel < 5 \
-                and not _fuel_ok_to_finish \
+                and not _fuel_ok_to_finish and not _race_over \
                 and (prev['fuel'] is None or prev['fuel'] >= 5):
             _fuel_margin_l = _fs.get('margin_l')
             _fuel_pit_required = bool(_fs.get('pit_required')) or (

@@ -256,8 +256,13 @@ def select_milestone(laps_remaining, lifecycle_state, sent):
         return None, ()
     if not isinstance(sent, dict):
         return None, ()
+    # ★2026-09-02：`2` を追加。従来は (5, 3, 1) で **残り2周が存在しなかった**。
+    #   9/2 Le Mans 実走の 5周=1 / 3周=1 / 2周=0 は不具合ではなく未実装だった。
+    #   なお `1` は上位で「Final lap.」として発話されるため、
+    #   「残り1周」と「ファイナルラップ」を別々に出すと依頼書が禁じる重複になる。
+    #   実装するのは 5 → 3 → 2 → Final(=1) の4回である。
     crossed = tuple(
-        m for m in (5, 3, 1)
+        m for m in (5, 3, 2, 1)
         if laps_remaining <= m and not bool(sent.get(m, False)))
     if not crossed:
         return None, ()

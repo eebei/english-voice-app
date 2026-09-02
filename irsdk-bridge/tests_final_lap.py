@@ -161,16 +161,16 @@ def test_milestone_path():
     sent = {5: False, 3: False, 1: False}
     milestone, crossed = fl.select_milestone(1, fl.RACING, sent)
     check('jump to one emits only Final Lap', milestone == 1, (milestone, crossed))
-    check('jump marks all crossed only after commit', crossed == (5, 3, 1), crossed)
+    check('jump marks all crossed only after commit', crossed == (5, 3, 2, 1), crossed)
     check('selection does not mutate state', sent == {5: False, 3: False, 1: False}, sent)
     committed = fl.commit_milestone(sent, crossed)
-    check('commit marks skipped thresholds', committed == {5: True, 3: True, 1: True}, committed)
+    check('commit marks skipped thresholds', committed == {5: True, 3: True, 2: True, 1: True}, committed)
     check('E0 DISPATCHED commits',
           fl.commit_milestone_after_dispatch(
-              sent, crossed, 'DISPATCHED') == {5: True, 3: True, 1: True})
+              sent, crossed, 'DISPATCHED') == {5: True, 3: True, 2: True, 1: True})
     check('isolated pre-E0 True commits',
           fl.commit_milestone_after_dispatch(
-              sent, crossed, True) == {5: True, 3: True, 1: True})
+              sent, crossed, True) == {5: True, 3: True, 2: True, 1: True})
     check('HELD does not consume',
           fl.commit_milestone_after_dispatch(sent, crossed, 'HELD') == sent)
     check('DROPPED does not consume',

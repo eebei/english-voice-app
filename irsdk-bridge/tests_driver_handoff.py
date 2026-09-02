@@ -348,7 +348,10 @@ def test_p0_4_pending_prepared_when_true_finish():
     # レース経路：should_fire_race_summary で判定
     check('レース経路で should_fire_race_summary が呼ばれる',
           re.search(
-              r'is_race_session:[\s\S]{0,700}?should_fire_race_summary\(',
+              # ★2026-09-02：窓幅は契約ではない。9/2 の `latest_lap_recorded` 修正で
+              #   コメントが増え 700 字を超えた。検証しているのは
+              #   「レース経路で should_fire_race_summary を呼ぶこと」であって字数ではない。
+              r'is_race_session:[\s\S]{0,2000}?should_fire_race_summary\(',
               src) is not None)
     check('最終ラップ記録後まで待つ last_lap_time == lapTime ガード',
           'last_lap_time == lapTime' in src)
