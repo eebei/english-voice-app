@@ -6525,3 +6525,40 @@ run `33467780133` / `20260901-0354` の1本だけ。
 |---|---|---|---|
 | 09-02 | `bdf1ac7` | ローカル事実処理の独立検証 | （既出・SHA確定） |
 | 09-02 | 本節 | 検証水準と意図分類層 | 新規MD `VERIFICATION_STANDARD_AND_INTENT_LAYER_20260902.md`。70%の正体・新受入基準6項目・経路別失敗率57%対14%・役割入れ替えの設計提案・Codex反証依頼3点・分類正答率の基準線・Build 292 未決 |
+
+## 2026-09-02 JST — 実名のログ出力停止と、識別キーを `cust_id` とする決定
+
+正本は `review/SPEECH_ACT_BASELINE_20260902.md` §7（対応1〜3）。
+
+Codex が訂正17件の独立採点に原本ログを要求したため repo へ入れる準備をしたところ、
+**このリポジトリは public** であり、診断ログに **他ドライバーの実名が72人分**（`DRIVER` 行）
+入っていたため commit 前に停止した。
+
+- **対応1**: `irsdk-bridge/bridge.py:2788` の `DRIVER` ログから実名の出力を削除。
+  この行の目的は idx / car_number / SR / iRating の紐付け調査で、**実名は判定にも照合にも使っていない**
+  （危険判定は `iRating<=1300` / `SR 1.0-2.0` のみ、`car_name_map` は telemetry 側でログにも発話にも出ない）。
+  **機能は不変**、preflight 86スイート全緑。今後テスターのログにも他人の実名が入らない。
+- **対応2**: 伏せ字版 `review/corpus/raw/*-redacted.log` 4本を repo へ。実名105箇所を `<redacted>` へ置換し
+  残存ゼロを機械確認。発話・経路・回答・SR・iRating・car number は無加工で、訂正の独立採点に必要な情報は全て残る。
+  `.gitignore` に原本を追加した。
+- **SR/iRating の公開リスクについて当方の見立ては誤りだった。** subsession ID は**ユーザーIDではなくイベントの識別子**で、
+  それがあれば iRacing 公式リザルトから全員の氏名・incidents・iRating が取得できる（Yuji 提供の
+  `eventresult-88367382.json` がまさにそれ）。**ログを伏せる理由は「特定を防ぐ」ではなく
+  「人手で流通するログに、判定に使っていない個人情報を載せない」である。**
+- **対応3**: Yuji の指摘「SRもiRatingもレースごとに変化する＝識別子にならない」は正しい。
+  ただし**実名も弱い**（実データに `Rodrigo Suarez4` `Thomas Stewart10` 等、iRacing が同名区別のため付けた
+  末尾数字がある）。**識別キーは `cust_id`** とする。Build 290 の「名前だけの永久ラベルは追加しない、
+  customer ID 照合を条件とする」決定と一致。
+- **欠落**: `bridge.py` の DriverInfo パーサーは `UserID`（=cust_id）を読んでいない。
+  そのため危険ドライバー判定は**セッション内限定**で、次レースへの持ち越し機構は存在しない。
+  **`UserID` が SDK の DriverInfo に含まれるかは未確認**（ログに YAML 本文が無い）。
+  `INCIDENTS DIAG` と同方式の診断を1行入れれば次走行で確定する。
+
+Build 292 は Gate 0〜5・7 合格、artifact は run `33467780133` の1本。**Yuji の公開GO待ち。**
+
+### MD更新台帳への追記
+
+| 日時(JST) | commit | 追記した節 | 中身 |
+|---|---|---|---|
+| 09-02 | `cae7965` | 発話行為の基準線 | （既出・SHA確定） |
+| 09-02 | 本節 | 実名停止と `cust_id` 決定 | public repo で実名72人分を検出し commit 前に停止・`DRIVER` ログから実名削除（機能不変）・伏せ字版corpus 105箇所置換・subsession ID の誤解を訂正・識別キーを `cust_id` と決定・`UserID` 未読取と SDK 有無の未確認 |
