@@ -65,7 +65,18 @@
   // label.  The renderer can use this contract to prevent an LLM response from
   // replacing an authoritative local answer, while unavailable/stale/held
   // results remain explicitly non-confirmed instead of looking like facts.
-  const replySignalsUnavailable = reply => /(?:取得できない|確定できない|まだ.{0,6}(?:出て|無|な)い|受信していない|届いていない|わからない|分からない|不明|データが無い|データがない|ありません|not (?:available|confirmed|received)|no data|unknown|cannot|can't|unavailable|do not have|don't have)/i.test(String(reply));
+  // Keep this as an independent semantic vocabulary, not a copy of a test
+  // oracle.  It covers the softer Japanese forms used by the actual cards
+  // (取れていない／未確定／足りない／確認できない) as well as English.
+  const replySignalsUnavailable = reply => {
+    const text = String(reply);
+    const patterns = [
+      /取れていない|取得できない|確認できない|確定できない/,
+      /未確定|足りない|記録は.*ない|データ.*ない/,
+      /受信していない|届いていない|不明|ありません/,
+      /not available|not confirmed|no data|unknown|cannot|can't|unavailable|do not have|don't have/i,
+    ];
+    return patterns.some(pattern => pattern.test(text)); };
   const replyConfidence = (intent, reply) => {
     if (/(?:unavailable|stale|held)/i.test(String(intent)) || replySignalsUnavailable(reply)) return 'unavailable';
     if (/(?:measuring|確認中|次の計測|あと\d+周|まだ。)/i.test(String(intent) + ' ' + String(reply))) return 'estimated';
