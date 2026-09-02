@@ -1,0 +1,347 @@
+{
+ "1": {
+  "speech_act": "報告",
+  "fact_axis": "機材",
+  "conf": "○"
+ },
+ "2": {
+  "speech_act": "報告",
+  "fact_axis": "機材",
+  "conf": "○"
+ },
+ "3": {
+  "speech_act": "質問",
+  "fact_axis": "機材",
+  "conf": "○"
+ },
+ "4": {
+  "speech_act": "質問",
+  "fact_axis": "挙動",
+  "conf": "○"
+ },
+ "5": {
+  "speech_act": "報告",
+  "fact_axis": "機材",
+  "conf": "○"
+ },
+ "6": {
+  "speech_act": "不能",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "7": {
+  "speech_act": "質問",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "8": {
+  "speech_act": "報告",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "9": {
+  "speech_act": "独り言",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "10": {
+  "speech_act": "報告",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "11": {
+  "speech_act": "報告",
+  "fact_axis": "戦略",
+  "conf": "○"
+ },
+ "12": {
+  "speech_act": "質問",
+  "fact_axis": "GAP",
+  "conf": "○"
+ },
+ "13": {
+  "speech_act": "質問",
+  "fact_axis": "GAP",
+  "conf": "○"
+ },
+ "14": {
+  "speech_act": "訂正",
+  "fact_axis": "GAP",
+  "conf": "○"
+ },
+ "15": {
+  "speech_act": "報告",
+  "fact_axis": "GAP",
+  "conf": "○",
+  "note": "Yuji確定"
+ },
+ "16": {
+  "speech_act": "質問",
+  "fact_axis": "リジョイン",
+  "conf": "○"
+ },
+ "17": {
+  "speech_act": "訂正",
+  "fact_axis": "燃料",
+  "conf": "○"
+ },
+ "18": {
+  "speech_act": "訂正",
+  "fact_axis": "他車コール",
+  "conf": "○"
+ },
+ "19": {
+  "speech_act": "依頼",
+  "fact_axis": "他車コール",
+  "conf": "○"
+ },
+ "20": {
+  "speech_act": "不能",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "21": {
+  "speech_act": "独り言",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "22": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "23": {
+  "speech_act": "質問",
+  "fact_axis": "他車(GTP)",
+  "conf": "○"
+ },
+ "24": {
+  "speech_act": "訂正",
+  "fact_axis": "他車(GTP)",
+  "conf": "○"
+ },
+ "25": {
+  "speech_act": "訂正",
+  "fact_axis": "他車(GTP)",
+  "conf": "○"
+ },
+ "26": {
+  "speech_act": "応答",
+  "fact_axis": "挙動",
+  "conf": "○"
+ },
+ "27": {
+  "speech_act": "訂正",
+  "fact_axis": "他車",
+  "conf": "○"
+ },
+ "28": {
+  "speech_act": "報告",
+  "fact_axis": "挙動",
+  "conf": "○"
+ },
+ "29": {
+  "speech_act": "訂正",
+  "fact_axis": "ダメージ",
+  "conf": "○",
+  "note": "Yuji確定：実際にクラッシュの後。Lunaの「荷重かかりすぎ→キャンバー」という原因診断を正している"
+ },
+ "30": {
+  "speech_act": "訂正",
+  "fact_axis": "他車",
+  "conf": "○"
+ },
+ "31": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "32": {
+  "speech_act": "決定",
+  "fact_axis": "ピット",
+  "conf": "○",
+  "note": "Yuji確定：正しくは「次の周入ろう！」STT誤訳「シュピート」"
+ },
+ "33": {
+  "speech_act": "独り言",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "34": {
+  "speech_act": "質問",
+  "fact_axis": "他車(GTP)",
+  "conf": "○"
+ },
+ "35": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "36": {
+  "speech_act": "雑談",
+  "fact_axis": "目標",
+  "conf": "○"
+ },
+ "37": {
+  "speech_act": "雑談",
+  "fact_axis": "目標",
+  "conf": "○"
+ },
+ "38": {
+  "speech_act": "質問",
+  "fact_axis": "セッション",
+  "conf": "○"
+ },
+ "39": {
+  "speech_act": "質問",
+  "fact_axis": "リジョイン",
+  "conf": "○"
+ },
+ "40": {
+  "speech_act": "決定",
+  "fact_axis": "ピット",
+  "conf": "○"
+ },
+ "41": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "42": {
+  "speech_act": "質問",
+  "fact_axis": "GAP",
+  "conf": "○"
+ },
+ "43": {
+  "speech_act": "質問",
+  "fact_axis": "戦略",
+  "conf": "○"
+ },
+ "44": {
+  "speech_act": "訂正",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "45": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "46": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "47": {
+  "speech_act": "訂正",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "48": {
+  "speech_act": "依頼",
+  "fact_axis": "リジョイン",
+  "conf": "○"
+ },
+ "49": {
+  "speech_act": "決定",
+  "fact_axis": "燃料ウィンドウ",
+  "conf": "○",
+  "note": "Yuji確定：正しくは「フューエルウィンドウが空いてからでいいんだよ」STT誤訳「相手から」"
+ },
+ "50": {
+  "speech_act": "質問",
+  "fact_axis": "燃料ウィンドウ",
+  "conf": "○"
+ },
+ "51": {
+  "speech_act": "質問",
+  "fact_axis": "燃料ウィンドウ",
+  "conf": "○"
+ },
+ "52": {
+  "speech_act": "質問",
+  "fact_axis": "燃料ウィンドウ",
+  "conf": "○"
+ },
+ "53": {
+  "speech_act": "決定",
+  "fact_axis": "ピット",
+  "conf": "○"
+ },
+ "54": {
+  "speech_act": "訂正",
+  "fact_axis": "燃料",
+  "conf": "○"
+ },
+ "55": {
+  "speech_act": "訂正",
+  "fact_axis": "戦略",
+  "conf": "○"
+ },
+ "56": {
+  "speech_act": "決定",
+  "fact_axis": "ピット",
+  "conf": "○"
+ },
+ "57": {
+  "speech_act": "訂正",
+  "fact_axis": "ピット",
+  "conf": "○"
+ },
+ "58": {
+  "speech_act": "独り言",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "59": {
+  "speech_act": "訂正",
+  "fact_axis": "戦略",
+  "conf": "○"
+ },
+ "60": {
+  "speech_act": "質問",
+  "fact_axis": "ペース",
+  "conf": "○"
+ },
+ "61": {
+  "speech_act": "訂正",
+  "fact_axis": "GAP",
+  "conf": "○"
+ },
+ "62": {
+  "speech_act": "訂正",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "63": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "64": {
+  "speech_act": "訂正",
+  "fact_axis": "インシデント",
+  "conf": "○"
+ },
+ "65": {
+  "speech_act": "質問",
+  "fact_axis": "ペース",
+  "conf": "○",
+  "note": "Yuji確定：確認の質問"
+ },
+ "66": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "67": {
+  "speech_act": "雑談",
+  "fact_axis": "-",
+  "conf": "○"
+ },
+ "68": {
+  "speech_act": "応答",
+  "fact_axis": "-",
+  "conf": "○"
+ }
+}
