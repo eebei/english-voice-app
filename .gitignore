@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 irsdk-bridge/bridge_log.txt
 /bridge_log.txt
+
+# 実走ログの原本（他ドライバーの実名を含む）。共有は review/corpus/raw/*-redacted.log を使う
+OMORAY-bridge-debug-*.log
+!review/corpus/raw/*-redacted.log

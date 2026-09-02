@@ -2785,8 +2785,12 @@ def poll_iracing():
                         for _dd in info.get('drivers', []):
                             if _dd.get('spectator', 0) == 0 and _dd.get('irating', 0) > 0:
                                 _srv = round(_dd.get('lic_sublevel', 0) / 100, 2)
+                                # ★2026-09-02：この行の目的は idx / car_number / SR / iRating の
+                                #   紐付けを追うことで、**実名は判定にも照合にも使っていない**。
+                                #   診断ログはテスターから送られ、共有もされる。他人の実名と
+                                #   レーティングを残す理由が無いので出さない（機能は不変）。
                                 log("  DRIVER idx=" + str(_dd.get('car_idx')) + " #" + str(_dd.get('car_number', '?'))
-                                    + " '" + str(_dd.get('name', '?')) + "' LIC=" + str(_dd.get('lic_level', '?'))
+                                    + " LIC=" + str(_dd.get('lic_level', '?'))
                                     + "." + str(_dd.get('lic_sublevel', '?')) + "(SR " + str(_srv) + ")"
                                     + " iR=" + str(_dd.get('irating', '?')) + " class=" + str(_dd.get('class_name', '?')))
                         last_session_sig = sig
