@@ -3308,9 +3308,15 @@ def poll_iracing():
                 #   レースsummaryが一度も発行されず、最終順位・iRating・incidentsが
                 #   デブリーフへ届いていなかった。どの条件で止まったかを残す記録が
                 #   1行も無く原因を特定できなかったため、状態が変わった時だけ出す。
-                _gate_state = (_should_fire, _lap_time_settled, _latest_lap_recorded)
-                if _gate_state != _race_summary_gate_last:
-                    _race_summary_gate_last = _gate_state
+                # ★2026-09-02 P0 修正：以前ここで `_gate_state` という名前を使っていた。
+                #   これはモジュール変数（発話ゲートの保留状態・1245行）と同名で、
+                #   同じ関数内で代入したことで poll_iracing() 内の全ての `_gate_state` が
+                #   ローカル扱いになり、2872行の `_gate_state['pending']` が
+                #   UnboundLocalError を投げて **telemetry スレッドごと落ちた**。
+                #   Build 292 の実走（9/2 10:45:22）で発生。名前を専用のものへ変える。
+                _rs_gate_state = (_should_fire, _lap_time_settled, _latest_lap_recorded)
+                if _rs_gate_state != _race_summary_gate_last:
+                    _race_summary_gate_last = _rs_gate_state
                     _last_row = session_laps[-1] if session_laps else {}
                     log('RACE SUMMARY GATE: may=' + str(_may_summary)
                         + ' should_fire=' + str(_should_fire)

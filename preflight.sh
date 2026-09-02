@@ -292,6 +292,9 @@ if node tests-conversation-truth-p0.js >/dev/null 2>&1; then echo "   ✅ 全ケ
 echo "── 8/31 RBR実走：ドライバーの「ボックス」を機械が覆さない（型③④）"
 if node tests-driver-pit-command.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-driver-pit-command.js 2>&1|grep "❌"|head -10; fail=1; fi
 
+echo "── bridge.py スコープ衝突（9/2 Build 292 実走クラッシュの再発防止）"
+if python3 irsdk-bridge/tests_scope_collisions.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_scope_collisions.py 2>&1|grep "❌"|head -6; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail
