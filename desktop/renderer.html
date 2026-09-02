@@ -2504,6 +2504,11 @@ function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false){
 }
 function telemetryTruthFallback(live, userText, isJP){
   const asked=String(userText||'');
+  // A truth-gate fallback must answer the driver's question, not leak the
+  // current vehicle state into an unrelated conversation.  Previously any
+  // LLM vehicle-state claim while on pit road returned "ピットレーン内。",
+  // even for questions such as "どうだった？俺の走り？".
+  const pitIntent=/ボックス|ピット|\bbox\b|\bpit\b/i.test(asked);
   const fs=(live&&live.fuel_strategy&&typeof live.fuel_strategy==='object')?live.fuel_strategy:{};
   if(/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(asked.trim())){
     return isJP ? '了解。' : 'Copy.';
@@ -2610,9 +2615,8 @@ function telemetryTruthFallback(live, userText, isJP){
       ? `${wantsOverall?'総合首位':'クラス首位'}とのGAPは取得できない。直前車のGAPでは代用しない。`
       : `Gap to the ${wantsOverall?'overall':'class'} leader is unavailable; I will not substitute the nearest-car gap.`;
   }
-  const pitIntent=/ボックス|ピット|\bbox\b|\bpit\b/i.test(String(userText||''));
   if(isJP){
-    if(live && live.on_pit_road===true) return 'ピットレーン内。';
+    if(live && live.on_pit_road===true && pitIntent) return 'ピットレーン内。';
     if(pitIntent) return sel==='LunaJP' ? 'うん、ボックス準備。' : 'ボックス準備。';
     // 真偽gateは「事実を捏造しない」ためのもの。ドライバーの目標や
     // フィーリングまで否定する定型文にはしない（8/16実走フィードバック）。
@@ -2632,7 +2636,7 @@ function telemetryTruthFallback(live, userText, isJP){
     if(!subject) return '今の質問、聞き取れた範囲では答えを持っていない。もう一度短く言って。';
     return `${subject}は今この瞬間の実測が取れていない。推測では答えない。次の計測で言う。`;
   }
-  if(live && live.on_pit_road===true) return 'In the pit lane.';
+  if(live && live.on_pit_road===true && pitIntent) return 'In the pit lane.';
   if(pitIntent) return 'Box prepared.';
   // ★2026-08-30 修正2 P0：英語側も汎用拒否を標準応答にしない。何が未確定かを言う。
   if(!/[?]|\b(?:what|where|when|how|which|can you|do you|is it|are we)\b/i.test(asked)) return 'Copy.';
