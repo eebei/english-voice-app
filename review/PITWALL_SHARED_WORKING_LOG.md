@@ -4811,6 +4811,16 @@ Spielberg / Red Bull Ring の表記ゆれを吸収する `normTrack()` が入っ
 
 次のMDに指示書あり
 
+## 2026-09-03 JST — Codex再確認（Luna発話保存の未接続）
+
+`888b871`の差戻し対応を独立再確認した。rendererのscript参照（runtime 16→18）と、disputeブロックがlocalIntentより前にあることは確認できた。
+
+しかし`recordLunaTurn()`は`renderer.html`に定義されただけで呼出しがなく、通常のLuna回答が会話Boxの`lunaTurns`へ保存されない。16件テストも`det.detect()`戻り値のみで、この製品経路欠落を検出できない。
+
+判定：Gate 4はP1暫定差戻し。通常回答・定型回答・ストリーミング完了を`recordLunaTurn()`へ接続し、実経路で訂正再生を行うまでBuildへ進めない。
+
+次のMDに指示書あり
+
 - Claude指摘P1を受理。`irsdk-bridge/bridge.py`の正本を`Build 290 (RBR memory, personal stats, and debrief routing)`へ更新し、版番号回帰も公開289の残存を拒否するよう変更した。
 - 採番後に`tests-ptt-capture.js` 15/15、Bridge compile、版番号全文検索、`git diff --check`、sandbox外`./preflight.sh`を実行し、全項目合格・`✅ 出荷可`。外部有料AI API呼出0件。
 - Build／push／deploy／公開は未実施。`server.js`差分なしのためGate 7はN/A見込みだが、候補SHA確定後に公開289との差分で再判定する。

@@ -696,3 +696,21 @@ Claude Codeが追加した `desktop/conversation-memory-box.js`、`desktop/dispu
 - preflight全体を実行可能な環境で再実行し、失敗理由を残したまま出荷判定しない。
 
 上記を満たすまで、Gate 4、commit、Build、公開はいずれも保留とする。
+
+## 9. Codex再確認（888b871 / 2026-09-03 JST）
+
+`888b871`（共有報告）と実装commit `778fed2`を再確認した。script参照は16→18となり、
+訂正検出ブロックもlocal intentより前に配置されていることは確認できた。
+
+ただし、以下のP1が残っている。
+
+- `recordLunaTurn()`は`desktop/renderer.html:1102`に定義されているが、呼出し箇所が存在しない。
+  `addMsg('ai', ...)`やストリーミング完了時にLuna発話を会話Boxへ登録していないため、
+  実際の通常Luna発話は`lunaTurns`へ入らず、16件テストの手作り前提と製品経路が一致しない。
+  そのままでは「直前のLuna発話を根拠に訂正を`disputed()`へ送る」本体が機能しない。
+- `tests-conversation-memory-box.js`の16件ループは依然として`det.detect()`戻り値だけを確認しており、
+  この未接続を検出できない。
+
+したがって、配線存在・runtime module 18/18・単体33/33は確認済みだが、Gate 4はP1暫定差戻し。
+`recordLunaTurn()`を実際の全Luna出力（通常回答、反射以外の定型回答、ストリーミング完了）へ接続し、
+その経路を通る訂正再生テストを追加するまで、実装合格とは扱わない。
