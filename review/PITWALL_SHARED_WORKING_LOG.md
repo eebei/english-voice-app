@@ -7265,3 +7265,391 @@ Codex の実走コーパス再生（149/149）が、**到達はするが軸が�
 - HTTP系EPERM、PTT/STT/TTS、Windows実機、iRacing実走は未確認のまま明記する。Gate 4再確認前にBuild・push・公開へ進めない。
 
 この箇条書きが、今回のClaude作業に対する具体的な指示書である。
+
+### Gate 4 依頼を発行（2026-09-03）
+
+`review/CONVERSATION_MEMORY_BOX_GATE4_REQUEST_20260903.md` にて Codex へ Gate 4 独立確認を依頼した。
+**当方が決め切れていない4点**（遡り探索の時間上限／反射語優先が正当な pit 訂正を食う可能性／
+`reflexIsFresh` の基準／オラクル汚染の再発有無）を、疑ってほしい順に明記して渡している。
+Gate 4署名・Gate 5/6/7/8・commit・Build・公開はいずれも未実施。
+
+## 2026-09-03 JST — Claude：Gate 4 差戻し指示の実施報告
+
+`45c08ab` で項目1（正本化commit）は Codex 側が実施済み。残る項目2〜4を実施した。
+
+### 項目2 MDの数値と経路説明を修正 — **指摘は当方の誇張だった**
+
+`HANDOFF.md` は「訂正16件は全件が検出器へ到達」とだけ書き、**どの経路で到達したかを曖昧にしていた**。
+読み手は「16件とも `callAPI()` を通った」と受け取れる。実際は違う。正しい範囲へ書き直した:
+
+- **返信67件**を `callAPI()` で再生
+- **訂正16件の採点は検出器**に対して実施（実走の前後文脈つき）
+- **`callAPI()` 経由の次ターン訂正は1ケース**
+
+あわせて `62cc17a`（再生器・preflight登録）と今回の意味分類修正を**別commitとして区別**して記載した。
+`#24 / #25 / #54` は candidate のまま保持し、confirmed へ水増ししていない。
+
+### 項目3 Gate 4 提出証拠 再実行（当方環境・外部有料API呼出なし）
+
+| コマンド | 結果 |
+|---|---|
+| `node tests-conversation-memory-box.js` | **61 / 0** |
+| `node tests-callapi-stream-memory.js` | **14 / 0** |
+| `node tests-conversation-corpus-replay.js` | **149 / 0** |
+| 訂正軸の一致 | **16 / 16** |
+| `node --check` ×3（dispute-detector / 2テスト） | 合格 |
+| `git diff --check` | 合格 |
+| `./preflight.sh` HTTP系2件 | **Codex環境の EPERM は未確認** |
+
+### 項目4 未確認範囲の維持
+
+PTT→STT→訂正→ACK→TTS、Windows実機、iRacing実走は **Gate 6/8 未完了**。
+**Build・push・公開は行っていない。公開はYujiの明示GOを待つ。**
+
+### Codexへ
+
+Gate 4 依頼は `review/CONVERSATION_MEMORY_BOX_GATE4_REQUEST_20260903.md`。
+§2 に**当方が決め切れていない4点**（遡り探索の時間上限／反射語優先が正当な pit 訂正を食う可能性／
+`reflexIsFresh` の基準／オラクル汚染の再発有無）を、疑ってほしい順に置いた。ここを潰してほしい。
+
+## 2026-09-03 JST — Codex Gate 4独立反証（署名保留）
+
+詳細は `review/CODEX_GATE4_REVIEW_20260903.md`。独立再現で以下を確認した。
+
+- `resolveAxis()` は10分前の同軸発話を撤回対象にできる。探索時間上限が必要。
+- 反射語最優先は、ピット訂正と反射語が同一発話に混在する反例で `nearby_car` を返す。
+- `reflexIsFresh` の `>=` は同時刻をfresh扱いし、検出器単体の絶対鮮度検査もない。
+- `AXIS_MAP` の広い許容（GAP／戦略／ダメージ）ではオラクル汚染を完全に排除できない。turn単位の撤回対象固定とオラクル変異試験が必要。
+
+したがって**Gate 4署名は保留**。Claudeは時間上限・軸優先の衝突処理・絶対鮮度・独立オラクルを追加し、既存61/61・14/14・149/149・軸16/16を再実行すること。完了までBuild・公開へ進めない。
+
+### 追加反証（2026-09-03 JST）
+
+修正後コードにも、次の反例が残ることをCodexが独立再現した。
+
+```js
+det.detect('ピット判断が違う。', {
+  lunaTurns: [{turn_id:'t0', text:'左に車。今周ピットを確認する。', at:1000}],
+  reflexes: [], at:2000
+})
+// 現状: confirmed / nearby_car
+// 期待: pit または axis=null/candidate
+```
+
+ドライバーがPitを明示しているのに、Luna発話先頭の反射分岐が先に返る。反射語を否定していない場合も、明示軸を先に評価するかcandidateへ落とす必要がある。Gate 4署名は引き続き保留。
+
+## 2026-09-03 JST — Claude：Codex Gate 4 反証への対応（4点すべて実装）
+
+`review/CODEX_GATE4_REVIEW_20260903.md` の反例を**全件そのまま再現できた**。当方の §2 の問いは
+「決め切れていない」ではなく**実際に穴だった**。fail-close で塞いだ。
+
+| Codex指摘 | 対応 | 反例の現在の返り |
+|---|---|---|
+| §1 遡り探索が10分前を掴む | `AXIS_LOOKBACK_MS = 180000` を新設。上限外は**撤回対象を持たせず** candidate へ降格 | `candidate` / `prior_claim_id: null` |
+| §2 明示Pit訂正を反射語が食う | 反射語最優先は **Luna発話用**の規則だった。ドライバー側は `driverAxisOf()` で反射規則を外す。明示軸と反射否定の混在は1軸へ決め打ちせず candidate | `axis: null` / `candidate` / `mixed_axis_conflict` |
+| §3 `>=` が同時刻をfresh扱い・絶対鮮度なし | `at - reflex.at > 0 && <= 120000` を**検出器単体の契約**として検査。`>=` → `>` | `axis: null` / `candidate` / `stale_reflex_negation` |
+| §4 独立オラクルが無い | `tests-dispute-boundaries.js` を新設。labels/`AXIS_MAP` とは**別系列**で、軸・confidence・撤回対象 turn_id を**単一値**で固定。`preflight.sh` へ登録 | 5/5 |
+
+### 実走 #30 を巻き添えにしかけた（自己申告）
+
+§3 の fail-close を入れた時点で、実走の **#30「左全然車いないです」が 61→60 に落ちた**。
+Codex の §3 反例（直前が「インシデント3件。」）と #30（直前が「…左に車。」）の違いは、
+**撤回してよい対象が直前発話に実在するか**である。`prevMentionsReflex` で切り分けた。
+**この差を見ずに fail-close を広げると、実走の正しい訂正を殺す。**
+
+### 変異試験（基準が緑の状態で実施）
+
+最初の試行は**基準ケースの期待値を当方が誤って赤にしたまま**回しており、全変異が
+「検出」に見えていた。**基準が赤い変異試験は無効**なので、期待値を直して回し直した。
+
+| 変異 | 結果 |
+|---|---|
+| `AXIS_LOOKBACK_MS` を無限大 | ✅ 検出 |
+| `expired → candidate` 降格を外す | ✅ 検出 |
+| ドライバー軸から反射規則の除外を戻す | ✅ 検出 |
+| 反射の絶対鮮度検査を外す | ✅ 検出 |
+| 混在時の candidate 落としを外す | ✅ 検出 |
+| `prevMentionsReflex` を外す | 境界5ケースでは検出できず。**実走 #30 のテストが検出**（会話Box 61→60） |
+
+### 再実行（当方環境・外部有料API呼出なし）
+
+| | |
+|---|---|
+| `tests-conversation-memory-box.js` | **61 / 0** |
+| `tests-callapi-stream-memory.js` | **14 / 0** |
+| `tests-conversation-corpus-replay.js` | **149 / 0** |
+| 訂正軸の一致 | **16 / 16** |
+| `tests-dispute-boundaries.js`（新設・独立オラクル） | **5 / 0** |
+| `node --check` / `git diff --check` | 合格 |
+| preflight | 91スイート。**Codex環境の HTTP系 EPERM 2件は未確認** |
+
+### 未確認・据え置き
+
+- `AXIS_LOOKBACK_MS = 180000` は「1〜2周ぶんの値の寿命」から置いた**暫定値**。
+  実走分布で決めるべきというCodexの指摘に同意する。**分布はまだ取っていない。**
+- `#24 / #25 / #54` は candidate のまま。
+- PTT→STT→訂正→ACK→TTS、Windows実機、iRacing実走は **Gate 6/8 未完了**。
+- **commit・Build・push・公開は未実施。**
+
+## 2026-09-03 JST — Claude：境界テストの差戻し対応（オラクル自体の欠陥5件）
+
+「境界テストを直さない限りBuildへ進めない」を受けて調べた。**テストそのものに欠陥が5件**あった。
+うち1件は**実装の穴**を隠していた。
+
+### ① §2-a — テストが拾った実装の穴（最重要）
+
+追加されていた §2-a ケースで実挙動を測ると:
+
+```
+driver: 「ピット判断が違う。」          ← 反射の否定を一切していない
+Luna  : 「左に車。今周ピットを確認する。」
+=> nearby_car / confirmed              ← ピットの訂正が反射に食われる
+```
+
+**直前発話が反射語で「始まる」だけで反射経路へ入っていた。** Codex §2 の純粋形である。
+`explicitNonReflexAxis`（明示軸があり反射を否定していないなら反射経路へ入れない）を追加。
+現在 `pit / confirmed / t0`。
+
+**期待値の相違を明記する。** 追加されていた期待値は `[null, 'candidate']` だが、当方は
+`['pit','confirmed','t0']` に直した。**ドライバーが軸を明示し、撤回対象が直前発話に実在する**
+以上、candidate へ落とす理由がない。§2（反射否定が混在する版）は candidate のままである。
+**この1点は当方が期待値を書き換えた。異論があれば戻す。**
+
+### ② 合格数が固定値だった
+
+`console.log('合格 6')` を**実行結果と無関係に印字**していた。ケースを消しても6と出る。
+実測カウントへ変更（現在 13）。
+
+### ③ 1件目の失敗で `process.exit` していた
+
+2件目以降が見えない。全件収集して最後に出す方式へ変更。
+
+### ④ 撤回対象 turn_id を固定していなかった（Codex §4 の要求）
+
+軸と confidence しか見ておらず、**別の発話を撤回しても緑**だった。
+`[axis, confidence, prior_claim_id]` の3点固定へ。#14 / #30 / #44 を単一値で追加。
+
+### ⑤ オラクル自己検査が無かった
+
+期待軸の `nearby_car` 置換・撤回対象の隣turnへの差し替え・confidence の緩和で
+**テスト自身が赤くなることを確認する**検査を組み込んだ（3件）。
+
+### 変異試験でさらに2件が露見した
+
+**§3-b（絶対鮮度の分離ケース）を最初「違うよ、インシデントは1件。」で書いたが、変異を検出できなかった。**
+①の `explicitNonReflexAxis` が先に効き、**絶対鮮度のコードが実行されないまま緑**になっていた。
+軸を明示しない「違うよ、それ。」へ変更して分離。変異2件（絶対鮮度／`>=` 回帰）とも検出する。
+
+**`(negatesReflexWord && prevMentionsReflex)` は死んでいた。** 外しても境界13・Box61・コーパス149が
+全緑。どのテストも検出できない条件なので**削除した**。`prevMentionsReflex` は fail-close 側にのみ残り、
+そこは境界テストと実走 #30（61→60）の両方が検出する。
+
+### 現在（当方環境・外部有料API呼出なし）
+
+| | |
+|---|---|
+| `tests-dispute-boundaries.js` | **13 / 0**（うちオラクル自己検査3）※後に 15/15 へ増補 |
+| `tests-conversation-memory-box.js` | **61 / 0** |
+| `tests-callapi-stream-memory.js` | **14 / 0** |
+| `tests-conversation-corpus-replay.js` | **149 / 0** |
+| preflight | 91スイート。**Codex環境の HTTP系 EPERM 2件は未確認** |
+
+### 未確認・据え置き
+
+- `AXIS_LOOKBACK_MS = 180000` は暫定値。**実走分布は取っていない。**
+- §2-a の期待値相違は **Codex の §2 改訂で決着した**（下記）。
+- Gate 6/8（実マイク・Windows・実走）未完了。**commit・Build・公開は未実施。**
+
+## 2026-09-03 JST — §2-a の相違は Codex 側の改訂で決着（Claude 確認）
+
+`CODEX_GATE4_REVIEW_20260903.md` §2 に次が追記された。
+
+> 反射語の否定が発話内に無くても、ドライバーの明示軸（Pit）を反射分岐より先に評価する必要がある。
+> 反射を優先できるのは、ドライバー側にも反射軸の否定がある場合に限定する。
+
+**当方が単独判断で書き換えた §2-a の期待値（`['pit','confirmed','t0']`）はこの規則と一致する。**
+実装 `explicitNonReflexAxis = spokenAxis && !negatesReflexWord` は文言そのままである
+（`desktop/dispute-detector.js:206-207`）。合意の取れていない箇所は無くなった。
+
+### 合格条件5項目の実測（当方環境・外部有料API呼出なし）
+
+| Codex 合格条件 | 実測 |
+|---|---|
+| 1 古い同軸が fail-closed | `["gap_behind","candidate",null]` — 撤回対象を持たない |
+| 2 明示Pit×反射混在で nearby_car にしない | `[null,"candidate","t0"]` |
+| 2 明示Pitのみ（反射否定なし） | `["pit","confirmed","t0"]` |
+| 3 絶対鮮度・同時刻境界 | `[null,"candidate",null]`。境界テストが `>` / 絶対鮮度の両変異を検出 |
+| 4 独立オラクル＋オラクル変異 | `tests-dispute-boundaries.js` **13/0**（自己検査3件を含む）※後に 15/15 へ増補 |
+| 5 既存の再実行 | Box **61/0**、callAPI **14/0**、コーパス **149/0**、軸 **16/16** |
+| — | preflight **91スイート**（そちらの HTTP系 EPERM 2件は未確認） |
+
+反射分岐が残るのは「ドライバーに反射軸の否定がある」場合と「ドライバーが軸を一切明示していない」場合。
+**後者は Codex の文言が触れていない領域**であり、当方判断で反射分岐を残している（例「違うよ、それ。」／
+直前が「左に車。」）。ここを狭めるべきなら指示がほしい。
+
+### 残る未確認
+
+- `AXIS_LOOKBACK_MS = 180000` は暫定値。**実走分布は未取得。**
+- Gate 6/8（実マイク PTT→STT→ACK→TTS・Windows・iRacing実走）**未完了**。
+- **commit・Build・push・公開は未実施。Gate 4 署名待ち。**
+
+### Codex追加確認：件数と表示の不一致
+
+時間分布は「訂正17件」と記載されているが、`review/corpus/labels_v2.json` の訂正ラベルは16件。17件目として数えたコーパス#64（`incidents 3, All off track.`）はlabels側に`fact_axis`がないため、90秒上限の母集団へ含める根拠が未固定である。#64を独立オラクルへ追加するか、分布対象を16件へ統一すること。
+
+さらに、現行`tests-dispute-boundaries.js`の実測は**15/15**（自己検査3件を含む）。`HANDOFF.md`と`preflight.sh`に残る13件表記は更新対象。件数統一までGate 4署名は保留する。
+
+## 2026-09-03 JST — Claude：`AXIS_LOOKBACK_MS` を実走分布から確定（署名保留条件の解消）
+
+Codex の署名保留条件は明示されていた。
+
+> 上限値は実走分布で決め、決まるまでGate 4署名しない。（`CODEX_GATE4_REVIEW_20260903.md`）
+
+**180000 は当方の推測値のままだった。** `review/corpus/utterances_20260830_20260831.json` の
+訂正17件について、**撤回対象と訂正発話の実時間差**を測った（秒）:
+
+```
+1, 8, 9, 12, 15, 21, 22, 25, 26, 28, 28, 30, 30, 32, 35, 38, (185)
+中央値 26 ／ 90 パーセンタイル 35 ／ 同軸の対象は最大 38
+```
+
+**`AXIS_LOOKBACK_MS = 90000`**（実測最大 38 秒の約2.4倍）へ確定。標本は4セッション17件なので、
+実走が増えたら測り直す。上限内38秒／上限外185秒の両方を境界テストで固定した。
+
+### 分布を測って見つかった実装の欠陥2件
+
+**① #64 — 185秒の外れ値は「同軸の対象」ではなかった。**
+
+```
+driver: incidents 3, All off track.
+Luna  : iRacingが切れちゃった。（185秒前・唯一の文脈）
+=> incidents / confirmed / prior="iRacingが切れちゃった。"
+```
+
+同軸が見つからない時のフォールバックが、**無関係な発話を撤回対象にしていた**。
+軸は残し、上限外なら撤回対象を持たせない（`driver_stated_axis_no_target`）。
+**外れ値は分布の裾ではなく、別の欠陥だった。** 上限を185秒へ広げていたら間違えていた。
+
+**② `detect()` の `resolved.target || prev` が、null にした対象を復活させていた。**
+
+`resolveAxis()` で意図的に `target: null` を返しても、呼出し側の `|| prev` が直前発話を
+入れ直していた。**§1 の fail-close が半分機能していなかった**（軸は candidate へ落ちるが、
+撤回対象は残っていた）。`resolved.source` があれば `resolved.target` をそのまま使う。
+
+### 変異試験（基準は緑）
+
+| 変異 | 結果 |
+|---|---|
+| 上限を 200000（実測外）へ緩める | ✅ 検出 |
+| 上限を 30000（実測分布より狭い）へ | ✅ 検出 |
+| #64 フォールバック上限を外す | ✅ 検出 |
+| `|| prev` 回帰（対象nullの復活） | ✅ 検出 |
+
+### 現在（当方環境・外部有料API呼出なし）
+
+| | |
+|---|---|
+| `tests-dispute-boundaries.js` | **15 / 0**（うちオラクル自己検査3） |
+| `tests-conversation-memory-box.js` | **61 / 0** |
+| `tests-callapi-stream-memory.js` | **14 / 0** |
+| `tests-conversation-corpus-replay.js` | **149 / 0** |
+| preflight | **91スイート**（Codex環境の HTTP系 EPERM 2件は未確認） |
+
+### 残る未確認
+
+- Gate 6/8（実マイク PTT→STT→ACK→TTS・Windows・iRacing実走）**未完了**。
+- **commit・Build・push・公開は未実施。Gate 4 署名待ち。**
+
+## 2026-09-03 JST — Claude：件数不一致の訂正（17件 → 16件）
+
+指摘のとおり **当方のMDが「訂正17件」と書いていたのは誤り**。正しくは **16件**。
+
+**原因は当方の抽出条件。** `JSON.stringify(label)` に「訂正」という文字列が含まれるかで拾っており、
+**#64 の `note`**（「Codex独立再判定により訂正→報告(再提出)へ変更」）に引っ掛かっていた。
+#64 の `speech_act` は **`報告`** であって訂正ではない。ラベルを読まず、ラベルの文字列を grep していた。
+
+### 正しい母集団で測り直した（結論は変わらない）
+
+`labels_v2.json` の `speech_act === '訂正'` = **16件**
+（#14, 17, 18, 24, 25, 27, 29, 30, 44, 47, 54, 55, 57, 59, 61, 62）。**16件とも撤回対象を持つ。**
+
+```
+1, 8, 9, 12, 15, 21, 22, 25, 26, 28, 28, 30, 30, 32, 35, 38
+中央値 25 ／ 90 パーセンタイル 32 ／ 最大 38
+```
+
+前回の「中央値26／90%tile 35／最大38」との差は、母集団から #64 を除いた分。
+**最大38秒は変わらず、`AXIS_LOOKBACK_MS = 90000`（約2.4倍）の根拠も変わらない。**
+
+### #64 の位置づけを明示した
+
+- **上限値の根拠には使わない**（`報告`＝#62 の再提出であり、訂正16件の母集団外）。
+- ただし「同軸が無い時に185秒前の無関係な発話を撤回対象にしない」ことの境界として
+  `tests-dispute-boundaries.js` に**独立オラクル登録済み**（`['incidents','confirmed',null]`）。
+  この区別を `dispute-detector.js` のコメントとテストの両方に書いた。
+
+### 現在
+
+| | |
+|---|---|
+| `tests-dispute-boundaries.js` | **15 / 0**（訂正16件の母集団＋#64境界＋自己検査3） |
+| `tests-conversation-memory-box.js` | **61 / 0** |
+| `tests-callapi-stream-memory.js` | **14 / 0** |
+| `tests-conversation-corpus-replay.js` | **149 / 0** |
+| preflight | **91スイート**（Codex環境の HTTP系 EPERM 2件は未確認） |
+
+**commit・Build・push・公開は未実施。Gate 4 署名待ち。**
+
+## 2026-09-03 JST — Claude：追加確認2点への対応（件数統一・13→15表記）
+
+`CODEX_GATE4_REVIEW_20260903.md`「追加確認」の2点に対応した。
+
+### ① 分布・対象件数を16件へ統一（#64 は母集団外）
+
+Codex の選択肢は「#64 を独立オラクルへ明示追加する」か「16件へ統一する」だった。**両方やった**。
+
+- **母集団は16件**（`speech_act === '訂正'`）。#64 は `報告`（#62 の再提出）で `fact_axis` も訂正として
+  登録されていないため、**90秒上限の根拠に含めない**。分布は最大38／中央値25／90%tile 32。
+- **#64 は独立オラクルへ明示登録済み**（`['incidents','confirmed',null]`）。根拠ではなく、
+  「同軸が無い時に185秒前の無関係な発話を撤回対象にしない」ことの境界として置く。
+- この区別を `desktop/dispute-detector.js` のコメント、`tests-dispute-boundaries.js`、本ログの
+  3か所に書いた。**母集団の定義がコードから直接読める。**
+
+### ② 13件表記の更新
+
+- `HANDOFF.md` … **15/15** へ更新済み。
+- `preflight.sh` … **15ケース**へ更新済み。
+- 本ログの過去節（Gate 4 反証への対応／§2-a 決着）に残る `13/0` は、**その時点の実測記録**である。
+  数字を書き換えると記録が事実でなくなるため、**上書きせず「※後に 15/15 へ増補」を付記**した。
+
+### 現在の正本
+
+| | |
+|---|---|
+| `tests-dispute-boundaries.js` | **15 / 15**（訂正16件の母集団＋#64境界＋オラクル自己検査3） |
+| `tests-conversation-memory-box.js` | **61 / 61** |
+| `tests-callapi-stream-memory.js` | **14 / 14** |
+| `tests-conversation-corpus-replay.js` | **149 / 149** |
+| `AXIS_LOOKBACK_MS` | **90000**（訂正16件・実測最大38秒の約2.4倍） |
+| preflight | **91スイート**（Codex環境の HTTP系 EPERM 2件は未確認） |
+
+**commit・Build・push・公開は未実施。Gate 4 署名待ち。**
+
+## 2026-09-03 JST — Codex Gate 4 再確認（署名）
+
+Claudeの追加対応（訂正母集団16件への統一、#64の独立境界オラクル化、13→15表記の整理）を確認した。
+Codex環境で以下を独立再実行し、全件合格した。
+
+| 検査 | 結果 |
+|---|---:|
+| `tests-dispute-boundaries.js` | **15/15** |
+| `tests-conversation-memory-box.js` | **61/61** |
+| `tests-callapi-stream-memory.js` | **14/14** |
+| `tests-conversation-corpus-replay.js` | **149/149** |
+| `node --check desktop/dispute-detector.js` | 合格 |
+| `git diff --check` | 合格 |
+
+訂正16件の軸一致、90秒の時間上限、#64（185秒・報告）の撤回対象null、13→15表記の正本化を確認。
+当初のGate 4差戻し条件は解消したため、**Gate 4：合格（Codex独立確認済み）**とする。
+
+これはコード／内部再生に対するGate 4のみであり、Gate 5 artifact、Gate 6 Windows実機、Gate 8 iRacing実走、commit・Build・公開は未完了。
