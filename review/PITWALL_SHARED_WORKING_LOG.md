@@ -6746,3 +6746,15 @@ Yujiより、内部で解決可能な範囲は実装・過去ログ再生・独�
 - 現在地：実装・再生・Gate 4・commit・push・Build・公開は未実施
 
 次のMDに指示書あり
+
+## 2026-09-03 JST — Codex独立確認（会話Box v2・暫定差戻し）
+
+Claude Codeの実装ファイルとテストを確認した。モジュール単体は33/33合格だが、製品経路への接続と実再生が不足しているためGate 4は不合格とする。
+
+- `desktop/renderer.html`に会話Box／dispute detectorのscript参照・呼出しがない（同梱だけで未接続）。
+- 訂正16/16は`det.detect()`の検出確認であり、製品の`disputed()`到達、撤回、応答配送を証明していない。
+- `./preflight.sh`は新規スイートを含むが、既存HTTP統合と`requireAdmin`がserver早期終了（実行環境bind制限）で失敗。全緑・出荷可とは扱わない。
+
+Claude Codeへの差戻しは、設計正本§8の3条件（renderer実配線、製品経路再生、全preflight証拠）を満たすこと。commit／Build／公開は保留。
+
+次のMDに指示書あり

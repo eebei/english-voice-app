@@ -4,9 +4,9 @@
 
 ## 現在地（2026-09-03・会話Box v2）
 
-公開中の製品版は既存のBuild 292。会話Box v2は設計16/16、追加測定3点を完了し、Yujiの許可で実装へ進む段階。Claude Codeが実装担当、Codexが独立Gate 4確認を担当する。実装・再生・Gate 4・Build・公開は未実施。
+公開中の製品版は既存のBuild 292。会話Box v2はClaude Codeがローカル実装ファイルと単体テストを追加済みだが、renderer実配線と製品経路再生が未完了。Codex独立確認は暫定差戻し（P1）で、Gate 4・Build・公開へ進めない。
 
-実装後の必須証拠は、8/30再生の未権威反射発話0、8/30〜9/2の訂正16/16、旧値再利用0、別session/class混入0、キュー無音消失0。設計正本は `review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md` §7、共有指示は `review/PITWALL_SHARED_WORKING_LOG.md` の「2026-09-03 JST — 会話Box v2 実装GO」。
+単体テストは33/33だが、16/16は検出器戻り値のみで`disputed()`到達を証明していない。`./preflight.sh`も既存HTTP統合／requireAdminがbind制限で失敗。設計正本は `review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md` §8、共有ログの「2026-09-03 JST — Codex独立確認（会話Box v2・暫定差戻し）」。
 
 ## 現在地（2026-08-30 時点・次セッションはここから読む）
 

@@ -665,3 +665,34 @@ Yujiより、内部で解決可能な範囲は実装・再生検証へ進める�
 - 上記証拠をClaude CodeがMDへ記録後、Codexが独立再実行してGate 4判定する。
 
 実装・再生・Gate 4が完了するまで、commit / push / build / deploy / 公開は行わない。
+
+## 8. Codex 独立確認・暫定判定（2026-09-03 JST）
+
+Claude Codeが追加した `desktop/conversation-memory-box.js`、`desktop/dispute-detector.js`、
+`tests-conversation-memory-box.js` を独立確認した。
+
+### 合格した範囲
+
+- 新規モジュール単体テスト：33/33
+- JavaScript構文検査：合格
+- 訂正16件の検出、反射集約順序、旧値撤回、session境界の単体契約：合格
+
+### Gate 4 不合格（P1）
+
+1. **製品経路へ未接続**：`desktop/renderer.html` に新規2モジュールの`<script>`参照がなく、
+   `PitwallConversationMemoryBox`／`PitwallDisputeDetector`を実走の入力・応答経路から呼んでいない。
+   同梱されるだけでは会話Boxは機能しない。
+2. **16/16テストが`disputed()`実行を証明していない**：最初の16件ループは
+   `det.detect()`の戻り値だけを確認し、`openDispute`・撤回・応答配送まで接続していない。
+3. **preflight全体が緑ではない**：新規スイートは合格したが、既存のHTTP統合テストと
+   `requireAdmin`テストがserver早期終了（この環境のbind制限）で失敗した。
+   `✅ 出荷可`とは記録できない。
+
+### 差戻し条件
+
+- rendererの実セッション開始・ドライバー入力・Luna応答・反射timelineへBoxを接続する。
+- 訂正検出→`disputed()`→旧値撤回→次回コンテキスト反映を製品経路で再生する。
+- 8/30〜9/2ログの実再生で、未権威反射0・訂正16/16・旧値再利用0を確認する。
+- preflight全体を実行可能な環境で再実行し、失敗理由を残したまま出荷判定しない。
+
+上記を満たすまで、Gate 4、commit、Build、公開はいずれも保留とする。
