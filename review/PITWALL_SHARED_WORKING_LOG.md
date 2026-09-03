@@ -4811,6 +4811,60 @@ Spielberg / Red Bull Ring の表記ゆれを吸収する `normTrack()` が入っ
 
 次のMDに指示書あり
 
+## 2026-09-03 JST — 次回作業指示（末尾再掲）
+
+前回の引き渡し文だけでは具体性が不足していたため、Claudeは以下を実施する。
+
+1. `desktop/dispute-detector.js` の最新3修正、`tests-conversation-memory-box.js`、本共有ログを同一commitへまとめる。対象外の未追跡ファイルはstageしない。
+2. `HANDOFF.md` の数値を61/61（Box）、14/14（callAPI）へ訂正し、`62cc17a`（再生器）と今回commit（意味分類修正）を分離記載する。
+3. 「訂正16/16がcallAPI経由」とは書かない。正確な範囲は、返信67件のcallAPI再生、訂正16件の検出器採点、callAPI次ターン訂正1件である。
+4. 次を再実行し、Gate 4資料へ結果を記録する：
+   `node tests-conversation-memory-box.js`（61/61）、`node tests-callapi-stream-memory.js`（14/14）、`node tests-conversation-corpus-replay.js`（149/149）、構文検査、`git diff --check`。HTTP系EPERMは未確認と明記する。
+
+Gate 6/8（実機・実走）未完了のまま、Build・push・公開へ進めない。公開GOはYujiの明示指示を待つ。
+
+## 2026-09-03 JST — Claude向け次作業指示（Codex Gate 4 差戻し）
+
+前節の「次のMDに指示書あり」は、具体的な作業指示を記載しておらず不十分だった。以下を次の担当作業とする。
+
+### Claudeが実施すること
+
+1. **最新変更を正本化**
+   - `desktop/dispute-detector.js` の `resolveAxis()`、反射優先、反射鮮度制限を対象にする。
+   - `tests-conversation-memory-box.js` の軸一致検査と #14 回帰検査を含める。
+   - `review/PITWALL_SHARED_WORKING_LOG.md` の本節を含めてcommitする。
+   - `PITWALL_発話種類一覧.txt`、`artifacts/`、`desktop/dist/`、`desktop/package-lock.json`、その他今回対象外の未追跡ファイルはstageしない。
+
+2. **MDの数値と経路説明を修正**
+   - `HANDOFF.md` の会話Boxを **61/61**、`callAPI()`実行型を **14/14** に更新する。
+   - `62cc17a` は再生器・preflight登録を含む既存commit、意味分類修正は今回の新commitとして区別する。
+   - 「訂正16/16がcallAPI経由」とは書かず、正しくは「全返信67件をcallAPIで再生し、訂正16件の検出器採点は実走前後文脈で実施。callAPI経由の次ターン訂正は1ケース」と記載する。
+   - `#24/#25/#54` は candidate のまま保持し、confirmedへ水増ししない。
+
+3. **Gate 4提出証拠を再実行**
+   ```text
+   node tests-conversation-memory-box.js
+   node tests-callapi-stream-memory.js
+   node tests-conversation-corpus-replay.js
+   node --check desktop/dispute-detector.js
+   node --check tests-conversation-memory-box.js
+   node --check tests-conversation-corpus-replay.js
+   git diff --check
+   ```
+   合格値は順に **61/61、14/14、149/149、訂正軸16/16**。Codex環境のHTTP系EPERMは「未確認」と明記する。
+
+4. **未確認範囲を維持**
+   - PTT→STT→訂正→ACK→TTS、Windows実機、iRacing実走はGate 6/8未完了。
+   - 上記commitとGate 4再確認が終わるまでBuild・push・公開は行わない。公開はYujiの明示GOが必要。
+
+### Codexの確認事項
+
+- Claudeのcommit後、上記3テストと差分を独立再実行する。
+- MDの主張が実測範囲を越えていないことを確認し、差異があればこの共有ログへ追記する。
+- Gate 4合格、Build可、公開可を混同しない。
+
+この節が次回の実作業指示書である。
+
 ## 2026-09-03 JST — Codex再確認（Luna発話保存の未接続）
 
 `888b871`の差戻し対応を独立再確認した。rendererのscript参照（runtime 16→18）と、disputeブロックがlocalIntentより前にあることは確認できた。
@@ -7134,3 +7188,80 @@ node tests-conversation-corpus-replay.js
 HANDOFF.mdの現在地もこの結果へ更新した。コード変更・再生器・preflight登録は未commitで、Build・公開はYujiの明示GOまで保留する。
 
 次のMDに指示書あり
+
+## 2026-09-03 JST — 意味分類の欠陥3件を修正（Codex コーパス再生の指摘対応）
+
+Codex の実走コーパス再生（149/149）が、**到達はするが軸が違う**という欠陥を拾った。
+到達だけでは足りない。**軸が違えば、別の値を撤回することになる。**
+
+### 指摘された #14
+
+```
+09:24:23 前5.9秒。
+09:25:01 後ろ0.0秒。            ← 訂正の対象はこれ
+09:25:02 ベスト更新。1:31.495。 ← 直前だが無関係
+09:25:11 「後ろ2.0だね。ギャップ。」
+```
+
+`axis=lap_time` になっていた。**直前1件しか見ていなかった**ため、
+訂正の1秒前に割り込んだ「ベスト更新」から軸を取っていた。
+ドライバー自身が「後ろ」「ギャップ」と言っているのに使っていない。
+
+### 修正① ドライバーが明示した軸を優先し、対象を遡って探す
+
+`resolveAxis()` を新設。ドライバーの発話に軸語があればそれを採り、
+**同じ軸を述べた Luna 発話を新しい順に遡って**訂正対象にする。
+`axis_source` を返り値に持たせ、どちらで決まったかを追えるようにした。
+
+`#14 → axis=gap_behind / prior_claim_text="後ろ0.0秒。"`
+
+### 修正②③ 軸検査を足したら、当方の別の欠陥が2件出た
+
+軸の一致検査を追加したところ、**Codex が指摘した1件以外に2件**落ちた。
+
+| # | 症状 | 原因 |
+|---|---|---|
+| 30 | 「左全然車いないです」→ `pit` | Luna「わかった。**ピット前に確認する**。今はドライビングに集中して。**左に車。**」から先頭一致で `pit` を拾っていた。1発話に複数の話題がある時、**最後に言った反射**が訂正の対象である → 反射語を `LUNA_AXIS` の最優先へ |
+| 44 | デブリーフ中の Incidents 訂正 → `nearby_car` | **ずっと前のレース中の反射**を拾っていた。反射の鮮度を見ていなかった → 反射経路は「直前発話が反射」か「反射が直前発話より新しい」時だけに限定 |
+
+29 と 59 は当方のテスト側の対応表が雑だった（キャンバー＝ピット文脈、「次のピット」＝pit）。
+**実装ではなく表を正した。**
+
+### 検証
+
+| 項目 | 結果 |
+|---|---|
+| 訂正16件の到達 | **16/16** |
+| **到達した訂正の軸が Yuji の正解と一致** | **16/16（新規検査）** |
+| #14 回帰（直前の「ベスト更新」に引きずられない） | ✅ 固定 |
+| #14 の撤回対象が「後ろ0.0秒。」を指す | ✅ 固定 |
+| 会話Box | **61/61** |
+| callAPI 実行型 | 14/14 |
+| Codex コーパス再生 | **149/149** |
+| 変異試験（今回の3修正） | **3/3 検出**（外すと #14 / #30 / #44 が再発） |
+| preflight | 当方環境 90スイート合格／Codex環境は HTTP系2件 EPERM で未確認 |
+
+副次的に、Codex が「ピット／燃料の軟い訂正」と書いていた **#54 の軸が `pit` → `fuel` に改善**した。
+
+### 残る candidate 3件（検出漏れではない）
+
+`#24 / #25`（GTPの曖昧な否定・軸 null）と `#54`（soft_dispute）。
+**到達はしているが confirmed ではない。** 確定応答へ進めるかは品質判断として残る。
+当方は**無理に confirmed へ上げない**。軸が確定しないまま撤回すると、別の値を消す。
+
+### まだ主張しないこと
+
+実マイク PTT → Google STT → 訂正 → ACK → TTS、Windows 実機、iRacing 実走は**未確認**。
+**Gate 6/8 は未完了。commit / Build / 公開は未実施。**
+
+次のMDに指示書あり
+
+## 2026-09-03 JST — Claude引き渡し指示（最新節）
+
+- 最新の意味分類修正（`resolveAxis()`、反射優先、反射鮮度）をcommitする。
+- `HANDOFF.md` のBox **61/61**、`callAPI()` **14/14**へ更新する。既存の`62cc17a`と今回の修正commitを分けて記載する。
+- 16件の訂正は検出器採点16/16。callAPI経由の次ターン訂正は現状1ケースなので、16件すべてがcallAPI経由とは記載しない。
+- `node tests-conversation-memory-box.js`、`node tests-callapi-stream-memory.js`、`node tests-conversation-corpus-replay.js`、構文検査、`git diff --check`を再実行し、61/61・14/14・149/149・軸16/16を記録する。
+- HTTP系EPERM、PTT/STT/TTS、Windows実機、iRacing実走は未確認のまま明記する。Gate 4再確認前にBuild・push・公開へ進めない。
+
+この箇条書きが、今回のClaude作業に対する具体的な指示書である。

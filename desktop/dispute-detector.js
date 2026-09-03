@@ -58,6 +58,11 @@ const REFLEX_AXIS = {
 
 // Luna の直前発話から軸を推定する。**数値の権威ではなく、何について話していたか**だけ。
 const LUNA_AXIS = [
+  // ★反射語を最優先。9/3 のコーパス再生で #30 が
+  //   「わかった。ピット前に確認する。…左に車。」から `pit` を拾い、
+  //   ドライバーの「左全然車いないです」を **ピットの訂正**にしていた。
+  //   1発話に複数の話題が混ざる時、**最後に言った反射**が訂正の対象である。
+  [/(左に車|右に車|3台並走|前方に停止車両)[^]*$/, 'nearby_car'],
   [/後ろ|背後|behind/, 'gap_behind'],
   [/前[のと]|直前車|ahead/, 'gap_ahead'],
   [/GAP|ギャップ/i, 'gap'],
@@ -76,6 +81,36 @@ function axisOf(text) {
   const s = String(text || '');
   for (const [re, axis] of LUNA_AXIS) if (re.test(s)) return axis;
   return null;
+}
+
+/**
+ * ★2026-09-03 Codex コーパス再生の指摘：#14「後ろ2.0だね。ギャップ。」の軸が
+ * `lap_time` になった。訂正の1秒前に「ベスト更新。1:31.495。」が割り込んでおり、
+ * **直前1件しか見ていなかった**ため、訂正の対象でない発話から軸を取っていた。
+ *
+ *   09:24:23 前5.9秒。
+ *   09:25:01 後ろ0.0秒。          ← 訂正の対象はこれ
+ *   09:25:02 ベスト更新。1:31.495。 ← 直前だが無関係
+ *   09:25:11 「後ろ2.0だね。ギャップ。」
+ *
+ * ドライバー自身が「後ろ」「ギャップ」と軸を言っている。**まずそれを見る。**
+ * 一致する軸を述べた Luna 発話を、直近から遡って探す。
+ * 見つからなければ従来どおり直前発話の軸を使う。
+ */
+function resolveAxis(driverText, lunaTurns) {
+  const turns = Array.isArray(lunaTurns) ? lunaTurns : [];
+  const prev = turns.length ? turns[turns.length - 1] : null;
+  const spoken = axisOf(driverText);           // ドライバーが明示した軸
+  if (spoken) {
+    // 同じ軸を述べた Luna 発話を新しい順に探す（無ければ軸だけ採用）
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (axisOf(turns[i].text) === spoken) {
+        return { axis: spoken, target: turns[i], source: 'driver_stated_axis' };
+      }
+    }
+    return { axis: spoken, target: prev, source: 'driver_stated_axis_no_match' };
+  }
+  return { axis: axisOf(prev && prev.text), target: prev, source: 'previous_turn_axis' };
 }
 
 function isReflexText(text) {
@@ -106,9 +141,15 @@ function detect(driverText, context = {}) {
 
   // ① 直前が反射コールなら、その軸への訂正として扱う。
   //    ★反射を文脈から外すと、この判定が原理的に不可能になる（v1 で3件落ちた理由）。
-  const recentReflex = reflexes.length ? reflexes[reflexes.length - 1] : null;
+  // ★反射経路へ入れるのは「直前発話が反射」か「反射が直前発話より新しい」時だけ。
+  //   9/3 のコーパス再生で #44（デブリーフ中の Incidents 訂正）が、
+  //   ずっと前のレース中の反射を拾って `nearby_car` になっていた。
+  //   反射の鮮度を見ないと、セッションを跨いで誤った軸を付ける。
+  const lastReflex = reflexes.length ? reflexes[reflexes.length - 1] : null;
   const prevIsReflex = prev && isReflexText(prev.text);
-  if ((prevIsReflex || recentReflex) && (negated || soft)) {
+  const reflexIsFresh = !!(lastReflex && prev && lastReflex.at >= prev.at);
+  const recentReflex = (prevIsReflex || reflexIsFresh) ? lastReflex : null;
+  if ((prevIsReflex || reflexIsFresh) && (negated || soft)) {
     const kind = recentReflex ? recentReflex.kind : null;
     return {
       axis: (kind && REFLEX_AXIS[kind]) || axisOf(prev && prev.text) || 'nearby_car',
@@ -119,9 +160,11 @@ function detect(driverText, context = {}) {
     };
   }
 
-  // ② 直前のLuna発話に軸があり、否定・言い直し・柔らかい否定のいずれかがある。
-  const axis = axisOf(prev && prev.text);
-  // 値だけの言い直し（型5）は、直前 Luna が同じ軸を述べていた時だけ訂正と見る。
+  // ② 軸を決める。ドライバーが明示した軸を優先し、その軸を述べた発話を遡って探す。
+  const resolved = resolveAxis(text, lunaTurns);
+  const axis = resolved.axis;
+  const target = resolved.target || prev;
+  // 値だけの言い直し（型5）は、Luna が同じ軸を述べていた時だけ訂正と見る。
   // そうでなければ単なる報告なので、下の candidate へ落とす。
   if (BARE_VALUE.test(text) && !NEGATION.test(text) && !axis) return null;
   if (axis && (negated || restated || soft)) {
@@ -130,8 +173,9 @@ function detect(driverText, context = {}) {
       confidence: (negated || restated) ? 'confirmed' : 'candidate',
       reason: negated ? 'negates_prior_claim'
         : restated ? 'restates_value' : 'soft_dispute',
-      prior_claim_id: prev ? prev.turn_id : null,
-      prior_claim_text: prev ? prev.text : null,
+      axis_source: resolved.source,
+      prior_claim_id: target ? target.turn_id : null,
+      prior_claim_text: target ? target.text : null,
     };
   }
 
@@ -189,5 +233,5 @@ function acknowledgementLine(item, lang) {
     : 'Understood - I am holding that value and will re-state it at the next reading.';
 }
 
-return { detect, axisOf, isReflexText, acknowledgementLine, resolveTurnPriority, REFLEX_AXIS };
+return { detect, axisOf, resolveAxis, isReflexText, acknowledgementLine, resolveTurnPriority, REFLEX_AXIS };
 }));

@@ -61,6 +61,43 @@ check(`訂正 ${CORRECTION_IDS.length}件すべてが disputed() へ到達する
   missed.length === 0, missed);
 console.log(`   到達 ${CORRECTION_IDS.length - missed.length}/${CORRECTION_IDS.length}`);
 
+// ★2026-09-03 Codex コーパス再生の指摘：到達しても**軸が違えば別の値を撤回する**。
+//   #14 は直前に「ベスト更新。1:31.495。」が割り込み、軸が lap_time になっていた。
+//   Yuji が付けた fact_axis と、検出器の軸が意味として一致するかを検査する。
+const AXIS_MAP = {
+  'GAP': ['gap', 'gap_behind', 'gap_ahead'],
+  '燃料': ['fuel'], '燃料ウィンドウ': ['fuel'],
+  'インシデント': ['incidents'], '戦略': ['strategy', 'pit', 'fuel'],
+  'ピット': ['pit'], 'ダメージ': ['car_state', 'pit'],   // 29 は「次のピットでキャンバー見直そ」への否定＝pit文脈も可
+  '他車': ['nearby_car', 'stopped_car'], '他車(GTP)': ['nearby_car', 'gap', null],
+  '他車コール': ['nearby_car'],
+};
+const axisBad = [];
+for (const id of CORRECTION_IDS) {
+  const r = rows[id - 1];
+  const lunaTurns = (r.luna_before || []).map((b, i) => ({ turn_id: 'p' + i, text: b.text, at: toMs(b.t) }));
+  const reflexes = (r.luna_before || []).filter(b => REFLEX_RE.test(b.text)).map((b, i) => ({
+    event_id: 'e' + i, kind: /停止車両/.test(b.text) ? 'stopped_ahead' : 'side_by_side',
+    direction: /左/.test(b.text) ? 'left' : /右/.test(b.text) ? 'right' : null,
+    at: toMs(b.t), authoritative: true }));
+  const d = det.detect(r.question, { lunaTurns, reflexes, at: toMs(r.time) });
+  const want = AXIS_MAP[labels[String(id)].fact_axis];
+  if (!d || !want) continue;                       // 対応表に無い軸は判定しない
+  if (!want.includes(d.axis)) axisBad.push({ id, want: labels[String(id)].fact_axis, got: d.axis });
+}
+check('到達した訂正の軸が、Yuji の正解と意味として一致する', axisBad.length === 0, axisBad);
+
+// #14 は回帰として個別に固定する（直前1件だけ見ると再発する）
+{
+  const r = rows[13];
+  const lt = (r.luna_before || []).map((b, i) => ({ turn_id: 'p' + i, text: b.text, at: toMs(b.t) }));
+  const d = det.detect(r.question, { lunaTurns: lt, reflexes: [], at: toMs(r.time) });
+  check('#14「後ろ2.0だね」の軸が gap_behind（直前の「ベスト更新」に引きずられない）',
+    d && d.axis === 'gap_behind', d && { axis: d.axis, prior: d.prior_claim_text });
+  check('#14 の撤回対象が「後ろ0.0秒。」を指す（訂正対象を遡って特定する）',
+    d && /後ろ0\.0秒/.test(String(d.prior_claim_text)), d && d.prior_claim_text);
+}
+
 // ── 過剰検出：訂正でない発話を訂正にしないか ─────────────────────────
 console.log('\n══ 過剰検出（訂正でない52件） ══');
 const falsePos = [];
