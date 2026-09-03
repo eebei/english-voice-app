@@ -298,6 +298,9 @@ if python3 irsdk-bridge/tests_scope_collisions.py >/dev/null 2>&1; then echo "  
 echo "── 9/2 Le Mans 実走再生（summary不達・終了後燃料発話・残り2周）"
 if python3 irsdk-bridge/tests_lemans_20260902_replay.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_lemans_20260902_replay.py 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── 会話記憶Box v2：訂正16/16・集約順序・旧値撤回・権威なし反射0（2026-09-03）"
+if node tests-conversation-memory-box.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-conversation-memory-box.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

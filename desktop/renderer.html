@@ -700,6 +700,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="team-plan.js"></script>
 <script src="relative-pace.js"></script>
 <script src="reflex-events.js"></script>
+<script src="conversation-memory-box.js"></script>
+<script src="dispute-detector.js"></script>
 <script src="pddp.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
@@ -1066,6 +1068,51 @@ let sel = null, selMode = null, sessionPurpose = null, userName = '', messages =
 // 全部失敗し続ける無言故障になる（2026-07-12の実走で発覚：自動ラジオコールも全部この配列に
 // 積まれるので、長いレースだと確実に上限に達する）。上限手前で古い方から間引く。
 const MAX_CLIENT_MESSAGES = 60;
+// ★2026-09-03 会話記憶ボックス v2 — 箱の生成と永続化。
+//   設置場所は renderer の localStorage（設計 §1）。ドライバーの声はサーバーへ残さない。
+//   再起動で消えないことが、毎ターン独立だった問題を直す本体である。
+const CONVO_BOX_KEY='pw_conversation_box_v1';
+let _convoBox=null;
+function conversationSessionKey(){
+  const u=(typeof currentMemoryUserId==='function'?currentMemoryUserId():'')||userName||'unknown';
+  const sn=(typeof lastSessionNum!=='undefined'&&lastSessionNum!=null)?lastSessionNum:'-';
+  return [u,sn,String(lastSessionType||''),String(lastTrack||''),
+          String(lastCarModel||lastCarClass||'')].join('|');
+}
+function ensureConversationBox(){
+  const B=window.PitwallConversationMemoryBox;
+  if(!B) return null;
+  const key=conversationSessionKey();
+  if(_convoBox && _convoBox.session_key===key) return _convoBox;
+  // session が変わったら箱を作り直す。**前 session の訂正を持ち越さない**（設計 §2）。
+  let restored=null;
+  try{
+    const raw=JSON.parse(localStorage.getItem(CONVO_BOX_KEY)||'null');
+    if(raw && raw.session_key===key) restored=raw;
+  }catch(_){}
+  _convoBox=restored||B.emptyBox(key);
+  diagnosticLog('CONVO_BOX',JSON.stringify({session_key:key,
+    restored:!!restored,turns:_convoBox.turns.length,open:_convoBox.open_items.length}));
+  return _convoBox;
+}
+function saveConversationBox(box){
+  if(!box) return;
+  try{ localStorage.setItem(CONVO_BOX_KEY,JSON.stringify(box)); }catch(_){}
+}
+function recordLunaTurn(text,kind){
+  const B=window.PitwallConversationMemoryBox; if(!B) return;
+  const box=ensureConversationBox(); if(!box) return;
+  B.addTurn(box,{who:'luna',text:String(text||''),at:Date.now(),kind:kind||null});
+  saveConversationBox(box);
+}
+function recordReflexEvent(ev){
+  const B=window.PitwallConversationMemoryBox; if(!B||!ev) return;
+  const box=ensureConversationBox(); if(!box) return;
+  // ★権威イベント（Bridge由来）かどうかを必ず持つ。LLM生成の反射は許可しない（設計 §7-5）。
+  B.addReflex(box,{kind:ev.kind,direction:ev.direction||null,target:ev.target_car_idx,
+    at:Date.now(),spoken:true,authoritative:ev.source==='bridge_telemetry'});
+  saveConversationBox(box);
+}
 function pushMsg(m){
   messages.push(m);
   if(messages.length > MAX_CLIENT_MESSAGES) messages.splice(0, messages.length - MAX_CLIENT_MESSAGES);
@@ -2319,6 +2366,55 @@ async function sendMsg(inputSource){
   // a debrief panel left open from a prior session.  A driver asking for the
   // gap must never be routed to an LLM/no-data template while the Bridge has
   // the value.  Keep this before evidenceDebrief deliberately.
+    // ★2026-09-03 会話記憶ボックス v2（設計 CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md）
+  //   Yuji「Lunaはその都度回答している。会話の連動性がない」。
+  //   訂正16/68の正答率が0%で、`measurement_disputed` は実走4本で発火0件だった。
+  //   **dispute は軸判定より前に走る**（設計 §B）。localIntent より手前に置くのはそのため。
+  const cmBox=(typeof ensureConversationBox==='function')?ensureConversationBox():null;
+  if(cmBox && typeof window.PitwallConversationMemoryBox!=='undefined'){
+    window.PitwallConversationMemoryBox.addTurn(cmBox,{who:'driver',text,at:Date.now()});
+  }
+  const disputeHit=(cmBox && window.PitwallDisputeDetector)
+    ? window.PitwallDisputeDetector.detect(text,{
+        lunaTurns:window.PitwallConversationMemoryBox.turnContext(cmBox,Date.now())
+          .filter(t=>t.who==='luna'),
+        reflexes:window.PitwallConversationMemoryBox.reflexContext(cmBox,Date.now()),
+        at:Date.now()
+      })
+    : null;
+  if(disputeHit){
+    const B=window.PitwallConversationMemoryBox;
+    // 同一軸に未解決があれば**再提出**として同じ item へ束ねる（14分後の言い直し対策）。
+    let item=disputeHit.axis?B.findOpenByAxis(cmBox,disputeHit.axis):null;
+    if(!item){
+      item=B.openDispute(cmBox,{axis:disputeHit.axis||'unknown',
+        driver_observation:text,prior_claim_id:disputeHit.prior_claim_id,
+        prior_claim_value:disputeHit.prior_claim_text,at:Date.now()});
+    }
+    diagnosticLog('DISPUTE_DETECTED',JSON.stringify({item_id:item&&item.item_id,
+      axis:disputeHit.axis,confidence:disputeHit.confidence,reason:disputeHit.reason}));
+    if(item && disputeHit.confidence==='confirmed'){
+      B.acknowledge(cmBox,item.item_id,Date.now());
+      B.retract(cmBox,item.item_id,Date.now());   // ★受理と撤回は別。旧値を無効化する
+      const ack=window.PitwallDisputeDetector.acknowledgementLine(item,
+        (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
+      diagnosticLog('DISPUTE_ACK',JSON.stringify({item_id:item.item_id,
+        retracted:item.luna_value_retracted}));
+      addMsg('ai',ack); pushMsg({role:'assistant',content:ack});
+      if(cmBox) B.addTurn(cmBox,{who:'luna',text:ack,at:Date.now(),kind:'dispute_ack'});
+      saveConversationBox(cmBox);
+      // 設計 §E：命令が同居する場合は ack を先に返し、命令はこの後の経路で実行する。
+      const cmd=(typeof window.PitwallEngineerCard!=='undefined'
+        && window.PitwallEngineerCard.classify)
+        ? window.PitwallEngineerCard.classify(text) : null;
+      const pri=window.PitwallDisputeDetector.resolveTurnPriority({
+        dispute:disputeHit, driverCommand:!!(cmd&&cmd.driverCommand)});
+      speak(ack,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'dispute_ack',
+        dedupeKey:'dispute|'+item.item_id});
+      diagnosticLog('DISPUTE_TURN_PRIORITY',JSON.stringify(pri));
+      if(pri.execute!=='driver_command') return;   // 命令が無ければここで完結
+    }
+  }
   const localRouterAvailable=!!(window.PitwallLocalIntentRouter
     && typeof window.PitwallLocalIntentRouter.route==='function');
   const localIntent = (selMode==='race' && iracingLive && lastTelemetry
@@ -4299,6 +4395,7 @@ function injectRadio(data){
   const _reflex=toReflexEvent(data);
   if(_reflex){
     reflexLatestByKind={...reflexLatestByKind,[_reflex.kind]:_reflex};
+    recordReflexEvent(_reflex);   // ★timeline へ。turns へは入れない（設計 §4）
     const _decision=reflexSpeakDecision(_reflex);
     if(!_decision.speak){
       diagnosticLog('REFLEX_SUPPRESSED',JSON.stringify({kind:_reflex.kind,
@@ -4412,6 +4509,8 @@ function injectRadio(data){
   //   LLM が知るべきは *事実*（GAP・順位・燃料）であって *自分が喋った文面* ではない。
   //   事実は telemetry snapshot から別途注入されるので、ここでは積まない。
   diagnosticLog('RADIO_HISTORY_EXCLUDED','trigger='+String(data.trigger||''));
+  // ★2026-09-03：LLM会話履歴へは従来どおり積まない（捏造対策）。
+  //   ただし会話Boxの timeline には権威つきで残る（上の recordReflexEvent）。
   // ★2026-07-20 Codexレビュー P0-1：bridgeが決めた優先度をそのまま使う。
   //   旧実装は crash_check だけ boolean で昇格させ、他は既定のP4に落ちていたため、
   //   停止車両・速いクラス接近・ピット手順まで「情報」と同列に扱われていた。
