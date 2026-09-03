@@ -313,5 +313,152 @@ console.log('\n══ renderer 配線（読み込み・呼出し・順序） ═
   }
 }
 
+// ── ⑨ 実経路テスト（Codex差戻し②：Lunaの全出力が箱へ入るか） ──────────
+// `recordLunaTurn()` は定義されていたが **41箇所ある addMsg('ai',…) のどこからも
+// 呼ばれていなかった**。その状態では `lunaTurns` が常に空で、検出は本番で成立しない。
+// ここでは renderer から addMsg / recordLunaTurn / ensureConversationBox を
+// **取り出して実行**し、実際の1ターンの流れを通す。存在検査はしない。
+console.log('\n══ 実経路：Luna の全出力が箱へ入り、次のターンで訂正が成立するか ══');
+{
+  const vm = require('vm');
+  const renderer = fs.readFileSync(path.join(__dirname, 'desktop', 'renderer.html'), 'utf8');
+  const grab = (name) => {
+    const m = renderer.match(new RegExp('function ' + name + '\\([^)]*\\)\\{[\\s\\S]*?\\n\\}'));
+    return m ? m[0] : null;
+  };
+  const parts = ['addMsg', 'recordLunaTurn', 'ensureConversationBox',
+                 'saveConversationBox', 'conversationSessionKey', 'convoLog'].map(grab);
+  check('renderer から実経路の関数群を取り出せる', parts.every(Boolean),
+    parts.map((p, i) => p ? 'ok' : ['addMsg','recordLunaTurn','ensureConversationBox',
+      'saveConversationBox','conversationSessionKey','convoLog'][i]));
+
+  if (parts.every(Boolean)) {
+    const store = {};
+    const ctx = {
+      window: { PitwallConversationMemoryBox: box, PitwallDisputeDetector: det },
+      localStorage: {
+        getItem: k => (k in store ? store[k] : null),
+        setItem: (k, v) => { store[k] = String(v); },
+      },
+      document: {
+        getElementById: () => ({ appendChild(){}, scrollTop: 0, scrollHeight: 0 }),
+        createElement: () => ({ className: '', textContent: '' }),
+      },
+      currentMemoryUserId: () => 'Yuji', userName: 'Yuji',
+      lastSessionNum: 2, lastSessionType: 'Race', lastTrack: 'Red Bull Ring',
+      lastCarModel: 'AMG', lastCarClass: 'GT3',
+      irBridge: null, diagnosticLog: () => {}, mirrorToOverlay: () => {},
+      console: { log: () => {} },
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    // renderer のモジュールスコープ変数も同じ順で取り出す（関数だけでは動かない）
+    const decls = (renderer.match(/const CONVO_BOX_KEY='[^']+';/) || [''])[0]
+      + '\n' + (renderer.match(/let _convoBox=null;/) || [''])[0];
+    check('箱のモジュール変数も renderer から取り出せる',
+      decls.includes('CONVO_BOX_KEY') && decls.includes('_convoBox'), decls);
+    vm.runInContext(decls + '\n' + parts.join('\n')
+      + '\nthis.addMsg=addMsg; this.ensureConversationBox=ensureConversationBox;', ctx);
+
+    // ── 実際の1ターン：Luna が値を言う → ドライバーが訂正する ──
+    ctx.addMsg('ai', '後ろ0.0秒。');            // ← 製品と同じ出口を通す
+    const b = ctx.ensureConversationBox();
+    check('Luna の発話が addMsg 経由で箱へ入る',
+      b && b.turns.length === 1 && b.turns[0].who === 'luna', b && b.turns);
+    check('箱が localStorage へ書かれる',
+      typeof store['pw_conversation_box_v1'] === 'string', Object.keys(store));
+
+    // 次のターンで検出器へ渡る形になっているか（本番と同じ組み立て）
+    const lunaTurns = box.turnContext(b, Date.now()).filter(t => t.who === 'luna');
+    check('次ターンの lunaTurns が空でない（ここが空だと検出は永遠に成立しない）',
+      lunaTurns.length === 1, lunaTurns.length);
+
+    const hit = det.detect('後ろ2.0 だね。ギャップ。',
+      { lunaTurns, reflexes: box.reflexContext(b, Date.now()), at: Date.now() });
+    check('実経路で組んだ文脈から訂正が検出される',
+      !!hit && hit.confidence === 'confirmed', hit);
+    check('訂正の軸が直前の Luna 発話から決まる',
+      hit && hit.axis === 'gap_behind', hit && hit.axis);
+
+    // 41箇所すべてが addMsg を通ることの担保：個別呼び出しを足していない。
+    // コメント行は数えない（`recordLunaTurn()` を説明で書いている箇所がある）。
+    const codeLines = renderer.split('\n').filter(l => !/^\s*(\/\/|\*|#)/.test(l));
+    const direct = codeLines.filter(l => /recordLunaTurn\(/.test(l)).length;
+    // Codex §10 が挙げた Luna 出力の出口は3つ。
+    //   ①ストリーミング完了 ②Truth Gate fallback（display 経由で①と同じ）③通信エラー
+    // 実呼出し = 定義1 + addMsg1(定型応答) + stream1 + error1 = 4。
+    // この数を固定するのは、出口が増えた時に**気づかず取りこぼす**のを防ぐため
+    // （9/3 に addMsg だけで足りると決めつけて通常回答を丸ごと落とした）。
+    check('recordLunaTurn の実呼出しは4箇所だけ（41箇所へ散らさない）',
+      direct === 4, { direct, lines: codeLines.filter(l => /recordLunaTurn\(/.test(l)).map(l => l.trim().slice(0, 60)) });
+  }
+}
+
+// ── ⑩ ストリーミング回答の保存（Codex差戻し③） ────────────────────────
+// 通常の Luna 回答は `addMsg('ai','')` で **空文字**の吹き出しを先に作り、
+// 中身をストリームで埋める。したがって addMsg 側の `if(text && ...)` では
+// **通常回答が一度も保存されない**。保存されるのは定型応答だけだった。
+console.log('\n══ ストリーミング回答が箱へ入るか ══');
+{
+  const vm = require('vm');
+  const renderer = fs.readFileSync(path.join(__dirname, 'desktop', 'renderer.html'), 'utf8');
+
+  // 空文字で呼ぶと保存されないこと自体を、実行で確かめる（差戻しの再現）
+  const grab = (name) => {
+    const m = renderer.match(new RegExp('function ' + name + '\\([^)]*\\)\\{[\\s\\S]*?\\n\\}'));
+    return m ? m[0] : null;
+  };
+  const decls = (renderer.match(/const CONVO_BOX_KEY='[^']+';/) || [''])[0]
+    + '\n' + (renderer.match(/let _convoBox=null;/) || [''])[0];
+  const parts = ['addMsg', 'recordLunaTurn', 'ensureConversationBox',
+                 'saveConversationBox', 'conversationSessionKey', 'convoLog'].map(grab);
+  const store = {};
+  const ctx = {
+    window: { PitwallConversationMemoryBox: box, PitwallDisputeDetector: det },
+    localStorage: { getItem: k => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); } },
+    document: { getElementById: () => ({ appendChild(){}, scrollTop: 0, scrollHeight: 0 }),
+      createElement: () => ({ className: '', textContent: '' }) },
+    currentMemoryUserId: () => 'Yuji', userName: 'Yuji',
+    lastSessionNum: 7, lastSessionType: 'Race', lastTrack: 'Le Mans',
+    lastCarModel: 'AMG', lastCarClass: 'GT3',
+    irBridge: null, diagnosticLog: () => {}, mirrorToOverlay: () => {},
+  };
+  ctx.globalThis = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(decls + '\n' + parts.join('\n')
+    + '\nthis.addMsg=addMsg; this.recordLunaTurn=recordLunaTurn; this.ensureConversationBox=ensureConversationBox;', ctx);
+
+  const bubble = ctx.addMsg('ai', '');     // ← ストリーミング開始（空文字）
+  const afterEmpty = ctx.ensureConversationBox();
+  check('空文字の吹き出しは箱へ入らない（差戻しの原因を再現）',
+    afterEmpty.turns.length === 0, afterEmpty.turns.length);
+
+  // ストリーム完了：本番と同じく recordLunaTurn(display,'streamed_reply') を呼ぶ
+  ctx.recordLunaTurn('後ろ0.0秒。前とは1.2秒。', 'streamed_reply');
+  const b = ctx.ensureConversationBox();
+  check('ストリーム完了時に一度だけ箱へ入る',
+    b.turns.length === 1 && b.turns[0].who === 'luna', b.turns);
+  check('kind に streamed_reply が残る（定型応答と区別できる）',
+    b.turns[0].kind === 'streamed_reply', b.turns[0].kind);
+
+  // その文脈で次ターンの訂正が成立するか（差戻し③の本体）
+  const lunaTurns = box.turnContext(b, Date.now()).filter(t => t.who === 'luna');
+  const hit = det.detect('後ろ2.0 だね。ギャップ。',
+    { lunaTurns, reflexes: box.reflexContext(b, Date.now()), at: Date.now() });
+  check('ストリーミング回答を文脈に、次ターンの訂正が検出される',
+    !!hit && hit.confidence === 'confirmed' && hit.axis === 'gap_behind', hit);
+
+  // 配線側：完了出口に接続されているか（存在ではなく位置で見る）
+  const iStream = renderer.indexOf("recordLunaTurn(display, 'streamed_reply')");
+  const iConvo = renderer.indexOf("convoLog('ai', display)");
+  check('ストリーム完了出口（convoLog と同じ場所）に接続されている',
+    iStream > 0 && iConvo > 0 && Math.abs(iStream - iConvo) < 800, { iStream, iConvo });
+  const codeLines = renderer.split('\n').filter(l => !/^\s*(\/\/|\*|#)/.test(l));
+  const calls = codeLines.filter(l => /recordLunaTurn\(/.test(l)).length;
+  check('実呼出しは 定義1＋addMsg1＋stream1＋error1 の計4箇所',
+    calls === 4, { calls, lines: codeLines.filter(l => /recordLunaTurn\(/.test(l)).map(l => l.trim().slice(0, 56)) });
+}
+
 console.log(`\n[conversation memory box] 合格 ${pass} / 不合格 ${fail}`);
 process.exit(fail ? 1 : 0);

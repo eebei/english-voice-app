@@ -301,6 +301,12 @@ if python3 irsdk-bridge/tests_lemans_20260902_replay.py >/dev/null 2>&1; then ec
 echo "── 会話記憶Box v2：訂正16/16・集約順序・旧値撤回・権威なし反射0（2026-09-03）"
 if node tests-conversation-memory-box.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-conversation-memory-box.js 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "── callAPI 実行型：ストリーム完了で会話Boxへ保存され、次ターンの訂正が成立するか"
+if node tests-callapi-stream-memory.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-callapi-stream-memory.js 2>&1|grep "❌"|head -8; fail=1; fi
+
+echo "── 実走コーパス再生：4セッション68件をcallAPI→Box→仮想発話まで通す"
+if node tests-conversation-corpus-replay.js >/dev/null 2>&1; then echo "   ✅ 68件再生合格"; else echo "   ❌ 不合格"; node tests-conversation-corpus-replay.js 2>&1|grep "❌"|head -8; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

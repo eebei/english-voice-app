@@ -2,11 +2,13 @@
 
 最終更新: 2026-09-03 JST
 
-## 現在地（2026-09-03・会話Box v2）
+## 現在地（2026-09-03・会話Box v2／実走コーパス再生）
 
-公開中の製品版は既存のBuild 292。会話Box v2はClaude Codeがモジュールとrenderer配線を追加済みだが、stream完了出口が`recordLunaTurn()`未接続で通常Luna発話がBoxへ保存されない。Codex独立確認は暫定差戻し（P1）で、Gate 4・Build・公開へ進めない。
+公開中の製品版はBuild 292。会話Box v2はClaude Codeの実装をCodexが確認中で、通常回答のストリーム完了出口まで接続された。Codexが追加した実走コーパス再生では、4セッション68件（cloud 67件＋local 1件）の実質問・実返信を`callAPI()`へ流し、Box保存と仮想発話まで **149/149** 合格した。訂正16件はすべて検出器へ到達し、confirmed 13件・candidate 3件（曖昧訂正）だった。
 
-単体テストは52/52だが、stream再生と`disputed()`までを証明していない。`./preflight.sh`も既存HTTP統合／requireAdminがbind制限で失敗。設計正本は `review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md` §10、共有ログの「2026-09-03 JST — Codex再確認（ストリーミング出口の未接続）」。
+追加テスト：`node tests-conversation-corpus-replay.js`、`node tests-callapi-stream-memory.js`、`node tests-conversation-memory-box.js` はそれぞれ合格（コーパス再生149/149、callAPI 9/9、Box 58/58）。外部APIは呼んでいない。`preflight.sh`へコーパス再生を登録済みだが、全体の実行環境差（HTTP系bind EPERM）は残る。
+
+未完了：実マイクPTT→STT→訂正→ACK→TTS、Windows実機、iRacing実走。変更は未commit・未Build・未公開で、Gate 4の最終署名も未実施。実走コーパス再生はソフトウェア経路の証拠であり、実機品質を保証しない。
 
 ## 現在地（2026-08-30 時点・次セッションはここから読む）
 

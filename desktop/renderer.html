@@ -2026,6 +2026,13 @@ function addMsg(type, text){
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
   if(text) convoLog(type, text);   // 空吹き出し(ストリーミング初期)はログしない
+  // ★2026-09-03 Codex差戻し②：`recordLunaTurn()` を定義しただけで
+  //   **41箇所ある addMsg('ai',…) のどこからも呼んでいなかった**。
+  //   その状態では箱に Luna の発話が入らず、dispute_detector が参照する
+  //   `lunaTurns` が空になり、**検出が本番で一度も成立しない**。
+  //   個別に41箇所へ足すと必ず足し忘れるので、出口である addMsg で一度だけ捕まえる。
+  //   （ドライバー側は PTT 経路で既に addTurn 済みなので二重に積まない）
+  if(text && type==='ai' && typeof recordLunaTurn==='function') recordLunaTurn(text, null);
   return div;   // ストリーミングで中身を更新できるよう要素を返す
 }
 // 会話をbridgeデバッグログに転送（AI返答含む全会話が後から追える＝スクショ不要）。
@@ -2401,7 +2408,7 @@ async function sendMsg(inputSource){
       diagnosticLog('DISPUTE_ACK',JSON.stringify({item_id:item.item_id,
         retracted:item.luna_value_retracted}));
       addMsg('ai',ack); pushMsg({role:'assistant',content:ack});
-      if(cmBox) B.addTurn(cmBox,{who:'luna',text:ack,at:Date.now(),kind:'dispute_ack'});
+      // ack は addMsg('ai',…) 経由で箱へ入る（二重に積まない）
       saveConversationBox(cmBox);
       // 設計 §E：命令が同居する場合は ack を先に返し、命令はこの後の経路で実行する。
       const cmd=(typeof window.PitwallEngineerCard!=='undefined'
@@ -2905,6 +2912,13 @@ async function callAPI(inputSource, memoryStatus=''){
     }
     if(bubble) bubble.textContent = display;
     convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
+    // ★2026-09-03 Codex差戻し③：ストリーミング回答は `addMsg('ai','')` で
+    //   **空文字**の吹き出しを先に作り、中身を後から入れる。そのため addMsg 側の
+    //   記録（`if(text && type==='ai')`）では **通常回答が一度も保存されない**。
+    //   保存されるのは直接 addMsg('ai', 完成文) を呼ぶ定型応答だけだった。
+    //   ストリーム完了はこの1箇所しか無いので、ここで一度だけ記録する。
+    //   （`convoLog('ai', display)` と同じ出口＝二重記録も取りこぼしも起きない）
+    if(typeof recordLunaTurn==='function') recordLunaTurn(display, 'streamed_reply');
     pushMsg({role:'assistant',content:display});
     if(selMode==='debrief' && !memorySavedThisSession && sessionMsgCount>=4){
       saveMemory({reason:'debrief_checkpoint'});
@@ -2924,6 +2938,11 @@ async function callAPI(inputSource, memoryStatus=''){
                  : isJP2 ? '申し訳ない、接続エラーです。後日アップデートいたします。'
                  : "Connection error. We'll fix it in an update.";
     speak(errMsg, true);
+    // ★2026-09-03 Codex §10：全 Luna 出力を箱へ。通信エラーの発話も Luna の発話であり、
+    //   これが欠けると「接続エラー」の直後にドライバーが訂正した時、
+    //   直前発話が空のまま判定することになる。
+    //   ここは addMsg('sys',…) しか通らない（type='ai' ではない）ので個別に記録する。
+    if(typeof recordLunaTurn==='function') recordLunaTurn(errMsg, 'connection_error');
     // ★重要：ここでmessagesにassistant側を積まないと、次のユーザー発言と合わせて
     // user/userが連続してしまいClaude APIのrole交互ルールに反し続け、
     // 以降の質問が全部このエラーメッセージを繰り返すだけになる（履歴が永久に壊れる）。
