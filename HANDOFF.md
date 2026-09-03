@@ -4,9 +4,9 @@
 
 ## 現在地（2026-09-03・会話Box v2）
 
-公開中の製品版は既存のBuild 292。会話Box v2はClaude Codeがモジュールとrenderer配線を追加済みだが、`recordLunaTurn()`が未呼出しで通常Luna発話がBoxへ保存されない。Codex独立確認は暫定差戻し（P1）で、Gate 4・Build・公開へ進めない。
+公開中の製品版は既存のBuild 292。会話Box v2はClaude Codeがモジュールとrenderer配線を追加済みだが、stream完了出口が`recordLunaTurn()`未接続で通常Luna発話がBoxへ保存されない。Codex独立確認は暫定差戻し（P1）で、Gate 4・Build・公開へ進めない。
 
-単体テストは33/33だが、16/16は検出器戻り値のみで`disputed()`到達を証明していない。`./preflight.sh`も既存HTTP統合／requireAdminがbind制限で失敗。設計正本は `review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md` §9、共有ログの「2026-09-03 JST — Codex再確認（Luna発話保存の未接続）」。
+単体テストは52/52だが、stream再生と`disputed()`までを証明していない。`./preflight.sh`も既存HTTP統合／requireAdminがbind制限で失敗。設計正本は `review/CONVERSATION_MEMORY_BOX_CODEX_DESIGN_20260902.md` §10、共有ログの「2026-09-03 JST — Codex再確認（ストリーミング出口の未接続）」。
 
 ## 現在地（2026-08-30 時点・次セッションはここから読む）
 

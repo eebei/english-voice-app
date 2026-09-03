@@ -714,3 +714,19 @@ Claude Codeが追加した `desktop/conversation-memory-box.js`、`desktop/dispu
 したがって、配線存在・runtime module 18/18・単体33/33は確認済みだが、Gate 4はP1暫定差戻し。
 `recordLunaTurn()`を実際の全Luna出力（通常回答、反射以外の定型回答、ストリーミング完了）へ接続し、
 その経路を通る訂正再生テストを追加するまで、実装合格とは扱わない。
+
+## 10. Codex再確認（ストリーミング出口の未接続 / 2026-09-03 JST）
+
+§9の差戻し後、`addMsg('ai', text)`へのフックと52/52テストを確認した。
+直接の定型応答は会話Boxへ入るが、通常の`callAPI()`は`chatBody.stream = true`であり、
+ストリーミング完了時は空の吹き出しを更新して`convoLog('ai', display)`と`pushMsg()`を呼ぶだけで、
+`recordLunaTurn(display, ...)`を呼んでいない。
+
+したがって、提示された
+`addMsg('ai','後ろ0.0秒。') → lunaTurns → det.detect()`
+は成立するが、実走の通常Luna回答（最重要の会話履歴）は依然として次ターンへ残らない。
+現行テストはこのストリーミング完了出口を再現していないため、52/52を製品経路合格とは扱わない。
+
+差戻し：ストリーミング完了・Truth Gate fallback・通信エラーを含む全Luna出力で、
+空バブル生成時の二重登録を避けながら`recordLunaTurn()`を一度だけ実行し、
+ストリーミング再生テストで次ターンの訂正検出まで確認すること。

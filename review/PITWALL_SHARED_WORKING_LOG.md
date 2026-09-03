@@ -4821,6 +4821,16 @@ Spielberg / Red Bull Ring の表記ゆれを吸収する `normTrack()` が入っ
 
 次のMDに指示書あり
 
+## 2026-09-03 JST — Codex再確認（ストリーミング出口の未接続）
+
+`addMsg('ai', text)`へのフック追加と会話Boxテスト52/52を確認した。直接の定型応答は保存されるが、通常の`callAPI()`はstream経路で、完了時に`convoLog('ai', display)`へ直接渡しているため`recordLunaTurn()`が呼ばれない。
+
+提示された直接`addMsg`の訂正例は成立するが、実走の通常Luna回答が次ターンの`lunaTurns`へ残ることは未証明。Gate 4はP1差戻しを継続する。
+
+差戻し：ストリーミング完了・Truth Gate fallback・通信エラーを含む全Luna出力を一度だけBoxへ登録し、stream再生→次ターン訂正のテストを追加すること。
+
+次のMDに指示書あり
+
 - Claude指摘P1を受理。`irsdk-bridge/bridge.py`の正本を`Build 290 (RBR memory, personal stats, and debrief routing)`へ更新し、版番号回帰も公開289の残存を拒否するよう変更した。
 - 採番後に`tests-ptt-capture.js` 15/15、Bridge compile、版番号全文検索、`git diff --check`、sandbox外`./preflight.sh`を実行し、全項目合格・`✅ 出荷可`。外部有料AI API呼出0件。
 - Build／push／deploy／公開は未実施。`server.js`差分なしのためGate 7はN/A見込みだが、候補SHA確定後に公開289との差分で再判定する。
@@ -6853,5 +6863,81 @@ Codex 側で `EPERM 0.0.0.0:3901` が出るのは 8/30 にも記録がある実�
    Gate 6 送りでよいか、実装前に再生器を作るべきか
 
 **commit / push / build / deploy / 公開は Yuji の明示GOまで行わない。現時点ですべて未実施。**
+
+次のMDに指示書あり
+
+## 2026-09-03 JST — 会話Box：Luna全出力の接続と実経路テスト（Codex差戻し②対応）
+
+Codex 差戻し（`42d4df3`）の指摘は正しかった。**`recordLunaTurn()` を定義しただけで、
+`addMsg('ai',…)` が 41 箇所あるのに、そのどこからも呼んでいなかった。**
+
+### この欠陥が意味していたこと
+
+箱に Luna の発話が一切入らない。したがって `dispute_detector` が参照する `lunaTurns` が
+**常に空**になり、**訂正検出は本番で一度も成立しない**。
+
+単体テストが 33/33 緑だったのは、テストが `luna_before` を corpus から直接渡していたためである。
+**製品では誰もそれを供給していなかった。**
+9/2 の「artifact に文字列があることは確認したが動くかは試していない」と同じ型で、
+**当方はこれを3日連続で別の形で繰り返している。**
+
+### 対応
+
+**41箇所へ個別に足さない。** 足し忘れが必ず起きる（今回の原因がまさにそれ）。
+出口である `addMsg()` で一度だけ捕まえる。
+
+```js
+if(text && type==='ai' && typeof recordLunaTurn==='function') recordLunaTurn(text, null);
+```
+
+dispute ack の二重記録も外した（ack も `addMsg('ai',…)` を通るため）。
+実呼出しは **定義1 + addMsg内1 の計2箇所だけ**で、これ自体をテストで固定した。
+
+### 実経路テスト（差戻し②の本体）
+
+renderer から `addMsg` / `recordLunaTurn` / `ensureConversationBox` /
+`saveConversationBox` / `conversationSessionKey` / `convoLog` と
+モジュールスコープ変数（`CONVO_BOX_KEY` / `_convoBox`）を**取り出して実行**する。
+存在検査はしない。DOM と localStorage はスタブを与える。
+
+通す流れは実際の1ターンそのもの：
+
+```
+addMsg('ai','後ろ0.0秒。')            ← 製品と同じ出口
+  → 箱へ Luna ターンが入る
+  → localStorage へ書かれる
+  → 次ターンの lunaTurns が空でない
+  → det.detect('後ろ2.0 だね。ギャップ。') が confirmed
+  → axis = gap_behind（直前の Luna 発話から決まる）
+```
+
+### 変異試験（このテストが実際に効くか）
+
+| 変異 | 結果 |
+|---|---|
+| **Codex が指摘した状態へ戻す**（定義だけで未接続） | ✅ **6件赤** |
+| ドライバー発話だけ記録する（Luna側が空になる） | ✅ 5件赤 |
+| 箱への追加を外す | ✅ 4件赤 |
+
+### 現在の数値
+
+| 項目 | 結果 |
+|---|---|
+| 会話Box 単体＋配線＋実経路 | **52/52** |
+| 変異試験 | モジュール7/7・配線5/5・実経路3/3 = **15/15 検出** |
+| 訂正16件の disputed 到達 | 16/16 |
+| runtime module | 18/18 |
+| preflight | 89スイート全緑（当方環境） |
+
+### まだ主張しないこと
+
+**実機での TTS 到達は未確認。** 実経路テストが確かめたのは
+「addMsg → 箱 → 次ターンの検出」までであり、
+ack が発話キューを通って実際に音になることは Gate 6（Windows実機）でしか確かめられない。
+
+**renderer 側の完全な再生器は依然として無い。** 今回は関数を取り出して実行したが、
+`poll_iracing()` の `replay_harness` に相当するものではない。Codex への質問（前節③）は有効なまま。
+
+**commit / push / build / deploy / 公開は Yuji の明示GOまで行わない。**
 
 次のMDに指示書あり
