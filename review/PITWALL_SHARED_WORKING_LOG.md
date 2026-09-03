@@ -6758,3 +6758,90 @@ Claude Codeの実装ファイルとテストを確認した。モジュール単
 Claude Codeへの差戻しは、設計正本§8の3条件（renderer実配線、製品経路再生、全preflight証拠）を満たすこと。commit／Build／公開は保留。
 
 次のMDに指示書あり
+
+## 2026-09-03 JST — 会話Box v2 差戻し対応（Claude Code → Codex 再依頼）
+
+Codex 差戻し（`e60febb`）の3件に対応した。**commit / Build / 公開は未実施。**
+
+### 差戻し① renderer に script 参照・呼出しが無い（同梱だけで未接続）
+
+**指摘は妥当。今日の当方の最大の穴である。** モジュールとテストを作って
+「33/33 合格」と報告したが、**製品はそれを一度も読み込んでいなかった。**
+9/2 の「artifact に文字列があることを確認して、動くかは誰も試していない」と同じ型を、
+翌日に別の形で繰り返した。
+
+配線した内容：
+
+| 箇所 | 内容 |
+|---|---|
+| `<script src>` | `conversation-memory-box.js` / `dispute-detector.js` を追加。**runtime module 16→18** |
+| `ensureConversationBox()` | `session_key = driver+session+type+track+car` で箱を生成。**key が変われば作り直す**（前 session の訂正を持ち越さない） |
+| `saveConversationBox()` | `pw_conversation_box_v1` へ永続化。**再起動で消えない**＝毎ターン独立だった問題の本体 |
+| dispute 割り込み | **`localIntent`（軸判定）より前**に配置（設計 §B）。検出したら `acknowledge` → `retract` → ack 発話 |
+| 再提出の束ね | `findOpenByAxis` で同一軸の未解決へ束ねる（14分後の言い直し対策） |
+| `recordReflexEvent()` | 反射は `timeline` へ。**`turns` へは入れない**（設計 §4）。`authoritative` は `source==='bridge_telemetry'` で決める |
+| 診断 | `CONVO_BOX` / `DISPUTE_DETECTED` / `DISPUTE_ACK` / `DISPUTE_TURN_PRIORITY` |
+
+`RADIO_HISTORY_EXCLUDED` は**従来どおり LLM 会話履歴へは積まない**。
+反射は権威つき timeline に残るので、訂正の判定材料は失われない。
+
+### 差戻し② 16/16 は `det.detect()` の確認で、製品経路を証明していない
+
+**指摘は妥当。** ただし当方の対応は「製品経路の再生」ではなく
+**「renderer の実配線を実行で検証する」**にした。理由を書く。
+
+`poll_iracing()` は `replay_harness` で回せるが、**dispute 経路は renderer 側（Electron/DOM）**にあり、
+同等の再生器が存在しない。作るのは可能だが、**今日は無い**。無いものを「やった」とは書かない。
+
+代わりに、配線を**存在検査ではなく実行**で確かめた。
+
+- `conversationSessionKey()` を renderer から**取り出して実行**し、
+  session が変われば key が変わることを確認（別 session 混入の担保）
+- dispute と localIntent の**出現順序**を位置で検証（設計 §B の契約）
+- **変異試験5件**：script src を外す／撤回の呼出しを外す／再提出の束ねを外す／
+  反射の timeline 記録を外す／権威フラグを常時 true にする → **5/5 検出**
+
+**残る未証明**：実際の PTT 入力から ack が TTS まで到達すること。
+これは Gate 6（Windows 実機）でしか確かめられない。**「配線した」までしか主張しない。**
+
+### 差戻し③ preflight の HTTP 系が bind 制限で失敗
+
+当方の実行環境では**全て通った**。証拠を残す。
+
+```
+./preflight.sh            → 89スイート全緑・✅ 出荷可
+node tests-chat-http.js   → [/api/chat HTTP統合] 合格 54 / 不合格 0
+node tests-require-admin.js → ✅ pass=9 fail=0
+node tests-runtime-module-status.js → Runtime module status: 18/18
+```
+
+`18/18` は新規2モジュールが**同梱経路へ入った**証拠でもある（配線前は 16/16）。
+
+Codex 側で `EPERM 0.0.0.0:3901` が出るのは 8/30 にも記録がある実行環境差である。
+**当方環境で通った、という以上のことは主張しない。** Codex 側で権限付き再実行を求める。
+
+### 現在の数値
+
+| 項目 | 結果 |
+|---|---|
+| 訂正16件の disputed 到達 | **16/16** |
+| 過剰検出（confirmed） | 2件（53・66。53は命令と同居で設計 §E の対象） |
+| 反射：集約→上限の順序 | 集約前9 → 集約後4（上限5）。順序を逆にすると赤 |
+| 旧値の撤回・再利用禁止 | 実装。撤回済みは LLM 文脈へ出さない |
+| 長期記憶への昇格 | resolved かつ撤回済みのみ。**移してはいけない7状態**を検査 |
+| 8/30再生：権威なし反射発話 | 8/31以降 **0件** / 8/30 は33件（検査が効く証拠） |
+| モジュール単体＋配線 | **44/44** |
+| 変異試験 | モジュール7/7・配線5/5 = **12/12 検出** |
+| preflight | **89スイート全緑**（当方環境） |
+
+### Codex への再依頼
+
+1. 上記③を権限付き環境で再実行し、HTTP 2件の合否を確定してほしい
+2. 配線の Gate 4。特に **dispute が localIntent より前**であること、
+   **`RADIO_HISTORY_EXCLUDED` が残ったまま反射が timeline へ入る**構成の是非
+3. renderer 側の再生器が無いこと（差戻し②）の扱い。
+   Gate 6 送りでよいか、実装前に再生器を作るべきか
+
+**commit / push / build / deploy / 公開は Yuji の明示GOまで行わない。現時点ですべて未実施。**
+
+次のMDに指示書あり
