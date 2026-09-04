@@ -133,9 +133,15 @@ def build_record(*, session_key, source_kind, signed_gap_s, target_car_idx,
         base['reason'] = CONFLICT_NO_VALUE
         return base
 
+    # A class position is meaningful only inside its own class. Physical
+    # traffic may be GTP P3 relative to a GT3 P10; comparing 3 < 10 fabricates
+    # an "ahead" verdict and silences the correct behind measurement. Physical
+    # records therefore use physical direction only. Battle/F2 records retain
+    # the same-class rank cross-check.
+    from_rank = (None if source_kind == SOURCE_PHYSICAL_TRAFFIC else
+                 rank_direction(target_class_position, player_class_position))
     direction, conflict = resolve_direction(
-        rank_direction(target_class_position, player_class_position),
-        signed_gap_direction(signed_gap_s))
+        from_rank, signed_gap_direction(signed_gap_s))
     if conflict or not direction:
         base['reason'] = conflict or CONFLICT_NO_VALUE
         return base

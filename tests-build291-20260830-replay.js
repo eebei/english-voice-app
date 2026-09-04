@@ -16,6 +16,8 @@
 const router = require('./desktop/local-intent-router.js');
 const cards = require('./engineer-card.js');
 const RP = require('./desktop/relative-pace.js');
+const fs = require('fs');
+const vm = require('vm');
 
 let pass = 0, fail = 0;
 function ck(label, ok, detail) {
@@ -26,6 +28,23 @@ function ck(label, ok, detail) {
 // ── P0-1 欠損値を 0 と断定しない ──────────────────────────────────────
 console.log('══ P0-1 null→0 の根絶 ══');
 {
+  const renderer=fs.readFileSync('./desktop/renderer.html','utf8');
+  const jpSource=renderer.match(/function oishiRadio\(d, forSpeech=false\)\{[\s\S]*?\n\}/)?.[0];
+  const deSource=renderer.match(/function matthiasRadio\(d\)\{[\s\S]*?\n\}/)?.[0];
+  const radioContext={lapTimeSpeechJP:value=>value};
+  vm.createContext(radioContext);
+  vm.runInContext(`${jpSource}\n${deSource}`,radioContext);
+  const stoppedCases=[
+    radioContext.oishiRadio({trigger:'stopped_ahead',delta:null}),
+    radioContext.oishiRadio({trigger:'stopped_behind',delta:undefined}),
+    radioContext.matthiasRadio({trigger:'stopped_ahead',delta:null}),
+    radioContext.matthiasRadio({trigger:'stopped_behind',delta:undefined}),
+  ];
+  ck('停止車両の距離欠損を null/undefined 秒として発話しない',
+    stoppedCases.every(text=>typeof text==='string'&&!/null|undefined/i.test(text)),stoppedCases.join(' | '));
+  ck('停止車両の実測距離は日本語・ドイツ語とも保持する',
+    radioContext.oishiRadio({trigger:'stopped_ahead',delta:2.4}).includes('2.4秒')
+    &&radioContext.matthiasRadio({trigger:'stopped_behind',delta:2.4}).includes('2.4 Sekunden'));
   // 当日の 09:38 と同じ形：range/shortfall はあるが window の周回は未確定
   const live = {
     session_num: 2, lap: 14, fuel: 15.4,

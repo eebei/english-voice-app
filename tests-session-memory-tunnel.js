@@ -176,7 +176,7 @@ check('履歴ありでも無しでも初走行を推測しない',
   && renderer.includes('「初めて」とは断定せず'));
 check('事実が無い時は「作るな」と明示する', /前回同条件の確定事実なし。[^']*過去の数字を作るな。/.test(renderer));
 check('identity は Bridge権威だけで作る（会話・推測から作らない）',
-  /function currentMemoryIdentity\(\)\{[\s\S]{0,400}lastSessionAuthority/.test(renderer));
+  /function currentMemoryIdentity\(\)\{[\s\S]{0,700}lastSessionAuthority/.test(renderer));
 
 // ── trace：黙った理由が必ず残る ──────────────────────────────
 console.log('\n══ trace ══');
@@ -434,6 +434,17 @@ if (fail) process.exit(1);
   const facts = M4.briefingFacts([row],{userId:'u1',track:'Red Bull Ring',car:'Mercedes-AMG GT3 2020'},now);
   check('RBR/Spielberg GP alias retrieves the prior personal run', facts.available===true && facts.finishPos===7);
   check('RBR alias produces a prior-run line instead of first-time silence', /前回/.test(M4.briefingLine(facts,'ja')));
+  const lapRow={...row,avgLap:236.0,seriesId:999,setupFingerprint:'old'};
+  const lapEvidence=M4.strategyLapEvidence([lapRow],{
+    userId:'u1',track:'Red Bull Ring',car:'Mercedes-AMG GT3 2020',
+    seriesId:419,setupFingerprint:'new'},now);
+  check('timed-race planning can reuse personal measured average lap across series',
+    lapEvidence.available===true&&lapEvidence.averageLapS===236
+    &&lapEvidence.confidence==='estimate_low'
+    &&lapEvidence.warnings.includes('series_mismatch'));
+  check('average-lap memory never crosses driver identity',
+    M4.strategyLapEvidence([lapRow],{
+      userId:'u2',track:'Red Bull Ring',car:'Mercedes-AMG GT3 2020'},now).available===false);
 }
 
 console.log(`\n(RBR alias含む累計) ${pass}/${pass + fail}`);

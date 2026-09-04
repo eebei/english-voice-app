@@ -183,6 +183,32 @@
     };
   }
 
+  // Lap pace is reusable more broadly than fuel burn. Series/fuel/tyre rules
+  // may change without invalidating a measured driver/car/track lap time.
+  function strategyLapEvidence(history, identity, nowMs) {
+    if (!Array.isArray(history) || !identity || !normTrack(identity.track)) {
+      return { available:false, reason:'history_or_identity_unavailable' };
+    }
+    const wantUser = identity.userId;
+    const wantCar = norm(identity.car || identity.carClass);
+    const rows = history.filter(record => {
+      if (!record || record.disputed === true || !isFreshRecord(record, nowMs)) return false;
+      if (normTrack(record.track) !== normTrack(identity.track)) return false;
+      if (wantCar && norm(record.car || record.carClass) !== wantCar) return false;
+      if (wantUser !== null && wantUser !== undefined && wantUser !== ''
+          && String(record.userId ?? '') !== String(wantUser)) return false;
+      return finite(record.avgLap) > 20;
+    });
+    if (!rows.length) return { available:false, reason:'average_lap_unavailable' };
+    const record = rows[rows.length - 1];
+    const warnings = [];
+    if (Number.isInteger(identity.seriesId) && Number.isInteger(record.seriesId)
+        && identity.seriesId !== record.seriesId) warnings.push('series_mismatch');
+    if (sameSetup(record, identity) === 'mismatch') warnings.push('setup_mismatch');
+    return { available:true, averageLapS:finite(record.avgLap), record,
+      basis:'memory_previous', confidence:warnings.length?'estimate_low':'estimate', warnings };
+  }
+
   // ブリーフィングで読み上げる短い一文。数字は briefingFacts が持つものだけを使う。
   // 事実が無ければ空文字を返し、呼び出し側は「言わない」を選べる。
   function briefingLine(facts, lang) {
@@ -290,6 +316,6 @@
   }
   function nowOrMs(ms) { return Number.isFinite(ms) ? ms : Date.now(); }
 
-  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, strategyFuelEvidence, isFreshRecord,
+  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, strategyFuelEvidence, strategyLapEvidence, isFreshRecord,
     setupComparison, setupComparisonLine, attachSetupDeclaration };
 }));

@@ -4189,8 +4189,9 @@ function oishiRadio(d, forSpeech=false){
     }
     case 'danger_behind': return `注意。後ろの${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバー（${d.reason}）。`;
     case 'danger_ahead':  return `抜く時気をつけて。前の${d.car_number?`ゼッケン${d.car_number}、`:''}危ないドライバー（${d.reason}）。`;
-    case 'stopped_behind': return `後ろに停止車両。${d.delta}秒。`;
-    case 'stopped_ahead':  return Number.isFinite(Number(d.delta))
+    case 'stopped_behind': return d.delta!==null&&d.delta!==undefined&&Number.isFinite(Number(d.delta))
+      ? `後ろに停止車両。${d.delta}秒。` : `後ろに停止車両。`;
+    case 'stopped_ahead':  return d.delta!==null&&d.delta!==undefined&&Number.isFinite(Number(d.delta))
       ? `前方に停止車両。${d.delta}秒。注意。`
       : `前方に停止車両。注意。`;
     case 'damage_report':
@@ -4276,8 +4277,10 @@ function matthiasRadio(d){
     }
     case 'danger_behind': return `Vorsicht hinten. ${d.car_number?`Nummer ${d.car_number}, `:''}Gefährlicher Fahrer (${d.reason}).`;
     case 'danger_ahead':  return `Vorsicht beim Überholen. ${d.car_number?`Nummer ${d.car_number}, `:''}Gefährlicher Fahrer vorne (${d.reason}).`;
-    case 'stopped_behind': return `Stehendes Auto hinten. ${d.delta} Sekunden.`;
-    case 'stopped_ahead':  return `Stehendes Auto vorne. ${d.delta} Sekunden. Vorsicht.`;
+    case 'stopped_behind': return d.delta!==null&&d.delta!==undefined&&Number.isFinite(Number(d.delta))
+      ? `Stehendes Auto hinten. ${d.delta} Sekunden.` : `Stehendes Auto hinten.`;
+    case 'stopped_ahead':  return d.delta!==null&&d.delta!==undefined&&Number.isFinite(Number(d.delta))
+      ? `Stehendes Auto vorne. ${d.delta} Sekunden. Vorsicht.` : `Stehendes Auto vorne. Vorsicht.`;
     case 'damage_report':
       return d.mandatory ? `Schaden bestätigt — Pflichtreparatur, etwa ${Math.round(d.repair_mand)} Sekunden. Nächste Box.`
                           : `Wenn es die Performance nicht beeinträchtigt, weiterfahren. Zustand im Auge behalten — einen weiteren Zwischenfall wollen wir vermeiden.`;
@@ -6458,7 +6461,7 @@ function saveSessionSummary(data){
     //   値はBridge由来のみを採用し、欠けていればnullで残す（推測で埋めない）。
     const _w=(data&&typeof data.weather==='object'&&data.weather)?data.weather:null;
     const _rp=(lastTelemetry&&typeof lastTelemetry.race_plan==='object')?lastTelemetry.race_plan:{};
-    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||lastSessionType||null,raceFormat:_rp.kind||null,configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,totalLapsRule:Number.isInteger(Number(lastTelemetry&&lastTelemetry.laps_total))?Number(lastTelemetry.laps_total):null,fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,irating:lastIrating||null,sr:lastSr||null});
+    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),custId:data.cust_id??data.customer_id??null,subsessionId:data.subsession_id??null,track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,startOverallPos:Number.isInteger(data.start_overall_position)?data.start_overall_position:null,finishOverallPos:Number.isInteger(data.finish_overall_position)?data.finish_overall_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||lastSessionType||null,raceFormat:_rp.kind||null,configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,totalLapsRule:Number.isInteger(Number(lastTelemetry&&lastTelemetry.laps_total))?Number(lastTelemetry.laps_total):null,fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,iratingBefore:Number.isFinite(Number(data.irating_before))?Number(data.irating_before):null,iratingAfter:Number.isFinite(Number(data.irating_after))?Number(data.irating_after):(lastIrating||null),iratingDelta:Number.isFinite(Number(data.irating_delta))?Number(data.irating_delta):null,sof:Number.isFinite(Number(data.sof))?Number(data.sof):null,planName:data.plan_name||null,planSuccess:data.plan_success===true,pitEntryLap:Number.isInteger(data.pit_entry_lap)?data.pit_entry_lap:null,pitExitLap:Number.isInteger(data.pit_exit_lap)?data.pit_exit_lap:null,driverStatement:data.driver_statement||null,irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -6680,6 +6683,9 @@ function refreshStrategyPlaybook(options={}){
   const personalFuelEvidence=(window.PitwallSessionMemory
     &&typeof window.PitwallSessionMemory.strategyFuelEvidence==='function')
     ?window.PitwallSessionMemory.strategyFuelEvidence(loadRaceHistory(),memoryIdentity,Date.now()):null;
+  const personalLapEvidence=(window.PitwallSessionMemory
+    &&typeof window.PitwallSessionMemory.strategyLapEvidence==='function')
+    ?window.PitwallSessionMemory.strategyLapEvidence(loadRaceHistory(),memoryIdentity,Date.now()):null;
   // An authenticated driver never falls back to the old unscoped aggregate:
   // doing so could reuse another tester's fuel record. Legacy aggregate data
   // remains available only before a stable user identity exists.
@@ -6699,8 +6705,8 @@ function refreshStrategyPlaybook(options={}){
     }
   }catch{}
   const q=lastWeekendAuthority?.qualifying_result||{};
-  const personalAverageLap=personalFuelEvidence&&personalFuelEvidence.available
-    ?Number(personalFuelEvidence.record?.avgLap):NaN;
+  const personalAverageLap=personalLapEvidence&&personalLapEvidence.available
+    ?Number(personalLapEvidence.averageLapS):NaN;
   const storedAverageLap=Number.isFinite(personalAverageLap)&&personalAverageLap>20
     ?personalAverageLap:(canUseLegacyAggregate?matchingHistoricalAverageLap():null);
   const liveAverageLap=Number(lastTelemetry?.driver_pace_sample_count)>=3
@@ -6742,7 +6748,12 @@ function refreshStrategyPlaybook(options={}){
   diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'history_resolved',session_num:lastSessionNum,
     track:lastTrack,car:lastCarModel||lastCarClass,record_count:personalFuelEvidence&&personalFuelEvidence.available?1:(Number(memory?.memoryRecordCount)||0),
     session_count:Number(memory?.sessions)||0,fuel_samples:rememberedSamples,
-    avg_fuel_l_per_lap:Number.isFinite(rememberedFuel)?rememberedFuel:null,memory_basis:personalFuelEvidence?.basis||null,memory_confidence:personalFuelEvidence?.confidence||null,memory_warnings:personalFuelEvidence?.warnings||[],avg_lap_s:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
+    avg_fuel_l_per_lap:Number.isFinite(rememberedFuel)?rememberedFuel:null,
+    memory_basis:personalFuelEvidence?.basis||null,memory_confidence:personalFuelEvidence?.confidence||null,
+    memory_rejection_reason:personalFuelEvidence?.available?null:(personalFuelEvidence?.reason||'module_unavailable'),
+    memory_warnings:personalFuelEvidence?.warnings||[],avg_lap_s:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
+    lap_memory_basis:personalLapEvidence?.basis||null,
+    lap_memory_rejection_reason:personalLapEvidence?.available?null:(personalLapEvidence?.reason||'module_unavailable'),
     matched_keys:memory?.matchedKeys||[],
     luna_self_memory_id:lunaSelfMemory?.memory_id||null,
     luna_self_memory_tags:lunaSelfMemory?.tags||[],
@@ -7131,6 +7142,7 @@ function currentMemoryIdentity(){
   const _weather=(lastTelemetry&&typeof lastTelemetry.weather==='object')?lastTelemetry.weather:{};
   return {
     userId:currentMemoryUserId(),
+    custId:(lastTelemetry&&(lastTelemetry.cust_id??lastTelemetry.customer_id??lastTelemetry.driver_cust_id))??null,
     track:lastTrack||'',
     car:lastCarModel||lastCarClass||'',
     seriesId:Number.isInteger(lastSessionAuthority&&lastSessionAuthority.series_id)

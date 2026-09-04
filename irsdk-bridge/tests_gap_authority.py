@@ -72,6 +72,30 @@ class ContradictionFailsClosed(unittest.TestCase):
         # 値は記録として残るが、喋ってよい値としては出さない。
         self.assertEqual(record['signed_gap_s'], 5.5)
 
+    def test_cross_class_physical_gap_never_compares_class_positions(self):
+        # GTP P3 behind a GT3 P10: class positions are incomparable. The
+        # measured physical sign is authoritative and must remain speakable.
+        record = ga.build_record(
+            session_key=SK, source_kind=ga.SOURCE_PHYSICAL_TRAFFIC,
+            signed_gap_s=+5.5, target_car_idx=40, target_class='GTP',
+            target_class_position=3, player_class_position=10,
+            sampled_at=100.0)
+        self.assertTrue(record['speakable'])
+        self.assertEqual(record['direction'], ga.DIRECTION_BEHIND)
+        self.assertEqual(record['gap_s'], 5.5)
+
+    def test_cross_class_replay_detects_removal_of_physical_source_guard(self):
+        # Mutation oracle: the identical positions must conflict if this record
+        # is incorrectly routed through the same-class battle contract. This
+        # proves the physical-source branch above is what keeps the replay live.
+        record = ga.build_record(
+            session_key=SK, source_kind=ga.SOURCE_SAME_CLASS_BATTLE,
+            signed_gap_s=+5.5, target_car_idx=40, target_class='GTP',
+            target_class_position=3, player_class_position=10,
+            sampled_at=100.0)
+        self.assertFalse(record['speakable'])
+        self.assertEqual(record['reason'], ga.CONFLICT_RANK_VS_PHYSICAL)
+
 
 class ValueAndTargetAreDecidedTogether(unittest.TestCase):
     """値だけ後から上書きしない。対象車が取り残されない。"""
