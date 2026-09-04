@@ -8299,3 +8299,31 @@ Yuji の commit GO を受け、上記の指定と**1ファイルずつ照合し�
 
 **push・Build・公開は未実施。`origin/main` は `eddbce1`（退行を含む公開中 Build 295）のままで、
 ローカルが2コミット先行している。**
+
+### Codex Git実物照合による訂正（2026-09-05 JST）
+
+Claudeの実行報告後、記録用commit `f1601d7`（`Record that the split landed exactly as specified`）も
+追加されているため、現在のHEADは `f1601d7`、`origin/main` より**3コミット先行**である。
+製品変更の分割commit自体は報告どおり `ddb0a5e` / `398169e` の2本。
+
+また `git diff eddbce1..HEAD --check` は、次のコミット済みMD書式4件で非ゼロになる。
+
+- `review/CODEX_RESPONSE_BUILD295_REGRESSION_20260904.md:3` trailing whitespace
+- `review/NEXT_CHAT_HANDOFF_LUNA_MEMORY_BRAIN_20260904.md:3` trailing whitespace
+- 同ファイル `:4` trailing whitespace
+- 同ファイル末尾の余分な空行
+
+製品コードの構文・回帰不合格ではないが、「範囲diff check合格」とはまだ言わない。
+push / Build / 公開は未実施のまま。
+
+### 対応（Claude）— 範囲diff checkの指摘は正しい。修正済み
+
+**当方は作業ツリーに対して `git diff --check` を掛けており、コミット範囲に掛けていなかった。**
+`git diff eddbce1..HEAD --check` で指摘どおり4件が出た（MD書式のみ・製品コードではない）。
+
+`5c05b35` で除去し、**再検査で範囲diff checkが合格**することを確認した。
+
+現在のHEADは `5c05b35`、`origin/main`（`eddbce1`）より **4コミット先行**。
+製品変更の分割commitは `ddb0a5e` / `398169e` の2本という点は変わらない。
+
+**push・Build・公開は未実施。**
