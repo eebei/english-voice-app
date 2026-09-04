@@ -8213,3 +8213,89 @@ local router 54/54／GAP freshness 70/70／**変異試験 2/2 検出**／preflig
 3. **`direction_conflict` が実走で0件になる証明はまだ無い**（ログに他車 LapDistPct 配列が無く完全再生不可）。**Gate 8 でしか埋まらない**
 
 **公開中の Build 295 は退行を含んだまま。この修正は未commit。Yuji の GO 待ち。**
+# 2026-09-05 JST — commit GO前の分割指示
+
+Yuji確認事項「commit GOもいけるらしいけど、どう？」へのCodex判断。
+
+**commit可能。ただし1本へ混ぜず、次の2コミットへ分割する。push / Build / deploy / 公開は別GOのまま。**
+
+## Commit 1 — Build 295実走退行修正
+
+対象:
+
+- `desktop/renderer.html` の停止車両 `null秒` 修正部分
+- `desktop/session-memory.js`
+- `irsdk-bridge/gap_authority.py`
+- `irsdk-bridge/tests_gap_authority.py`
+- `tests-build291-20260830-replay.js`
+- `tests-session-memory-tunnel.js`
+- 当該修正に対応する既存review差分
+
+確認済み:
+
+- GAP authority: 44 tests
+- Build 291 replay: 43/43（日本語・ドイツ語の実発話関数を実行）
+- Session Memory: 126/126
+- Strategy Playbook: 45
+- Engineer Card: 116/116
+- Local Intent Router: 54/54
+- GAP queue: 49/49
+
+## Commit 2 — Luna Memory Brain 第1完成スライス
+
+対象:
+
+- `desktop/memory-brain.js`
+- `desktop/renderer.html` のMemory Brain配線部分
+- `tests-memory-brain.js`
+- `tests-callapi-stream-memory.js`
+- `tests-conversation-corpus-replay.js`
+- `tests-gap-answer-queue.js` のVM依存更新
+- `preflight.sh`
+- `HANDOFF.md`
+
+確認済み:
+
+- Memory Brain固定入力・変異: 19/19
+- 実`callAPI()`注入→stream→TTS→復路: 17/17
+- 会話コーパス: 149/149
+- runtime module派生検査: 19/19
+- `git diff --check`、追加JS構文: 合格
+
+## commit対象外
+
+次は既存生成物・ユーザー所有物のため、明示的にstageしない。
+
+- `artifacts/`
+- `desktop/dist/`
+- `desktop/package-lock.json`
+- `PITWALL_発話種別一覧.txt`
+- 今回の2コミットに直接属さないdocs/reviewファイル
+
+全体`preflight.sh`は製品ロジック群が合格。Codex sandboxでは従来どおりHTTP bind系2件と
+未deploy確認が不合格であり、出荷合格とは扱わない。Windows/iRacing/PTT/STT/TTS、完成asar、実走は未確認。
+
+**Yujiがcommit GOを明示したら、上記のexact file/hunkだけをstageし、2コミットに分けて実行する。**
+
+### 実行報告（Claude）— 指定どおり2コミットで実行済み
+
+Yuji の commit GO を受け、上記の指定と**1ファイルずつ照合して**実行した。**指定と完全一致。**
+
+| commit | 内容 |
+|---|---|
+| `ddb0a5e` | Build 295 実走退行修正（GAP沈黙・記憶経路・`null秒`） |
+| `398169e` | Luna Memory Brain 第1スライス |
+
+`desktop/renderer.html` は両方の変更が混在していたため、**14ハンクを内容で分類してハンク単位で分割**した
+（退行7 / Brain 7）。分割の健全性は次で担保している:
+
+- 分割前の `renderer.html` を保存し、**2コミット後の内容と `diff` で完全一致を確認**
+- 各コミット後に構文検査（`gap_authority.py` / `memory-brain.js`）
+- 全スイート再実行：GAP authority OK／Session memory 126/126／build291 replay 43/0／
+  Memory Brain 19/19／callAPI stream 17/0／コーパス 149/0／GAP queue 49/49／**preflight ✅ 出荷可**
+
+除外指定（`artifacts/` / `desktop/dist/` / `package-lock.json` / `PITWALL_発話種類一覧.txt` /
+無関係な `docs/`）はすべて**未追跡のまま**。
+
+**push・Build・公開は未実施。`origin/main` は `eddbce1`（退行を含む公開中 Build 295）のままで、
+ローカルが2コミット先行している。**
