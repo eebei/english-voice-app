@@ -84,6 +84,7 @@ function contextFor(entries) {
     buildWeekendAuthorityNote: () => '', buildCurrentSessionFactNote: () => '',
     buildSessionEvidenceNote: () => '', buildContractNote: () => '',
     buildActiveRaceFactsNote: () => '', buildMemoryStatusNote: () => '',
+    currentMemoryBrainPrompt: () => '', completeMemoryBrainTurn: () => null,
     buildRaceHistoryContext: () => '', buildNamedRivalNote: () => '',
     hasTelemetryOwnedVehicleClaim: () => false,
     normalizeLunaSpeech: t => t,

@@ -8130,3 +8130,86 @@ LLMが受け取る文字列：`後ろとのギャップ 5.1秒` → `後ろと�
    実走で `GAP AUTHORITY source=physical_traffic_gap` を確認するのが唯一の道
 
 **Gate 6/8 未完了。commit / Build / 公開は未実施。**
+
+## 2026-09-04 JST — Build 295 実走で退行3件（`CODEX_HANDOFF_BUILD295_REGRESSION_20260904.md`）
+
+Yuji 実走（夕・Le Mans/IMSA・公開中の Build 295）で「GAP全くダメ、悪くなってる／記憶発動もない」。
+**3件とも再現し原因を特定。うち2件は今日の変更による退行。**
+
+**当方の責任：** `CLAUDE_VERIFICATION_OF_CODEX_IMPL_20260904.md` で「合格」と報告したが3件とも見逃した。
+Codex が「新GAP方式のフル再生は未実施」と明記していたのを**引用しただけで埋めなかった**。
+`gap_authority` を実ログに一度も回していない。**①はやれば必ず出た。**
+
+### ① GAPの沈黙（★最優先・原因確定）
+
+`direction_conflict_rank_vs_physical` **2,796回**が発話不可の唯一の理由。`dropping` 2,771回。
+捨てられた est は**全件正**、相手は **idx=40 が2,023回 / idx=23 が657回**＝**系統的**。
+
+**根本原因：クラスを跨いで順位を比較している。** `gap_authority.py:137` は
+`rank_direction(target_class_position, player_class_position)` を**同クラス確認なしで**呼ぶ。
+GTP P3 × 自車 GT3 P10 → `3<10` → `ahead`、物理は `behind` → 衝突 → 沈黙。49台マルチクラスで延々発生。
+`tests_gap_authority.py` は同クラス入力しか無く、**クラス跨ぎが一件も無い**。
+
+（当方は初版で「至近距離の符号揺れ」と書いたが**誤り**。est が全件正で符号は揺れていない。訂正済み。）
+
+### ② 記憶が発動しない
+
+`memory_basis=None` / `avg_lap_s=None` / `reason=historical_average_lap_unavailable`。
+**timed 2700秒では総周回に平均ラップが必須**で、燃費だけ通しても計画は立たない。
+`avgLap` は保存されているが `personalFuelEvidence` 経由でしか届かず、そこが unavailable。
+**なぜ unavailable かは `strategyFuelEvidence` の `reason` が診断に出ておらず特定できない。憶測で直さない。**
+
+### ③ `null秒` を発話（2回）
+
+「前方に停止車両。**null秒**。注意。」
+
+### 必須検証（単体では3件とも捕まらなかった）
+
+A 実ログ再生で `direction_conflict` が2,796回出ない／**B クラス跨ぎ入力で沈黙しない（現行テストに存在しない）**／
+C 同クラス周回差（当方未確認）／D timed＋記憶で計画成立／E `reason` が診断に出る／F `null` を発話しない／
+G 変異でBが赤くなる。
+
+**公開中の Build 295 はこの退行を含んだまま。ロールバックの要否は Yuji の判断。実装は未変更。**
+
+## 2026-09-04 JST — Claude 独立反証：退行3件の修正は合格（`CLAUDE_VERIFICATION_BUILD295_FIX_20260904.md`）
+
+`CODEX_RESPONSE_BUILD295_REGRESSION_20260904.md` を検証。**3件とも直っている。**
+
+### ① GAP沈黙 — 実走の失敗ケースをそのまま入力して確認
+
+実走で**2,023回**沈黙した状況（GTP P3 × 自車GT3 P10・物理後方）を `build_record()` へ投入:
+
+| 入力 | 結果 |
+|---|---|
+| `physical_traffic_gap` GTP P3 × GT3 P10 / +5.5秒 | **speakable=True / behind / 5.5秒** |
+| `same_class_battle_gap` P11 × P10 / 0.21秒 | **speakable=True / behind / 0.21秒** |
+
+**当方の懸念「実走で捨てられたのは same_class 側では？」も潰した。** `bridge.py:5877-5882` は
+同クラス隣接順位でも物理値が取れれば `physical_traffic_gap` を付けるため、**今回の除外が直接効く。**
+
+**設計メモ（差戻しではない）：** `source_kind` は「どう測ったか」で決まり「同クラスか跨ぎか」では決まらない。
+結果として物理値がある時は順位検証なし、F2Time へ落ちた時だけ順位検証あり。
+**F2Timeこそ符号反転する経路なので、必要な場所にだけ検証が残っており妥当。** ただし名前が実態と食い違う。
+
+### ② 記憶不発 — タイム制で計画が成立
+
+`buildPlaybook(timed 2700秒, 7.87L/周, 平均ラップ236秒, 52.3L)` → **available:true / 進入6周 / 作業7周目**。
+`strategyLapEvidence` 新設で燃料規則と独立に平均ラップを取得。`memory_rejection_reason` も診断へ。
+
+**ただし実走で落ちた本当の理由は未確定。** 次の実走ログで `memory_rejection_reason` を読むまで
+「記憶不発は直った」と断定しない。**今言えるのは「理由が見えるようになった」まで。**
+
+### ③ `null秒` — ガード実装済み。変異で `tests-build291-real-failures.js` が赤くなる
+
+### 独立再実行（全一致）
+
+Bridge GAP authority OK／Session memory 126/126／playbook 45／engineer card 116/0／
+local router 54/54／GAP freshness 70/70／**変異試験 2/2 検出**／preflight ✅ 出荷可。
+
+### 残る指摘
+
+1. `source_kind` の命名が実態と食い違う（差戻しではない）
+2. **実走で記憶が落ちた理由は未確定**
+3. **`direction_conflict` が実走で0件になる証明はまだ無い**（ログに他車 LapDistPct 配列が無く完全再生不可）。**Gate 8 でしか埋まらない**
+
+**公開中の Build 295 は退行を含んだまま。この修正は未commit。Yuji の GO 待ち。**

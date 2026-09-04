@@ -61,15 +61,19 @@ const decls = (renderer.match(/const CONVO_BOX_KEY='[^']+';/) || [''])[0]
   + '\n' + (renderer.match(/let _convoBox=null;/) || [''])[0];
 
 // ── 外界だけ偽装する。ストリームは本物のチャンク列で流す ────────────────
-function makeContext(chunks) {
+function makeContext(chunks, options = {}) {
   const ctxErrors = [];
   const store = {};
   const spoken = [];
+  const requests = [];
+  const brainCompleted = [];
   const enc = new TextEncoder();
   let idx = 0;
   const ctx = {
     // ★ここが本体：本番と同じ getReader() のインターフェースで分割配信する
-    fetch: async () => ({
+    fetch: async (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return ({
       ok: true,
       // 本番は X-Pitwall-Authority / X-Pitwall-Intent をヘッダで受ける
       headers: { get: (k) => (k === 'X-Pitwall-Authority' ? 'llm' : '') },
@@ -80,7 +84,8 @@ function makeContext(chunks) {
             : { done: true, value: undefined }),
         }),
       },
-    }),
+      });
+    },
     TextDecoder, TextEncoder, AbortController, setTimeout, clearTimeout,
     Date, JSON, Math, String, Number, Error, RegExp, Promise, console,
     window: { PitwallConversationMemoryBox: box, PitwallDisputeDetector: det,
@@ -104,6 +109,8 @@ function makeContext(chunks) {
     buildWeekendAuthorityNote: () => '', buildCurrentSessionFactNote: () => '',
     buildSessionEvidenceNote: () => '', buildContractNote: () => '',
     buildActiveRaceFactsNote: () => '', buildMemoryStatusNote: () => '',
+    currentMemoryBrainPrompt: () => options.brainPrompt || '',
+    completeMemoryBrainTurn: reply => { brainCompleted.push(reply); return options.brainRecord || null; },
     buildRaceHistoryContext: () => '', buildNamedRivalNote: () => '',
     hasTelemetryOwnedVehicleClaim: () => false,
     normalizeLunaSpeech: (t) => t,
@@ -123,8 +130,9 @@ function makeContext(chunks) {
     jamesAutoMicEnabled: undefined,
     updateNamedRivalFromUser: () => null,
     lastSectors: () => null,
-    speakReplyChunk: () => null,
-    _spoken: spoken, _store: store, _errors: ctxErrors,
+    speakReplyChunk: t => { spoken.push(t); },
+    _spoken: spoken, _store: store, _errors: ctxErrors, _requests: requests,
+    _brainCompleted: brainCompleted,
   };
   ctx.globalThis = ctx;
   ctx.window.localStorage = ctx.localStorage;
@@ -211,6 +219,22 @@ if (ranOk) {
         eb && eb.turns.map(t => [t.who, t.kind, t.text.slice(0, 20)]));
       check('通信エラーの直後でも次ターンの文脈が空でない',
         box.turnContext(eb, Date.now()).filter(t => t.who === 'luna').length === 1);
+    }
+
+    // ── Memory Brain の実製品出口：prompt注入→stream→TTS→再保存 ───
+    {
+      const brainPrompt='\n\n━━ LUNA MEMORY BRAIN ━━\n{"memory_ids":["race|88462769|315555"],"positions_gained":2}';
+      const reply='危険を避けながらP10からP8、1xで50を持ち帰った。判断は正しかった。';
+      const brainCtx=makeContext([reply.slice(0,18),reply.slice(18)],{brainPrompt,brainRecord:{memory_id:'evaluation|1'}});
+      vm.createContext(brainCtx);
+      vm.runInContext(decls + '\n' + memSrc.join('\n') + '\n' + callApiSrc+'\nthis.callAPI=callAPI;',brainCtx);
+      await brainCtx.callAPI('typed');
+      check('Memory Brain検索結果が実callAPI requestへ注入される',
+        brainCtx._requests[0]&&brainCtx._requests[0].profileNote.includes('race|88462769|315555'));
+      check('Memory Brain根拠付き回答が実ストリームからTTSへ出る',
+        brainCtx._spoken.join('').includes('P10からP8')&&brainCtx._spoken.join('').includes('判断は正しかった'),brainCtx._spoken);
+      check('実回答全文がMemory Brain復路へ再保存される',
+        brainCtx._brainCompleted.length===1&&brainCtx._brainCompleted[0]===reply,brainCtx._brainCompleted);
     }
 
     console.log(`\n[callAPI stream memory] 合格 ${pass} / 不合格 ${fail}`);

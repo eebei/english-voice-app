@@ -703,6 +703,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="conversation-memory-box.js"></script>
 <script src="dispute-detector.js"></script>
 <script src="pddp.js"></script>
+<script src="memory-brain.js"></script>
 <script>
 // API/TTS/STT の宛先（base href を廃止したので明示的にRailwayを叩く）
 // 独自ドメインのDNS障害でもレース中のSTT/TTS/Chatを止めないよう、APIはRailway実体へ直結する。
@@ -713,6 +714,7 @@ const PERSISTENT_SETTING_KEYS = [
   ,'pw_chief_enabled','pw_chief_driver_1','pw_chief_driver_2','pw_chief_driver_3','pw_chief_current_driver'
   // 合意済みのTeam Planは、走行中にアプリが落ちても失われてはいけない。
   ,'pw_team_plan_v1'
+  ,'pw_memory_brain_evaluations_v1'
 ];
 function persistentSet(key,value){
   try{
@@ -2035,6 +2037,7 @@ function addMsg(type, text){
   //   個別に41箇所へ足すと必ず足し忘れるので、出口である addMsg で一度だけ捕まえる。
   //   （ドライバー側は PTT 経路で既に addTurn 済みなので二重に積まない）
   if(text && type==='ai' && typeof recordLunaTurn==='function') recordLunaTurn(text, null);
+  if(text && type==='ai' && typeof completeMemoryBrainTurn==='function') completeMemoryBrainTurn(text);
   return div;   // ストリーミングで中身を更新できるよう要素を返す
 }
 // 会話をbridgeデバッグログに転送（AI返答含む全会話が後から追える＝スクショ不要）。
@@ -2306,6 +2309,10 @@ async function sendMsg(inputSource){
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
+  // Every driver turn enters the same memory search before intent-specific
+  // handlers or the LLM. Individual features no longer decide whether Luna
+  // remembers; they only decide how the retrieved evidence is consumed.
+  prepareMemoryBrain(text);
   const pendingKinds=pendingConfirmationKinds();
   if(bareConfirmationAnswer(text)!==null&&pendingKinds.length>1){
     const reply=confirmationClarification(pendingKinds,isJapaneseEngineer());
@@ -2767,7 +2774,7 @@ async function callAPI(inputSource, memoryStatus=''){
   const profileNote = buildProfileNote(profile) + buildCarTrackMemory() + buildPracticeProfileNote() + buildFuelAuthorityNote(_isJP_pre)
     + buildWeekendAuthorityNote(_isJP_pre) + buildCurrentSessionFactNote(_isJP_pre) + buildSessionEvidenceNote()
     + buildContractNote(_isJP_pre) + buildActiveRaceFactsNote(_isJP_pre)
-    + buildMemoryStatusNote(_isJP_pre, memoryStatus);
+    + buildMemoryStatusNote(_isJP_pre, memoryStatus) + currentMemoryBrainPrompt();
   const raceHistory = buildRaceHistoryContext();
   try{
     const isJP = _isJP_pre;
@@ -2921,6 +2928,7 @@ async function callAPI(inputSource, memoryStatus=''){
     //   ストリーム完了はこの1箇所しか無いので、ここで一度だけ記録する。
     //   （`convoLog('ai', display)` と同じ出口＝二重記録も取りこぼしも起きない）
     if(typeof recordLunaTurn==='function') recordLunaTurn(display, 'streamed_reply');
+    completeMemoryBrainTurn(display);
     pushMsg({role:'assistant',content:display});
     if(selMode==='debrief' && !memorySavedThisSession && sessionMsgCount>=4){
       saveMemory({reason:'debrief_checkpoint'});
@@ -7157,6 +7165,47 @@ function currentMemoryIdentity(){
     tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,
     trackTempC:Number.isFinite(Number(_weather.track_temp_c))?Number(_weather.track_temp_c):null,
   };
+}
+const MEMORY_BRAIN_EVALUATIONS_KEY='pw_memory_brain_evaluations_v1';
+let activeMemoryBrainTurn=null;
+function loadMemoryBrainEvaluations(){
+  try{const rows=JSON.parse(localStorage.getItem(MEMORY_BRAIN_EVALUATIONS_KEY)||'[]');return Array.isArray(rows)?rows:[];}
+  catch{return [];}
+}
+function prepareMemoryBrain(question){
+  const brain=window.PitwallMemoryBrain;
+  if(!brain||typeof brain.search!=='function'){
+    activeMemoryBrainTurn=null;
+    diagnosticLog('MEMORY_BRAIN',JSON.stringify({phase:'search',reason:'module_unavailable'}));
+    return null;
+  }
+  const identity=currentMemoryIdentity();
+  const matches=brain.search({raceHistory:loadRaceHistory(),
+    debriefRecords:(typeof loadEvidenceRecords==='function'?loadEvidenceRecords():[]),
+    decisionRecords:(typeof decisionMemoryStore==='function'?decisionMemoryStore():[]),
+    evaluations:loadMemoryBrainEvaluations()},identity);
+  const result=brain.derive(matches);
+  activeMemoryBrainTurn={question:String(question||''),identity,result,prompt:brain.promptBlock(result)};
+  diagnosticLog('MEMORY_BRAIN',JSON.stringify({phase:'search',available:result.available,
+    reason:result.reason||null,memory_ids:result.memory_ids||[],user_id:identity.userId,cust_id:identity.custId,
+    track:identity.track,car:identity.car}));
+  return activeMemoryBrainTurn;
+}
+function currentMemoryBrainPrompt(){return activeMemoryBrainTurn&&activeMemoryBrainTurn.prompt||'';}
+function completeMemoryBrainTurn(reply){
+  const turn=activeMemoryBrainTurn,brain=window.PitwallMemoryBrain;
+  if(!turn||!brain||typeof brain.evaluationRecord!=='function')return null;
+  const record=brain.evaluationRecord(turn.result,reply,turn.identity,Date.now());
+  if(!record){
+    diagnosticLog('MEMORY_BRAIN',JSON.stringify({phase:'reply',saved:false,reason:'no_grounded_memory'}));
+    return null;
+  }
+  const rows=loadMemoryBrainEvaluations();rows.push(record);while(rows.length>40)rows.shift();
+  localStorage.setItem(MEMORY_BRAIN_EVALUATIONS_KEY,JSON.stringify(rows));
+  diagnosticLog('MEMORY_BRAIN',JSON.stringify({phase:'reply',saved:true,memory_id:record.memory_id,
+    source_memory_ids:record.source_memory_ids,reply:record.reply}));
+  activeMemoryBrainTurn=null;
+  return record;
 }
 function currentMemoryUserId(){
   try{

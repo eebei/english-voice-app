@@ -1,6 +1,34 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-09-03 JST
+最終更新: 2026-09-05 JST
+
+## 現在地（2026-09-05・Luna Memory Brain 最初の完成スライス）
+
+`review/NEXT_CHAT_HANDOFF_LUNA_MEMORY_BRAIN_20260904.md` を正本として、全ドライバー入力が
+intent別処理より前に共通検索を通る `desktop/memory-brain.js` と製品配線を追加した。
+2026-09-04 IMSA Le Mans固定sessionを使い、race/debrief検索、user/cust_id分離、根拠付き評価、
+LLM prompt注入、実`callAPI()`ストリーム、TTS queue、使用memory ID trace、評価再保存、再起動・次ターン再取得まで接続した。
+
+機械確認（外部有料API呼出なし）:
+
+- Memory Brain 固定入力・必須変異: **19/19**
+- 実`callAPI()`ストリーム（Memory Brain注入→実回答→TTS→復路）: **17/17**
+- 会話コーパス: **149/149**
+- runtime module 派生検査: **19/19**（`memory-brain.js`を自動検出）
+- Build 295退行修正: GAP authority **44 tests**、停止車両実発話を含むreplay **43/43**、session memory **126/126**
+- `git diff --check`、追加JS構文: 合格
+
+まだ完了としない範囲:
+
+- 固定8質問すべての意味別回答品質と、次戦ブリーフィング「一度だけ」の実行型検査は未完了。
+- `cust_id/subsession_id` は保存schemaへ追加したが、Bridge/公式結果importから本番値が届く入口は未接続。
+- Windows/iRacing/PTT/STT/TTS実機、完成asar、実走は未確認。
+- commit / push / Build / deploy / 公開は未実施。既存dirty差分を保持中。
+- 外部API呼出回数は増えないが、記憶一致ターンではprompt JSONが増える。現状は最大12件に制限したが、
+  token/原価の実測・不要記憶の質問別絞り込みは未完了（テストは外部有料API呼出0）。
+
+次の行動: 固定8質問の実回答オラクル、公式result/Bridgeからcust_id・subsession_idを通す入口、
+次戦ブリーフィング一回制御を同じ往復テストへ追加する。その後に独立反証へ渡す。
 
 ## 現在地（2026-09-03・会話Box v2／**Gate 4 合格・Codex独立確認済み**）
 

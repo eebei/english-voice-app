@@ -109,6 +109,7 @@ const sandbox = {
   lastSessionNum: 2, fuelWindowWatch: null,
   document: { getElementById: () => ({ value: '', style: {} }) },
   addMsg: () => {}, pushMsg: () => {}, usageCount: () => {},
+  prepareMemoryBrain: () => null,
   captureConfirmedFuelCapacity: () => {}, maybeQuietMode: () => {},
   answerHistoricalWeatherLocally: () => null,
   // ── 計装 ──
