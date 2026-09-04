@@ -165,6 +165,19 @@ class SameClassRecordsComeFromOneSource(unittest.TestCase):
             player_class_position=8)
         self.assertEqual(out[ga.DIRECTION_AHEAD]['target_car_idx'], 12)
 
+    def test_each_adjacent_record_keeps_its_measurement_source(self):
+        rows = {
+            7: {'car_idx': 12, 'signed_gap_s': -5.5,
+                'source_kind': ga.SOURCE_PHYSICAL_TRAFFIC},
+            9: {'car_idx': 31, 'signed_gap_s': +3.0,
+                'source_kind': ga.SOURCE_SAME_CLASS_BATTLE},
+        }
+        out = ga.build_same_class_records(
+            session_key=SK, sampled_at=100.0, standings_by_pos=rows,
+            player_class_position=8, player_class='GT3')
+        self.assertEqual(out[ga.DIRECTION_AHEAD]['source_kind'], ga.SOURCE_PHYSICAL_TRAFFIC)
+        self.assertEqual(out[ga.DIRECTION_BEHIND]['source_kind'], ga.SOURCE_SAME_CLASS_BATTLE)
+
     def test_absent_neighbour_yields_none(self):
         out = ga.build_same_class_records(
             session_key=SK, sampled_at=100.0, standings_by_pos={},
@@ -364,7 +377,10 @@ class BridgeWiringUsesTheAuthority(unittest.TestCase):
         self.assertNotIn('nearest_behind_gap = abs(_adj_behind)', self.src)
 
     def test_standings_carry_car_idx(self):
-        self.assertIn("standings_by_pos[_spos] = {'car_idx': _si, 'signed_gap_s': _signed}", self.src)
+        self.assertIn("standings_by_pos[_spos] = {", self.src)
+        self.assertIn("'car_idx': _si", self.src)
+        self.assertIn("'signed_gap_s': (_physical_signed", self.src)
+        self.assertIn("'source_kind': ('physical_traffic_gap'", self.src)
 
     def test_bridge_builds_records_and_updates_target_idx(self):
         self.assertIn('gap_authority.apply_same_class_records(', self.src)

@@ -56,7 +56,7 @@ import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 294 (conversation truth-gate routing fix)"
+BUILD_VERSION = "Build 295 (memory pit lap, GAP identity, and multi-intent answers)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -5756,17 +5756,38 @@ def poll_iracing():
                                 continue                       # 前方 or 観測範囲外
                             _cn = _norm_class_name(car_class_name_map.get(_mi)) or 'faster class'
                             _mc_observed_groups.setdefault(_cn, []).append(_mcgap)
+                            _mc_previous = multiclass_gap_history.get(_mi)
                             _approaching, _mc_sample, _mc_reason = evaluate_multiclass_approach(
-                                multiclass_gap_history.get(_mi), _mcgap, now)
+                                _mc_previous, _mcgap, now)
                             multiclass_gap_history[_mi] = _mc_sample
                             if not _approaching:
                                 continue                       # 後方でも停止・減速・離脱中なら黙る
-                            _mc_groups.setdefault(_cn, []).append(_mcgap)
+                            _closing_rate = None
+                            _eta = None
+                            if (_mc_previous and len(_mc_previous) == 2
+                                    and now > _mc_previous[1]):
+                                _closing_rate = ((_mc_previous[0] - _mcgap)
+                                                 / (now - _mc_previous[1]))
+                                if _closing_rate > 0:
+                                    _eta = _mcgap / _closing_rate
+                            _mc_groups.setdefault(_cn, []).append({
+                                'gap': _mcgap, 'car_idx': _mi,
+                                'class_pos': (_cls_pos_mc[_mi]
+                                              if _cls_pos_mc and _mi < len(_cls_pos_mc)
+                                              else None),
+                                'closing_rate': _closing_rate, 'eta': _eta})
 
                         _seen_classes = set()
-                        for _cn, _gaps in _mc_groups.items():
-                            _gaps.sort()
-                            _near = _gaps[0]
+                        for _cn, _candidates in _mc_groups.items():
+                            # Primary threat is the car with the shortest measured
+                            # catch ETA, not whichever unrelated car owns a nearby
+                            # same-class GAP number.
+                            _candidates.sort(key=lambda row: (
+                                row['eta'] if isinstance(row.get('eta'), (int, float)) else 999999,
+                                row['gap']))
+                            _primary = _candidates[0]
+                            _gaps = sorted(row['gap'] for row in _candidates)
+                            _near = _primary['gap']
                             if _near > MC_PREPARE_SEC:
                                 continue                        # まだ引き金の距離に入っていない
                             _seen_classes.add(_cn)
@@ -5779,6 +5800,12 @@ def poll_iracing():
                                 broadcast({'type': 'radio', 'trigger': 'multiclass',
                                     'stage': _stg, 'class_name': _cn,
                                     'delta': round(_near, 1), 'count': len(_gaps),
+                                    'target_car_idx': _primary['car_idx'],
+                                    'class_pos': _primary['class_pos'],
+                                    'closing_rate_s_per_s': (round(_primary['closing_rate'], 3)
+                                                             if isinstance(_primary.get('closing_rate'), (int, float)) else None),
+                                    'time_to_reach_s': (round(_primary['eta'], 1)
+                                                        if isinstance(_primary.get('eta'), (int, float)) else None),
                                     'shape': _shape, 'clusters': _clusters,
                                     'message': _mc_message_en(_cn, _near, _gaps, _shape, _clusters, _stg)})
                         # ★2026-07-20 Codexレビュー P1-6：発火(5秒)と再武装が同じ境界に依存しており、
@@ -5826,7 +5853,34 @@ def poll_iracing():
                         standings_gaps[str(_spos)] = _signed
                         # ★G1：値だけでなく対象車も同じ場所で押さえる。値を後段で
                         #   上書きしつつ idx を放置したのが 8/23 実走の誤数値の原因。
-                        standings_by_pos[_spos] = {'car_idx': _si, 'signed_gap_s': _signed}
+                        # Adjacent-car radio uses the continuously sampled physical
+                        # position when available. CarIdxF2Time is still retained for
+                        # arbitrary class-position questions, but on long tracks it
+                        # can remain unchanged for minutes and must not be narrated as
+                        # the current nearest-car gap.
+                        _physical_signed = None
+                        if (car_dist_pct and player_car_idx < len(car_dist_pct)
+                                and _si < len(car_dist_pct)
+                                and isinstance(player_last_lap, (int, float))
+                                and player_last_lap > 20):
+                            _player_pct = car_dist_pct[player_car_idx]
+                            _target_pct = car_dist_pct[_si]
+                            if (isinstance(_player_pct, (int, float)) and _player_pct >= 0
+                                    and isinstance(_target_pct, (int, float)) and _target_pct >= 0):
+                                _pct_delta = _target_pct - _player_pct
+                                if _pct_delta > 0.5:
+                                    _pct_delta -= 1.0
+                                elif _pct_delta < -0.5:
+                                    _pct_delta += 1.0
+                                # gap_authority convention: negative=ahead, positive=behind.
+                                _physical_signed = round(-_pct_delta * player_last_lap, 2)
+                        standings_by_pos[_spos] = {
+                            'car_idx': _si,
+                            'signed_gap_s': (_physical_signed
+                                             if _physical_signed is not None else _signed),
+                            'source_kind': ('physical_traffic_gap'
+                                            if _physical_signed is not None
+                                            else 'same_class_battle_gap')}
                         if _si != player_car_idx:
                             competitor_status.append({
                                 'car_idx': _si,
@@ -6671,7 +6725,10 @@ def poll_iracing():
                           'direction': _r.get('direction'),
                           'source_kind': _r.get('source_kind'),
                           'session_key': _r.get('session_key'),
-                          'gap_s': _r.get('gap_s')}
+                          'gap_s': _r.get('gap_s'),
+                          'target_class': _r.get('target_class'),
+                          'target_class_position': _r.get('target_class_position'),
+                          'sampled_at': _r.get('sampled_at')}
                          if isinstance(_r, dict) and _r.get('speakable') else None)
                     for _d, _r in (gap_authority_records or {}).items()},
                 'gap_behind': round(nearest_behind_gap, 2) if nearest_behind_gap is not None else None,

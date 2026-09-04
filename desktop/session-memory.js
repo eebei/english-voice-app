@@ -138,6 +138,51 @@
     };
   }
 
+  // Strategy consumes structured evidence, not the human-readable briefing.
+  // Core identity (driver/car/track/series) is enforced by selectPrevious().
+  // Session/rules mismatches fail closed when both sides are known; setup and
+  // weather differences remain usable only as a clearly-labelled estimate.
+  function strategyFuelEvidence(history, identity, nowMs) {
+    const record = selectPrevious(history, identity, nowMs);
+    if (!record) return { available: false, reason: 'no_matching_record' };
+    const burn = finite(record.avgFuelPerLap);
+    if (!(burn > 0)) return { available: false, reason: 'fuel_burn_unavailable' };
+    const sameKnown = (a, b) => !norm(a) || !norm(b) || norm(a) === norm(b);
+    if (!sameKnown(record.sessionType, identity.sessionType)) {
+      return { available: false, reason: 'session_type_mismatch' };
+    }
+    if (!sameKnown(record.raceFormat, identity.raceFormat)) {
+      return { available: false, reason: 'race_format_mismatch' };
+    }
+    if (!sameKnown(record.fuelRule, identity.fuelRule)) {
+      return { available: false, reason: 'fuel_rule_mismatch' };
+    }
+    if (!sameKnown(record.tyreRule, identity.tyreRule)) {
+      return { available: false, reason: 'tyre_rule_mismatch' };
+    }
+    const setupMatch = sameSetup(record, identity);
+    const priorTrackTemp = finite(record.trackTempC);
+    const currentTrackTemp = finite(identity.trackTempC);
+    const trackTempDeltaC = priorTrackTemp !== null && currentTrackTemp !== null
+      ? Math.abs(currentTrackTemp - priorTrackTemp) : null;
+    const warnings = [];
+    if (setupMatch === 'mismatch') warnings.push('setup_mismatch');
+    if (trackTempDeltaC !== null && trackTempDeltaC >= 10) warnings.push('track_temp_delta');
+    return {
+      available: true,
+      reason: warnings.length ? 'matching_identity_with_context_difference' : 'matching_identity',
+      avgFuelPerLap: burn,
+      sampleLaps: Number.isInteger(record.totalLaps) && record.totalLaps > 0 ? record.totalLaps : 1,
+      basis: 'memory_previous',
+      confidence: warnings.length ? 'estimate_low' : 'estimate',
+      warnings,
+      setupMatch,
+      trackTempDeltaC,
+      recordDate: String(record.date || '') || null,
+      record,
+    };
+  }
+
   // ブリーフィングで読み上げる短い一文。数字は briefingFacts が持つものだけを使う。
   // 事実が無ければ空文字を返し、呼び出し側は「言わない」を選べる。
   function briefingLine(facts, lang) {
@@ -245,6 +290,6 @@
   }
   function nowOrMs(ms) { return Number.isFinite(ms) ? ms : Date.now(); }
 
-  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, isFreshRecord,
+  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, strategyFuelEvidence, isFreshRecord,
     setupComparison, setupComparisonLine, attachSetupDeclaration };
 }));

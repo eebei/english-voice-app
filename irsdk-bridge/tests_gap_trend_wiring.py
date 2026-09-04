@@ -75,6 +75,12 @@ class GapTrendWiringTests(unittest.TestCase):
         self.assertIn('elif not _pending_is_gap:', early_gate)
         self.assertNotIn('elif _pending_is_gap:', early_gate)
 
+    def test_multiclass_primary_threat_keeps_identity_and_closing_eta(self):
+        self.assertIn("'target_car_idx': _primary['car_idx']", BRIDGE)
+        self.assertIn("'closing_rate_s_per_s':", BRIDGE)
+        self.assertIn("'time_to_reach_s':", BRIDGE)
+        self.assertIn("row['eta'] if isinstance(row.get('eta')", BRIDGE)
+
 
 if __name__ == '__main__':
     unittest.main()

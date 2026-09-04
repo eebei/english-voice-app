@@ -55,6 +55,9 @@ r = route('むしろ ギャップ どう？', live);
 check('8/24 directionless noisy gap question returns both nearest values', r.handled && r.reply==='前4.6秒、後ろ5.8秒。');
 r = route('出ました。前は？', live);
 check('a short follow-up asking for the front gap is still deterministic', r.handled && r.reply==='前4.6秒。');
+r = route('後ろとの差は？', {...live,gap_authority:{behind:{target_class:'GT3',target_car_idx:22,gap_s:5.8}}});
+check('structured rear gap names the measured class and cannot be relabelled GTP',
+  r.handled && r.reply==='後ろのGT3 5.8秒。' && !/GTP/.test(r.reply));
 r = route('ちゃんとギャップ答えたよ。', live);
 check('a statement about a prior gap answer is acknowledged, not misread as a new query', r.handled && r.intent==='gap_reply_acknowledgement');
 r = route('走り始めたらギャップちゃんと教えてね。', live);

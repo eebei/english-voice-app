@@ -44,12 +44,12 @@
     return stops;
   }
 
-  function firstService(planStops, totalLaps, burn, capacity, firstStintBurn) {
+  function firstService(planStops, totalLaps, burn, capacity, firstStintBurn, initialFuel = capacity) {
     if (!planStops.length) return { estimated_add_l: 0, target_onboard_l: 0, entry_fuel_l: null };
     const first = planStops[0];
     const next = planStops[1] || totalLaps;
     const nextLength = Math.max(1, next - first);
-    const entry = Math.max(0, capacity - firstStintBurn * first);
+    const entry = Math.max(0, initialFuel - firstStintBurn * first);
     const target = Math.min(capacity, burn * nextLength + RESERVE_L);
     return {
       estimated_add_l: Math.round(Math.max(0, Math.min(capacity - entry, target - entry)) * 10) / 10,
@@ -68,6 +68,7 @@
     const samples = Math.max(0, Math.trunc(finite(input.historicalFuelSamples) || 0));
     const averageLap = finite(input.historicalAverageLapS);
     const capacity = finite(input.effectiveCapacityL);
+    const startingFuel = finite(input.startingFuelL) ?? capacity;
     const pitLane = finite(input.pitLaneS);
     const memoryEvidence = input.memoryEvidence && typeof input.memoryEvidence === 'object'
       ? input.memoryEvidence : {};
@@ -86,7 +87,8 @@
     }
     if (!(totalLaps > 0)) return unavailable('race_laps_unavailable', { format });
 
-    const safeStintLaps = Math.max(1, Math.floor((capacity - RESERVE_L) / burn));
+    if (!(startingFuel > burn)) return unavailable('starting_fuel_unavailable', { format, burn, capacity });
+    const safeStintLaps = Math.max(1, Math.floor((startingFuel - RESERVE_L) / burn));
     const baselineStops = schedule(totalLaps, safeStintLaps, safeStintLaps);
     const undercutFirst = Math.max(1, safeStintLaps - 1);
     const undercutStops = schedule(totalLaps, safeStintLaps, undercutFirst);
@@ -96,13 +98,19 @@
     const overcutStops = schedule(totalLaps, safeStintLaps, overcutFirst);
     const qualifier = finite(input.qualifyingPosition);
     const classEntries = finite(input.classEntryCount);
-    const baselineService = firstService(baselineStops, totalLaps, burn, capacity, burn);
-    const undercutService = firstService(undercutStops, totalLaps, burn, capacity, burn);
-    const overcutService = firstService(overcutStops, totalLaps, burn, capacity, overcutTargetBurn);
+    const baselineService = firstService(baselineStops, totalLaps, burn, capacity, burn, startingFuel);
+    const undercutService = firstService(undercutStops, totalLaps, burn, capacity, burn, startingFuel);
+    const overcutService = firstService(overcutStops, totalLaps, burn, capacity, overcutTargetBurn, startingFuel);
 
     const planA = {
       id: 'A', kind: 'baseline', available: true,
       first_pit_lap: baselineStops[0] || null, pit_laps: baselineStops,
+      // `first_pit_lap` historically meant the completed lap after which the
+      // driver enters pit lane.  Keep it for compatibility, but expose both
+      // sides of the S/F crossing so radio never alternates between "lap 6"
+      // and "lap 7" for the same stop.
+      pit_entry_after_lap: baselineStops[0] || null,
+      pit_service_lap: baselineStops[0] ? baselineStops[0] + 1 : null,
       stop_count: baselineStops.length, first_service: baselineService,
       conditions: ['standard_pace', 'no_verified_traffic_gain'],
     };
@@ -110,6 +118,8 @@
       id: 'B', kind: 'undercut', available: undercutStops.length <= baselineStops.length,
       reason: undercutStops.length <= baselineStops.length ? 'same_stop_count' : 'adds_extra_stop',
       first_pit_lap: undercutStops[0] || null, pit_laps: undercutStops,
+      pit_entry_after_lap: undercutStops[0] || null,
+      pit_service_lap: undercutStops[0] ? undercutStops[0] + 1 : null,
       stop_count: undercutStops.length, first_service: undercutService,
       conditions: ['blocked_by_slower_same_class_car', 'verified_clean_pace_advantage', 'clear_rejoin']
         .concat(selfTags.includes('gap_accuracy') ? ['latest_gap_same_frame_required'] : []),
@@ -118,6 +128,8 @@
       id: 'C', kind: 'overcut', available: overcutFirst < totalLaps,
       reason: overcutSavingPct > 0 ? 'fuel_save_required' : 'normal_extension',
       first_pit_lap: overcutFirst < totalLaps ? overcutFirst : null,
+      pit_entry_after_lap: overcutFirst < totalLaps ? overcutFirst : null,
+      pit_service_lap: overcutFirst < totalLaps ? overcutFirst + 1 : null,
       pit_laps: overcutStops, stop_count: overcutStops.length,
       first_service: overcutService,
       required_first_stint_burn_l_per_lap: Math.round(overcutTargetBurn * 1000) / 1000,
@@ -166,6 +178,16 @@
         'immediate_exit_class_position', 'post_cycle_class_position', 'final_class_position',
         'forward_pack_size', 'rejoin_traffic_state', 'rival_pit_timestamps'
       ],
+      pit_lap_plan: {
+        plan_id: 'A',
+        pit_entry_after_lap: planA.pit_entry_after_lap,
+        pit_service_lap: planA.pit_service_lap,
+        basis: 'memory_previous',
+        confidence: 'estimate',
+        fuel_start_l: Math.round(startingFuel * 1000) / 1000,
+        burn_l_per_lap: Math.round(burn * 1000) / 1000,
+        sample_laps: samples,
+      },
       format: { ...format, estimated_race_laps: totalLaps },
       evidence: {
         track: input.track || '', car: input.car || '',
@@ -173,7 +195,7 @@
         historical_fuel_samples: samples,
         historical_average_lap_s: averageLap,
         effective_capacity_l: Math.round(capacity * 1000) / 1000,
-        starting_fuel_assumption_l: Math.round(capacity * 1000) / 1000,
+        starting_fuel_assumption_l: Math.round(startingFuel * 1000) / 1000,
         pit_lane_s: pitLane,
         qualifying_position: qualifier,
         class_entry_count: classEntries,
@@ -208,6 +230,7 @@
       historicalFuelPerLapL: burn, historicalFuelSamples: samples,
       historicalAverageLapS: playbook.evidence.historical_average_lap_s,
       effectiveCapacityL: playbook.evidence.effective_capacity_l,
+      startingFuelL: playbook.evidence.starting_fuel_assumption_l,
       pitLaneS: playbook.evidence.pit_lane_s,
       qualifyingPosition: playbook.evidence.qualifying_position,
       classEntryCount: playbook.evidence.class_entry_count,
@@ -227,6 +250,14 @@
     if (!rebuilt.available) return playbook;
     rebuilt.source = 'live_clean_laps';
     rebuilt.provisional = false;
+    rebuilt.pit_lap_plan = {
+      ...(rebuilt.pit_lap_plan || {}),
+      plan_id: rebuilt.selected_plan || 'A',
+      basis: 'measured_today',
+      confidence: 'measured',
+      burn_l_per_lap: burn,
+      sample_laps: samples,
+    };
     rebuilt.evidence.live_fuel_l_per_lap = burn;
     rebuilt.evidence.live_fuel_samples = samples;
     rebuilt.revision_reason = 'three_live_clean_laps';

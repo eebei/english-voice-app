@@ -29,7 +29,7 @@ Gate 5 artifact、Gate 7 Railway、そして **Gate 6 Windows実機 / Gate 8 iRa
 
 ## 現在地（2026-09-03・詳細：訂正の「軸」まで一致）
 
-公開中の製品版は **Build 292**。会話Box v2 は通常回答のストリーム完了出口まで接続済み。Codex の実走コーパス再生（`62cc17a`・再生器とpreflight登録を含む既存commit）で **149/149** 合格した。
+公開中の製品版は **Build 294**。会話Box v2 は通常回答のストリーム完了出口まで接続済み。Codex の実走コーパス再生（`62cc17a`・再生器とpreflight登録を含む既存commit）で **149/149** 合格した。
 
 **経路の正確な範囲**（越えて書かない）:
 - **返信67件**を `callAPI()` で再生した
@@ -67,12 +67,12 @@ Gate 5 artifact、Gate 7 Railway、そして **Gate 6 Windows実機 / Gate 8 iRa
 
 ### 未完了
 
-実マイクPTT→STT→訂正→ACK→TTS、Windows実機、iRacing実走。**Gate 4はCodex独立再確認済み。変更は未commit・未Build・未公開。** `EXTERNAL_USER_DISCOVERY_SAHIDE_20260902.md` の受入条件「**耳で確認できたときだけ合格**」に、現在の証拠は届いていない（すべて内部計算）。
+実マイクPTT→STT→訂正→ACK→TTS、Windows実機、iRacing実走。**Gate 4はCodex独立再確認済み。変更は`a3d493d`へcommit・push済み。Build 294生成・公開済み。** `EXTERNAL_USER_DISCOVERY_SAHIDE_20260902.md` の受入条件「**耳で確認できたときだけ合格**」に、現在の証拠は届いていない（すべて内部計算）。
 
 ### 次の行動
 
-1. **commit GO 受領**（今回の変更をcommit。対象外の未追跡ファイルはstageしない）
-2. Gate 5（artifact の module 実数）→ Gate 7（Railway 反映）→ **Gate 6 / 8（Windows実機・実走＝耳の確認）**
+1. Gate 5（公開Build 294 artifactのmodule実数・bytes・SHA-256）
+2. Gate 7（Railway 反映）→ **Gate 6 / 8（Windows実機・実走＝耳の確認）**
 
 ## 現在地（2026-08-30 時点・次セッションはここから読む）
 

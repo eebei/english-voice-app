@@ -19,6 +19,10 @@ check('20-minute format becomes estimated 12 laps', monza.format.estimated_race_
 check('baseline is two stops', monza.plans.A.stop_count === 2, JSON.stringify(monza.plans.A));
 check('baseline pit laps are 5 and 10', monza.plans.A.pit_laps.join(',') === '5,10');
 check('undercut first stop is lap 4', monza.plans.B.first_pit_lap === 4);
+check('pit lap semantics distinguish entry completion and service lap',
+  monza.plans.A.pit_entry_after_lap === 5 && monza.plans.A.pit_service_lap === 6
+  && monza.pit_lap_plan.basis === 'memory_previous'
+  && monza.pit_lap_plan.confidence === 'estimate');
 check('undercut does not add a stop', monza.plans.B.available === true);
 check('overcut first stop is lap 6', monza.plans.C.first_pit_lap === 6);
 check('overcut labels required saving', monza.plans.C.required_fuel_saving_pct > 0);
@@ -38,6 +42,22 @@ check('planned first add never exceeds tank', monza.plans.A.first_service.estima
 check('historical start-fuel assumption stays internal until bridge authority exists',
   !/スタート燃料は.*前提|給油設定.*L/.test(playbook.briefing(monza,'ja')));
 
+const partialStart = playbook.buildPlaybook({
+  durationS:1200, historicalFuelPerLapL:3, historicalFuelSamples:8,
+  historicalAverageLapS:100, effectiveCapacityL:50, startingFuelL:20,
+});
+check('first stint uses measured grid fuel rather than tank capacity',
+  partialStart.safe_stint_laps===6 && partialStart.pit_lap_plan.fuel_start_l===20,
+  JSON.stringify(partialStart.pit_lap_plan));
+const rbrMemory = playbook.buildPlaybook({
+  durationS:2400, historicalFuelPerLapL:7.87, historicalFuelSamples:10,
+  historicalAverageLapS:86, effectiveCapacityL:53, startingFuelL:52.3,
+});
+check('52.3L / 7.87L-lap is stated as enter after lap 6, service on lap 7',
+  rbrMemory.pit_lap_plan.pit_entry_after_lap===6
+  && rbrMemory.pit_lap_plan.pit_service_lap===7,
+  JSON.stringify(rbrMemory.pit_lap_plan));
+
 const selfCorrected = playbook.buildPlaybook({
   track: 'monza full', car: 'Mercedes-AMG GT3 2020',
   raceDetail: { session_type: 'Race', session_time: '1200 sec' },
@@ -55,6 +75,8 @@ check('self-memory provenance is retained in the playbook evidence',
 
 const live = playbook.updateWithLive(monza, { fuel_strategy: { clean_laps_sampled: 3, avg_fuel_per_lap: 3.7 } });
 check('three clean laps replace historical source', live.source === 'live_clean_laps');
+check('three clean laps promote pit plan provenance to measured today',
+  live.pit_lap_plan.basis === 'measured_today' && live.pit_lap_plan.confidence === 'measured');
 check('live sample count is retained', live.evidence.live_fuel_samples === 3);
 check('live briefing stays one short measured update',
   playbook.briefing(live, 'ja') === '実測3.70L/周でPlan Aを更新。');

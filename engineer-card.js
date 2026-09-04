@@ -27,6 +27,7 @@ const TOPIC = Object.freeze({
   PENALTY_REPORT: 'penalty_report',
   TRAFFIC_STATUS: 'traffic_status',
   PLAN_STATUS: 'plan_status',
+  PIT_LAP_QUERY: 'pit_lap_query',
   SESSION_FORMAT: 'session_format',
   ACKNOWLEDGEMENT: 'acknowledgement',
   UNRESOLVED_OPERATIONAL: 'unresolved_operational',
@@ -254,6 +255,24 @@ function classify(text, options = {}) {
     return { topic: TOPIC.ACKNOWLEDGEMENT, confidence: 1 };
   }
   return null;
+}
+
+// Collect secondary meanings without changing the long-standing first-match
+// classifier.  A single match therefore follows the exact legacy route; only
+// utterances that currently lose a second explicit question are composed.
+function classifyAll(text, options = {}) {
+  const primary = classify(text, options);
+  if (!primary) return [];
+  const out = [primary];
+  const t = String(text || '').trim();
+  const asksPitLap = /(?:何|どの|いつの?)\s*(?:周|週|ラップ)\s*目|(?:何|どの)\s*(?:周|週|ラップ).{0,8}(?:ピット|ボックス|入)|(?:ピット|ボックス).{0,8}(?:何|どの|いつの?)\s*(?:周|週|ラップ)|what\s+lap.{0,10}(?:pit|box)|(?:pit|box).{0,10}what\s+lap/i.test(t);
+  if (asksPitLap && primary.topic !== TOPIC.PIT_LAP_QUERY) {
+    const choice = /プラン\s*[AＡ]|plan\s*a/i.test(t) ? 'A'
+      : /プラン\s*[BＢ]|plan\s*b/i.test(t) ? 'B'
+      : /プラン\s*[CＣ]|plan\s*c/i.test(t) ? 'C' : null;
+    out.push({ topic: TOPIC.PIT_LAP_QUERY, planChoice: choice, confidence: 0.99 });
+  }
+  return out;
 }
 
 const finite = value => {
@@ -734,6 +753,27 @@ function buildPlanStatus(live, lang, card = {}) {
   return prefix + 'Fuel-finish evidence is not ready; I will not lock a pit call yet.';
 }
 
+function buildPitLapQuery(live, lang, card = {}) {
+  const playbook = live && live.strategy_playbook;
+  const chosen = card.planChoice || (playbook && playbook.selected_plan) || 'A';
+  const plan = playbook && playbook.available && playbook.plans && playbook.plans[chosen];
+  if (!plan || plan.available === false) return ja(lang)
+    ? `Plan ${chosen}のピット周はまだ成立していない。`
+    : `The pit lap for Plan ${chosen} is not established yet.`;
+  const entry = finite(plan.pit_entry_after_lap ?? plan.first_pit_lap);
+  const service = finite(plan.pit_service_lap ?? (entry != null ? entry + 1 : null));
+  if (entry == null) return ja(lang)
+    ? `Plan ${chosen}のピット周はまだ計算できない。`
+    : `The pit lap for Plan ${chosen} is not calculated yet.`;
+  const memoryBasis = playbook.pit_lap_plan && playbook.pit_lap_plan.basis === 'memory_previous';
+  const basis = memoryBasis
+    ? (ja(lang) ? '前回の同条件燃費からの推定' : 'estimated from the previous matching fuel record')
+    : (ja(lang) ? '今日の実測燃費' : "today's measured fuel burn");
+  return ja(lang)
+    ? `Plan ${chosen}。${Math.trunc(entry)}周を走り終えてピットイン、作業は${Math.trunc(service)}周目。${basis}だよ。`
+    : `Plan ${chosen}: pit after completing lap ${Math.trunc(entry)}; service is on lap ${Math.trunc(service)}. This is ${basis}.`;
+}
+
 function buildPace(live, lang) {
   const { fs, current, required, add } = fuelPlan(live || {});
   const endurance = fs.endurance_plan || live.endurance_fuel_plan || {};
@@ -1002,6 +1042,7 @@ function build(card, live, lang = 'en') {
     [TOPIC.HANDLING_REPORT]: (l, lg) => buildHandlingReport(l, lg, card),
     [TOPIC.PENALTY_REPORT]: buildPenaltyReport,
     [TOPIC.TRAFFIC_STATUS]: buildTrafficStatus, [TOPIC.PLAN_STATUS]: buildPlanStatus,
+    [TOPIC.PIT_LAP_QUERY]: (l, lg) => buildPitLapQuery(l, lg, card),
     [TOPIC.SESSION_FORMAT]: buildSessionFormat,
   };
   if (card.topic === TOPIC.ACKNOWLEDGEMENT) {
@@ -1023,10 +1064,19 @@ function build(card, live, lang = 'en') {
 }
 
 function route(text, live, lang = 'en', options = {}) {
-  const card = classify(text, options);
-  if (!card) return null;
-  const reply = build(card, live || {}, lang);
-  return { card, reply, status: card.topic === TOPIC.UNRESOLVED_OPERATIONAL ? 'deferred' : 'fired' };
+  const cards = classifyAll(text, options);
+  if (!cards.length) return null;
+  if (cards.length === 1) {
+    const card = cards[0];
+    const reply = build(card, live || {}, lang);
+    return { card, cards, reply, status: card.topic === TOPIC.UNRESOLVED_OPERATIONAL ? 'deferred' : 'fired' };
+  }
+  const pitLap = cards.find(card => card.topic === TOPIC.PIT_LAP_QUERY);
+  // The pit-lap answer includes the selected plan and is the complete answer
+  // for "Plan A, what lap?".  Do not concatenate the generic Plan description.
+  const reply = pitLap ? buildPitLapQuery(live || {}, lang, pitLap)
+    : cards.map(card => build(card, live || {}, lang)).filter(Boolean).join(ja(lang) ? '' : ' ');
+  return { card: cards[0], cards, reply, status: 'fired' };
 }
 
-module.exports = { TOPIC, classify, build, route, fuelPlan, hasAuthoritativeFinishTarget, formatDuration, pitPhase, OPERATIONAL_RE };
+module.exports = { TOPIC, classify, classifyAll, build, route, fuelPlan, hasAuthoritativeFinishTarget, formatDuration, pitPhase, OPERATIONAL_RE };

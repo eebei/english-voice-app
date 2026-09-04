@@ -84,6 +84,26 @@ check('  車種が不一致の記録も選ばない（欠損とは別経路）',
   memory.selectPrevious([{ ...YESTERDAY, car: 'Ferrari 296 GT3', carClass: 'GT3' }], IDENTITY, TEST_NOW) === null);
 check('現在側にseriesがある時、記録側のseries欠損を一致扱いにしない',
   memory.selectPrevious([{ ...YESTERDAY, seriesId: null }], IDENTITY, TEST_NOW) === null);
+
+const strategyRow = { ...YESTERDAY, recordedAt:'2026-08-24T10:00:00Z',
+  avgFuelPerLap:7.87,totalLaps:11,sessionType:'Race',raceFormat:'timed',
+  fuelRule:'50pct',tyreRule:'optional',trackTempC:31 };
+let strategyEvidence = memory.strategyFuelEvidence([strategyRow], {
+  ...IDENTITY,sessionType:'Race',raceFormat:'timed',fuelRule:'50pct',tyreRule:'optional',trackTempC:34,
+}, TEST_NOW);
+check('戦略は個人・車・コース・シリーズ一致の燃費記憶を構造で取得する',
+  strategyEvidence.available===true&&strategyEvidence.avgFuelPerLap===7.87
+  &&strategyEvidence.basis==='memory_previous'&&strategyEvidence.confidence==='estimate');
+check('燃料規則が違う記憶は次戦計画に使わない',
+  memory.strategyFuelEvidence([strategyRow],{...IDENTITY,sessionType:'Race',raceFormat:'timed',fuelRule:'100pct'},TEST_NOW).reason==='fuel_rule_mismatch');
+strategyEvidence = memory.strategyFuelEvidence([strategyRow], {
+  ...IDENTITY,sessionType:'Race',raceFormat:'timed',fuelRule:'50pct',tyreRule:'optional',
+  setupFingerprint:'different',trackTempC:44,
+}, TEST_NOW);
+check('setup・路温差は捏造せず低確信の推定として明示する',
+  strategyEvidence.available===true&&strategyEvidence.confidence==='estimate_low'
+  &&strategyEvidence.warnings.includes('setup_mismatch')
+  &&strategyEvidence.warnings.includes('track_temp_delta'));
 check('認証ユーザーが分かる時、旧recordのuserId欠損を一致扱いにしない',
   memory.selectPrevious([{ ...YESTERDAY, userId: null }], IDENTITY, TEST_NOW) === null);
 check('車種が取れていない時は車種で絞り込まない（正しい記録を捨てない）',

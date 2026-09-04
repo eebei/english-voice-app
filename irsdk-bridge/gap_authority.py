@@ -149,7 +149,8 @@ def build_record(*, session_key, source_kind, signed_gap_s, target_car_idx,
 
 
 def build_same_class_records(*, session_key, sampled_at, standings_by_pos,
-                             player_class_position, player_class=None, previous=None):
+                             player_class_position, player_class=None, previous=None,
+                             source_kind=SOURCE_SAME_CLASS_BATTLE):
     """Race の同クラス隣接順位から前後を作る。
 
     `standings_by_pos` は {class_position: {'car_idx': int, 'signed_gap_s': float}}。
@@ -168,7 +169,7 @@ def build_same_class_records(*, session_key, sampled_at, standings_by_pos,
             continue
         out[direction] = build_record(
             session_key=session_key,
-            source_kind=SOURCE_SAME_CLASS_BATTLE,
+            source_kind=(entry.get('source_kind') or source_kind),
             signed_gap_s=entry.get('signed_gap_s'),
             target_car_idx=entry.get('car_idx'),
             target_class=player_class,
@@ -180,7 +181,8 @@ def build_same_class_records(*, session_key, sampled_at, standings_by_pos,
 
 
 def apply_same_class_records(*, session_key, sampled_at, standings_by_pos,
-                             player_class_position, player_class=None, previous=None):
+                             player_class_position, player_class=None, previous=None,
+                             source_kind=SOURCE_SAME_CLASS_BATTLE):
     """bridge が使う唯一の入口。値・対象車・診断traceをまとめて返す。
 
     bridge 側へロジックを置くと文字列検査でしか守れず、実際に壊れても
@@ -196,7 +198,7 @@ def apply_same_class_records(*, session_key, sampled_at, standings_by_pos,
         session_key=session_key, sampled_at=sampled_at,
         standings_by_pos=standings_by_pos,
         player_class_position=player_class_position,
-        player_class=player_class, previous=previous)
+        player_class=player_class, previous=previous, source_kind=source_kind)
     # ★G4（2026-08-25）S/F 跨ぎ対策。
     #   Race で standings が取れているなら、**権威がこの poll の唯一の出所**。
     #   確認できなかった方向は EstTime の残り値を使わず None にする。

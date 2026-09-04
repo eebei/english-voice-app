@@ -866,8 +866,21 @@ function buildSystem(p) {
     else if (live.finish_crossings_status) { jp.push('残り周回権威=取得不能（理由:' + live.finish_crossings_status + '）'); en.push('Finish-crossing authority unavailable (reason: ' + live.finish_crossings_status + ')'); }
     if (live.best != null)       { const b = fmtLap(live.best); jp.push('自己ベスト ' + b); en.push('Best ' + b); }
     if (live.last != null)       { const l = fmtLap(live.last); jp.push('直近ラップ ' + l); en.push('Last ' + l); }
-    if (live.gap_ahead != null)  { jp.push('前とのギャップ ' + live.gap_ahead + '秒'); en.push('Gap ahead ' + live.gap_ahead + 's'); }
-    if (live.gap_behind != null) { jp.push('後ろとのギャップ ' + live.gap_behind + '秒'); en.push('Gap behind ' + live.gap_behind + 's'); }
+    const gapFacts = live.gap_authority && typeof live.gap_authority === 'object'
+      ? live.gap_authority : {};
+    const addGapFact = (direction, labelJP, labelEN) => {
+      const rec = gapFacts[direction];
+      if (!rec || rec.gap_s == null || rec.target_car_idx == null) return;
+      const cls = rec.target_class ? String(rec.target_class) : 'same class';
+      const pos = rec.target_class_position != null ? ` P${rec.target_class_position}` : '';
+      jp.push(`${labelJP} ${rec.gap_s}秒（${cls}${pos}、carIdx ${rec.target_car_idx}、${rec.source_kind}）`);
+      en.push(`${labelEN} ${rec.gap_s}s (${cls}${pos}, carIdx ${rec.target_car_idx}, ${rec.source_kind})`);
+    };
+    // Never give the LLM a naked GAP number. Identity, class and measurement
+    // source travel in the same authority record, so a GT3 gap cannot be
+    // relabelled as a GTP approach by conversational inference.
+    addGapFact('ahead', '前とのギャップ', 'Gap ahead');
+    addGapFact('behind', '後ろとのギャップ', 'Gap behind');
     // クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）。
     // gap_ahead/behindは直前直後の車限定だったが、これで離れた順位も実値で答えられる。
     if (live.standings_gaps) {

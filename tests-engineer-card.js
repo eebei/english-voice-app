@@ -180,6 +180,27 @@ planRoute=cards.route('プランBは？',build255Live,'ja',{race:true});
 check('Plan B includes a deterministic switch condition',
   planRoute&&planRoute.card.planChoice==='B'&&/あと3周走ってピット、給油設定11L.*復帰トラフィック/.test(planRoute.reply),planRoute&&planRoute.reply);
 
+const memoryPitPlanLive = {
+  ...build255Live,
+  strategy_playbook: {
+    available:true, selected_plan:'A',
+    pit_lap_plan:{basis:'memory_previous',confidence:'estimate'},
+    plans:{
+      A:{available:true,first_pit_lap:6,pit_entry_after_lap:6,pit_service_lap:7},
+      B:{available:true,first_pit_lap:5,pit_entry_after_lap:5,pit_service_lap:6},
+      C:{available:false},
+    },
+  },
+};
+planRoute=cards.route('プランA！何周目？',memoryPitPlanLive,'ja',{race:true});
+check('compound Plan A pit-lap question answers the part legacy first-match discarded',
+  planRoute&&planRoute.cards.length===2
+  && planRoute.cards.some(x=>x.topic===cards.TOPIC.PIT_LAP_QUERY)
+  && /6周を走り終えてピットイン、作業は7周目.*前回の同条件燃費からの推定/.test(planRoute.reply),
+  planRoute&&planRoute.reply);
+check('single-intent Plan A route remains a single legacy match',
+  cards.route('プランAは？',memoryPitPlanLive,'ja',{race:true}).cards.length===1);
+
 const intentCases = [
   ['燃費は？', cards.TOPIC.FUEL_USE, /3\.45L\/周/],
   ['残り何周？', cards.TOPIC.RACE_DISTANCE, /残り5分2秒.*残り4周/],

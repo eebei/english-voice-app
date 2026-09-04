@@ -107,6 +107,9 @@
       identity.generation = record.generation === undefined ? null : record.generation;
       identity.source_kind = record.source_kind === undefined ? null : record.source_kind;
       identity.target_car_idx = record.target_car_idx === undefined ? null : record.target_car_idx;
+      identity.target_class = record.target_class === undefined ? null : record.target_class;
+      identity.target_class_position = record.target_class_position === undefined ? null : record.target_class_position;
+      identity.sampled_at = record.sampled_at === undefined ? null : record.sampled_at;
     }
     return identity;
   };
@@ -115,6 +118,19 @@
       confidence: replyConfidence(intent, reply),
       gapIdentities:identities }
     : { handled:false };
+  const gapClassLabel = (live, direction, lang) => {
+    const rec = live && live.gap_authority && live.gap_authority[direction];
+    const cls = rec && typeof rec.target_class === 'string' ? rec.target_class.trim() : '';
+    if (!cls) return '';
+    return isJP(lang) ? `${cls} ` : `${cls} `;
+  };
+  const gapPhrase = (live, direction, value, lang) => {
+    const cls = gapClassLabel(live, direction, lang);
+    if (isJP(lang)) return cls
+      ? `${direction==='ahead'?'前':'後ろ'}の${cls}${value.toFixed(1)}秒`
+      : `${direction==='ahead'?'前':'後ろ'}${value.toFixed(1)}秒`;
+    return `${cls}${value.toFixed(1)} seconds ${direction}`;
+  };
 
   function fuelWindowStatus(live, lang) {
     const options = live && live.strategy_options && typeof live.strategy_options === 'object'
@@ -386,11 +402,11 @@
       const parts = [];
       const identities = [];
       if (wantsAhead && ahead !== null) {
-        parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
+        parts.push(gapPhrase(live,'ahead',ahead,lang));
         identities.push(gapIdentityFor(live, 'ahead', ahead));
       }
       if (wantsBehind && behind !== null) {
-        parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
+        parts.push(gapPhrase(live,'behind',behind,lang));
         identities.push(gapIdentityFor(live, 'behind', behind));
       }
       if (parts.length) return gapAnswer('nearest_gap', isJP(lang) ? `${parts.join('、')}。` : `${parts.join(', ')}.`, identities);
@@ -413,11 +429,11 @@
       const parts = [];
       const identities = [];
       if (ahead !== null) {
-        parts.push(isJP(lang) ? `前${ahead.toFixed(1)}秒` : `${ahead.toFixed(1)} seconds ahead`);
+        parts.push(gapPhrase(live,'ahead',ahead,lang));
         identities.push(gapIdentityFor(live, 'ahead', ahead));
       }
       if (behind !== null) {
-        parts.push(isJP(lang) ? `後ろ${behind.toFixed(1)}秒` : `${behind.toFixed(1)} seconds behind`);
+        parts.push(gapPhrase(live,'behind',behind,lang));
         identities.push(gapIdentityFor(live, 'behind', behind));
       }
       if (parts.length) return gapAnswer('nearest_gap',

@@ -1322,6 +1322,7 @@ let teamRaceStints=[];
 let practiceRun = null;
 let fuelCapacityConfirmedThisSession = null;
 let lastFuelCapacityContext = null;
+let strategyStartingFuelL = null;
 let namedRival = null; // {carIdx,name,carNumber}; reset at SessionNum boundary
 let strategyObjectiveAnnouncedKey = '';
 
@@ -1332,6 +1333,7 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   lastSessionSummary=null;
   namedRival=null;
   fuelLearningSignature='';
+  strategyStartingFuelL=null;
   activeRaceFacts={sessionKey:String(nextSessionNum??lastSessionNum??''),fuelReflex:null,
     strategyOptions:null,strategyPlaybook:null};
   activeStrategyPlaybook=null;
@@ -3821,6 +3823,12 @@ function connectBridge(){
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=applySessionFormatAuthority(data);
+        if(/race/i.test(String(lastSessionType||lastTelemetry.session_type||''))
+            && strategyStartingFuelL===null && Number(lastTelemetry.fuel)>0){
+          strategyStartingFuelL=Number(lastTelemetry.fuel);
+          strategyPlaybookRefreshKey='';
+          refreshStrategyPlaybook({announce:false,force:true});
+        }
         captureDrivingStyleProfile(lastTelemetry);
         if(activeStrategyPlaybook) lastTelemetry.strategy_playbook=activeStrategyPlaybook;
         rememberLiveFuelEvidence(lastTelemetry);
@@ -6449,7 +6457,8 @@ function saveSessionSummary(data){
     //   これが無いと「昨日の路面温度」「前回のsetup」「何番手スタート」に答える材料が存在しない。
     //   値はBridge由来のみを採用し、欠けていればnullで残す（推測で埋めない）。
     const _w=(data&&typeof data.weather==='object'&&data.weather)?data.weather:null;
-    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,irating:lastIrating||null,sr:lastSr||null});
+    const _rp=(lastTelemetry&&typeof lastTelemetry.race_plan==='object')?lastTelemetry.race_plan:{};
+    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||lastSessionType||null,raceFormat:_rp.kind||null,configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,totalLapsRule:Number.isInteger(Number(lastTelemetry&&lastTelemetry.laps_total))?Number(lastTelemetry.laps_total):null,fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,irating:lastIrating||null,sr:lastSr||null});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -6667,6 +6676,20 @@ function refreshStrategyPlaybook(options={}){
     const mem=JSON.parse(localStorage.getItem('pw_ctmem')||'{}');
     memory=findCarTrackMemory(mem,lastTrack,lastCarModel||'',lastCarClass||'');
   }catch{}
+  const memoryIdentity=currentMemoryIdentity();
+  const personalFuelEvidence=(window.PitwallSessionMemory
+    &&typeof window.PitwallSessionMemory.strategyFuelEvidence==='function')
+    ?window.PitwallSessionMemory.strategyFuelEvidence(loadRaceHistory(),memoryIdentity,Date.now()):null;
+  // An authenticated driver never falls back to the old unscoped aggregate:
+  // doing so could reuse another tester's fuel record. Legacy aggregate data
+  // remains available only before a stable user identity exists.
+  const canUseLegacyAggregate=!memoryIdentity.userId;
+  const rememberedFuel=personalFuelEvidence&&personalFuelEvidence.available
+    ?Number(personalFuelEvidence.avgFuelPerLap)
+    :(canUseLegacyAggregate?Number(memory?.avgFuel):NaN);
+  const rememberedSamples=personalFuelEvidence&&personalFuelEvidence.available
+    ?Number(personalFuelEvidence.sampleLaps)||1
+    :(canUseLegacyAggregate?(Number(memory?.fuelSampleCount)||0):0);
   let lunaSelfMemory=null;
   try{
     const selfLayer=window.PitwallLunaSelfMemory;
@@ -6676,17 +6699,21 @@ function refreshStrategyPlaybook(options={}){
     }
   }catch{}
   const q=lastWeekendAuthority?.qualifying_result||{};
-  const storedAverageLap=matchingHistoricalAverageLap();
+  const personalAverageLap=personalFuelEvidence&&personalFuelEvidence.available
+    ?Number(personalFuelEvidence.record?.avgLap):NaN;
+  const storedAverageLap=Number.isFinite(personalAverageLap)&&personalAverageLap>20
+    ?personalAverageLap:(canUseLegacyAggregate?matchingHistoricalAverageLap():null);
   const liveAverageLap=Number(lastTelemetry?.driver_pace_sample_count)>=3
     ? Number(lastTelemetry?.driver_pace_median_s):null;
   const liveFuel=lastTelemetry?.fuel_strategy||{};
   const refreshKey=JSON.stringify([
     String(lastSessionNum??''),String(lastSessionType||''),lastTrack,lastCarModel||lastCarClass,
     raceDetail?.session_laps??null,raceDetail?.session_time??null,
-    memory?.avgFuel??null,memory?.fuelSampleCount??0,memory?.avgLap??null,
+    Number.isFinite(rememberedFuel)?rememberedFuel:null,rememberedSamples,memory?.avgLap??null,
     memory?.pitLaneSec??null,(memory?.matchedKeys||[]).join(','),
     Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
-    loadConfirmedFuelCapacity(),q.status,q.class_position||q.overall_position||null,
+    loadConfirmedFuelCapacity(),Number.isFinite(strategyStartingFuelL)?strategyStartingFuelL:null,
+    q.status,q.class_position||q.overall_position||null,
     Number(liveFuel.clean_laps_sampled)||0,Number(liveFuel.avg_fuel_per_lap)||null,
     lunaSelfMemory?.memory_id||null,(lunaSelfMemory?.tags||[]).join(','),
   ]);
@@ -6697,14 +6724,15 @@ function refreshStrategyPlaybook(options={}){
   strategyPlaybookRefreshKey=refreshKey;
   const playbook=engine.buildPlaybook({
     track:lastTrack||'', car:lastCarModel||lastCarClass||'', raceDetail,
-    historicalFuelPerLapL:Number(memory?.avgFuel),
-    historicalFuelSamples:Number(memory?.fuelSampleCount)||0,
+    historicalFuelPerLapL:rememberedFuel,
+    historicalFuelSamples:rememberedSamples,
     historicalAverageLapS:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
     effectiveCapacityL:loadConfirmedFuelCapacity(),
+    startingFuelL:Number.isFinite(strategyStartingFuelL)?strategyStartingFuelL:null,
     pitLaneS:Number(memory?.pitLaneSec),
     qualifyingPosition:q.status==='valid'?Number(q.class_position||q.overall_position):null,
     classEntryCount:Number(lastWeekendAuthority?.player_class_entry_count)||null,
-    memoryEvidence:{source:memory?.source||'none',recordCount:Number(memory?.memoryRecordCount)||0,
+    memoryEvidence:{source:(personalFuelEvidence&&personalFuelEvidence.available?'personal_race_history':(canUseLegacyAggregate?memory?.source:'none'))||'none',recordCount:personalFuelEvidence&&personalFuelEvidence.available?1:(Number(memory?.memoryRecordCount)||0),
       sessionCount:Number(memory?.sessions)||0,matchedKeys:memory?.matchedKeys||[],
       canonicalTrack:memory?.canonicalTrack||'',canonicalCar:memory?.canonicalCar||''},
     selfMemory:{memoryId:lunaSelfMemory?.memory_id||null,tags:lunaSelfMemory?.tags||[]},
@@ -6712,9 +6740,9 @@ function refreshStrategyPlaybook(options={}){
   activeStrategyPlaybook=playbook;
   activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),strategyPlaybook:playbook};
   diagnosticLog('MEMORY_ACTION',JSON.stringify({phase:'history_resolved',session_num:lastSessionNum,
-    track:lastTrack,car:lastCarModel||lastCarClass,record_count:Number(memory?.memoryRecordCount)||0,
-    session_count:Number(memory?.sessions)||0,fuel_samples:Number(memory?.fuelSampleCount)||0,
-    avg_fuel_l_per_lap:memory?.avgFuel??null,avg_lap_s:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
+    track:lastTrack,car:lastCarModel||lastCarClass,record_count:personalFuelEvidence&&personalFuelEvidence.available?1:(Number(memory?.memoryRecordCount)||0),
+    session_count:Number(memory?.sessions)||0,fuel_samples:rememberedSamples,
+    avg_fuel_l_per_lap:Number.isFinite(rememberedFuel)?rememberedFuel:null,memory_basis:personalFuelEvidence?.basis||null,memory_confidence:personalFuelEvidence?.confidence||null,memory_warnings:personalFuelEvidence?.warnings||[],avg_lap_s:Number.isFinite(storedAverageLap)?storedAverageLap:liveAverageLap,
     matched_keys:memory?.matchedKeys||[],
     luna_self_memory_id:lunaSelfMemory?.memory_id||null,
     luna_self_memory_tags:lunaSelfMemory?.tags||[],
@@ -7099,6 +7127,8 @@ function buildSessionEvidenceNote(){
 // 褒めてよい根拠として構造化する。保存していない事実は作らない。
 // ★スライス1：記憶の検索キーはBridge権威だけで作る。会話・推測からは作らない。
 function currentMemoryIdentity(){
+  const _rp=(lastTelemetry&&typeof lastTelemetry.race_plan==='object')?lastTelemetry.race_plan:{};
+  const _weather=(lastTelemetry&&typeof lastTelemetry.weather==='object')?lastTelemetry.weather:{};
   return {
     userId:currentMemoryUserId(),
     track:lastTrack||'',
@@ -7107,6 +7137,13 @@ function currentMemoryIdentity(){
       ?lastSessionAuthority.series_id:null,
     setupFingerprint:(lastSessionAuthority&&lastSessionAuthority.setup_fingerprint
       &&lastSessionAuthority.setup_fingerprint!=='unknown')?lastSessionAuthority.setup_fingerprint:null,
+    sessionType:lastSessionType||null,
+    raceFormat:_rp.kind||null,
+    configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,
+    totalLapsRule:Number.isInteger(Number(lastTelemetry&&lastTelemetry.laps_total))?Number(lastTelemetry.laps_total):null,
+    fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,
+    tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,
+    trackTempC:Number.isFinite(Number(_weather.track_temp_c))?Number(_weather.track_temp_c):null,
   };
 }
 function currentMemoryUserId(){
