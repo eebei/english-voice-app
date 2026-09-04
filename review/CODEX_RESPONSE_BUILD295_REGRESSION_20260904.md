@@ -1,6 +1,6 @@
 # Codex回答：Build 295 実走退行3件
 
-対象: `review/CODEX_HANDOFF_BUILD295_REGRESSION_20260904.md`  
+対象: `review/CODEX_HANDOFF_BUILD295_REGRESSION_20260904.md`
 日付: 2026-09-04 JST
 
 ## 判定

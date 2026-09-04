@@ -1,7 +1,7 @@
 # 次チャット引継ぎ — Luna Memory Brain / Build 295実走後
 
-作成: 2026-09-04 JST  
-決裁: Yuji  
+作成: 2026-09-04 JST
+決裁: Yuji
 用途: 新しいチャットルームから、この長大な会話を読み直さず開発を継続するための正本
 
 ## 1. 最優先の目的
@@ -186,4 +186,3 @@ Yujiは、速いドライバーのデータをLunaへ読み込ませ、自分と
 新しいチャットで次を送れば再開できる。
 
 > `/Users/yuji.s/Desktop/Claude/english-voice-app/review/NEXT_CHAT_HANDOFF_LUNA_MEMORY_BRAIN_20260904.md` を正本として全文確認。まず現在のdirty差分と既存Memory/PDDP/strategy経路を監査し、§4のLe Mans固定入力を使う共通Memory Brainの往路・復路テストから開始して。設計MDの追加だけで終わらず、製品経路の実出力で報告。commit/push/Build/公開は私の別GOまで禁止。
-
