@@ -49,6 +49,28 @@ function addTurn(box, { who, text, at, kind }) {
   return box;
 }
 
+/**
+ * ★2026-09-05 Codex Gate 4 P1-3：本文一致で最後の1件を探す方式では、
+ *   表示してからTTSが始まるまでの間に別の Luna 発話が入ると対象を見失う。
+ *   実走5件が成功したのは**その5件で割込みが無かった**だけで、境界を踏んでいない。
+ *   turn_id で名指しする。存在しなければ何もしない（取り違えて消す方が危険）。
+ */
+function amendTurn(box, turnId, newText) {
+  if (!box || !turnId || !Array.isArray(box.turns)) return false;
+  const t = box.turns.find(x => x.turn_id === String(turnId));
+  if (!t) return false;
+  t.text = str(newText);
+  return true;
+}
+
+function dropTurn(box, turnId) {
+  if (!box || !turnId || !Array.isArray(box.turns)) return false;
+  const i = box.turns.findIndex(x => x.turn_id === String(turnId));
+  if (i < 0) return false;
+  box.turns.splice(i, 1);
+  return true;
+}
+
 /** 反射イベントを timeline へ足す。権威イベント（Bridge由来）かどうかを必ず持つ。 */
 function addReflex(box, { kind, direction, target, at, spoken, authoritative }) {
   if (!box || !kind) return box;
@@ -238,7 +260,7 @@ function buildContext(box, at, opts = {}) {
 }
 
 return {
-  emptyBox, addTurn, addReflex,
+  emptyBox, addTurn, amendTurn, dropTurn, addReflex,
   reflexContext, turnContext, buildContext,
   openDispute, findItem, findOpenByAxis,
   acknowledge, retract, resolve, hold, expire,

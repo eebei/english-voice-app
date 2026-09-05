@@ -43,6 +43,12 @@ function extract(name) {
 //   「自己反省記憶が GAP の質問を飲み込む」回帰を検出できなくなる。
 const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
   'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech',
+  // ★2026-09-05 第4回 Gate 4：終端集約を**本物で**動かす。
+  //   スタブに差し替えると「呼ばれた記録」しか取れず、Overlay・会話Boxまで到達しない。
+  'nextUtteranceId', 'finalizeUtterance', 'discardQueuedUtterances',
+  'pushMsg', 'amendMessageById', 'removeMessageById',
+  'addMsg', 'convoLog', 'recordLunaTurn', 'amendLunaTurnById', 'dropLunaTurnById',
+  'ensureConversationBox', 'saveConversationBox', 'conversationSessionKey',
   'handleLunaSelfMemoryInput', 'lunaSelfMemoryProposalLine',
   'pendingConfirmationKinds', 'bareConfirmationAnswer', 'confirmationClarification']
   .map(extract).join('\n');
@@ -108,7 +114,10 @@ const sandbox = {
   lastTelemetry: snapshot(), lastTelemetryAt: fakeNow,
   lastSessionNum: 2, fuelWindowWatch: null,
   document: { getElementById: () => ({ value: '', style: {} }) },
-  addMsg: () => {}, pushMsg: () => {}, usageCount: () => {},
+  // ★第4回：addMsg は本物を抽出して使う（スタブにすると Overlay・会話Boxへ到達しない）。
+  //   messages / pushMsg は LLM会話履歴の契約を検査するため実体を持たせる。
+  messages: [], MAX_CLIENT_MESSAGES: 40, _msgSeq: 0,
+  usageCount: () => {},
   prepareMemoryBrain: () => null,
   captureConfirmedFuelCapacity: () => {}, maybeQuietMode: () => {},
   answerHistoricalWeatherLocally: () => null,
@@ -143,6 +152,43 @@ const sandbox = {
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
+// ★2026-09-05 第4回：本物の finalizer / addMsg / 会話Box を動かすための最小環境。
+//   Overlay 窓は別プロセスなので、push された行を配列で保持して本文を検査する。
+sandbox._uttSeq = 0;
+sandbox._convoBox = null;
+sandbox.CONVO_BOX_KEY = 'pw_conversation_box_v1';
+sandbox.lastTrack = 'Okayama'; sandbox.lastCarModel = 'Audi R8 LMS GT3';
+sandbox.lastCarClass = 'GT3'; sandbox.lastSessionType = 'Race'; sandbox.lastSessionNum = 2;
+sandbox.currentMemoryUserId = () => 'u1';
+sandbox.__ovl = {};                       // id -> {text, removed}
+sandbox.__ovlSeq = 0;
+sandbox.mirrorToOverlay = (type, text) => {
+  const id = 'L' + (++sandbox.__ovlSeq);
+  sandbox.__ovl[id] = { text, removed: false };
+  return id;
+};
+sandbox.pitwall = {
+  overlayPush: (line) => {
+    if (!line) return;
+    if (line.remove) { if (sandbox.__ovl[line.id]) sandbox.__ovl[line.id].removed = true; return; }
+    if (line.update && sandbox.__ovl[line.id] && typeof line.text === 'string' && line.text) {
+      sandbox.__ovl[line.id].text = line.text;
+    }
+  },
+};
+{
+  const _store = {};
+  sandbox.localStorage = {
+    getItem: k => (k in _store ? _store[k] : null),
+    setItem: (k, v) => { _store[k] = String(v); },
+  };
+  sandbox.__store = _store;
+}
+sandbox.document = {
+  getElementById: () => ({ appendChild(){}, scrollTop:0, scrollHeight:0, classList:{add(){},remove(){},toggle(){}} }),
+  createElement: () => ({ textContent:'', className:'', parentNode:null }),
+  querySelector: () => null,
+};
 vm.createContext(sandbox);
 
 // 本物のモジュールを本番と同じ形（window.*）で読み込む
@@ -151,6 +197,7 @@ function loadModule(file) {
 }
 loadModule('desktop/local-intent-router.js');
 loadModule('desktop/gap-freshness.js');
+loadModule('desktop/conversation-memory-box.js');   // ★第4回：会話Boxを本物で動かす
 vm.runInContext(productionCode, sandbox, { filename: 'renderer.html' });
 
 check('本番の router が読めた', typeof sandbox.window.PitwallLocalIntentRouter.route === 'function');
@@ -164,6 +211,7 @@ function reset() {
   if (sandbox.speakWatchdog) { clearTimeout(sandbox.speakWatchdog); sandbox.speakWatchdog = null; }
   played.length = 0; audioInstances.length = 0; traces.length = 0; ttsResolve = null;
   fakeNow = 1_700_000_000_000;
+  sandbox.messages = [];
   sandbox.lastTelemetry = snapshot(); sandbox.lastTelemetryAt = fakeNow;
   sandbox.pendingLunaSelfMemoryConfirmation = null;
   sandbox.pendingDecisionDispute = null;
@@ -172,7 +220,13 @@ function reset() {
 
 /** ドライバーが喋る（本番 sendMsg を実行する）。 */
 async function ask(text) {
-  sandbox.document = { getElementById: () => ({ value: text, style: {} }) };
+  // ★2026-09-05：addMsg が本物になったので createElement も要る。
+  sandbox.document = {
+    getElementById: () => ({ value: text, style: {},
+      appendChild(){}, scrollTop:0, scrollHeight:0, classList:{add(){},remove(){},toggle(){}} }),
+    createElement: () => ({ textContent:'', className:'', parentNode:null }),
+    querySelector: () => null,
+  };
   await sandbox.sendMsg('ptt');
   await sleep(5);
 }
@@ -453,6 +507,171 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     const F = sandbox.window.PitwallGapFreshness;
     check('回答側と再生側が同じ closed constant',
       F.MAX_AGE_MS === 5000 && /GAP_ANSWER_MAX_AGE_MS = 5000;/.test(routerSrc));
+  }
+
+  // ══ ★2026-09-05 第4回 Gate 4：実 drainQueue の統合replay ══
+  //   Codex 指定：9/4 実走ログに最終TTS本文が無い代わりの必須証拠。
+  //   local router → addMsg → speak → **実 drainQueue** →
+  //   evaluateAnswer → rebuildAnswerText → finalizer → _it.text → TTS raw
+  //   の順序が保たれ、Overlay・会話Box・実際にTTSへ渡った文が一致することを1本で通す。
+  {
+    console.log('\n══ 統合replay：実 drainQueue で回答が rebuild される ══');
+    reset(); spokenTexts.length = 0;
+    sandbox.__ovl = {}; sandbox.__ovlSeq = 0; sandbox._convoBox = null;
+    Object.keys(sandbox.__store).forEach(k => delete sandbox.__store[k]);
+
+    // 先行発話でキューを塞ぎ、回答を待たせる（実走の「queue待ちで陳腐化」を再現）
+    sandbox.speak('先行発話。', { prio: sandbox.SPEAK_PRIO ? sandbox.SPEAK_PRIO.P1_HAZARD : 1,
+      kind: 'reflex' });
+    await sleep(5);
+
+    await ask('後ろとのギャップは？');
+    const answered = sandbox.speakQueue.filter(q => /local_/.test(q.kind || ''));
+    check('統合① 回答が queue に入り uid と表示要素を持つ',
+      answered.length === 1 && !!answered[0].utteranceId && !!answered[0].displayEl,
+      JSON.stringify(answered.map(q => ({ k: q.kind, uid: q.utteranceId, el: !!q.displayEl }))));
+
+    const it = answered[0];
+    const ovlId = it.displayEl && it.displayEl._ovlId;
+    const turnId = it.displayEl && it.displayEl._turnId;
+    const candidateText = it.text;
+    check('統合② 候補が Overlay と会話Box へ出ている',
+      !!ovlId && sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].text === candidateText
+      && !!turnId, `ovl=${ovlId} turn=${turnId}`);
+
+    // 同じ車で値だけ動かして rebuild を起こす（既存テストと同じ作法）。
+    fakeNow += 6000;
+    sandbox.lastTelemetry = snapshot({ gap_behind: 0.6, behind: { gap_s: 0.6 } });
+    sandbox.lastTelemetryAt = fakeNow;
+
+    await finishCurrentUtterance();     // 先行発話を終わらせ、回答を実 drainQueue で処理させる
+    await sleep(15);
+
+    const finalTts = spokenTexts[spokenTexts.length - 1];
+    const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
+    const turnNow = boxNow && (boxNow.turns.find(t => t.turn_id === turnId) || {}).text;
+    const ovlNow = sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].text;
+
+    // ★rebuild が本当に起きたことを先に確かめる。起きていなければ ④ は
+    //   「候補のまま一致した」だけで、rebuild 配線を何も証明しない。
+    const rebuiltTrace = traces.filter(t => /GAP_ANSWER_FRESHNESS fate=rebuild/.test(t));
+    check('統合③ 実 drainQueue で fate=rebuild が起きた', rebuiltTrace.length === 1,
+      JSON.stringify(traces.filter(t => /GAP_ANSWER_FRESHNESS/.test(t))));
+    check('統合③-b 最終本文は候補と別物', finalTts !== candidateText,
+      `cand=${candidateText} final=${finalTts}`);
+    check('統合③-c 実 drainQueue が TTS へ本文を渡した', typeof finalTts === 'string' && !!finalTts,
+      String(finalTts));
+    check('統合④ **Overlay＝会話Box＝TTSへ渡った本文**（同一uid）',
+      !!finalTts && ovlNow === finalTts && turnNow === finalTts,
+      `tts=${finalTts} ovl=${ovlNow} box=${turnNow}`);
+    check('統合⑤ uid が queue item と表示要素で一致',
+      it.utteranceId === it.displayEl._uid, `${it.utteranceId} / ${it.displayEl._uid}`);
+    // ★第4回P1-4：LLM会話履歴に**古いGAP本文**が残ると、次のターンで Luna が
+    //   自分の発言として古い数字を根拠に使う。
+    const msgs = sandbox.messages || [];
+    check('統合⑨ LLM会話履歴に古い候補本文が残らない',
+      !msgs.some(m => m && m.role === 'assistant' && String(m.content) === candidateText),
+      JSON.stringify(msgs.filter(m => m && m.role === 'assistant').map(m => m.content)));
+    check('統合⑩ LLM会話履歴も最終本文になっている',
+      msgs.some(m => m && m.role === 'assistant' && String(m.content) === finalTts),
+      JSON.stringify(msgs.filter(m => m && m.role === 'assistant').map(m => m.content)));
+  }
+
+  // ══ 統合replay：stale discard で消え、次のqueueが進む ══
+  {
+    console.log('\n══ 統合replay：実 drainQueue の stale discard ══');
+    reset(); spokenTexts.length = 0;
+    sandbox.__ovl = {}; sandbox.__ovlSeq = 0; sandbox._convoBox = null;
+    Object.keys(sandbox.__store).forEach(k => delete sandbox.__store[k]);
+
+    sandbox.speak('先行発話。', { prio: 1, kind: 'reflex' });
+    await sleep(5);
+    await ask('後ろとのギャップは？');
+    const it = sandbox.speakQueue.filter(q => /local_/.test(q.kind || ''))[0];
+    const ovlId = it && it.displayEl && it.displayEl._ovlId;
+    const turnId = it && it.displayEl && it.displayEl._turnId;
+
+    // 対象車を入れ替えて discard を起こす（module 側の契約で fate=discard になる）
+    // Date.now() は fakeNow に固定されている。live snapshot を契約(5秒)より古くする。
+    sandbox.lastTelemetryAt = fakeNow - 60000;
+
+    // 後続の発話を1本積んで「次が進む」ことを見る
+    sandbox.speak('後続発話。', { prio: 4, kind: 'info' });
+
+    await finishCurrentUtterance();
+    await sleep(15);
+
+    const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
+    const turnGone = !boxNow || !boxNow.turns.some(t => t.turn_id === turnId);
+    check('統合⑥ stale discard で Overlay から消える',
+      !!ovlId && sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].removed === true,
+      JSON.stringify(sandbox.__ovl[ovlId]));
+    check('統合⑦ stale discard で会話Boxからも消える', turnGone,
+      JSON.stringify(boxNow && boxNow.turns.map(t => t.turn_id)));
+    const msgsD = sandbox.messages || [];
+    check('統合⑧-b discard された回答は LLM会話履歴からも消える',
+      !msgsD.some(m => m && m.role === 'assistant' && /後ろ/.test(String(m.content))),
+      JSON.stringify(msgsD.filter(m => m && m.role === 'assistant').map(m => m.content)));
+    check('統合⑧ discard 後も次のqueueが進む',
+      spokenTexts.some(t => /後続発話/.test(t)) || sandbox.speakQueue.length === 0,
+      JSON.stringify(spokenTexts));
+  }
+
+  // ══ ★第5回P1：LLM履歴を本文一致で触らない（別発話を巻き込まない）══
+  //   Codex 反例：無線は pushMsg しない。それが drop された時、同文の
+  //   **既存 assistant 発話**を消してはならない。
+  {
+    console.log('\n══ 第5回P1：同文の別発話を巻き込まない ══');
+    reset(); resetSpoken();
+
+    // ① 既存の assistant 履歴（別経路で積まれたもの）
+    sandbox.pushMsg({ role: 'assistant', content: '右に車。' });
+    const beforeLen = sandbox.messages.length;
+
+    // ② 無線（injectRadio 相当）は履歴へ積まない。同じ本文で queue 化して drop する。
+    const el = sandbox.addMsg('ai', '右に車。', { uid: sandbox.nextUtteranceId() });
+    const radioItem = { text: '右に車。', kind: 'reflex', displayEl: el };   // messageId 無し
+    sandbox.finalizeUtterance(radioItem, 'dropped', null, 'voice_off');
+
+    check('P1① 履歴を積んでいない無線の drop で既存履歴が消えない',
+      sandbox.messages.length === beforeLen
+      && sandbox.messages.some(m => m.role === 'assistant' && m.content === '右に車。'),
+      JSON.stringify(sandbox.messages.map(m => m.content)));
+
+    // ③ queue待ち中に同文の assistant 発話が後から入っても、
+    //    古い local GAP item は**自分の履歴だけ**を直す。
+    reset(); resetSpoken();
+    const elG = sandbox.addMsg('ai', '後ろ3.8秒。', { uid: sandbox.nextUtteranceId() });
+    const midG = sandbox.pushMsg({ role: 'assistant', content: '後ろ3.8秒。' });
+    const laterMid = sandbox.pushMsg({ role: 'assistant', content: '後ろ3.8秒。' });  // 同文の別発話
+    const gapItem = { text: '後ろ3.8秒。', kind: 'local_nearest_gap',
+                      displayEl: elG, messageId: midG };
+    sandbox.finalizeUtterance(gapItem, 'rebuilt', '後ろ0.6秒。');
+
+    const own = sandbox.messages.find(m => m._mid === midG);
+    const other = sandbox.messages.find(m => m._mid === laterMid);
+    check('P1② rebuild は自分の履歴だけを直す',
+      own && own.content === '後ろ0.6秒。', JSON.stringify(own));
+    check('P1③ 同文の別発話は触らない',
+      other && other.content === '後ろ3.8秒。', JSON.stringify(other));
+
+    // ④ drop も同じ
+    const gapItem2 = { text: '後ろ0.6秒。', kind: 'local_nearest_gap',
+                       displayEl: elG, messageId: midG };
+    sandbox.finalizeUtterance(gapItem2, 'dropped', null, 'gap_answer_stale');
+    check('P1④ drop も自分の履歴だけを消す',
+      !sandbox.messages.some(m => m._mid === midG)
+      && sandbox.messages.some(m => m._mid === laterMid),
+      JSON.stringify(sandbox.messages.map(m => ({ id: m._mid, c: m.content }))));
+
+    // ⑤ local intent 出口が実際に messageId を渡しているか（配線）
+    const _rsrc = fs.readFileSync(path.join(ROOT, 'desktop/renderer.html'), 'utf8');
+    check('P1⑤ local intent 出口が messageId を speak へ渡す',
+      /const _ansMsgId = pushMsg\(\{role:'assistant',content:reply\}\);/.test(_rsrc)
+      && /messageId:_ansMsgId,/.test(_rsrc));
+    check('P1⑥ finalizer は messageId が無ければ messages を触らない',
+      /if\(item\.messageId\) removeMessageById\(item\.messageId\);/.test(_rsrc)
+      && /if\(item\.messageId\) amendMessageById\(item\.messageId, finalText\);/.test(_rsrc));
   }
 
   console.log(`\nGap answer queue: ${pass}/${pass + fail}`);

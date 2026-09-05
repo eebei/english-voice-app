@@ -93,6 +93,11 @@ function makeSandbox({ fetchImpl, AudioImpl, webSpeechImpl, voiceLang = 'ja-JP',
         state.webSpeechCalls.push(utt);
         // WebSpeech本体の挙動をテストが指定可能
         if (webSpeechImpl && webSpeechImpl.throwOnSpeak) throw new Error(webSpeechImpl.throwOnSpeak);
+        // ★2026-09-05：実際の WebSpeech は speak() の後 onstart で再生が始まる。
+        //   reportSpoke は**開始してから**呼ぶ契約になったので、ここで onstart を模す。
+        //   onerror を指定したケースでは onstart を発火させない＝一度も音が出ていない。
+        if (!(webSpeechImpl && (webSpeechImpl.fireOnError || webSpeechImpl.suppressOnStart))
+            && utt.onstart) utt.onstart();
         setTimeout(() => {
           if (webSpeechImpl && webSpeechImpl.fireOnError) {
             if (utt.onerror) utt.onerror({ error: webSpeechImpl.fireOnError });
@@ -107,6 +112,18 @@ function makeSandbox({ fetchImpl, AudioImpl, webSpeechImpl, voiceLang = 'ja-JP',
   sandbox.window = sandbox;
   // onUtteranceDoneが元々グローバル依存なので、呼び出し回数を数える差し替え関数を注入
   sandbox._testOrigOnUtteranceDone = null;   // 抽出関数で上書きされる
+  // ★2026-09-05：発話の終端集約（utterance_id／finalizer）を製品へ入れたため、
+  // 抽出実行するハーネスにも同じ記号を置く。ここでの finalizer は
+  // 「呼ばれたことを記録するだけ」で、契約は tests-gap-display-sync.js が持つ。
+  sandbox._uttSeq = 0;
+  sandbox.nextUtteranceId = () => 'u' + (++sandbox._uttSeq);
+  sandbox.__finalized = [];
+  sandbox.finalizeUtterance = (item, outcome, finalText, reason) => {
+    sandbox.__finalized.push({ uid: item && item.utteranceId, outcome, reason });
+  };
+  sandbox.discardQueuedUtterances = (items, reason) => {
+    (items || []).forEach(i => sandbox.finalizeUtterance(i, 'dropped', null, reason));
+  };
   vm.createContext(sandbox);
   vm.runInContext(parts, sandbox);
   // 抽出でloadされたonUtteranceDoneをラップして呼び出し回数を数える

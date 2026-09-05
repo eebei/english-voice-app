@@ -2,6 +2,24 @@
 
 最終更新: 2026-09-05 JST
 
+## Build 297事後Gate 4（Codex独立確認）
+
+**第7回Gate 4は合格。** Claudeの第6回対応で内部`_mid`を非列挙化し、client送信境界とserver stream/non-streamの両方を`role/content`へsanitize。Codex独立実行でcallAPI 26/26、GAP answer 68/68、GAP display 60/60、非同期割込み18/18、TTS失敗51/51、server構文、diff checkが合格した。PTT GAPの実`drainQueue` rebuild/drop、Overlay＝会話Box＝TTS raw、同文履歴分離、非再生終端を確認済み。未commitのためYujiのcommit GO待ち。commit後はSHA固定、private artifact Gate 5、Windows Gate 6、`server.js`変更のRailway Gate 7、iRacing Gate 8が必要。Build／公開は別GOまで不可。P2（永続uid、再翻訳、open_items参照整合、途中中断heard契約）は次スライスへ。
+
+Claudeの第5回対応で本文一致の履歴取り違えはstable message IDにより閉じ、Codex独立実行もGAP answer 68/68等に合格。ただし**第6回Gate 4はP1 1件で不合格**。`pushMsg()`が列挙可能な`_mid`をmessageへ付け、`callAPI()`→server→Anthropic `messages.create()`へsanitize無しで送るため、未知フィールドでChat API全体がvalidation失敗し得る。内部IDを外部payloadから除外し、実callAPI送信キー検査と変異を追加する。詳細は共有ログ末尾。未commit、Build・公開不可。
+
+Claudeの第4回対応により、必須synthetic replayは実`drainQueue`まで通り、Codex独立実行でもGAP answer 62/62等に合格。ただし**第5回Gate 4はP1 1件で不合格**。新しいLLM履歴同期が`messages`を本文一致で検索して全発話へ無条件適用されるため、履歴へ追加しないradioのdropでも、同文の別assistant履歴を削除できる。local intentが追加した特定messageのstable ID／参照をqueue itemへ渡し、その対象だけを更新／削除する必要がある。同文割込み反例と変異を追加後、再確認。詳細は共有ログ末尾。未commit、Build・公開不可。
+
+Claudeの第3回差戻し対応で、PTT GAP回答のuid/displayEl受渡し、answer finalizer、製品trace uid、mode-switch終端はコード上修正された。ただし**第4回Gate 4はP1証拠未達で保留**。60/60のPTT検査は`addMsg→speak`後、rebuild/discardをfinalizer直接呼出しで確認しており、実`drainQueue→evaluateAnswer→TTS raw`を通していない。9/4最終TTS本文が無い代替として、このsynthetic integration replayは必須。またrebuild後の`pushMsg`会話履歴には古いGAP候補が残るため、後続回答等へ再利用されない契約の確認が必要。詳細は共有ログ末尾。未commit、Build・公開不可。
+
+Claudeの第2回差戻し対応をCodexが再確認したが、**第3回Gate 4もP1不合格**。duplicate／TTS失敗等の個別配線は改善した一方、PTT local GAP回答は`addMsg()`の要素を捨てて`speak()`へ`displayEl/utteranceId`を渡さず、回答側discard/rebuildもfinalizerを呼ばない。このためYuji報告の中心であるGAP音声とOverlay／会話記憶の不一致が残る。製品`SPEECH_LATENCY`にもuidが無く、テストstubだけがuid traceを生成している。mode切替filterによる未終端除去も残存。詳細と次回受入条件は共有ログ末尾。未commitを維持し、Build・公開不可。
+
+Claudeの第1回差戻し修正（未commit）をCodexが再確認したが、**第2回Gate 4もP1で不合格**。31/31等の新テストは緑だが、finalizerをhelperとして直接呼ぶ試験が中心で、製品のduplicate、`reportSpoke`、非emergency TTS失敗、defer cap／現在発話割込みから終端処理へ未接続。単一stable `utterance_id`もcandidate→queue→Overlay→memory→`play_started`を貫いていない。元実走の最終TTS本文が無い代替は、helper試験ではなく実製品分岐を通すsynthetic replayなら再判定する。詳細と受入条件は共有ログ末尾。未commitを維持し、Build・公開不可。
+
+公開中Build 297／SHA `18668a95a54f4e34bbd9c10f1dc9ca36293dac10` の表示・音声同期修正は、対象テスト22/22等の回帰には合格したが、Codex事後Gate 4は**P1 3件で不合格**。異言語Overlayで旧翻訳が残る競合、GAP freshness以外の非再生出口で表示・会話記憶が残る問題、本文一致＋直近turn依存で割込み時に旧会話記憶が残る問題がある。現テストは実`drainQueue`→`play_started`を通していない。
+
+実走の追加問題は、製品発話経路の`'八木さん'`リテラル、GAP conflict 14,190件のsource情報欠落と未集約、停止車両判定のreject理由欠落。次はClaudeが「実名修正＋実行コード限定検査 → GAP source/集約診断 → 停止車両状態/reject診断」を行い、表示同期P1も閉じて新SHAを回覧する。Codexが保存ログreplayと5境界を再確認するまでBuild／公開不可。詳細は共有ログ末尾。
+
 ## 現在地（2026-09-05・Luna Memory Brain 最初の完成スライス）
 
 `review/NEXT_CHAT_HANDOFF_LUNA_MEMORY_BRAIN_20260904.md` を正本として、全ドライバー入力が
@@ -516,3 +534,13 @@ Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加
 - 詳細指示は `review/PITWALL_SHARED_WORKING_LOG.md` の「2026-09-05 07:07 JST」、走行項目は `review/RACE_CHECKLIST_BUILD296_20260905.md` を参照。
 - Build／公開は別GO。まずBuild 296実走ログを解析する。
 - 追加申告: 9/4実走で自発GAPの音声とOverlayの数字が頻繁に不一致、数字も固定的に感じた。コード上、Overlay表示後にTTSキュー内だけGAP本文をrebuildしており表示へ反映しない欠陥を確認。最終TTS本文もログへ残らず個別照合不能。Build 297要件として同一発話IDで候補・Overlay・最終TTSを記録／一致させる。詳細は共有ログ末尾。
+
+# 2026-09-05 Founder scope lock — minimum real AI Engineer
+
+- 次の完成区間を **安全コール（反射）／GAP／燃料・ピットウィンドーの確認返答** に固定する。新しい広域機能を増やす指示ではない。
+- 目的はスポッター化ではない。創業者の最終目標は変わらず、**リアルの担当エンジニアが行う動きをAIで再現すること**。この3領域を、事実取得から判断・発話・Plan維持・変化時の再判断まで貫通させる最初の縦切りとする。
+- 反射層は決定論的・即時。GAP／燃料／ピット計算は権威値を決定論的に作る。AI Engineer層は数字を維持し、重要な証拠を選び、合意Planを保持し、状況変化がPlanへ与える影響だけを短く伝える。
+- 実装順は `確認返答の成立 -> 合意Planの継続 -> 状況変化検出 -> Plan影響コール -> 複数案比較`。セットアップ全般、動画比較、レース全体戦略への拡張は、この縦切りの実走合格後。
+- 第一完成条件は、安全割込み、正しい対象・値のGAP回答、燃料／ピットウィンドー回答、Plan合意、後続ターンでのPlan維持、変化時のみの理由付き更新、最終実音声＝Overlay＝会話記憶の一致。
+- 外部テスター2名は一時休止。現段階の検証費を使わず、まずYuji本人の実走で信頼性を上げる。復帰時期は別途Founder判断。
+- 詳細: `review/FOUNDER_SCOPE_LOCK_MINIMUM_REAL_AI_ENGINEER_20260905.md`。

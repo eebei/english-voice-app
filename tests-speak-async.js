@@ -83,6 +83,18 @@ const sandbox = {
   SpeechSynthesisUtterance: class { constructor(t){ this.text = t; } },
 };
 sandbox.window = sandbox;
+// ★2026-09-05：発話の終端集約（utterance_id／finalizer）を製品へ入れたため、
+// 抽出実行するハーネスにも同じ記号を置く。ここでの finalizer は
+// 「呼ばれたことを記録するだけ」で、契約は tests-gap-display-sync.js が持つ。
+sandbox._uttSeq = 0;
+sandbox.nextUtteranceId = () => 'u' + (++sandbox._uttSeq);
+sandbox.__finalized = [];
+sandbox.finalizeUtterance = (item, outcome, finalText, reason) => {
+  sandbox.__finalized.push({ uid: item && item.utteranceId, outcome, reason });
+};
+sandbox.discardQueuedUtterances = (items, reason) => {
+  (items || []).forEach(i => sandbox.finalizeUtterance(i, 'dropped', null, reason));
+};
 vm.createContext(sandbox);
 vm.runInContext(parts, sandbox);
 

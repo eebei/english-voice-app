@@ -1325,9 +1325,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           }
         }
       };
+      // ★2026-09-05 Codex 第6回P1：クライアントが内部管理項目を混ぜても
+      //   Anthropic の messages schema へ渡さない。role/content だけへ絞る。
+      //   （クライアント側でも絞っているが、古い版・別実装からの流入を防ぐ）
+      const safeMessages = (Array.isArray(messages) ? messages : [])
+        .map(m => ({ role: m && m.role, content: m && m.content }));
       try {
         const stream = await client.messages.create({
-          model, max_tokens: safeMaxTokens, system, messages, stream: true,
+          model, max_tokens: safeMaxTokens, system, messages: safeMessages, stream: true,
         });
         for await (const event of stream) {
           if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta') {
@@ -1356,7 +1361,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       model,
       max_tokens: safeMaxTokens,
       system,
-      messages,
+      // ★第6回P1：非stream経路も同じ契約で絞る。
+      messages: (Array.isArray(messages) ? messages : [])
+        .map(m => ({ role: m && m.role, content: m && m.content })),
     });
 
     logUsage(response.usage);

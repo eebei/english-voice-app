@@ -114,7 +114,17 @@ function makeContext(chunks, options = {}) {
     buildRaceHistoryContext: () => '', buildNamedRivalNote: () => '',
     hasTelemetryOwnedVehicleClaim: () => false,
     normalizeLunaSpeech: (t) => t,
-    speak: (t) => { spoken.push(t); }, pushMsg(){},
+    speak: (t) => { spoken.push(t); },
+    // ★2026-09-05 第6回P1：内部IDが**実際に付いた履歴**を送信させないと反証にならない。
+    //   本番と同じく非列挙で `_mid` を付ける。
+    _msgSeq: 0,
+    pushMsg(m){
+      if(m && typeof m==='object' && !m._mid){
+        Object.defineProperty(m,'_mid',{value:'m'+(++ctx._msgSeq),
+          enumerable:false, writable:true, configurable:true});
+      }
+      ctx.messages.push(m); return m && m._mid ? m._mid : null;
+    },
     // 会話状態
     sel: 'LunaJP', selMode: 'race', userName: 'Yuji', messages: [],
     turns: 0, sessionMsgCount: 0, isBusy: false,
@@ -235,6 +245,70 @@ if (ranOk) {
         brainCtx._spoken.join('').includes('P10からP8')&&brainCtx._spoken.join('').includes('判断は正しかった'),brainCtx._spoken);
       check('実回答全文がMemory Brain復路へ再保存される',
         brainCtx._brainCompleted.length===1&&brainCtx._brainCompleted[0]===reply,brainCtx._brainCompleted);
+    }
+
+    // ══ ★2026-09-05 Codex 第6回P1：送信payloadに内部IDを漏らさない ══
+    //   `_mid` は内部管理用で、Anthropic の messages schema は role/content のみ。
+    //   列挙可能なまま持つと `JSON.stringify(chatBody)` で外部APIまで届く。
+    {
+      console.log('\n══ 送信payload：内部IDを外部APIへ出さない ══');
+      // ★履歴が空だと「キーが正しい」が空配列で通ってしまう。
+      //   内部IDの付いた履歴を実際に積んでから、実 callAPI() で送らせる。
+      ctx.pushMsg({ role:'user', content:'後ろとのギャップは？' });
+      ctx.pushMsg({ role:'assistant', content:'後ろ3.8秒。' });
+      ctx._requests.length = 0;
+      await ctx.callAPI('ptt');
+
+      const sent = (ctx._requests || []).filter(r => r && Array.isArray(r.messages));
+      check('送信payloadを捕捉できた', sent.length > 0, String(sent.length));
+      const allMsgs = sent.flatMap(r => r.messages);
+      check('送信メッセージが1件以上ある', allMsgs.length > 0, String(allMsgs.length));
+
+      const ALLOWED = new Set(['role','content']);
+      const badKeys = [];
+      for (const m of allMsgs) {
+        for (const k of Object.keys(m || {})) if (!ALLOWED.has(k)) badKeys.push(k);
+      }
+      check('★送信メッセージのキーが role/content だけ', badKeys.length === 0,
+        JSON.stringify([...new Set(badKeys)]));
+      check('★内部ID `_mid` が送信payloadに0件',
+        !JSON.stringify(sent).includes('_mid'),
+        JSON.stringify(sent).slice(0, 200));
+
+      // 内部では ID が生きていること（外部から消しても機能が壊れていない）
+      // ★多層防御は end-to-end 検査だけでは**片方を外しても緑**になる。
+      //   Codex 受入条件④（配線を一つ外すと赤）を満たすため、各層を個別に固定する。
+      const rsrc = fs.readFileSync(path.join(__dirname, 'desktop', 'renderer.html'), 'utf8');
+      // 層A：`_mid` は非列挙で持つ
+      // 本番の pushMsg を renderer から取り出して、この1件だけで層Aを固定する。
+      //   （ハーネスの pushMsg は模造なので、それを見ても製品の契約にならない）
+      const _pushSrc = (fs.readFileSync(path.join(__dirname,'desktop','renderer.html'),'utf8')
+        .match(/function pushMsg\(m\)\{[\s\S]*?\n\}/) || [''])[0];
+      const _probeCtx = { messages: [], MAX_CLIENT_MESSAGES: 40, _msgSeq: 0, Object };
+      _probeCtx.globalThis = _probeCtx;
+      vm.createContext(_probeCtx);
+      vm.runInContext(_pushSrc + '\nthis.pushMsg = pushMsg;', _probeCtx);
+      const probe = { role:'user', content:'x' };
+      _probeCtx.pushMsg(probe);
+      const desc = Object.getOwnPropertyDescriptor(probe, '_mid');
+      check('層A：内部IDは非列挙プロパティ', !!desc && desc.enumerable === false,
+        JSON.stringify(desc));
+      // 層B：送信境界が role/content だけへ絞る
+      check('層B：送信境界に明示のホワイトリストがある',
+        /const outboundMessages = \(Array\.isArray\(messages\)\?messages:\[\]\)\s*\n\s*\.map\(m => \(\{ role:m\.role, content:m\.content \}\)\);/.test(rsrc)
+        && /messages: outboundMessages,/.test(rsrc));
+      // 層C：サーバー側も同じ契約で絞る
+      const ssrc = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+      check('層C：サーバーも role/content だけへ絞る',
+        /messages: safeMessages/.test(ssrc)
+        && /\.map\(m => \(\{ role: m && m\.role, content: m && m\.content \}\)\)/.test(ssrc));
+
+      const withMid = (ctx.messages || []).filter(m => m && m._mid);
+      check('内部では message ID が保持されている', withMid.length > 0,
+        String((ctx.messages||[]).length));
+      check('内部IDは列挙されない（JSON化しても出ない）',
+        (ctx.messages||[]).every(m => !JSON.stringify(m).includes('_mid')),
+        JSON.stringify(ctx.messages||[]).slice(0,160));
     }
 
     console.log(`\n[callAPI stream memory] 合格 ${pass} / 不合格 ${fail}`);

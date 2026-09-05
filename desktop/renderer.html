@@ -1102,10 +1102,13 @@ function saveConversationBox(box){
   try{ localStorage.setItem(CONVO_BOX_KEY,JSON.stringify(box)); }catch(_){}
 }
 function recordLunaTurn(text,kind){
-  const B=window.PitwallConversationMemoryBox; if(!B) return;
-  const box=ensureConversationBox(); if(!box) return;
+  const B=window.PitwallConversationMemoryBox; if(!B) return null;
+  const box=ensureConversationBox(); if(!box) return null;
   B.addTurn(box,{who:'luna',text:String(text||''),at:Date.now(),kind:kind||null});
   saveConversationBox(box);
+  // ★2026-09-05 Codex P1-3：後で名指しできるよう turn_id を返す。
+  const _last=box.turns[box.turns.length-1];
+  return _last?_last.turn_id:null;
 }
 // ★2026-09-05：Luna が言っていない文を「Luna の発話」として残さない。
 //
@@ -1120,27 +1123,89 @@ function recordLunaTurn(text,kind){
 //
 //   どちらのヘルパーも **原文が一致した時だけ**触る。間に別の発話が入っていたら
 //   何もしない（取り違えて消す方が危険）。
-function amendLastLunaTurn(expectText,newText){
-  const B=window.PitwallConversationMemoryBox; if(!B) return false;
-  const box=ensureConversationBox(); if(!box||!Array.isArray(box.turns)) return false;
-  for(let i=box.turns.length-1;i>=0;i--){
-    if(box.turns[i].who!=='luna') continue;
-    if(String(box.turns[i].text)!==String(expectText)) return false;
-    box.turns[i].text=String(newText||'');
-    saveConversationBox(box); return true;
-  }
-  return false;
+function amendLunaTurnById(turnId,newText){
+  const B=window.PitwallConversationMemoryBox; if(!B||!turnId) return false;
+  const box=ensureConversationBox(); if(!box) return false;
+  const ok=B.amendTurn(box,turnId,newText);
+  if(ok) saveConversationBox(box);
+  return ok;
 }
-function dropLastLunaTurn(expectText){
-  const B=window.PitwallConversationMemoryBox; if(!B) return false;
-  const box=ensureConversationBox(); if(!box||!Array.isArray(box.turns)) return false;
-  for(let i=box.turns.length-1;i>=0;i--){
-    if(box.turns[i].who!=='luna') continue;
-    if(String(box.turns[i].text)!==String(expectText)) return false;
-    box.turns.splice(i,1);
-    saveConversationBox(box); return true;
+function dropLunaTurnById(turnId){
+  const B=window.PitwallConversationMemoryBox; if(!B||!turnId) return false;
+  const box=ensureConversationBox(); if(!box) return false;
+  const ok=B.dropTurn(box,turnId);
+  if(ok) saveConversationBox(box);
+  return ok;
+}
+
+// ★2026-09-05 Codex Gate 4 P1-2：**非再生の出口は drainQueue の discard だけではない**。
+//   session終了・voice off のキュー全消去、dedupe/overflow の splice、キャラ未選択、
+//   TTS と WebSpeech が両方失敗する経路がある。そこを通ると「耳では聞いていない発話」が
+//   Overlay と会話Box に残る。**出口を一つに集約する。**
+// ★2026-09-05 Codex 第2回 Gate 4：candidate → queue → Overlay行 → 会話turn →
+//   play_started → final trace を**同じIDで貫く**。DOM要素と本文一致で「同一発話」と
+//   数えていたのが差戻し理由。
+let _uttSeq = 0;
+function nextUtteranceId(){ return 'u'+(++_uttSeq); }
+
+function amendMessageById(mid, newText){
+  if(!mid || typeof messages==='undefined' || !Array.isArray(messages)) return false;
+  const m = messages.find(x => x && x._mid === mid);
+  if(!m) return false;                 // 既に窓から溢れて消えていれば何もしない
+  m.content = String(newText||'');
+  return true;
+}
+function removeMessageById(mid){
+  if(!mid || typeof messages==='undefined' || !Array.isArray(messages)) return false;
+  const i = messages.findIndex(x => x && x._mid === mid);
+  if(i < 0) return false;
+  messages.splice(i,1);
+  return true;
+}
+
+function finalizeUtterance(item, outcome, finalText, reason){
+  if(!item) return;
+  // ★終端は 'spoken' と 'dropped' のみ。'rebuilt' はまだキューに居るので終端にしない。
+  //   rebuilt を終端にすると「作り替えた後にキューが消えた」時に drop を阻止してしまい、
+  //   耳で聞いていない文が記憶に残る（P1-2 と同じ穴を自分で作ることになる）。
+  if(item._finalized==='spoken'||item._finalized==='dropped') return;
+  item._finalized = outcome;
+  const el = item.displayEl || null;
+  const _uid = item.utteranceId || (el && el._uid) || null;
+  if(outcome === 'dropped'){
+    // ★第4回P1-4／第5回P1：一度も喋っていないので LLM履歴からも外す。
+    //   **自分が pushMsg した1件だけ**を ID で名指す。ID が無い item
+    //   （無線＝そもそも履歴へ積んでいない）は messages を一切触らない。
+    if(item.messageId) removeMessageById(item.messageId);
+    if(el && el.parentNode) el.parentNode.removeChild(el);
+    if(el && el._ovlId && window.pitwall) window.pitwall.overlayPush({ remove:true, id:el._ovlId });
+    const _dropped = (el && el._turnId) ? dropLunaTurnById(el._turnId) : false;
+    diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome=dropped reason='+(reason||'?')
+      +' kind='+(item.kind||'?')+' dropped_turn='+_dropped
+      +' text='+JSON.stringify(String(item.text||'').slice(0,60)));
+    return;
   }
-  return false;
+  if(outcome === 'rebuilt'){
+    if(el) el.textContent = finalText;
+    // ★第4回P1-4／第5回P1：履歴が候補のままだと次のターンで Luna が
+    //   **古いGAPを自分の発言として根拠に使う**。自分の1件だけを ID で直す。
+    if(item.messageId) amendMessageById(item.messageId, finalText);
+    // ★P1-1：原文だけ差し替えると、先に届いた**古い訳**が表示され続ける
+    //   （overlay の textFor は訳を原文より優先する）。訳も同時に無効化する。
+    if(el && el._ovlId && window.pitwall)
+      window.pitwall.overlayPush({ update:true, id:el._ovlId, text:finalText, tr:'', trLang:'' });
+    const _amended = (el && el._turnId) ? amendLunaTurnById(el._turnId, finalText) : false;
+    diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome=rebuilt amended_turn='+_amended
+      +' text='+JSON.stringify(finalText)+' was='+JSON.stringify(String(item.text||'')));
+    return;
+  }
+  diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome='+outcome+' kind='+(item.kind||'?')
+    +' turn='+((el&&el._turnId)||'-')+' ovl='+((el&&el._ovlId)||'-'));
+}
+// キューから未再生のまま取り除く時は必ずここを通す。
+function discardQueuedUtterances(items, reason){
+  if(!Array.isArray(items)) return;
+  for(const _q of items) finalizeUtterance(_q,'dropped',null,reason);
 }
 function recordReflexEvent(ev){
   const B=window.PitwallConversationMemoryBox; if(!B||!ev) return;
@@ -1150,9 +1215,23 @@ function recordReflexEvent(ev){
     at:Date.now(),spoken:true,authoritative:ev.source==='bridge_telemetry'});
   saveConversationBox(box);
 }
+// ★2026-09-05 Codex 第5回P1：LLM履歴を**本文一致で**探して直していた。
+//   会話Boxから排除したはずの欠陥を messages 側へ再導入していた。
+//   さらに `injectRadio()` は pushMsg しないので、無線が drop されると
+//   **無関係な既存 assistant 発話**（同じ「右に車。」など）を消し得た。
+//   安定IDを付け、**自分が積んだ1件だけ**を名指しする。
+let _msgSeq = 0;
 function pushMsg(m){
+  // ★2026-09-05 Codex 第6回P1：`_mid` は**内部管理用**であり外部APIの契約項目ではない。
+  //   通常代入すると列挙可能になり `JSON.stringify(chatBody)` に載って
+  //   Anthropic の messages schema へ未知フィールドとして届く。非列挙で持つ。
+  if(m && typeof m === 'object' && !m._mid){
+    Object.defineProperty(m, '_mid', {
+      value:'m'+(++_msgSeq), enumerable:false, writable:true, configurable:true });
+  }
   messages.push(m);
   if(messages.length > MAX_CLIENT_MESSAGES) messages.splice(0, messages.length - MAX_CLIENT_MESSAGES);
+  return m && m._mid ? m._mid : null;
 }
 let recognition = null, isRecording = false, voiceOn = true, isBusy = false;
 let sessionActive = false;
@@ -2031,7 +2110,10 @@ function switchMode(newMode){
     if(!jamesMuted) setTimeout(startAutoMic, 400);   // 自動ラップ読み上げ＋常時マイク
   } else {
     // モード遷移前の古い通常会話・戦略は流さない。P0/P1安全無線と期限付きピット手順だけ保持。
-    speakQueue=speakQueue.filter(q=>q && (q.prio<=SPEAK_PRIO.P1_HAZARD || q.immediate===true));
+    // ★第3回P1-4：filter で落とした分も「耳に届いていない」。終端へ渡す。
+    const _keep=q=>q && (q.prio<=SPEAK_PRIO.P1_HAZARD || q.immediate===true);
+    discardQueuedUtterances(speakQueue.filter(q=>!_keep(q)),'mode_switch');
+    speakQueue=speakQueue.filter(_keep);
     speakGateActive=false; speakWindowOk=true;
     if(isSpeaking && currentSpeakPrio>SPEAK_PRIO.P1_HAZARD) stopCurrentAudio();
     else drainQueue();
@@ -2051,13 +2133,14 @@ function endSession(){
   disconnectBridge();
   jamesAutoMicEnabled=false;
   if(recognition){ try{recognition.stop();}catch(e){} }
+  discardQueuedUtterances(speakQueue,'session_end');   // ★P1-2
   speakQueue=[]; stopCurrentAudio();
   sessionActive=false;
   showScreen('screen-select');
 }
 
 // ── Messages ──
-function addMsg(type, text){
+function addMsg(type, text, opts){
   const area = document.getElementById('chat-area');
   const div = document.createElement('div');
   div.className = 'msg '+type;
@@ -2066,6 +2149,7 @@ function addMsg(type, text){
   area.scrollTop = area.scrollHeight;
   // ★2026-09-05：Overlay の行IDを要素へ結びつける。TTS直前に本文が確定した時、
   //   チャット欄だけでなく **走行中に実際に見ている Overlay** も同じ行を更新できる。
+  if(opts && opts.uid) div._uid = opts.uid;     // ★同一発話IDを表示要素にも持たせる
   if(text) div._ovlId = convoLog(type, text) || null;   // 空吹き出し(ストリーミング初期)はログしない
   // ★2026-09-03 Codex差戻し②：`recordLunaTurn()` を定義しただけで
   //   **41箇所ある addMsg('ai',…) のどこからも呼んでいなかった**。
@@ -2073,7 +2157,8 @@ function addMsg(type, text){
   //   `lunaTurns` が空になり、**検出が本番で一度も成立しない**。
   //   個別に41箇所へ足すと必ず足し忘れるので、出口である addMsg で一度だけ捕まえる。
   //   （ドライバー側は PTT 経路で既に addTurn 済みなので二重に積まない）
-  if(text && type==='ai' && typeof recordLunaTurn==='function') recordLunaTurn(text, null);
+  // ★2026-09-05 P1-3：turn_id を要素へ持たせ、後で名指しで訂正・取消できるようにする。
+  if(text && type==='ai' && typeof recordLunaTurn==='function') div._turnId = recordLunaTurn(text, null);
   if(text && type==='ai' && typeof completeMemoryBrainTurn==='function') completeMemoryBrainTurn(text);
   return div;   // ストリーミングで中身を更新できるよう要素を返す
 }
@@ -2187,8 +2272,11 @@ function mirrorToOverlay(type, text){
   var _ovlIdForCaller = id;
   // 表示言語と違う言語の行だけ、あとから訳を差し込む（同言語なら翻訳しない＝コスト/遅延ゼロ）
   if(lang !== ovlLang){
+    // ★Codex Gate 4 P1-1：翻訳は非同期。この行の本文が rebuild で差し替わっていたら、
+    //   遅れて届いた**候補文の訳**を載せてはいけない。世代番号で弾く。
+    const _genAtRequest = 0;   // push 直後は必ず世代0
     translateLine(clean, ovlLang).then(tr=>{
-      if(tr) window.pitwall.overlayPush({ update:true, id, tr, trLang:ovlLang });
+      if(tr) window.pitwall.overlayPush({ update:true, id, tr, trLang:ovlLang, gen:_genAtRequest });
     });
   }
   return _ovlIdForCaller;
@@ -2503,11 +2591,15 @@ async function sendMsg(inputSource){
       fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
       diagnosticLog('FUEL_WINDOW_WATCH','armed session='+fuelWindowWatch.sessionKey);
     }
-    addMsg('ai',reply);
-    pushMsg({role:'assistant',content:reply});
+    // ★第3回P1-1：**Yuji が報告した経路はこちら（PTTで尋ねた時のGAP）**。
+    //   戻り値を捨てていたため、rebuild/discard しても Overlay と会話Box を直せなかった。
+    const _ansUid = nextUtteranceId();
+    const _ansEl = addMsg('ai',reply,{uid:_ansUid});
+    const _ansMsgId = pushMsg({role:'assistant',content:reply});
     // ★G5：GAP の回答は queue 待ちで陳腐化する。どの方向の・どの車の値を述べたのかを
     //   一緒に queue へ渡し、TTS 開始直前に現在値と照合する（Codex Build 284 P1）。
     speak(reply,{prio:localPriority,kind:'local_'+localIntent.intent,
+      displayEl:_ansEl, utteranceId:_ansUid, messageId:_ansMsgId,
       dedupeKey:'local|'+localIntent.intent+'|'+reply,
       gapIdentities:(Array.isArray(localIntent.gapIdentities)&&localIntent.gapIdentities.length)
         ?localIntent.gapIdentities:null});
@@ -2843,8 +2935,13 @@ async function callAPI(inputSource, memoryStatus=''){
     // 会員チェック(is_member)を実際に働かせる。
     const authToken = localStorage.getItem('pw_auth_token');
     const chatHeaders = {'Content-Type':'application/json'};
+    // ★第6回P1：外部APIへ出す形はここで**明示的に決める**。
+    //   非列挙化だけに頼ると、今後 誰かが列挙可能な内部項目を足した時に再発する。
+    //   role/content 以外は出さない、と一箇所で宣言する。
+    const outboundMessages = (Array.isArray(messages)?messages:[])
+      .map(m => ({ role:m.role, content:m.content }));
     const chatBody = {
-        messages,
+        messages: outboundMessages,
         character:sel,
         mode:selMode,
         level:'C2',
@@ -3218,6 +3315,9 @@ function speechLatencyTrace(state, item, extra={}){
     const queuedAt=Number(item&&item.queuedAt);
     const payload={
       state:String(state||'unknown'),
+      // ★2026-09-05 第3回P1-3：candidate→queue→play_started→final を同じIDで辿れるようにする。
+      //   これが無いと「同一uidで貫いた」を製品側で証明できない（旧テストは stub で補っていた）。
+      utterance_id:(item&&item.utteranceId)||null,
       kind:String(item&&item.kind||'radio'),
       prio:Number(item&&item.prio),
       queue_ms:Number.isFinite(queuedAt)?Math.max(0,Date.now()-queuedAt):null,
@@ -3242,6 +3342,8 @@ function speak(text, opts){
                 //   Overlay と記憶は addMsg 時点の原文のまま残っていた。表示要素を
                 //   持ち歩いて、確定時に必ず揃える。
                 displayEl:o.displayEl||null,
+                utteranceId:o.utteranceId||(o.displayEl&&o.displayEl._uid)||nextUtteranceId(),
+                messageId:o.messageId||null,   // ★自分が積んだ履歴だけを直す
                 gapIdentities:(Array.isArray(o.gapIdentities)&&o.gapIdentities.length)?o.gapIdentities:null,
                 costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
@@ -3252,6 +3354,7 @@ function speak(text, opts){
   if(item.dedupeKey && speakQueue.some(q=>q.dedupeKey===item.dedupeKey)){
     typeof costRecord==='function'&&costRecord('discarded', {id:item.costId, kind:kind, reason:'duplicate_dedupe_key'});
     if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',item,{reason:'duplicate_dedupe_key'});
+    finalizeUtterance(item,'dropped',null,'duplicate_dedupe_key');   // ★第2回P1-1
     return;
   }
 
@@ -3275,6 +3378,7 @@ function speak(text, opts){
       } else {
         diagnosticLog('SPEAK_DEFER_DISCARDED', 'kind='+displaced.kind+' by=P'+prio+' incoming='+item.kind+' reason=defer_cap_reached defer_count='+(displaced._deferCount||0));
         typeof costRecord==='function'&&costRecord('discarded', {id:displaced.costId, kind:displaced.kind, reason:'defer_cap_reached'});
+        finalizeUtterance(displaced,'dropped',null,'defer_cap_reached');   // ★第2回P1-4
       }
     }
     stopCurrentAudio();
@@ -3287,6 +3391,7 @@ function speak(text, opts){
     if(wi>=0 && speakQueue[wi].prio > SPEAK_PRIO.P1_HAZARD){
       typeof costRecord==='function'&&costRecord('discarded', {id:speakQueue[wi].costId, kind:speakQueue[wi].kind, reason:'queue_overflow'});
       if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',speakQueue[wi],{reason:'queue_overflow'});
+      finalizeUtterance(speakQueue[wi],'dropped',null,'queue_overflow');   // ★P1-2
       speakQueue.splice(wi,1);
     }
   }
@@ -3323,6 +3428,11 @@ function stopCurrentAudio(){
   isSpeaking=false;
   draining=false;              // ←これが無いとキューが二度と流れない
   currentSpeakPrio=9;
+  // ★2026-09-05 第2回P1-4：割込みで消える発話の最終状態を必ず残す。
+  //   再生開始前に消えたなら耳に届いていない＝drop。開始済みは 'spoken' のまま触らない。
+  if(currentSpeakItem && typeof finalizeUtterance==='function'
+     && currentSpeakItem._finalized!=='spoken')
+    finalizeUtterance(currentSpeakItem,'dropped',null,'interrupted_before_start');
   currentSpeakItem=null;       // 割り込み後は再生対象なし
   setTimeout(drainQueue, 0);   // 割り込んだ側を即座に再生へ
 }
@@ -3346,7 +3456,8 @@ async function drainQueue(){
     nextIndex = speakQueue.findIndex(q=>speechMayStart(q));
     if(nextIndex < 0) return;
   }
-  const c = CHARS[sel]; if(!c){ speakQueue=[]; return; }
+  const c = CHARS[sel];
+  if(!c){ discardQueuedUtterances(speakQueue,'no_character'); speakQueue=[]; return; }   // ★P1-2
   draining = true;
   isSpeaking = true;
   // 発話中はマイクを止めて自分の声を拾わない
@@ -3367,16 +3478,9 @@ async function drainQueue(){
         +' target='+_it.gapIdentity.target_car_idx+' dir='+_it.gapIdentity.direction
         +' age_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
       typeof costRecord==='function'&&costRecord('discarded',{id:_it.costId, kind:_it.kind, reason:'gap_'+_fresh.reason});
-      // ★2026-09-05：一度も再生しないので、表示と会話Boxからも取り消す。
-      //   残すと「Luna が言った」ことになり、訂正の撤回対象がズレる。
-      if(_it.displayEl && _it.displayEl.parentNode) _it.displayEl.parentNode.removeChild(_it.displayEl);
-      if(_it.displayEl && _it.displayEl._ovlId && window.pitwall)
-        window.pitwall.overlayPush({ remove:true, id:_it.displayEl._ovlId });
-      if(typeof dropLastLunaTurn==='function'){
-        const _dropped=dropLastLunaTurn(_it.text);
-        diagnosticLog('GAP_DISPLAY_SYNC','fate=discard removed_display='+(!!_it.displayEl)
-          +' dropped_turn='+_dropped+' text='+JSON.stringify(_it.text));
-      }
+      // ★2026-09-05：一度も再生しないので、表示・Overlay・会話Boxから取り消す。
+      //   出口は一つの finalizer へ集約している（Codex P1-2）。
+      finalizeUtterance(_it,'dropped',null,'gap_'+_fresh.reason);
       if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',_it,{reason:'gap_'+_fresh.reason});
       draining=false; isSpeaking=false;
       setTimeout(drainQueue,0);
@@ -3390,15 +3494,9 @@ async function drainQueue(){
         diagnosticLog('GAP_FRESHNESS','fate=rebuild was='+_it.gapIdentity.gap_s
           +' now='+_fresh.gapS+' target='+_it.gapIdentity.target_car_idx);
         // ★2026-09-05：音声だけ作り替えて表示と記憶を置き去りにしない。
-        //   最終TTS本文をログにも残す（同一発話について表示＝音声を後から照合できる）。
-        const _wasText = _it.text;
+        //   翻訳の無効化も finalizer 側で行う（Codex P1-1）。
+        finalizeUtterance(_it,'rebuilt',_rebuilt);
         _it.text = _rebuilt;
-        if(_it.displayEl) _it.displayEl.textContent = _rebuilt;
-        if(_it.displayEl && _it.displayEl._ovlId && window.pitwall)
-          window.pitwall.overlayPush({ update:true, id:_it.displayEl._ovlId, text:_rebuilt });
-        const _amended=(typeof amendLastLunaTurn==='function')?amendLastLunaTurn(_wasText,_rebuilt):false;
-        diagnosticLog('GAP_DISPLAY_SYNC','fate=rebuild display='+JSON.stringify(_rebuilt)
-          +' was='+JSON.stringify(_wasText)+' amended_turn='+_amended);
       }
     } else {
       diagnosticLog('GAP_FRESHNESS','fate=play target='+_it.gapIdentity.target_car_idx
@@ -3422,6 +3520,8 @@ async function drainQueue(){
         +' live_age_ms='+(_liveAge===null?'?':_liveAge));
       typeof costRecord==='function'&&costRecord('discarded',{id:_it.costId, kind:_it.kind, reason:'gap_answer_'+_ans.reason});
       if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',_it,{reason:'gap_answer_'+_ans.reason});
+      // ★第3回P1-2：自発コール側だけ finalizer を通していた。回答側も同じ終端へ。
+      finalizeUtterance(_it,'dropped',null,'gap_answer_'+_ans.reason);
       draining=false; isSpeaking=false;
       setTimeout(drainQueue,0);
       return;
@@ -3433,6 +3533,8 @@ async function drainQueue(){
         diagnosticLog('GAP_ANSWER_FRESHNESS','fate=rebuild reason='+_ans.reason
           +' was="'+_it.text+'" now="'+_rebuiltAns+'"'
           +' queue_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
+        // ★第3回P1-2：Overlay・会話Box も同時に最終本文へ揃える。
+        finalizeUtterance(_it,'rebuilt',_rebuiltAns);
         _it.text = _rebuiltAns;
       }
     } else {
@@ -3453,6 +3555,8 @@ async function drainQueue(){
   const reportSpoke = ()=>{
     if(_reportSpokeCalled || myGen !== speakGeneration) return;    // 古い世代・既呼び出しは計上しない
     _reportSpokeCalled = true;
+    // ★第2回P1-2：実際に再生が始まった時だけ 'spoken' 終端にする。
+    finalizeUtterance(_it,'spoken');
     if(typeof speechLatencyTrace==='function') speechLatencyTrace('play_started',currentSpeakItem,{source:ttsAudio?'cloud_tts':'webspeech_or_fallback'});
     try{ if(irBridge && irBridge.readyState===1)
       irBridge.send(JSON.stringify({cmd:'spoke', prio:currentSpeakPrio, kind:(_it&&_it.kind)||'radio'})); }catch(e){}
@@ -3481,11 +3585,14 @@ async function drainQueue(){
     const emergencyFallback = currentSpeakPrio<=SPEAK_PRIO.P1_HAZARD ||
       !!(_it && IMMEDIATE_PIT_KINDS.has(_it.kind));
     if(emergencyFallback){
-      reportSpoke();
-      playWebSpeech(clean, c, myGen, _completeOnce);
+      // ★第2回P1-3：再生前に reportSpoke すると、WebSpeech が失敗しても
+      //   「聞いた」と記録される。実際の開始境界で報告させる。
+      playWebSpeech(clean, c, myGen, _completeOnce, reportSpoke);
     } else {
       ttsFailLog('cloud_tts_temporarily_disabled',
         'chars='+clean.length+' lang='+c.gLang+' → text-only; alien voice suppressed');
+      // ★第2回P1-3：音が出ない＝耳には届いていない。表示と記憶から取り消す。
+      finalizeUtterance(_it,'dropped',null,'cloud_tts_disabled_text_only');
       _completeOnce();
     }
     return;
@@ -3506,9 +3613,10 @@ async function drainQueue(){
       (emergencyFallback ? ' → emergency WebSpeech' : ' → text-only; alien voice suppressed'));
     ttsAudio = null;
     if(emergencyFallback){
-      reportSpoke();    // reportSpokeは_reportSpokeCalled guardで1回きり
-      playWebSpeech(clean, c, myGen, _completeOnce);
+      playWebSpeech(clean, c, myGen, _completeOnce, reportSpoke);   // ★第2回P1-3：実開始で報告
     } else {
+      // ★第2回P1-3：フォールバックもせず音が出ない。耳に届いていない。
+      finalizeUtterance(_it,'dropped',null,'tts_failed_text_only');
       _completeOnce();
     }
   };
@@ -3622,7 +3730,10 @@ async function drainQueue(){
 // ★2026-07-20 Codex再レビュー P0-1：cancel()後に遅れて届く旧utteranceの onend/onerror が
 //   現在再生中のP0に対して onUtteranceDone() を実行し、isSpeaking/draining を誤って解除しうる。
 //   世代IDを受け取り、自分の世代でなければ状態に一切触れない。
-function playWebSpeech(text, c, gen, onDone){
+// ★2026-09-05 第2回P1-3：`onStart` を受ける。WebSpeech は `speak()` を呼んだだけでは
+//   再生されない（音声未ロード・エラー・OS側の拒否）。**実際に onstart が来た時だけ**
+//   「耳へ届いた」と報告する。呼出し前に報告すると、失敗しても記憶に残る。
+function playWebSpeech(text, c, gen, onDone, onStart){
   const myGen = (typeof gen === 'number') ? gen : speakGeneration;
   // ★2026-07-23 Codex再指摘：フォールバック元で_completeOnceを渡す設計に変更。
   //   従来はonUtteranceDoneを直接呼び、audio側のonended/onerrorと合わせて2回呼ばれうるバグがあった。
@@ -3638,14 +3749,23 @@ function playWebSpeech(text, c, gen, onDone){
     const voice = pickVoice(c.voiceLang,c.voiceNames);
     if(voice) utt.voice=voice;
     else ttsFailLog('webspeech_no_voice', 'lang='+c.voiceLang+' names='+(c.voiceNames||[]).join(',')+' → システム既定音声を使用（言語が違えば無音になり得る）');
+    utt.onstart=()=>{ if(myGen!==speakGeneration) return;
+      if(typeof onStart==='function') onStart(); };     // ★実開始でだけ報告
     utt.onend=done;
     utt.onerror=(ev)=>{
       ttsFailLog('webspeech_onerror', 'error='+(ev && ev.error)+' lang='+c.voiceLang+' chars='+text.length);
+      // onstart 前の失敗＝一度も音が出ていない。表示と記憶から取り消す。
+      if(typeof finalizeUtterance==='function' && currentSpeakItem
+         && currentSpeakItem._finalized!=='spoken')
+        finalizeUtterance(currentSpeakItem,'dropped',null,'webspeech_onerror');
       done();
     };
     window.speechSynthesis.speak(utt);
   }catch(e){
     ttsFailLog('webspeech_throw', (e && (e.name+': '+e.message))+' lang='+c.voiceLang);
+    if(typeof finalizeUtterance==='function' && currentSpeakItem
+       && currentSpeakItem._finalized!=='spoken')
+      finalizeUtterance(currentSpeakItem,'dropped',null,'webspeech_throw');
     done();
   }
 }
@@ -3655,7 +3775,7 @@ function toggleVoice(){
   btn.textContent=voiceOn?t('voice_on'):t('voice_off');
   btn.classList.toggle('on',voiceOn);
   persistentSet('pw_voice_on', voiceOn?'1':'0');
-  if(!voiceOn){ speakQueue=[]; stopCurrentAudio(); }
+  if(!voiceOn){ discardQueuedUtterances(speakQueue,'voice_off'); speakQueue=[]; stopCurrentAudio(); }   // ★P1-2
 }
 
 // ── STT (manual) ──
@@ -4604,7 +4724,8 @@ function injectRadio(data){
   // ★Build 265 lifecycle latches — one-way per session, cleared at session-num reset.
   if(data.trigger==='final_lap_notice') finalLapNoticeSeen = true;
   if(data.trigger==='checker_out_notice') checkerOutNoticeSeen = true;
-  const _radioEl = addMsg('ai',text);
+  const _uid = nextUtteranceId();          // ★candidate 時点で採番する
+  const _radioEl = addMsg('ai',text,{uid:_uid});
   // ★2026-08-30 修正2 P0：無線を LLM 会話履歴へ入れない。
   //   Road Atlanta 実走で LLM が「左に車。」を自分で書き、reply_chunk(P2) として
   //   再生された（同時刻に side_by_side(P0) は無い＝捏造）。原因は無線を
@@ -4619,7 +4740,7 @@ function injectRadio(data){
   //   停止車両・速いクラス接近・ピット手順まで「情報」と同列に扱われていた。
   // ★G2：GAP候補は完成文だけで queue へ入れない。どの車のどちら向きの、
   //   いつの値かを一緒に持たせ、TTS開始直前に最新snapshotと照合する。
-  speak(spokenText||text, {displayEl:_radioEl,
+  speak(spokenText||text, {displayEl:_radioEl, utteranceId:_uid,
                prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
                kind:data.trigger||'radio',
                gapIdentity:(data.gap_identity&&typeof data.gap_identity==='object')?data.gap_identity:null,
@@ -7744,6 +7865,7 @@ async function pttStart(){
   if(!irBridge || irBridge.readyState!==1){ setHint(t('hint_bridge_off')); return; }
   pttHeld = true;
   // 録音中はAI発話を止める（自分の声に被せない）
+  discardQueuedUtterances(speakQueue,'ptt_pressed');   // ★P1-2
   speakQueue=[]; stopCurrentAudio();
   document.getElementById('mic-btn').classList.add('recording');
   setHint(t('hint_recording'));

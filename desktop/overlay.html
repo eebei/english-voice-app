@@ -195,15 +195,23 @@
       const d = byId[line.id];
       // ★2026-09-05：訳だけでなく本文も差し替えられるようにする。
       //   TTS直前に最新GAPへ作り替えた時、Overlayが旧文のまま残っていた。
-      if(d && typeof line.text === 'string' && line.text) d.orig = line.text;
-      if(d && line.tr !== undefined){ d.tr = line.tr; d.trLang = line.trLang; }
+      // ★Codex Gate 4 P1-1：textFor() は訳を原文より優先する。本文を差し替えた時に
+      //   古い訳を残すと、**原文だけ新しく訳は古い**状態で表示され、また音声とズレる。
+      //   本文が変わったら訳を捨て、世代を上げて**遅れて届く古い訳を弾く**。
+      if(d && typeof line.text === 'string' && line.text && line.text !== d.orig){
+        d.orig = line.text; d.tr = ''; d.trLang = ''; d.gen = (d.gen||0) + 1;
+      }
+      if(d && line.tr !== undefined){
+        // 古い世代の訳は捨てる（rebuild と翻訳promiseの競合）
+        if(line.gen === undefined || line.gen === d.gen){ d.tr = line.tr; d.trLang = line.trLang; }
+      }
       const el = wrap.querySelector('.rc[data-id="'+line.id+'"]');
       if(el && d){ const tx = el.querySelector('.tx'); if(tx) tx.textContent = textFor(d); }
       return;
     }
     if(!line.text) return;
     const id = line.id || ('L'+Date.now());
-    byId[id] = { orig:line.text, origLang:line.lang || 'en', tr:'', trLang:'' };
+    byId[id] = { orig:line.text, origLang:line.lang || 'en', tr:'', trLang:'', gen:0 };
     const div = document.createElement('div');
     div.className = 'rc ' + (line.type==='drv' ? 'drv' : 'ai');
     div.dataset.id = id;
