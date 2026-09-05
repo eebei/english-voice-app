@@ -1,7 +1,7 @@
 # Founder Scope Lock: Minimum Real AI Engineer
 
-Date: 2026-09-05  
-Authority: Founder decision  
+Date: 2026-09-05
+Authority: Founder decision
 Audience: Claude Code, Codex and all PITWALL engineering/review work
 
 ## Decision
