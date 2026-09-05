@@ -130,6 +130,26 @@ Claude CodeまたはCodexが、相手担当へ向けたレビューコメント�
 
 相手担当はこの合図を受けたら、ユーザーへ担当判断を聞き返さず、最新の共有MDと更新commitを確認して作業を継続する。指示書を読まずにBuild、公開、再質問へ進まない。
 
+### 必須の作業回覧（変更箇所・不安点を隠さない）
+
+CodexまたはClaude Codeが、相手の独立確認を要する変更を行った時は、**Build提案・公開提案より先に**
+`review/PITWALL_SHARED_WORKING_LOG.md`へ一つの回覧項目を追記する。散文だけの「直した」は不可。
+
+回覧項目には最低限、次を表で明記する。
+
+1. 作業者、対象commit/SHA、目的、実装・未commit・Build・公開の各状態
+2. **変更箇所**（ファイル、関数または狭い行範囲、何を変えたか）
+3. 実行した検査と結果。実行していない検査・Windows/iRacingでしか確かめられない項目も同じ表へ残す
+4. 不安点、設計上の選択、反証してほしい点、既知の未解決事項
+5. 次に誰が何を確認するか。Gate 4なら確認者と合否条件を明記する
+
+確認者はこの表を起点にdiff・実行経路・失敗経路を独立に辿る。表が無い、SHAが曖昧、または未検証点を隠した回覧は
+Gate 4の依頼として受理しない。緊急時も省略せず、短縮した検査と残るリスクをYujiへ明示して判断を仰ぐ。
+
+共有MDへ回覧を追加したチャット報告には、既存ルールどおり必ず次の一文を含める。
+
+`次のMDに指示書あり`
+
 Keep `HANDOFF.md` concise and current. Update it after a meaningful completed slice, before ending a session with unfinished work, and whenever the release/field/cost state changes materially.
 
 It must answer:
