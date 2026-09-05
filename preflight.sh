@@ -310,6 +310,9 @@ if node tests-conversation-corpus-replay.js >/dev/null 2>&1; then echo "   ✅ 6
 echo "── Luna Memory Brain：Le Mans固定sessionの検索→注入→実回答→再保存→次ターン"
 if node tests-memory-brain.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-brain.js 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "▶ 実在テスター名が発話へ混入していないか（Build 294-297 で八木さん固定）"
+if out=$(node tests-no-real-names-in-speech.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格"; node tests-no-real-names-in-speech.js 2>&1|tail -6; fail=1; fi
+
 echo "▶ 表示と音声の一致（Overlay＝TTS・会話Box汚染防止）"
 if out=$(node tests-gap-display-sync.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格"; node tests-gap-display-sync.js 2>&1|tail -6; fail=1; fi
 

@@ -2,6 +2,14 @@
 
 最終更新: 2026-09-05 JST
 
+## 次Phase決定：音声ピット設定
+
+Founder決定により、現行のレース会話成立・GAP同期の実機確認後、次の主要Phaseへ**走行中の口頭指示によるiRacingブラックボックス設定**を追加する。共通command基盤は拡張可能に作るが、MVPは「タイヤ4本／交換なし」と「指定給油量／満タン／ゴール時3L残し」に限定。自然文→閉じたcommand→Luna復唱→Driver明示承認→実行→設定読み戻しを必須契約とする。ティアオフ、Fast Repair、左右タイヤ、全取消、画面切替はPhase 1.1、Brake Bias／TC／ABSは車種別安全契約後。全体進捗表と詳細は共有ログ末尾。中核差分と追加の実在テスター名修正はともにGate 4合格。実名修正は未commitで、commit／Build／公開は各GO待ち。
+
+## 実在テスター名修正 Gate 4
+
+PDDPブリーフィングの固定`八木さん`を保存`userName`／一般名fallbackへ変更した未commit差分は、Codex独立Gate 4合格。no-real-names 18/18、PDDP 57/57、構文・diff check合格。残存実在名はコメントのみ。Windowsの保存名と実音声はGate 6、artifactはGate 5で確認する。commit／Build 298／公開は各GO待ち。
+
 ## Build 297事後Gate 4（Codex独立確認）
 
 **第7回Gate 4は合格。** Claudeの第6回対応で内部`_mid`を非列挙化し、client送信境界とserver stream/non-streamの両方を`role/content`へsanitize。Codex独立実行でcallAPI 26/26、GAP answer 68/68、GAP display 60/60、非同期割込み18/18、TTS失敗51/51、server構文、diff checkが合格した。PTT GAPの実`drainQueue` rebuild/drop、Overlay＝会話Box＝TTS raw、同文履歴分離、非再生終端を確認済み。未commitのためYujiのcommit GO待ち。commit後はSHA固定、private artifact Gate 5、Windows Gate 6、`server.js`変更のRailway Gate 7、iRacing Gate 8が必要。Build／公開は別GOまで不可。P2（永続uid、再翻訳、open_items参照整合、途中中断heard契約）は次スライスへ。

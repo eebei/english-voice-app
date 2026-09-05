@@ -1221,6 +1221,15 @@ function recordReflexEvent(ev){
 //   **無関係な既存 assistant 発話**（同じ「右に車。」など）を消し得た。
 //   安定IDを付け、**自分が積んだ1件だけ**を名指しする。
 let _msgSeq = 0;
+// ★2026-09-05：ドライバーへの呼びかけ名は1箇所で決める。
+//   保存済みの userName を正本とし、未設定なら言語別の一般名へ落とす。
+//   **実在の個人名をコードへ書かない。**
+function driverAddressName(lang){
+  const n = String(typeof userName!=='undefined' ? (userName||'') : '').trim();
+  if(n) return n;
+  return String(lang||'').toLowerCase().startsWith('ja') ? 'ドライバー' : 'Driver';
+}
+
 function pushMsg(m){
   // ★2026-09-05 Codex 第6回P1：`_mid` は**内部管理用**であり外部APIの契約項目ではない。
   //   通常代入すると列挙可能になり `JSON.stringify(chatBody)` に載って
@@ -5086,7 +5095,10 @@ async function scheduleAutoBriefing(){
     const _pddp=(window.PitwallPddp&&typeof window.PitwallPddp.analyze==='function')
       ? window.PitwallPddp.analyze(loadRaceHistory(),{limit:10}) : null;
     const _pddpLine=(window.PitwallPddp&&_pddp&&typeof window.PitwallPddp.briefingLine==='function')
-      ? window.PitwallPddp.briefingLine(_pddp,_decLang==='ja'?'八木さん':'Driver') : '';
+      // ★2026-09-05：ここに実在テスターの名前がリテラルで残っており、
+      //   **誰が走っても「八木さん」と呼んでいた**（Build 294〜297 が公開済み）。
+      //   呼びかけ名は保存済みの `userName` を正本とし、無ければ一般名へ落とす。
+      ? window.PitwallPddp.briefingLine(_pddp, driverAddressName(_decLang)) : '';
     diagnosticLog('PDDP_BRIEFING',JSON.stringify({available:!!_pddpLine,
       sample_size:_pddp&&_pddp.sample_size||0,focus:_pddp&&_pddp.primary_focus||null}));
     if(_pddpLine){
