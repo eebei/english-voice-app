@@ -310,6 +310,9 @@ if node tests-conversation-corpus-replay.js >/dev/null 2>&1; then echo "   ✅ 6
 echo "── Luna Memory Brain：Le Mans固定sessionの検索→注入→実回答→再保存→次ターン"
 if node tests-memory-brain.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-brain.js 2>&1|grep "❌"|head -8; fail=1; fi
 
+echo "▶ 表示と音声の一致（Overlay＝TTS・会話Box汚染防止）"
+if out=$(node tests-gap-display-sync.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格"; node tests-gap-display-sync.js 2>&1|tail -6; fail=1; fi
+
 echo "▶ 訂正検出の境界（Codex Gate 4 反例・独立オラクル）"
 if node tests-dispute-boundaries.js >/dev/null 2>&1; then echo "   ✅ 15ケース合格"; else echo "   ❌ 不合格"; node tests-dispute-boundaries.js 2>&1|tail -5; fail=1; fi
 

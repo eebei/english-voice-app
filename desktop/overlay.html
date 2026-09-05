@@ -182,9 +182,21 @@
   function pushLine(line){
     if(!line) return;
     // 翻訳の後乗せ：既存の行に訳を差し込む
+    // ★2026-09-05：一度も再生しなかった行は消す。
+    //   TTS直前の鮮度判定で破棄された自発GAPコールが、画面にだけ残っていた。
+    if(line.remove){
+      const el = wrap.querySelector('.rc[data-id="'+line.id+'"]');
+      if(el && el.parentNode) el.parentNode.removeChild(el);
+      delete byId[line.id];
+      reflow();
+      return;
+    }
     if(line.update){
       const d = byId[line.id];
-      if(d){ d.tr = line.tr; d.trLang = line.trLang; }
+      // ★2026-09-05：訳だけでなく本文も差し替えられるようにする。
+      //   TTS直前に最新GAPへ作り替えた時、Overlayが旧文のまま残っていた。
+      if(d && typeof line.text === 'string' && line.text) d.orig = line.text;
+      if(d && line.tr !== undefined){ d.tr = line.tr; d.trLang = line.trLang; }
       const el = wrap.querySelector('.rc[data-id="'+line.id+'"]');
       if(el && d){ const tx = el.querySelector('.tx'); if(tx) tx.textContent = textFor(d); }
       return;

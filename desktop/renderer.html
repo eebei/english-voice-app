@@ -1107,6 +1107,41 @@ function recordLunaTurn(text,kind){
   B.addTurn(box,{who:'luna',text:String(text||''),at:Date.now(),kind:kind||null});
   saveConversationBox(box);
 }
+// ★2026-09-05：Luna が言っていない文を「Luna の発話」として残さない。
+//
+//   9/4 実走（Build 295）の自発GAPコール13件のうち **11件**で、表示と音声が食い違っていた
+//   （`fate=rebuild` 10件・`fate=discard` 1件／一致は2件）。
+//   `addMsg()` は表示と同時に convoLog・会話Box・Memory Brain へ原文を記録するが、
+//   本文が確定するのは TTS 直前の `drainQueue()` である。rebuild では音声だけ新しい値に
+//   なり、discard では**一度も喋られないのに記録だけ残る**。
+//
+//   会話Box が汚れると、ドライバーが耳で聞いた文ではなく画面の文が撤回対象になり、
+//   訂正検出が別の値を消す。表示の見た目より、こちらの方が重い。
+//
+//   どちらのヘルパーも **原文が一致した時だけ**触る。間に別の発話が入っていたら
+//   何もしない（取り違えて消す方が危険）。
+function amendLastLunaTurn(expectText,newText){
+  const B=window.PitwallConversationMemoryBox; if(!B) return false;
+  const box=ensureConversationBox(); if(!box||!Array.isArray(box.turns)) return false;
+  for(let i=box.turns.length-1;i>=0;i--){
+    if(box.turns[i].who!=='luna') continue;
+    if(String(box.turns[i].text)!==String(expectText)) return false;
+    box.turns[i].text=String(newText||'');
+    saveConversationBox(box); return true;
+  }
+  return false;
+}
+function dropLastLunaTurn(expectText){
+  const B=window.PitwallConversationMemoryBox; if(!B) return false;
+  const box=ensureConversationBox(); if(!box||!Array.isArray(box.turns)) return false;
+  for(let i=box.turns.length-1;i>=0;i--){
+    if(box.turns[i].who!=='luna') continue;
+    if(String(box.turns[i].text)!==String(expectText)) return false;
+    box.turns.splice(i,1);
+    saveConversationBox(box); return true;
+  }
+  return false;
+}
 function recordReflexEvent(ev){
   const B=window.PitwallConversationMemoryBox; if(!B||!ev) return;
   const box=ensureConversationBox(); if(!box) return;
@@ -2029,7 +2064,9 @@ function addMsg(type, text){
   div.textContent = text;
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
-  if(text) convoLog(type, text);   // 空吹き出し(ストリーミング初期)はログしない
+  // ★2026-09-05：Overlay の行IDを要素へ結びつける。TTS直前に本文が確定した時、
+  //   チャット欄だけでなく **走行中に実際に見ている Overlay** も同じ行を更新できる。
+  if(text) div._ovlId = convoLog(type, text) || null;   // 空吹き出し(ストリーミング初期)はログしない
   // ★2026-09-03 Codex差戻し②：`recordLunaTurn()` を定義しただけで
   //   **41箇所ある addMsg('ai',…) のどこからも呼んでいなかった**。
   //   その状態では箱に Luna の発話が入らず、dispute_detector が参照する
@@ -2043,13 +2080,14 @@ function addMsg(type, text){
 // 会話をbridgeデバッグログに転送（AI返答含む全会話が後から追える＝スクショ不要）。
 // user/ai のみ。bridge未接続なら黙ってスキップ。
 function convoLog(type, text){
-  mirrorToOverlay(type, text);   // 完成した行だけをレースオーバーレイへも流す（同じファネル）
+  const _ovlId = mirrorToOverlay(type, text);   // 完成した行だけをレースオーバーレイへも流す（同じファネル）
   try {
     if ((type==='user'||type==='ai') && text && irBridge && irBridge.readyState===1) {
       const tag = type==='ai' ? (sel||'AI') : 'USER';
       irBridge.send(JSON.stringify({cmd:'log_line', text:'['+tag+'] '+text}));
     }
   } catch(e){}
+  return _ovlId;
 }
 // Diagnostics are evidence for the debug log, never driver speech.  Sending
 // these through addMsg/convoLog previously mirrored blocked LLM text into the
@@ -2144,12 +2182,16 @@ function mirrorToOverlay(type, text){
   const id = 'L'+(++_ovlLineSeq);
   // まず原文を即表示（字幕の表示自体は遅らせない）
   window.pitwall.overlayPush({ id, type:side, name, text:clean, lang });
+  // ★2026-09-05：TTS直前に本文が作り替わる／破棄される経路があるので、
+  //   後から同じ行を更新・削除できるよう行IDを返す。
+  var _ovlIdForCaller = id;
   // 表示言語と違う言語の行だけ、あとから訳を差し込む（同言語なら翻訳しない＝コスト/遅延ゼロ）
   if(lang !== ovlLang){
     translateLine(clean, ovlLang).then(tr=>{
       if(tr) window.pitwall.overlayPush({ update:true, id, tr, trLang:ovlLang });
     });
   }
+  return _ovlIdForCaller;
 }
 
 // ── オーバーレイ操作（chat画面のパネル）──
@@ -3196,6 +3238,10 @@ function speak(text, opts){
   const kind = o.kind||'radio';
   const item = {text, prio, kind, ts:Date.now(), queuedAt:Date.now(), dedupeKey:o.dedupeKey||null,
                 gapIdentity:o.gapIdentity||null,
+                // ★2026-09-05：TTS直前に本文が作り替わる／破棄される経路があるのに、
+                //   Overlay と記憶は addMsg 時点の原文のまま残っていた。表示要素を
+                //   持ち歩いて、確定時に必ず揃える。
+                displayEl:o.displayEl||null,
                 gapIdentities:(Array.isArray(o.gapIdentities)&&o.gapIdentities.length)?o.gapIdentities:null,
                 costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
@@ -3321,6 +3367,16 @@ async function drainQueue(){
         +' target='+_it.gapIdentity.target_car_idx+' dir='+_it.gapIdentity.direction
         +' age_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
       typeof costRecord==='function'&&costRecord('discarded',{id:_it.costId, kind:_it.kind, reason:'gap_'+_fresh.reason});
+      // ★2026-09-05：一度も再生しないので、表示と会話Boxからも取り消す。
+      //   残すと「Luna が言った」ことになり、訂正の撤回対象がズレる。
+      if(_it.displayEl && _it.displayEl.parentNode) _it.displayEl.parentNode.removeChild(_it.displayEl);
+      if(_it.displayEl && _it.displayEl._ovlId && window.pitwall)
+        window.pitwall.overlayPush({ remove:true, id:_it.displayEl._ovlId });
+      if(typeof dropLastLunaTurn==='function'){
+        const _dropped=dropLastLunaTurn(_it.text);
+        diagnosticLog('GAP_DISPLAY_SYNC','fate=discard removed_display='+(!!_it.displayEl)
+          +' dropped_turn='+_dropped+' text='+JSON.stringify(_it.text));
+      }
       if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',_it,{reason:'gap_'+_fresh.reason});
       draining=false; isSpeaking=false;
       setTimeout(drainQueue,0);
@@ -3333,7 +3389,16 @@ async function drainQueue(){
       if(_rebuilt){
         diagnosticLog('GAP_FRESHNESS','fate=rebuild was='+_it.gapIdentity.gap_s
           +' now='+_fresh.gapS+' target='+_it.gapIdentity.target_car_idx);
+        // ★2026-09-05：音声だけ作り替えて表示と記憶を置き去りにしない。
+        //   最終TTS本文をログにも残す（同一発話について表示＝音声を後から照合できる）。
+        const _wasText = _it.text;
         _it.text = _rebuilt;
+        if(_it.displayEl) _it.displayEl.textContent = _rebuilt;
+        if(_it.displayEl && _it.displayEl._ovlId && window.pitwall)
+          window.pitwall.overlayPush({ update:true, id:_it.displayEl._ovlId, text:_rebuilt });
+        const _amended=(typeof amendLastLunaTurn==='function')?amendLastLunaTurn(_wasText,_rebuilt):false;
+        diagnosticLog('GAP_DISPLAY_SYNC','fate=rebuild display='+JSON.stringify(_rebuilt)
+          +' was='+JSON.stringify(_wasText)+' amended_turn='+_amended);
       }
     } else {
       diagnosticLog('GAP_FRESHNESS','fate=play target='+_it.gapIdentity.target_car_idx
@@ -4539,7 +4604,7 @@ function injectRadio(data){
   // ★Build 265 lifecycle latches — one-way per session, cleared at session-num reset.
   if(data.trigger==='final_lap_notice') finalLapNoticeSeen = true;
   if(data.trigger==='checker_out_notice') checkerOutNoticeSeen = true;
-  addMsg('ai',text);
+  const _radioEl = addMsg('ai',text);
   // ★2026-08-30 修正2 P0：無線を LLM 会話履歴へ入れない。
   //   Road Atlanta 実走で LLM が「左に車。」を自分で書き、reply_chunk(P2) として
   //   再生された（同時刻に side_by_side(P0) は無い＝捏造）。原因は無線を
@@ -4554,7 +4619,8 @@ function injectRadio(data){
   //   停止車両・速いクラス接近・ピット手順まで「情報」と同列に扱われていた。
   // ★G2：GAP候補は完成文だけで queue へ入れない。どの車のどちら向きの、
   //   いつの値かを一緒に持たせ、TTS開始直前に最新snapshotと照合する。
-  speak(spokenText||text, {prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
+  speak(spokenText||text, {displayEl:_radioEl,
+               prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
                kind:data.trigger||'radio',
                gapIdentity:(data.gap_identity&&typeof data.gap_identity==='object')?data.gap_identity:null,
                dedupeKey:(data.trigger||'') + (data.class_name||'') + (data.car_number||'')});

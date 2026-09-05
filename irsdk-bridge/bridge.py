@@ -56,7 +56,7 @@ import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 296 (multiclass gap direction, memory lap evidence, and memory brain)"
+BUILD_VERSION = "Build 297 (what the overlay shows is what the driver hears)"
 PORT = 8765
 connected_clients = set()
 loop = None
