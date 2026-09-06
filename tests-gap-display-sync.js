@@ -36,8 +36,16 @@ const drainSrc = (renderer.match(/async function drainQueue\([^)]*\)\{[\s\S]*?\n
 check('drainQueue を取り出せる', !!drainSrc);
 check('drainQueue の discard が finalizer を通る',
   /fate === 'discard'[\s\S]*?finalizeUtterance\(_it,'dropped'/.test(drainSrc));
-check('drainQueue の rebuild が finalizer を通る',
-  /finalizeUtterance\(_it,'rebuilt'/.test(drainSrc));
+// ★2026-09-06 ② 構造置換（Founder指示）：`rebuilt`（表示後に作り替える）は**廃止**。
+//   新契約は「authority 確定 → 最終本文を1回生成 → Overlay・会話Box・TTS へ fan-out」。
+//   したがって検査するのは「rebuild が finalizer を通るか」ではなく
+//   **「作り替えが製品から消えていること」と「確定点で1回だけ生成していること」**。
+check('rebuilt（表示後amend）が製品から消えている',
+  !/finalizeUtterance\(_it,'rebuilt'/.test(drainSrc) && !/outcome === 'rebuilt'/.test(renderer));
+check('drainQueue が authority 確定後に最終本文を1回生成する',
+  /buildGapUtterance\(\{[\s\S]{0,200}?gap_s:_fresh\.gapS/.test(drainSrc));
+check('drainQueue が確定後に fan-out する（表示・Overlay・会話Boxは同じ addMsg 経由）',
+  /_it\.deferredRender && !_it\.displayEl[\s\S]{0,160}?addMsg\('ai', _final/.test(drainSrc));
 check('speak() が表示要素を持ち歩く', /displayEl:o\.displayEl\|\|null/.test(renderer));
 check('addMsg が Overlay行IDを結び付ける', /div\._ovlId = convoLog\(type, text\)/.test(renderer));
 check('addMsg が turn_id を結び付ける（P1-3）',
@@ -57,7 +65,6 @@ for (const [name, re] of [
   ['character無し', /discardQueuedUtterances\(speakQueue,'no_character'\)/],
   ['GAP stale（自発コール）', /finalizeUtterance\(_it,'dropped',null,'gap_'\+_fresh\.reason\)/],
   ['GAP stale（**PTT回答**）', /finalizeUtterance\(_it,'dropped',null,'gap_answer_'\+_ans\.reason\)/],
-  ['GAP rebuild（**PTT回答**）', /finalizeUtterance\(_it,'rebuilt',_rebuiltAns\)/],
   ['mode切替のfilter除去', /discardQueuedUtterances\(speakQueue\.filter\(q=>!_keep\(q\)\),'mode_switch'\)/],
   ['非emergency text-only（TTS停止中）', /finalizeUtterance\(_it,'dropped',null,'cloud_tts_disabled_text_only'\)/],
   ['TTS失敗 text-only', /finalizeUtterance\(_it,'dropped',null,'tts_failed_text_only'\)/],
@@ -65,6 +72,9 @@ for (const [name, re] of [
   ['WebSpeech throw', /finalizeUtterance\(currentSpeakItem,'dropped',null,'webspeech_throw'\)/],
   ['現在発話の割込み', /finalizeUtterance\(currentSpeakItem,'dropped',null,'interrupted_before_start'\)/],
   ['実再生開始→spoken', /finalizeUtterance\(_it,'spoken'\)/],
+  // ★2026-09-06 ② 構造置換：authority から本文が作れない時も終端へ落とす。
+  ['authority から本文を作れない（自発）', /finalizeUtterance\(_it,'dropped',null,'gap_no_text_from_authority'\)/],
+  ['authority から本文を作れない（PTT回答）', /finalizeUtterance\(_it,'dropped',null,'gap_answer_no_text_from_authority'\)/],
 ]) check('受入①分岐が終端へ到達：' + name, re.test(renderer));
 
 // ★受入条件2：stable utterance_id が candidate→queue→表示→trace を貫く
@@ -77,10 +87,14 @@ check('受入② final trace に uid が出る', /UTTERANCE_FINAL','uid='\+_uid/
 check('受入② SPEECH_LATENCY に utterance_id が入る（製品側）',
   /utterance_id:\(item&&item\.utteranceId\)\|\|null/.test(renderer));
 // ★第3回P1-1：PTT回答の出口が displayEl と uid を渡すこと
-check('受入① PTT回答が採番して同じ要素を speak へ渡す',
+// ★構造置換後：GAPを含む回答は enqueue 時に表示しない（`_ansIsGap ? null : addMsg`）。
+//   uid は候補時点で採番し、表示要素は確定後に作って同じ uid を載せる。
+check('受入① PTT回答が採番し、GAPは確定まで表示しない',
   /const _ansUid = nextUtteranceId\(\);/.test(renderer)
-  && /const _ansEl = addMsg\('ai',reply,\{uid:_ansUid\}\);/.test(renderer)
+  && /const _ansEl = _ansIsGap \? null : addMsg\('ai',reply,\{uid:_ansUid\}\);/.test(renderer)
   && /displayEl:_ansEl, utteranceId:_ansUid,/.test(renderer));
+check('受入①-b GAP回答は確定後に同じ uid で表示要素を作る',
+  /_it\.displayEl = addMsg\('ai', _ansFinal, \{uid:_it\.utteranceId\}\)/.test(renderer));
 
 // ★受入条件3：WebSpeech は実開始境界でだけ spoken
 check('受入③ WebSpeech は onstart で報告', /utt\.onstart=\(\)=>\{[\s\S]{0,120}onStart\(\)/.test(renderer));
@@ -121,8 +135,12 @@ check('受入③ 再生前 reportSpoke を残していない',
 }
 
 // ★P1-1：翻訳の扱い
-check('P1-1 rebuild で訳を無効化して渡す',
-  /overlayPush\(\{ update:true, id:el\._ovlId, text:finalText, tr:'', trLang:'' \}\)/.test(renderer));
+// ★構造置換後：本文の後追い差し替えが無いので、**旧訳が残る競合そのものが起きない**。
+//   旧検査（差し替え時に訳を無効化して渡す）は amend 前提だった。
+//   代わりに「後追い差し替えを製品が持たないこと」を検査する。
+//   overlay.html 側の世代ガードは**残す**（翻訳は今も非同期で後から届くため）。
+check('P1-1 Overlay 本文の後追い差し替えが製品に無い',
+  !/overlayPush\(\{ update:true, id:el\._ovlId, text:finalText/.test(renderer));
 check('P1-1 翻訳promiseに世代を載せる', /gen:_genAtRequest/.test(renderer));
 check('P1-1 overlay が本文差替時に訳を捨てる',
   /d\.orig = line\.text; d\.tr = ''; d\.trLang = ''; d\.gen = \(d\.gen\|\|0\) \+ 1;/.test(overlayHtml));
@@ -159,7 +177,9 @@ const grab = (src, name) => {
 };
 const names = ['addMsg', 'recordLunaTurn', 'amendLunaTurnById', 'dropLunaTurnById',
                'finalizeUtterance', 'discardQueuedUtterances', 'nextUtteranceId', 'speak',
-               'ensureConversationBox', 'saveConversationBox', 'conversationSessionKey', 'convoLog'];
+               'ensureConversationBox', 'saveConversationBox', 'conversationSessionKey', 'convoLog',
+               // ★2026-09-06 ② fan-out 監査：会話Boxの本文を**箱側から**読む関数も実物で動かす。
+               'lunaTurnTextById'];
 const parts = names.map(n => grab(renderer, n));
 check('実経路の関数群を renderer から取り出せる', parts.every(Boolean),
   names.filter((_, i) => !parts[i]).join(', '));
@@ -170,6 +190,7 @@ const ovlParts = ovlNames.map(n => grab(overlayHtml, n));
 check('Overlay 窓の関数を取り出せる', ovlParts.every(Boolean),
   ovlNames.filter((_, i) => !ovlParts[i]).join(', '));
 
+const ctxTraces = {};
 if (parts.every(Boolean) && ovlParts.every(Boolean)) {
   // ── Overlay 窓のミニ実装（実物の pushLine / textFor を動かす）──
   const rows = [];
@@ -231,7 +252,7 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
       overlayPush({ id, type: type === 'ai' ? 'ai' : 'drv', name: 'ENG', text, lang: 'ja' });
       return id;
     },
-    diagnosticLog: () => {}, console,
+    diagnosticLog: (tag, line) => { (ctxTraces[tag] = ctxTraces[tag] || []).push(String(line)); }, console,
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
@@ -251,31 +272,82 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
     return b && Array.isArray(b.turns) ? b.turns.filter(t => t.who === 'luna').map(t => t.text) : [];
   };
 
-  // ── ③ 別Luna発話を挟んだ rebuild（P1-3 の本体）────────────────
-  vm.runInContext("var elA = addMsg('ai','後ろ3.4秒。1.2秒縮んだ。');", ctx);
+  // ── ③ 別Luna発話を挟んでも、確定本文だけが箱に入る ────────────
+  //   ★2026-09-06 ② 構造置換：候補は表示も記録もしないので「訂正する」ではなく
+  //     **「候補が一度も入らない」**が新しい正解。割込み発話を巻き込まないのは不変。
   vm.runInContext("var elMid = addMsg('ai','左に車。');", ctx);   // ★割込み
-  vm.runInContext("finalizeUtterance({text:'後ろ3.4秒。1.2秒縮んだ。',kind:'gap_trend',displayEl:elA},"
-    + "'rebuilt','後ろ2.9秒。');", ctx);
-  check('③ 割込みがあっても正しい turn を訂正する（P1-3）',
+  vm.runInContext("var elA = addMsg('ai','後ろ2.9秒。');", ctx);   // 確定後の fan-out 相当
+  vm.runInContext("finalizeUtterance({text:'後ろ2.9秒。',kind:'gap_trend',displayEl:elA},"
+    + "'spoken','後ろ2.9秒。');", ctx);
+  check('③ 確定本文だけが会話Boxに入る（候補は入らない）',
     lunaTexts().includes('後ろ2.9秒。') && !lunaTexts().includes('後ろ3.4秒。1.2秒縮んだ。'),
     JSON.stringify(lunaTexts()));
   check('③ 割込み発話は消していない', lunaTexts().includes('左に車。'), JSON.stringify(lunaTexts()));
-  check('③ Overlay も最終本文になる', ovlTextOf(ctx.elA._ovlId) === '後ろ2.9秒。',
+  check('③ Overlay も確定本文になる', ovlTextOf(ctx.elA._ovlId) === '後ろ2.9秒。',
     String(ovlTextOf(ctx.elA._ovlId)));
 
-  // ── ① 翻訳前後の rebuild 競合（P1-1）──────────────────────────
-  vm.runInContext("var elT = addMsg('ai','後ろ5.0秒。');", ctx);
+  // ── ① 翻訳は今も非同期で後から届く。世代ガードは残す（P1-1）──────
+  //   本文の後追い差し替えは無くなったが、**訳の到着順**の問題は消えていない。
+  vm.runInContext("var elT = addMsg('ai','後ろ7.1秒。');", ctx);
   const idT = ctx.elT._ovlId;
-  overlayPush({ update:true, id:idT, tr:'5.0 seconds behind.', trLang:'en', gen:0 });  // 訳が先に到着
+  overlayPush({ update:true, id:idT, tr:'7.1 seconds behind.', trLang:'en', gen:0 });
   check('① 訳が到着すると訳を表示する（前提）',
-    ovlTextOf(idT) === '5.0 seconds behind.', String(ovlTextOf(idT)));
-  vm.runInContext("finalizeUtterance({text:'後ろ5.0秒。',kind:'gap_trend',displayEl:elT},"
-    + "'rebuilt','後ろ7.1秒。');", ctx);
-  check('① rebuild 後に旧訳が残らない（P1-1）',
-    ovlTextOf(idT) === '後ろ7.1秒。', String(ovlTextOf(idT)));
-  overlayPush({ update:true, id:idT, tr:'5.0 seconds behind.', trLang:'en', gen:0 });  // 遅れて届く旧訳
+    ovlTextOf(idT) === '7.1 seconds behind.', String(ovlTextOf(idT)));
+  //   本文が別経路で変わった時に、古い世代の訳が上書きしないこと。
+  overlayPush({ update:true, id:idT, text:'後ろ8.4秒。', tr:'', trLang:'', gen:0 });
+  overlayPush({ update:true, id:idT, tr:'旧世代の訳', trLang:'en', gen:0 });  // 遅れて届く旧世代
   check('① 遅れて届いた旧世代の訳を弾く（P1-1）',
-    ovlTextOf(idT) === '後ろ7.1秒。', String(ovlTextOf(idT)));
+    ovlTextOf(idT) === '後ろ8.4秒。', String(ovlTextOf(idT)));
+
+  // ── ★② fan-out 監査（Codex ②P1 差戻し 2026-09-06）───────────────
+  //   `lunaTurnTextById()` が会話Boxを `x.id` で検索していた。実キーは `turn_id`。
+  //   そのため `box_text` が常に空になり、4出力が実際には同文でも
+  //   `fanout_match=false` を記録していた。**trace 項目の存在だけを見ていて気づけなかった。**
+  {
+    ctxTraces.UTTERANCE_FINAL = [];
+    vm.runInContext("var elF1 = addMsg('ai','前5.5秒。');", ctx);
+    vm.runInContext("var elMid2 = addMsg('ai','右に車。');", ctx);   // ★間に別のLuna発話
+    vm.runInContext("var elF2 = addMsg('ai','後ろ2.2秒。');", ctx);
+    // 対象を **turn_id で名指し**して一致を証明する（別発話が混ざっても取り違えない）
+    vm.runInContext("finalizeUtterance({text:'前5.5秒。',kind:'gap_trend',displayEl:elF1},'spoken','前5.5秒。');", ctx);
+    vm.runInContext("finalizeUtterance({text:'後ろ2.2秒。',kind:'gap_trend',displayEl:elF2},'spoken','後ろ2.2秒。');", ctx);
+    const finals = ctxTraces.UTTERANCE_FINAL || [];
+    check('② 会話Boxを turn_id で読める（実モジュール）',
+      vm.runInContext("lunaTurnTextById(elF1._turnId)", ctx) === '前5.5秒。',
+      String(vm.runInContext("lunaTurnTextById(elF1._turnId)", ctx)));
+    for (const [label, want] of [['前5.5秒。', 'elF1'], ['後ろ2.2秒。', 'elF2']]) {
+      const line = finals.find(l => l.includes('tts_text="' + label + '"'));
+      check(`② fanout_match=true を残す：${label}`,
+        !!line && /fanout_match=true/.test(line)
+        && line.includes('overlay_text="' + label + '"')
+        && line.includes('box_text="' + label + '"')
+        && line.includes('chat_text="' + label + '"'),
+        String(line));
+    }
+    check('② 間に別のLuna発話があっても取り違えない',
+      vm.runInContext("lunaTurnTextById(elMid2._turnId)", ctx) === '右に車。',
+      String(vm.runInContext("lunaTurnTextById(elMid2._turnId)", ctx)));
+
+    // ★不一致を作れること。一致ケースだけだと「常に true と書く」変異を検出できない。
+    ctxTraces.UTTERANCE_FINAL = [];
+    vm.runInContext("var elMis = addMsg('ai','前3.3秒。');", ctx);
+    vm.runInContext("amendLunaTurnById(elMis._turnId,'別の本文。');", ctx);   // 箱だけずらす
+    vm.runInContext("finalizeUtterance({text:'前3.3秒。',kind:'gap_trend',displayEl:elMis},'spoken','前3.3秒。');", ctx);
+    const misLine = (ctxTraces.UTTERANCE_FINAL || [])[0];
+    check('② 実際に食い違えば fanout_match=false になる',
+      !!misLine && /fanout_match=false/.test(misLine) && !/box_reason=/.test(misLine),
+      String(misLine));
+
+    // ★存在しない／drop済み turn では true を偽装しない
+    ctxTraces.UTTERANCE_FINAL = [];
+    vm.runInContext("var elGone = addMsg('ai','前9.9秒。'); dropLunaTurnById(elGone._turnId);"
+      + "finalizeUtterance({text:'前9.9秒。',kind:'gap_trend',displayEl:elGone},'spoken','前9.9秒。');", ctx);
+    const goneLine = (ctxTraces.UTTERANCE_FINAL || [])[0];
+    check('② drop済み turn では fanout_match を true にしない',
+      !!goneLine && !/fanout_match=true/.test(goneLine), String(goneLine));
+    check('② 検証不能な理由を残す',
+      !!goneLine && /box_reason=/.test(goneLine), String(goneLine));
+  }
 
   // ── ② queued GAP の duplicate discard ─────────────────────────
   vm.runInContext("var elD = addMsg('ai','後ろ4.0秒。');"
@@ -355,12 +427,13 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
     !!ctx.itQ && ctx.itQ.utteranceId === ctx.elQ._uid && ctx.itQ.displayEl === ctx.elQ,
     `item.uid=${ctx.itQ && ctx.itQ.utteranceId} el.uid=${ctx.elQ && ctx.elQ._uid}`);
 
-  // rebuild：Overlay と会話Box が最終本文になる
-  vm.runInContext("finalizeUtterance(itQ,'rebuilt','前7.3秒。');", ctx);
+  // ★2026-09-06 ② 構造置換：作り替えは無い。確定本文で fan-out された1本が
+  //   Overlay・会話Box・TTS のすべてで同じであることを見る。
+  vm.runInContext("finalizeUtterance(itQ,'spoken','前5.5秒。');", ctx);
   const qTurn = () => (boxOf().turns.find(t => t.turn_id === ctx.elQ._turnId) || {}).text;
-  check('受入④ PTT回答の rebuild が Overlay を直す',
-    ovlTextOf(ctx.elQ._ovlId) === '前7.3秒。', String(ovlTextOf(ctx.elQ._ovlId)));
-  check('受入④ PTT回答の rebuild が会話Boxを直す', qTurn() === '前7.3秒。', String(qTurn()));
+  check('受入④ PTT回答の確定本文が Overlay に出る',
+    ovlTextOf(ctx.elQ._ovlId) === '前5.5秒。', String(ovlTextOf(ctx.elQ._ovlId)));
+  check('受入④ PTT回答の確定本文が会話Boxに入る', qTurn() === '前5.5秒。', String(qTurn()));
 
   // stale discard：表示・Overlay・会話Boxから消える
   vm.runInContext(

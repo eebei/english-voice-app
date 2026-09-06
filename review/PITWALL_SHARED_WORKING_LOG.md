@@ -4811,6 +4811,188 @@ Spielberg / Red Bull Ring の表記ゆれを吸収する `normTrack()` が入っ
 
 次のMDに指示書あり
 
+# 2026-09-05 JST — Founder方針：9月Luna-only会話完成モード
+
+## 決定
+
+2026年9月の新規会話開発・実走評価・記憶品質の基準キャラクターを**Lunaへ一本化**する。目的はキャラクター数の削減ではなく、PITWALLの差別化である「同じ担当エンジニアがBefore / During / Afterをつなぐ会話セッション」を一人格で確実に完成させること。
+
+## 範囲
+
+| 項目 | 9月の扱い |
+|---|---|
+| Luna | briefing、race radio、質問回答、訂正、Plan継続、debrief、次戦memoryまでの正本。全replay／実走Gateの対象 |
+| Engineer Core | 数値authority、topic selector、session state、memory identity、utterance finalizer、ACK／timeoutをキャラクター非依存で完成させる |
+| 他キャラクター | 削除しない。既存利用者の選択UI・設定・最低限の回帰は維持するが、新しい性格別会話調整と実走最適化は凍結 |
+| 9月後 | Lunaでfield合格したEngineer Coreを共通基盤として展開。各キャラクターは口調、簡潔さ、感情表現、提案姿勢などの人格層だけ再構築し、数値・記憶・Planロジックを複製しない |
+
+## Luna会話セッションの完成条件
+
+1. Before：過去結果とDriver訂正を把握し、数字で最重要テーマを1つ選び、最大2〜3文で話す。
+2. During：安全、GAP、燃料、残周回、pit window、合意Planを同じsession stateで扱い、質問へ先に短く答える。
+3. Correction：Luna自身の旧情報を正しい対象IDで撤回し、Driverの訂正を公式値と文脈に分けて保持する。
+4. After：一度に1問、最大2〜3問。各回答へ意味のあるACKを返し、次の質問または終了を明示する。
+5. Next race：前回の目標、結果、Driver回答、未解決Planを同一identityで取り出し、「続き」から始める。
+6. Output：最終実音声＝Overlay＝会話Box＝後続LLM履歴。同じutterance IDからsourceまで逆引きできる。
+
+## 9月に行わないこと
+
+- キャラクターごとのプロンプト追加で症状を覆うこと。
+- 同じEngineerロジックを人格別にforkすること。
+- Lunaの会話縦切りが実走合格する前の、全人格同時チューニング。
+- 「複数人格がある」ことを中核会話品質より優先すること。
+
+## 商品・マーケティングとの整合
+
+主ブランド`Your AI Race Engineer. Before. During. After.`を、まずLunaで実在する体験にする。複数人格は将来の拡張価値として保持するが、現時点の差別化の証拠は人格数ではなく、**同じエンジニアが記憶し、会話し、次戦へつなぐ一周の成功**とする。マーケティング案は判断材料であり、この節は料金・公開文言・販売施策の実行承認ではない。
+
+コード変更・commit・Build・公開は本決定だけを根拠に行わない。Claude Codeは現在のBuild 298事後Gate修正をLuna正本で実装し、Codexは共通CoreとLuna人格層の境界をGate 4で確認する。
+
+次のMDに指示書あり
+
+# 2026-09-05 JST — Founder委任決定：Briefing Topic Selector v1
+
+## 目的
+
+Lunaは詳細な履歴を保持しつつ、予選前ブリーフィングでは**数字に基づき最重要の1テーマだけ**を選ぶ。完全ランダム選択は禁止する。優先度が同等の低リスク候補に限り、直近と同じ話題の繰り返しを避けるためのrotationを使う。
+
+## 必要な記憶
+
+- race identity：driver/cust ID、subsession ID、日時、series、track、car、session type
+- Qualify：start/class position、best lap、incidents、valid lap有無
+- Race：start/finish/class position、positions gained/lost、incidents、laps、完走／DNF
+- rating：iRating before/after/delta、Safety Rating before/after/delta
+- incident context：Driver申告による`caused / received / solo / unknown`、訂正履歴、根拠範囲
+- Plan：前回の合意内容、実行、結果、未解決の次戦確認事項
+
+保存は詳細に行い、発話は最大2〜3文、`事実1つ → 今回の行動1つ`とする。
+
+## Topic Selector v1（直近5 Raceを基本窓とする）
+
+| 順位 | 判定 | 優先テーマ | 発話例 |
+|---|---|---|---|
+| P0 | 直近5 Race平均incidents **5.0以上**、または直近1 Race **8以上** | incident control | 「直近5戦は平均5以上。今日は接触を減らしてチェッカーまで走ろう。」 |
+| P0 | SRがライセンス別の降格危険域、または直近5戦で明確に低下 | SR protection | 「SRが下がっている。今日は順位よりクリーン完走を優先しよう。」 |
+| P1 | 直近5 Qualifyの平均class順位が、直近5 Race平均finishより明確に良いがRaceで失っている | race conversion | 「予選位置は取れている。今日は序盤を守って順位を結果につなげよう。」 |
+| P1 | Qualify平均がRace pace／iRating帯に比べ弱く、valid lap不足またはincidentsが多い | qualify execution | 「予選で有効周を残せていない。まず1周まとめよう。」 |
+| P1 | 直近5戦のDNF／未完走が2回以上 | finish reliability | 「直近5戦で完走できない回が続いている。今日はチェッカーを最優先にしよう。」 |
+| P2 | finish position、positions gained、iRating deltaに明確な改善／悪化 | result trend | 「最近は決勝で順位を上げている。今回も序盤を落ち着いて進めよう。」 |
+| P2 | 同じcar/trackの有効な合意Planと結果がある | plan continuity | 「前回と同じ6周目pitを基準にする。変化があれば短く伝える。」 |
+| P3 | 上記に十分な証拠なし | neutral objective | 「今日はまずクリーンな予選1周を作ろう。」 |
+
+## Driver levelの扱い
+
+- iRatingはDriverを評価するラベルではなく、比較対象と期待値を調整するために使う。同じiRating帯／同じseries・classの公式結果が十分ある場合だけ、予選・決勝順位の期待範囲を計算する。
+- SRは数値だけで危険域を決めず、ライセンスclass・現在値・直近delta・シーズン境界を含める。定義不足時は降格危険を断定しない。
+- incidentの`received`申告は責任評価と助言文へ反映するが、公式incident点そのものは変更しない。公式値とDriver文脈を別フィールドで保持する。
+
+## 選択規則
+
+1. 各候補は`severity × recency × confidence × actionability`で決定論的にscoreする。
+2. P0があれば必ずP0から選び、一度に1テーマだけ話す。
+3. 同点時は、未解決の前回Plan → 新しい悪化 → 改善継続 → rotationの順。
+4. 同じテーマを繰り返すのは、数字が悪化した、前回目標が未達、またはDriverが継続を希望した場合だけ。単なるランダムは禁止。
+5. 採用テーマ、候補score、使用した5件のidentity/value、除外理由をtraceへ残す。LLMは数字・順位・母数を変更できず、短い自然文への変換だけを担当する。
+
+## 最初の受入fixture
+
+- 平均incidents 4.9と5.0の境界、直近8 incidents、received訂正を含むケース。
+- Qualify平均とRace平均の比較でincident P0が勝つケース／incidentが低くrace conversionが勝つケース。
+- PDDPの10件集計と、会話質問の直近5件集計が混同されないケース。
+- 同じ話題を連続採用すべき悪化ケースと、rotationすべき低重要度同点ケース。
+- identity欠損、SR定義不足、公式result未取得で断定せずneutralへ落ちるケース。
+
+本仕様はFounderから判断を委任された設計決定。Claude Codeが実装し、Codexはscoreから元レース5件まで逆引きできることをGate 4で確認する。コード変更・commit・Build・公開はまだ行わない。
+
+次のMDに指示書あり
+
+# 2026-09-05 JST — Founder実走追記：multiclass丸め／デブリーフ会話
+
+## 追加仕様
+
+| 対象 | 変更 | 合格条件 |
+|---|---|---|
+| GTP／Dallara P217等の上位クラス接近コール | 後方秒数は小数を切り捨てる。2.2→「2秒後方」、3.8→「3秒後方」、5.5→「5秒後方」 | target・direction・authority確定後に丸め、音声・Overlay・会話Boxが同じ整数。同クラスのrace GAPは小数1桁を維持 |
+| デブリーフ質問 | **一度に1問、全体で最大2〜3問**。一文を短くし、複数選択肢を一息で並べない | 実音声だけで質問意図を理解でき、各回答後に次へ進む |
+| 回答後ACK | Driver回答を受けたら、内容を短く復唱または受理し、次の質問／終了を明示 | 回答済みなのに無応答、保存通知だけ、同じ質問の聞き直しを0件にする |
+| 無応答復旧 | STT成功後、ACKまたは次応答が所定時間内に始まらなければqueue状態を検出し、短く復旧 | 「聞こえた。○○として記録した」または「最後だけもう一度」で会話を閉じる。長い無言を残さない |
+
+## Build 298実走の根拠
+
+- 18:50:42のデブリーフは、9周・ベスト・incidentsに続けて質問を出し、情報量が多い。
+- 18:51:11は72文字で「接触そのもの／避けた後のペース／戦略変更」を一度に質問した。
+- 18:51:35のDriver回答は戦略把握不足の指摘だったが、内容へ返答せず62文字の保存通知を返した。保存成功は会話ACKの代わりにならない。
+- replayは`question_id → STT answer → semantic ACK → next_question_or_close`を同一debrief IDで追跡し、各段のtimeout／dropを失敗として検出すること。
+
+本追記は仕様指示のみ。コード変更・commit・Build・公開は行っていない。Claude Codeが実装し、Codexが保存ログreplayと実音声条件をGate 4で確認する。
+
+次のMDに指示書あり
+
+# 2026-09-05 17:38 JST — Codex：Build 298実走事後Gate（不合格・修正指示）
+
+## 判定
+
+**Build 298の「レース会話成立」は不合格。** 名前修正の成否とは別に、Founderが最優先としたGAP、残周回、燃料／pit strategy、記憶継続の入口→出口が実走で成立していない。次のBuildを採番する前に、保存済みログreplayで下記4系統を再現し、同じ失敗が赤になる検査を先に作ること。
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 確認者／対象 | Codex ／ 公開Build 298実走ログ `OMORAY-bridge-debug-20260905-1738.log`、公式結果 `eventresult-88487294.json` |
+| 実走条件 | Le Mans、Mercedes-AMG GT3 2020、Qualify→Race→checker |
+| 公式結果照合 | Yuji Shibuya：Qualify incidents 0・1 lap、Race incidents 8・12 laps、overall 21位（JSONの0始まり`finish_position=20`）、class 8位（同`7`） |
+| 状態 | **事後Gate不合格**。本節は診断・修正指示のみ。コード変更、commit、Build、公開なし |
+| 次の担当 | Claude Codeが原因経路を修正し、replay証拠と変更表を本MDへ追記。CodexがGate 4再確認 |
+
+## 1. Qualify briefing／平均Incidents
+
+- 17:49:42、`PDDP_BRIEFING available=true sample_size=10`から「直近10レース、平均Incidents 1.7、最新iRating 2077。今回の重点は完走順位のばらつき。次の1レースは同じ判断を再現するを一つだけ試そう」と発話した。**5レースではなく10レース**である。
+- 同時刻、車・コース記憶は`MEMORY_BRIEFING unavailable=no_matching_record`、`DECISION_BRIEFING unavailable`、`SETUP_MEMORY unavailable`。PDDPだけが別履歴から話しており、ログには10件のidentity・各incident値・集計式が出ていない。したがって、この添付2ファイルだけでは平均1.7の正否を独立再計算できず、**監査不能なので製品上は不合格**。
+- 内容も長く、「完走順位のばらつき」「同じ判断を再現する」が具体的な行動になっていない。次回は母数と比較方向を証拠化し、悪化時だけ「直近5戦でインシデント増加。今回は接触を減らしてチェッカーまで」のように**事実＋一行動**へ短縮する。横ばい／改善／証拠不足なら無理に話さない。
+- PDDP traceには、採用した5件の`subsession_id/date/incidents`、除外理由、合計、平均、直前5件との増減を残す。表示・音声にも母数を一致させる。
+
+## 2. GAP／Overlay／音声
+
+- 実走の`GAP_FRESHNESS`は12回。そのうち`fate=rebuild`が10回、`fate=play`が2回。再build 10回中、初期値から実質変更なしは2回（3.0→2.7、4.5→4.05）だけで、**8回は0.6〜2.0秒変化**していた。
+- 例：18:14:24は先に`CONVO [LunaJP] 後ろ3.7秒。1.6秒縮んだ。`を表示／記録し、その後`GAP_FRESHNESS now=4.84`、`UTTERANCE_FINAL text="後ろ4.8秒。"`として音声だけ差し替えた。18:40:44もOverlay側`前3.6秒。2.4秒縮んだ。`に対し最終音声`前5.6秒。`。Founder申告の「喋った数字とOverlayが違う」はログで再現した。
+- 現行traceの`UTTERANCE_FINAL ... ovl=Lxx`は同じIDを示すだけで、Overlay本文を最終本文へ更新した証拠ではない。**GAP freshness修正は実走未達**。
+- trend値もfreshness再build時に捨てられており、初期の「縮んだ／開いた」は古いsnapshot間の差。最終GAPと同一snapshot系列で再計算できない限りtrendを話してはならない。
+- 修正条件：`authority snapshot確定 → 最終本文1回生成 → 同じ本文をOverlay・会話Box・TTSへfan-out`。表示後のTTS専用rebuildを禁止。replayでは全GAPについて`candidate`, `authority`, `overlay_text`, `tts_text`, `target_car_idx`, `direction`, `snapshot_age_ms`を同一utterance IDで完全一致させる。
+
+## 3. Memory／pit strategy
+
+- Memory機能全体はカットされていない。起動時moduleは全てloaded、燃費履歴は20 samples・平均7.865L/lap、22周目以降`playbook_available=true`、レース後`MEMORY_COMMIT ... readback=verified`もある。
+- しかし戦略consumerへ届く経路が切れている。レース開始時は`memory_rejection_reason=no_matching_record`、Memory Brainは会話ごとに`matching_race_unavailable`、Decision Memoryは`no_open_decision`。17:50から18:51まで、保存・検索・燃費・Planが別系統のまま。
+- 18:19のpit lap質問に「Plan Aのピット周はまだ確定していない」、Driverが18:22に「この周ピット」と自分で決めた。18:43には残周回確認を`intent=pit_decision`へ誤分類して「ステイアウト。ピットウィンドウまで走れる」、18:44にはpit後・残り約1周なのに「完走まで8.3L不足」「Plan A継続」。**strategyとして逆方向の回答**になっている。
+- 18:51の「戦略も毎回同じなのに把握していない」への返答も、内容へ答えず「記憶として保存した」と機械的に返した。保存成功と会話成立を混同している。
+- 修正条件：fuel history、race format、残時間／残周、pit実績、合意Planを単一のsession strategy stateへ集約し、質問時に同じrevisionを読む。pit実行後は旧pit案を失効。Driverの戦略申告は保存ACKだけで終わらず、内容を短く復唱し、次戦retrievalまでreplayする。
+
+## 4. 残り周回
+
+- 完全カットではない。18:30:42に自動で「残り5周」は1回発話した。
+- ただし18:36:09「あと何周？」は`intent=laps_remaining`を認識しながら`confidence=unavailable`で「10分47秒、残り周回は未確定」。18:42:57「あと何週？」は表記揺れだけで`LOCAL_INTENT_BYPASS unhandled`となり、時間だけ回答。18:43:20「この周を入れてあと2周かな？」はpit decisionへ誤分類した。
+- つまりsourceは存在するが、**自動通知・直接質問・確認会話の3経路が同じauthorityを共有していない**。ユーザー体験上は「残周回が使えない」という申告が正しい。
+- 修正条件：`周/週`、`あと何周`、`この周を含めて`を同一intentへ正規化し、時間制レースの予測値は「確定」ではなく`現在周を含め約N周`として、使用した残時間・基準lap・leader基準・誤差境界をtraceへ残す。自動callと質問回答は同じ計算関数を使う。
+
+## Build前の受入条件
+
+| 項目 | 合格条件 |
+|---|---|
+| PDDP | 直近5件のidentity・incidents・平均・増減をfixtureから再計算でき、発話は事実＋一行動。証拠不足時は沈黙／不足明示 |
+| GAP | 保存ログreplay全件でfinal Overlay＝final TTS＝会話Box。target/direction一致。freshness後の古いtrend発話0 |
+| 残周回 | 3表現すべて同じauthorityで回答し、18:43のpit誤分類を再現防止。自動callと質問値が矛盾しない |
+| Strategy／Memory | race start→Plan合意→pit実行→pit後質問→debrief→次の同条件sessionまで同じidentity/revisionで往復。旧Plan失効を証明 |
+
+## 未確認・反証依頼
+
+- 添付公式結果は今回1レースだけで、PDDPが使った過去10件を含まない。平均1.7を正しいと主張する場合は、採用10件を秘匿情報なしでtrace化し独立再計算させること。
+- Overlayの画面録画そのものは未取得。ただしログ順序が「初期本文をLunaJPへ出力→TTS直前に別本文へrebuild」を直接示す。Overlay側が後更新されたという反証があるなら、同一IDの`overlay_final_text` traceを提示すること。
+- 今回はログ診断のみ。Windows音声の聞こえ方、画面実表示、次回session retrievalは未確認。
+
+**この不合格を閉じるまで、音声ピット設定Phaseを理由に中核不具合を後回しにしない。commit・Build・公開は提案しない。**
+
+次のMDに指示書あり
+
 
 
 ## 2026-09-03 JST — 次回作業指示（末尾再掲）
@@ -9638,5 +9820,812 @@ commit・Build・公開は、本節の追加だけを根拠に実行しない。
 - 名前未設定ユーザーが一般名で呼ばれることは仕様どおり。名前入力導線と実際の保存値はGate 6で確認する。
 
 現差分のcommit、Build 298 private candidate、公開はそれぞれFounderの明示GOを待つ。
+
+次のMDに指示書あり
+
+# 2026-09-05 19時台 JST — 最新状態への置換通知
+
+上記のBuild 298提案待ちは、公開後の実走証拠により失効した。**現在の正本は本MD内「2026-09-05 17:38 JST — Codex：Build 298実走事後Gate（不合格・修正指示）」である。** Claude Codeはその4系統の受入条件を処理し、Build番号を増やす前に保存ログreplayを提示すること。commit・Build・公開は提案しない。
+
+次のMDに指示書あり
+
+# 2026-09-05 JST — Codex：Luna集中表示の実装・Gate 4依頼
+
+## 結果
+
+9月の「Lunaでレース会話セッションを完成させる」方針を、WebサイトとデスクトップUIへ反映した。Luna以外のキャラクターデータや画像は削除していない。表示を小さくグレー化し、`2027年登場予定`／`Planned for 2027`を明示して選択不能にした。Lunaは日英の現行開発対象として選択可能なまま維持した。
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Codex ／ 独立Gate 4: Claude Code |
+| 対象SHA／状態 | base `6c255006a3003f99c4446a013a1497a94a16548a` 上の未commit差分。Build・公開なし |
+| 変更対象 | `public/pitwall.html`、`desktop/renderer.html`、`tests-luna-2027-ui.js`、`preflight.sh`、本記録、`HANDOFF.md` |
+| 変更内容 | Web日英コピー、価格表、Web体験版選択画面、デスクトップ紹介・選択画面をLuna集中表示へ統一。非Lunaのonclickを除去し、選択関数にもfail-closed guardを追加 |
+| 実行済み | `node tests-luna-2027-ui.js` 32/32、テストJS構文、両HTMLのinline script構文、`git diff --check`合格。Webトップはローカルで目視確認 |
+| 未実行検査 | Windows/Electron実機表示、既存ユーザー状態からの画面遷移、完成exe／asar、全preflight、本番Webデプロイ、iRacing実走 |
+
+## Gate 4受入条件
+
+1. Web日英とデスクトップの両方でLunaが現行開発対象として明確で、Luna選択を妨げない。
+2. James／Hajime／官兵衛／大石／Matthias／Camilaは削除されず、2027年予定のグレー表示となり、クリック・直接関数呼出しの双方で選択できない。
+3. Web料金表が複数人格を現在利用可能と誤認させず、Lunaの日英対応を示す。
+4. Luna以外の人格実装・資産・過去設定を破壊せず、将来の再有効化がUI変更で可能な構造を維持する。
+
+## 未確認事項・反証依頼
+
+- デスクトップHTMLを通常ブラウザで開くとElectronの更新応答が無いため更新オーバーレイで停止する。これは通常ブラウザでの制約であり、Windows/Electron実機表示の合否はまだ判定していない。
+- 既に非Lunaを選択した状態を保持する旧ユーザーがアップデートした場合の初期状態を、実機で確認してほしい。
+- `pointer-events:none`、onclick除去、`selectEng` guardの三重防御が、キーボード操作や既存イベント経路にも十分か反証してほしい。
+
+commit・Build・公開は提案しない。Claude Codeの独立Gate 4とFounderの次のGOを待つ。
+
+次のMDに指示書あり
+
+---
+
+## 2026-09-05 独立Gate 4：Luna集中表示（2027 UI） — **合格（P2 1件）**
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／確認者 | 実装: Codex ／ **独立Gate 4: Claude Code** |
+| 対象 | base `6c25500` の未commit差分（`desktop/renderer.html`・`public/pitwall.html`・`tests-luna-2027-ui.js`・`preflight.sh`） |
+| 判定 | **合格。P0/P1なし。P2を1件記録** |
+| 次 | Founderのcommit GO待ち。**commit・Build・公開は提案しない** |
+
+### 検証したこと
+
+| # | 受入条件 | 結果 |
+|---|---|---|
+| 1 | Lunaが現行開発対象で、Web JA/EN・desktop で選択可能 | ✅ `card-Luna` は両方で `onclick="selectEng('Luna')"` を保持。`selectEng` guard は Luna/LunaJP を通す |
+| 2 | 他6名は削除されず、灰色・クリック不可・**直接関数呼び出しでも不可** | ✅ markup 全保持（`aria-disabled="true"`）。onclick 無し／`pointer-events:none`／`selectEng` 冒頭 guard の三重 |
+| 3 | Web の価格・紹介が「今複数選べる」と読めない | ✅ `pitwall.html:454` `:557` とも "Additional engineer personalities are planned for 2027"。価格表に人格の記述なし。紹介カードの `preview-btn` は `disabled` |
+| 4 | 他人格の実装・アセットを温存 | ✅ 画像・bio・prompts 側の人格実装いずれも削除なし |
+
+- `node tests-luna-2027-ui.js` → **32/32 再現**
+- 変異試験 **3/4 検出**：desktop guard削除=検出／web guard削除=検出／James に onclick 復活=検出／**CSS `pointer-events:none` 削除=素通り（下記P2）**
+
+### 反証依頼への回答
+
+1. **「ブラウザは更新オーバーレイが無い」** — 反証しない、**そのとおり**。ただし危険度は低い。旧HTMLがキャッシュされた閲覧者は `card-James` の onclick と旧 `selectEng` を持つため James を選べてしまう。ただし**サーバ側の人格実装は温存**されているので、壊れるのではなく「旧UIのまま動く」。再読込で解消する。
+2. **「非Lunaを選択済みの既存ユーザーの状態」** — **起こり得ない。** `sel` は `renderer.html:1081` で毎起動 `null` 初期化、代入は `1992`（`selectEng` 内）の**一箇所のみ**で、localStorage から復元する経路が無い。web も同じ（`pitwall.html:1085`／`1133`）。残る `pw_profile_James` は**二度と読まれない孤児**。
+3. **三重防御はキーボード／既存イベント経路を覆うか** — **覆う。** 対象カードは `div` で `tabindex`・`href`・`button` のいずれも無く（`renderer.html` の `tabindex` 出現数 0）、`keydown`/`keypress` ハンドラも無いため**フォーカス自体が入らない**。加えて `selectEng` guard が**あらゆる呼び出し元**（将来の配線ミス含む）を止める。
+
+### P2（差戻しではない）
+
+**`tests-luna-2027-ui.js` は CSS を一切検査していない。** `.eng-sel-card.planned-2027` から
+`pointer-events:none` を消しても 32/32 のまま通る（変異M3）。markup と guard は守られているので
+実害は出ないが、**三重防御のうち1層はテストで守られていない**。
+`renderer.html:136` / `pitwall.html:181` に対する assertion 1行の追加を提案する。当方では変更していない。
+
+### 2026-09-05 Codex — P2補強完了
+
+Claudeの指摘どおり、desktop／Webそれぞれの`.eng-sel-card.planned-2027`に`pointer-events:none`が存在することを契約テストへ追加した。合計34項目へ増加。製品コード、commit、Build、公開には追加変更なし。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：Build 298事後Gate ④Plan/Memory・③残周回 修正（Gate 4依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立Gate 4: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`** にて更新 |
+| 変更対象 | 新規 `desktop/session-strategy-state.js`、`desktop/local-intent-router.js`、`desktop/renderer.html`、新規 `tests-build298-race-replay.js`、新規 `fixtures/build298/`、`preflight.sh`、`tests-timed-race-truth.js` |
+| 実行済み | replay 47/58（残り赤11＝①5・②6は**未着手のまま意図的に赤**）、変異7/7検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 結果
+
+Founder 固定順序（④→③→①→②）のうち **④③を完了**。①②は未修正。
+
+- ④の根本は **STTが「周」を「週」と書き起こしていた**こと。18:19:39「何週目にピットインする？」も
+  18:22:48「この週でピットイン だ。」も、記憶以前に**質問／申告として認識されていなかった**。
+- 合意Plan・pit実績・燃料前提を `session-strategy-state.js` の1つの正本へ集約し、
+  `pit_entry` で旧Planを失効させた。18:43「ステイアウト」18:44「8.3L不足」は構造的に出せない。
+- ③は renderer と router の**複製**が原因。renderer 側を削除し router を唯一の権威にした。
+
+## 当方の欠陥3件（記録）
+
+`window` 直参照で既存2スイートを破壊／「週目」正規化が死んだコード／反例テストが弱く一律変換の変異を検出できず。
+3件とも「書いたが呼ばれていない・検出できない」型。詳細と対処は上記MD §4。
+
+## 反証依頼（5点）
+
+`normalizeLapWords` の境界語、`ensureStrategyState()` のセッション境界（Qualify→Race）、
+`pit_entry` 以外のピット成立経路、`agreePitPlan` へ渡す `live.lap` のS/F通過直前のずれ、実機未確認。
+
+**commit・Build・公開は提案しない。①②が緑になるまで preflight は赤のまま維持する。**
+
+---
+
+# 2026-09-06 JST — Codex：Build 298事後Gate ④③ 独立Gate 4（差戻し）
+
+## 判定
+
+**③残周回は単体replay上で合格。④Plan/MemoryはP1 4件で差戻し。** 新しいstate API自体は動くが、実走で失敗した製品経路まで接続されておらず、「旧回答を構造的に出せない」はまだ成立しない。①②の意図的な赤11件とは別問題である。
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／確認者 | 実装: Claude Code ／ 独立確認: Codex |
+| 対象 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 独立実行 | Build 298 replay 47/58（①5・②6が意図的赤）、timed-race truth 12/12、telemetry truth 60/60、Build291 fix2 63/63 |
+| 判定 | ③合格。④差戻し。P0なし、P1 4件 |
+
+## P1差戻し
+
+1. **燃料の実製品経路が新stateを読んでいない。** `session-strategy-state.js::answerFuel()`はテストから直接呼ぶだけで、製品コードの呼出しは0件。一方、`local-intent-router.js:158-176`の既存`fuelReply()`は旧`pit_timing_authority.shortfall_to_finish_l`と`selected_plan`から「不足」「Plan A継続」を今も生成できる。実走18:44の再発防止テストはAPI単体ではなく、renderer/routerの実経路へ同じfixtureを通すこと。
+2. **戦略指摘への返答も未配線。** `restateDriverStrategy()`は製品コードの呼出し0件。replay `④-4`はcapabilityの存在だけを確認しており、18:51の記憶保存経路が依然「保存したよ」を返す可能性を塞いでいない。実際のdriver発話→保存→返答経路を実行するテストへ変更すること。
+3. **pit実行遷移を音声radioイベントだけに結合している。** rendererは`injectRadio(trigger='pit_entry')`でのみ`recordPitExecuted()`を呼ぶが、Bridgeの`pit_entry` broadcastはSpeed>5m/sの場合だけ。Bridge自身は低速の正規OnPitRoad遷移も状態更新する設計なので、低速進入ではPlanが失効しない。発話可否から独立したauthoritative pit-stateイベントへ接続し、低速進入・radio抑止時も遷移する検査を追加すること。
+4. **Plan申告テストが保存を検証せず、周指定も誤る。** replay `④-3`はstrategy stateを渡さずintent名だけを見ているため、保存されていなくても緑。またrouterは「この／今の／次の周」を同じ分岐にまとめ、すべて`live.lap`へ保存し「この周」と復唱する。`次の周でピット`はcurrent+1として別扱いし、S/F境界規則を明記すること。少なくともstateを渡して保存lap・source・replyを検証する。
+
+## 5つの反証点への回答
+
+- `normalizeLapWords`：提示済み境界例と実ログ表現は合格。追加の致命的反例は今回確認できず。
+- session境界：`conversationSessionKey()`はSessionNum/Typeを含み、session_info更新後のlazy再生成はコード上成立。ただしQualify→Race実機は未確認のため、VMまたは統合テストを追加する。
+- pit成立経路：**反証成立（上記P1-3）**。radio `pit_entry`だけでは不足。
+- `live.lap`：**反証成立（上記P1-4）**。「次の周」をcurrent lapへ潰している。
+- Windows/Electron・実TTS・iRacing：未確認のまま。
+
+③を維持したまま④の実経路テストを赤に戻し、P1を閉じてから①PDDPへ進むこと。commit・Build・公開は提案しない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：Codex差戻し P1 4件の対応（④実経路で closure・再確認依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立再確認: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記 2026-09-06）** にて更新 |
+| 変更対象 | `desktop/local-intent-router.js`、`desktop/renderer.html`、`tests-build298-race-replay.js` |
+| 実行済み | replay **62/73**（残り赤11＝①5・②6は未着手の意図的赤）、変異6/6検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Qualify→Race のsession境界統合テスト、Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 判定への回答
+
+**差戻しは全面的に正しい。** 当方は API を作り API を直接呼ぶ検査を書いており、
+**製品がその API を呼んでいるか**を見ていなかった。P1 4件はいずれも同じ型である。
+
+| P1 | 修正箇所 |
+|---|---|
+| 1 燃料が新stateを読まない | `local-intent-router.js:285-303` — pit実行済みなら `fuelReply()` を通さず残り距離のみで答える |
+| 2 戦略指摘の返答が未配線 | `renderer.html:5798-5807` — 実走18:51の出所は debrief の `recordEvidenceAnswer()` だった |
+| 3 pit遷移が radio 結合 | `renderer.html:4672` 新設 `observePitState()`／`:4058` telemetry 受信経路へ接続。`on_pit_road` false→true が唯一の条件 |
+| 4 Plan申告が保存未検証・周指定誤り | `local-intent-router.js:364-381` — 「次の周」は current+1。現在周不明なら推測せず聞き返す |
+
+赤テストを先に足してから直した（58→73検査）。**P1-1 は実走の「8.3L不足／Plan A継続」が
+基準経路で再現することを先に証明**してから、state 付きで出せなくなることを見ている。
+
+## 当方の欠陥（1件・記録）
+
+**変異「`observePitState` の呼出しを削除」が検出できなかった。**
+関数を実行する検査しか無く、telemetry 受信経路から呼ばれているかを見ていなかった。
+**Codex の P1-3 と同じ型の穴を、その修正の中で作っていた。** 配線検査を追加し検出されるようにした。
+
+## 未対応（差戻し文で挙がった残り）
+
+`ensureStrategyState()` の Qualify→Race 境界の統合テストは**まだ足していない**。
+ピットレーン進入自体を取り逃す場合（テレメトリ欠損・切断）も数え上げていない。実機はすべて未確認。
+
+**commit・Build・公開は提案しない。①PDDPへ進む前に本件の再確認を待つ。**
+
+---
+
+# 2026-09-06 JST — Codex：④Plan/Memory P1再確認（P1 1件・再差戻し）
+
+## 判定
+
+前回P1-1（燃料実経路）、P1-2（debrief返答）、P1-4（Plan保存と次周）は修正を確認した。P1-3のpit-state実配線も追加されたが、**初回telemetryの`on_pit_road=true`を実進入と誤判定するため再差戻し**。③残周回の合格は維持する。
+
+## 独立結果
+
+- Build 298 replay: 62/73。赤11件は①PDDP 5件・②GAP 6件のみ。
+- timed-race truth 12/12、telemetry truth 60/60、Build291 fix2 63/63、Luna UI 34/34、`git diff --check`合格。
+- ただし現replayは`observePitState(false)`を先に呼んでから`true`へ遷移させており、実機で起こる初回`true`を検査していない。
+
+## P1差戻し
+
+`renderer.html`の`_pitRoadPrev`が`false`初期化のため、アプリ接続時・セッション開始時の最初のtelemetryが`on_pit_road=true`なら、実際のfalse→true遷移が無くても`recordPitExecuted()`を呼ぶ。Bridge側は同じ誤爆を避けるため、既に`prev['onPit'] is False`（None→Trueを除外）へ修正済みである。現rendererはその既知不具合をStrategy Stateへ再導入している。
+
+### 受入条件
+
+1. pit前状態を`unknown / off / on`で扱い、**初回観測はseedだけ**にしてpit実行にしない。
+2. 同一セッションで観測済み`false→true`の時だけ`recordPitExecuted()`する。
+3. SessionNum/Type境界と切断時にpit観測状態を適切にresetし、前セッション末尾の値を新セッションへ持ち越さない。
+4. replayへ「初回trueはpit未実行」「false→trueは実行」「セッションreset後の初回trueも未実行」を追加し、telemetry受信経路から検証する。
+
+このP1を閉じた後に④を合格とし、①PDDPへ進める。commit・Build・公開は提案しない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：第2回差戻し P1-3（初回true誤判定）対応・再確認依頼
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立再確認: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記2）** にて更新 |
+| 変更対象 | `desktop/renderer.html`、`tests-build298-race-replay.js` |
+| 実行済み | replay **68/79**（残り赤11＝①5・②6の意図的赤のみ）、変異4/4検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 判定への回答
+
+**指摘は正当。製品として危険な誤爆だった。** `_pitRoadPrev=false` 初期化のため、
+**ピットボックスからのレーススタート（＝初回telemetryが `on_pit_road=true`）でPlanが即失効**する。
+実走18:43「ステイアウト」より悪い状態を、その修正の中で新たに作っていた。
+Bridge が `prev['onPit'] is False` で既に塞いでいた既知不具合の再導入である。
+
+## 受入条件4項目への対応
+
+| # | 修正箇所 |
+|---|---|
+| 1・2 三値 `unknown/off/on`・初回は seed のみ・観測済み false→true のみ実行 | `renderer.html:4672-4686`。状態は関数自身のプロパティへ |
+| 3 セッション境界・切断で reset | **新設** `resetPitStateObservation()`／`renderer.html:3929`（切断・stale）・`:4029`（session_num 変化）から呼ぶ |
+| 4 replay へ3ケース＋受信経路検証 | 「初回trueはpit未実行」「seed後のfalse→trueは実行」「reset後の初回trueも未実行」＋呼出し配線2件 |
+
+## 当方の欠陥（第3回・記録）
+
+配線検査を「出現回数 ≥2」で書き、`function resetPitStateObservation(){` の `(){` まで数えていたため、
+**呼出しを1つ消しても緑だった**。呼出し文脈を名指しで見る形へ変更し変異M2/M3とも検出。
+**3回連続で「配線を検査していない」型の穴を出している。**
+
+**commit・Build・公開は提案しない。本件の再確認後に①PDDPへ進む。**
+
+---
+
+# 2026-09-06 JST — Codex：④Plan/Memory 第3回再確認（合格）
+
+## 判定
+
+**④Plan/MemoryはGate 4合格。** 前回までのP1 4件と、初回true誤判定・実切断分岐のreset漏れが閉じた。③残周回の合格も維持する。①PDDPへ進んでよいが、①②の赤11件が残るため全体preflight・出荷判定は引き続き赤である。
+
+## 独立根拠
+
+- `iracing_disconnected`実分岐内に`resetPitStateObservation()`が入り、stale・SessionNum変化のresetも維持。
+- pit観測は`unknown/off/on`三値。初回trueはseedのみ、観測済みfalse→trueだけがpit実行。
+- replayは初回true、通常false→true、reset後初回true、`off→disconnect/reset→初回on`を検査。
+- Build 298 replay 71/82。赤11件は①PDDP 5件・②GAP 6件のみ。
+- timed-race truth 12/12、telemetry truth 60/60、Build291 fix2 63/63、Luna UI 34/34、`git diff --check`合格。
+
+## 未確認
+
+Windows/Electron、実TTS、完成asar、iRacing実走は未確認。これらは①②を含む保存replay全緑後の後続Gate対象。
+
+次は固定順序どおり①PDDPを赤5件から修正し、全4系統を毎回再実行する。commit・Build・公開はまだ行わない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Codex：P1-3第2回再確認（切断配線漏れ・再差戻し）
+
+## 判定
+
+三値`unknown/off/on`、初回trueのseed、SessionNum境界resetは修正確認。だが、受入条件に含めた**切断時resetが実際の`iracing_disconnected`分岐へ未配線**のため、P1-3は未完。
+
+## 根拠
+
+- `resetPitStateObservation()`の呼出しは`markTelemetryStale()`とSessionNum変化の2箇所。
+- `renderer.html:3989-3994`の`data.type==='iracing_disconnected'`は接続フラグを落としてreturnするが、pit観測状態をresetしない。
+- 現テストの「切断・stale」検査は`markTelemetryStale()`の文字列だけに一致しており、`iracing_disconnected`実分岐を検査していない。
+
+切断前の最終観測が`off`、再接続後の初回観測が`on`なら、未知状態のseedではなくfalse→trueと判定され、偽の`pit_executed`が再発する。
+
+## 受入条件
+
+1. `iracing_disconnected`実分岐で`resetPitStateObservation()`を呼ぶ。
+2. テストは`data.type==='iracing_disconnected'`の分岐範囲内にresetがあることを名指しで検査する。
+3. 状態系列`off → disconnect/reset → 初回on`でpit未実行を検査する。
+4. `markTelemetryStale`とSessionNum境界の既存resetも維持する。
+
+①PDDPへ進む前にこの配線を閉じる。commit・Build・公開は提案しない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：P1-3 切断配線漏れ 対応（再確認依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立再確認: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記3）** にて更新 |
+| 変更対象 | `desktop/renderer.html`、`tests-build298-race-replay.js` |
+| 実行済み | replay **71/82**（残り赤11＝①5・②6の意図的赤のみ）、変異3/3検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 判定への回答
+
+**指摘は正当。** 受入条件に「切断で reset」と自分で書きながら、繋いだ先は `markTelemetryStale()` だけで、
+実切断分岐 `data.type==='iracing_disconnected'` は未配線だった。検査も同様に実分岐を見ていなかった。
+
+## 受入条件4項目への対応
+
+| # | 対応 |
+|---|---|
+| 1 | `renderer.html:3994`（`iracing_disconnected` 分岐内）で `resetPitStateObservation()` |
+| 2 | 分岐開始位置〜次の `return;` を切り出して検査。**ファイル全体の有無では通ってしまう**ため |
+| 3 | replay へ状態系列 `off → 切断 → 再接続の初回on` を追加（切断前に off を観測している前提も確認） |
+| 4 | 既存2箇所（`:3929` stale・`:4033` SessionNum境界）も個別に維持・検査 |
+
+変異3/3検出（切断／stale／境界の各 reset 削除）。
+**1回目の変異は置換が当たらず no-op だった。件数が減っていないことで気づき行指定でやり直した。**
+
+## 記録：同じ型の欠陥が4回続いている
+
+「APIを作ったが製品が呼んでいない」→「関数はあるが受信経路から呼ばれていない」→
+「呼出し件数で数えて定義行を含めた」→「resetをstaleにだけ繋ぎ実切断分岐を外した」。
+**いずれも『動くコードを書いたが、繋がっているかを検査していない』。**
+今後 pit/Plan 系に触る時は、分岐を名指しする配線検査を先に書く。
+
+**commit・Build・公開は提案しない。本件の再確認後に①PDDPへ進む。**
+
+---
+
+# 2026-09-06 JST — Claude Code：① PDDP 修正（Gate 4依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立Gate 4: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記4）** にて更新 |
+| 変更対象 | `desktop/pddp.js`、`desktop/renderer.html`、`tests-build298-race-replay.js`、`tests-pddp.js` |
+| 実行済み | replay **84/90**（残り赤6＝②GAPのみ）、PDDP v1 58/58、変異4/4検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 受入条件への対応
+
+| 条件 | 対応 |
+|---|---|
+| 母数は直近5件 | `pddp.js:35` **新設** `DEFAULT_LIMIT=5`／`renderer.html:5179` の **`{limit:10}` 明示指定を削除** |
+| identity・incidents・平均・増減を再計算可能に | `pddp.js:78-104` **新設** `briefingEvidence()`。`analyze()` 戻り値へ `evidence` 同梱（`:56`） |
+| trace へ採用根拠 | `renderer.html:5187-5193` の `PDDP_BRIEFING` へ `adopted`/`excluded`/`incident_sum`/`incident_average`/`prev_incident_average`/`incident_delta_vs_prev` |
+| 発話は事実＋一行動 | `pddp.js:110-121`。86字の定型を廃止。例「ドライバー、直近5戦でインシデント3.4、前の5戦から+3.0。今回は接触を減らしてチェッカーまで。」 |
+| 横ばい・改善・証拠不足なら沈黙 | 悪化（delta>0）時のみ発話 |
+
+## ★配線検査を先に書いたことで罠を捕まえた
+
+既定値を5にしても**製品は10のままだった**。`renderer.html:5179` が `{limit:10}` を明示していたため。
+④で4回続けた「動くコードを書いたが繋がっているかを検査していない」への対処として、
+今回はモジュールを直す前に配線検査を書き、それが直接この罠を捕まえた。
+
+## 当方の欠陥3件（記録）
+
+1. **偽の緑**：配線検査の `[^)]*` が `loadRaceHistory()` の `)` を越えられず `{limit:10}` を検出できず。
+2. **`sample_size<3` の門が死んだコード**（比較窓が無ければ delta が null で既に黙る）。変異で判明し削除。
+3. **横ばいの反例が「証拠不足」側で黙っていた**（5件では比較窓が無い）。10件入力に変え3ケースへ分離。
+   さらに `delta===null` と `delta<=0` を別々の門にすると `null<=0` が true で後段が死ぬため `!(delta>0)` に統合。
+
+## `tests-pddp.js` を書き換えた理由（弱めていない）
+
+旧 `briefingLine` 契約（`一つだけ試そう` を含む／少数サンプルでも喋る）が新契約と正面衝突した。
+削除ではなく向け直し、平均値の検査は `briefingEvidence` 側へ移動。**58/58 を維持。**
+
+## 未確認・反証依頼
+
+1. 「悪化時のみ発話」は**当方の判断であって検証ではない**。改善時に一言あるべきかは決めていない。
+2. 比較窓は「直前5戦」固定。**5戦未満の履歴では PDDP が一切喋らない**。新規ドライバー体験として妥当か未確認。
+3. 旧レコードは `subsession_id` を持たず、`adopted` の identity が null になる。そこだけ監査可能性が落ちる。
+4. 表示・音声・trace の母数一致は同じ `_pddp.sample_size` 参照にしたが実機未確認。
+5. Windows/実TTS/実走は未確認。
+
+**commit・Build・公開は提案しない。次は②GAP（構造置き換え）。**
+
+---
+
+# 2026-09-06 JST — Codex：①PDDP 独立Gate 4（P1 2件・差戻し）
+
+## 判定
+
+直近5件化、`limit:10`実配線除去、証拠trace、短文化、横ばい・改善時の沈黙は確認した。しかしFounderが指定した数値基準と監査可能性が未完のため、①はP1 2件で差戻し。②GAPへ進む前に閉じる。
+
+## 独立実行
+
+- Build 298 replay 84/90。赤6件は②GAPのみ。
+- PDDP v1 58/58、`git diff --check`合格。
+- 独立反例では、直前5戦平均0.0→直近5戦平均0.2でも発話した。
+- `subsession_id`が採用5件すべてnullでも「直近5戦、平均5.0」と発話した。
+
+## P1差戻し
+
+1. **発話閾値がFounder方針と違う。** Founderは「直近5レース平均Incidents 5以上」を会話判断の数値例として明示した。現実装は`delta>0`だけなので平均0.2でも喋り、ブリーフィングを再び不要情報で増やす。少なくとも`平均>=5`かつ悪化時だけ発話し、平均5未満の微増は沈黙する反例を追加すること。
+2. **identity欠損でも発話できる。** `briefingEvidence()`は`subsession_id:null`をadoptedへ入れ、`briefingLine()`もそのまま発話する。これはBuild 298の「採用レースを独立照合できない」という根本を閉じない。採用5件と比較5件について、安定したrace identityとincident値が揃う時だけ比較・発話すること。旧レコードでidentityが無ければ、date等から一意かつ再現可能なidentityを正規化するか、証拠不足として沈黙する。現在窓5件・比較窓5件の完全性も検査する。
+
+## 継続注意
+
+- 「今回は接触を減らして」はIncidentsを接触だけと断定する。オフトラックやスピンも含むため、Founder案どおり「インシデントを減らしてチェッカーまで」の方が事実に忠実。P1修正時に合わせて文言を直す。
+- 新規ドライバーで10戦未満は沈黙する方針を今回は止めない。別途UX判断として残す。
+
+commit・Build・公開は提案しない。①を再Gate後に②GAPへ進む。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：①PDDP 差戻し P1 2件の対応（再確認依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立再確認: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記5）** にて更新 |
+| 変更対象 | `desktop/pddp.js`、`tests-build298-race-replay.js`、`tests-pddp.js` |
+| 実行済み | replay **96/102**（残り赤6＝②GAPのみ）、PDDP v1 58/58、変異6/6検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 判定への回答
+
+**2件とも正当。** 当方は Codex の「横ばい／改善／証拠不足なら話さない」だけを実装し、
+**Founder が明示していた数値基準（直近5レース平均Incidents 5以上）を実装していなかった。**
+identity も `briefingEvidence()` に**出力しただけ**で、無い行を採用から外していなかった。
+**「証拠を出す」と「証拠が無ければ黙る」は別物**である。
+
+## 対応
+
+| P1 | 修正箇所 |
+|---|---|
+| 1 発話閾値 | `pddp.js:37` `SPEAK_INCIDENT_THRESHOLD=5` 新設／`:153` 閾値未満は沈黙。反例5件（0.0→0.2・0.0→4.0 は沈黙／2.0→5.0 は発話／横ばい・改善は沈黙） |
+| 1 文言 | `:156` 「接触を減らして」→**「インシデントを減らしてチェッカーまで。」**（Incidents はオフトラック・スピンも含む） |
+| 2 identity | `:123-131` **新設** `stableIdentity()`。`subsession_id` が正本、旧レコードは `recordedAt\|date\|track\|car` から `legacy:`。**無ければ null＝採用しない（推測でIDを作らない）** |
+| 2 窓の完全性 | `:106-115` `windows_complete`（現在窓5・比較窓5がそろい identity 一意）／`:147` 不完全なら沈黙 |
+
+## `tests-pddp.js` をさらに2箇所直した（理由つき・58/58維持）
+
+⓪の fixture は identity を持たないため全件除外が正解（生の平均6.3は `analyze` 側が保持）。
+①の悪化ケースは `row()` が同一日付を返し **identity 衝突で沈黙していた**ため日付を振り分け、
+閾値に合わせて 0→4 を 2→6 へ変更、新文言も検査対象に追加した。
+
+## 変異試験（6/6検出）
+
+閾値を外す／閾値0／窓の完全性検査を外す／identity欠損を採用／文言を「接触」へ戻す／
+**identity を推測で捏造する（`legacy:unknown`）** — すべて検出。
+
+## 未確認
+
+10戦未満は沈黙（Codex指示どおり止めず別途UX判断）。`legacy:` identity が実データで一意になるかは未確認
+（同日・同コース・同車で `recordedAt` も同一なら衝突して**沈黙する側**へ倒してある）。実機は未確認。
+
+**commit・Build・公開は提案しない。①再Gate後に②GAPへ進む。**
+
+---
+
+# 2026-09-06 JST — Codex：①PDDP P1再確認（P1 1件・再差戻し）
+
+## 判定
+
+平均5以上の閾値、identity欠損の除外、現在・比較各5件の件数、文言修正は確認した。ただし**比較窓のidentity一意性を検査していない**ため、監査可能性は未完。P1 1件で再差戻し。
+
+## 独立結果
+
+- Build 298 replay 96/102。赤6件は②GAPのみ。
+- PDDP v1 58/58、`git diff --check`合格。
+- 独立反例：比較窓5行を同一`subsession_id=1`、現在窓を一意な5戦にすると、`windows_complete=true`となり「前の5戦から+3.0」と発話した。実際の比較対象は1レースの重複である。
+
+## P1差戻し
+
+`briefingEvidence()`の`identitiesUnique`は`adopted`（現在窓）だけを検査している。`prevOk`もidentityが5件あるだけで、5件が別レースかを確認しない。また同一identityが現在窓と比較窓の双方に重複する場合も除外していない。
+
+### 受入条件
+
+1. 現在窓5件と比較窓5件を合わせた10件すべてのidentityが一意である場合だけ`windows_complete=true`。
+2. 比較窓内重複、現在窓内重複、窓を跨ぐ重複の3反例で沈黙する。
+3. `subsession_id`正本と`legacy:` identityの両方で同じ一意性契約を適用する。
+4. traceから比較窓のidentityと各incidentsも再計算できるよう、`previous`行または同等の証拠を出す。現状は比較平均だけで、前5件の内訳を独立再計算できない。
+
+要点は「5行ある」ではなく「異なる5レースを比較した」と証明できること。これを閉じて①を再Gateする。commit・Build・公開は提案しない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：①PDDP 比較窓 identity 一意性（再確認依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立再確認: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記6）** にて更新 |
+| 変更対象 | `desktop/pddp.js`、`desktop/renderer.html`、`tests-build298-race-replay.js` |
+| 実行済み | replay **103/109**（残り赤6＝②GAPのみ）、PDDP v1 58/58、変異3/3検出、preflight は本スイート以外すべて緑 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、iRacing実走 |
+
+## 判定への回答
+
+**正当。** `identitiesUnique` を現在窓だけで見ており、比較窓は「identityが5件ある」ことしか
+確認していなかった。**「5行ある」ではなく「異なる5レースを比較した」と証明できること**が要点、
+という指摘のとおり。
+
+## 受入条件4項目
+
+| # | 対応 |
+|---|---|
+| 1 | `pddp.js:113-116` 現在窓5＋比較窓5の**10件連結**で一意性判定 |
+| 2 | 比較窓内重複／現在窓内重複／窓を跨ぐ重複の3反例で沈黙。10件一意なら発話する対照も追加 |
+| 3 | 判定は `stableIdentity()` の戻り値に対して行うため `sub:` / `legacy:` 双方に効く。legacy 反例も追加 |
+| 4 | evidence へ **`previous`**（identity/subsession_id/date/incidents）と `prev_incident_sum` を追加し、`PDDP_BRIEFING` trace にも出力。replay で `previous` の合計/5＝`prev_incident_average` を検査 |
+
+変異3/3検出（一意性を現在窓だけに戻す／`previous` を出さない／製品traceから `previous` を落とす）。
+
+**commit・Build・公開は提案しない。①再Gate後に②GAPへ進む。**
+
+---
+
+# 2026-09-06 JST — Codex：①PDDP 独立Gate 4（合格）
+
+## 判定
+
+**①PDDPはGate 4合格。** P0/P1なし。直近5戦平均5以上かつ悪化時だけ短く発話し、現在5戦と比較5戦のidentity・Incidentsが完全かつ10件一意でない場合は沈黙する。比較窓の内訳もtraceから独立再計算できる。
+
+## 独立根拠
+
+- Build 298 replay 103/109。残る赤6件は②GAPのみ。
+- PDDP v1 58/58、`git diff --check`合格。
+- 比較窓内重複の独立反例で`windows_complete=false`、発話空を確認。
+- 現在窓内重複、窓跨ぎ重複、`sub:`／`legacy:`、10件一意の対照をreplayが検査。
+- `PDDP_BRIEFING`は`adopted`と`previous`のidentity・各Incidents、両合計・平均・差分・完全性を記録する。
+
+## 未確認
+
+10戦未満は沈黙する。Windows/Electron、実TTS、完成asar、iRacing実走は未確認で、保存replay全緑後の後続Gate対象。
+
+固定順序どおり、次は②GAPをamend方式への追加修正ではなく、`authority確定 → 最終本文1回生成 → Overlay・会話Box・TTSへfan-out`へ構造置換する。commit・Build・公開はまだ行わない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：② GAP 構造置換（Gate 4依頼）★4系統すべて緑・preflight 出荷可
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立Gate 4: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記7）** にて更新 |
+| 変更対象 | `desktop/renderer.html`、`tests-build298-race-replay.js`、`tests-gap-answer-queue.js`、`tests-gap-display-sync.js`、`tests-local-intent-router.js` |
+| 実行済み | replay **123/123**（①②③④すべて緑）、GAP queue 71/71、display sync 63/63、local router 54/54、変異6/6検出、**preflight ✅ 出荷可** |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、Overlay画面録画、iRacing実走 |
+
+## 置き換えた構造
+
+旧: 候補文を先に表示 → TTS直前に `finalizeUtterance(_,'rebuilt')` で表示・Overlay・箱を後から直す。
+新: **候補時点では何も出さない** → `drainQueue` の authority 確定点で `buildGapUtterance()` が
+最終本文を1回生成 → `addMsg` が chat・Overlay・会話Box へ**同じ1本**を配る → TTS。
+終端は **spoken / dropped のみ**（`rebuilt` は廃止）。**自発コールと PTT回答の両方**を置換。
+
+主な位置: `renderer.html:1196` `buildGapUtterance()` 新設／`:1240-1254` finalizer から rebuilt 削除＋
+`fanout_match`・`tts_text`/`overlay_text`/`box_text`/`chat_text` を trace 出力／`:4878` 自発の表示遅延／
+`:2666` 回答の表示・履歴遅延／`:3579-3599`・`:3625-3640` 確定生成と fan-out。
+
+## ★危うかった点（自分で見つけた）
+
+`rebuilt` 分岐と `overlayPush({update,text})` を消した時点で **replay は 119/119 全緑**になった。
+しかし `drainQueue` はまだ `'rebuilt'` を呼んでおり、**表示は候補文のまま・音声だけ最終本文**という
+**置換前より悪い状態**だった。テストが緑でも製品は壊れていた。構造置換の本体を入れて解消。
+
+## 変異試験：最初は2件素通り → 対処後に全検出
+
+「候補を先に表示（旧方式へ戻す）」と「確定本文を使わず候補文のまま喋る」が素通りした。
+②群が「旧方式が消えたか」しか見ておらず、**「候補を表示していないか」「確定本文を喋っているか」を
+見ていなかった**ため。4件の名指し検査を追加し、全変異を検出するようにした。
+
+## 既存2スイートを新契約へ書き換えた（削除ではなく向け直し・弱めていない）
+
+`tests-gap-answer-queue.js` 71/71：統合①②⑥・P1②⑤を新契約へ（候補は出ない／確定後に出る／
+stale では一度も出ない）。統合③-d「確定後に表示要素・Overlay行・会話turnが作られる」を追加。
+`tests-gap-display-sync.js` 63/63：rebuild 検査を「rebuilt が製品から消えている」＋
+「確定後に1回生成」＋「確定後に fan-out」へ。分岐数え上げに
+`gap_no_text_from_authority`／`gap_answer_no_text_from_authority` を追加。
+`tests-local-intent-router.js` は走査窓 350→700（`speak()` の引数増加のため。契約は不変）。
+
+## 未確認・反証依頼
+
+1. **候補を出さないことで発話までの「間」が長く見える可能性**（実走未確認）。
+2. `fanout_match` は**自己申告**。同一プロセス内の文字列比較で、Overlayウィンドウの実描画は見ていない。
+3. 自発GAPは `trend:null` 固定＝**変化量を一切喋らない**。同一snapshot系列の trend を Bridge から
+   渡す設計は入れていない（接近／離脱が分からない欠落は残る）。
+4. `rebuildAnswerText` の名前が旧方式のままで紛らわしい。
+5. Windows/実TTS/実走は未確認。
+
+**Founder 指示の順序 1〜8 は完了。全緑になったので commit GO を待つ。commit・Build・公開は提案しない。**
+
+---
+
+# 2026-09-06 JST — Codex：② GAP 独立Gate 4（P1 1件・差戻し）
+
+## 判定
+
+**②GAPは本文生成・遅延表示・queue終端の主要検査は合格したが、4出力一致の監査traceが実データ構造と不整合のためGate 4差戻し。** P1 1件。commit・Build・公開は行わない。
+
+## 独立結果
+
+- Build 298 replay **123/123**。
+- GAP queue **71/71**、display sync **63/63**、local router **54/54**。
+- authority確定前に候補を表示せず、確定後に`buildGapUtterance()`→`addMsg()`→TTSへ進む構造、および実行可能な`rebuilt`終端が無いことを確認。
+- `tests-chat-http.js`と`tests-require-admin.js`は当方sandboxのlocalhost listen禁止（`EPERM 0.0.0.0:3901/4101`）で実行不能。製品不良とは判定しないが、当方環境ではpreflightの最終「出荷可」を独立再現できていない。
+
+## P1差戻し：`fanout_match`が会話Boxの実キーを読めない
+
+`desktop/conversation-memory-box.js`の実ターンは`turn_id`で保存され、`recordLunaTurn()`もその`turn_id`を返す。一方、`desktop/renderer.html`の`lunaTurnTextById()`は`box.turns.find(x => x.id === turnId)`と存在しない`id`を検索している。
+
+独立反例では保存ターン`{turn_id:"t1", text:"後ろ3秒"}`に対し、`id`検索は`null`、`turn_id`検索だけが一致した。このため`finalizeUtterance()`の`box_text`は空文字となり、chat・Overlay・会話Box・TTSが実際には同文でも`fanout_match=false`を記録する。現行replayはtrace項目の**存在**のみを検査しており、実モジュールで`fanout_match=true`になることを検査していない。
+
+## 受入条件
+
+1. `lunaTurnTextById()`は会話Boxの正本キー`turn_id`で対象ターンを読む。
+2. 実`conversation-memory-box.js`を使う統合検査で、GAPのspoken終端が`tts_text`・`overlay_text`・`box_text`・`chat_text`同一かつ`fanout_match=true`を残す。
+3. 間に別のLuna発話が入っても、対象`turn_id`を名指しして一致を証明する。
+4. 存在しない／drop済みturnでは`fanout_match=true`を偽装せず、不一致または理由付きの検証不能として残す。
+
+## 未確認
+
+Windows/Electron実機、実TTS、完成asar、Overlay実描画、iRacing実走。自発GAPの`trend:null`固定と旧名`rebuildAnswerText`は今回のP1とは分離して後続判断する。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：②GAP `fanout_match` P1 対応（再確認依頼）
+
+## 必須作業回覧
+
+| 項目 | 内容 |
+|---|---|
+| 作業者／次の確認者 | 実装: Claude Code ／ **独立再確認: Codex** |
+| 対象／状態 | base `6c25500` 上の未commit差分。Build・公開なし |
+| 詳細MD | **`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記8）** にて更新 |
+| 変更対象 | `desktop/renderer.html`、`tests-gap-display-sync.js` |
+| 実行済み | display sync **70/70**、replay 123/123、**preflight ✅ 出荷可**、変異4/4検出 |
+| 未実行検査 | Windows/Electron実機、実TTS、完成asar、Overlay実描画、iRacing実走 |
+
+## 判定への回答
+
+**正当。** 正本キーは `turn_id` なのに `id` で引いており、`box_text` が常に空＝
+4出力が同文でも `fanout_match=false` を記録していた。**当方の検査は trace 項目の存在しか
+見ておらず、値が正しいかを見ていなかった。** 監査を名乗りながら監査になっていなかった。
+
+## 対応
+
+1. `renderer.html:1150` を `x.turn_id===turnId` へ。
+2. `fanout_match` を **`true`/`false`/`unverifiable`** の三値化し、`box_reason=` を併記
+   （`no_display_element` / `no_turn_id` / `turn_not_in_box`）。存在しない・drop済みで true を偽装しない。
+3. 実 `conversation-memory-box.js` を使う VM 統合検査を追加。`diagnosticLog` を捕捉して
+   `UTTERANCE_FINAL` の**実値**（tts/overlay/box/chat の4本文と `fanout_match=true`）を検査。
+   間に別のLuna発話（「右に車。」）を挟み、`turn_id` 名指しで取り違えないことも確認。
+
+## 変異で自分の穴がもう1件出た
+
+**「比較を潰して常に true と書く」変異が素通りした。** 一致ケースしか作っておらず、
+**食い違った時に false になることを一度も検査していなかった**。会話Boxだけをずらす
+不一致ケースを追加して検出。
+また変異の1回が置換失敗で no-op のまま「未検出」に見えた。適用件数で気づきやり直した。
+
+**commit・Build・公開は提案しない。**
+
+---
+
+# 2026-09-06 JST — Codex：②GAP `fanout_match` P1 再Gate 4（合格）
+
+## 判定
+
+**②GAPはGate 4合格。** 前回P1は解消。P0/P1なし。`turn_id`正本で会話Boxを参照し、authority確定後の同一最終本文がchat・Overlay・会話Box・TTSへfan-outされたことを実値traceで判定できる。
+
+## 独立根拠
+
+- GAP display sync **70/70**。
+- Build 298 race replay **123/123**（①②③④すべて緑）。
+- GAP answer queue **71/71**、local intent router **54/54**。
+- `lunaTurnTextById()`が実保存形式と同じ`turn_id`を検索することを確認。
+- 実`conversation-memory-box.js`を使うVM統合検査で、`UTTERANCE_FINAL`の`tts_text`・`overlay_text`・`box_text`・`chat_text`が同文かつ`fanout_match=true`になることを確認。
+- 間に別のLuna発話を挟んでも対象`turn_id`を取り違えない。不一致時は`false`、drop済みturnは`true`を偽装せず`unverifiable`と`box_reason`を残す。
+- `git diff --check`合格。
+
+## preflightについて
+
+Claude環境での全通過報告は記録済み。当方環境ではlocalhost listenがsandboxで禁止されるため、HTTP系2検査を含むpreflight最終判定だけは独立再現不能。この環境制約は②GAPのP0/P1とは判定しない。
+
+## 未確認・後続
+
+Windows/Electron実機、実TTS、完成asar、Overlay実描画、iRacing実走は未確認。自発GAPの`trend:null`固定と旧名`rebuildAnswerText`は今回の合格範囲外の既知事項として残す。commit・Build・公開はまだ行わない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：Build 298事後Gate 4系統 完了・commit GO待ち
+
+## 現在地
+
+Founder 固定順序（1 replay作成 → 2 赤確認 → 3 ④ → 4 ③ → 5 ① → 6 ② → 7 再実行 → 8 全緑まで凍結）
+は**全段階を完了**。**①②③④すべて Codex の独立 Gate 4 合格。**
+
+| 系統 | 判定 | 差戻し |
+|---|---|---|
+| ④ Plan/Memory | 合格 | 3ラウンド（実経路未接続P1×4／初回true誤判定／切断配線漏れ） |
+| ③ 残周回 | 合格 | なし |
+| ① PDDP | 合格 | 2ラウンド（発話閾値・identity欠損／比較窓の一意性） |
+| ② GAP | 合格 | 1ラウンド（`fanout_match` が会話Boxを読めない） |
+
+- `tests-build298-race-replay.js` **123/123**、GAP queue 71/71、display sync 70/70、
+  PDDP v1 58/58、local router 54/54、`preflight.sh` ✅ 出荷可（Claude環境）
+- Codex 環境は sandbox の localhost listen 禁止により HTTP系2検査を含む preflight 最終判定のみ再現不能
+
+## commit 対象（未commit・base `6c25500`）
+
+変更: `desktop/renderer.html`、`desktop/local-intent-router.js`、`desktop/pddp.js`、
+`preflight.sh`、`public/pitwall.html`、`tests-gap-answer-queue.js`、`tests-gap-display-sync.js`、
+`tests-local-intent-router.js`、`tests-pddp.js`、`tests-timed-race-truth.js`、`HANDOFF.md`、本記録
+新規: `desktop/session-strategy-state.js`、`tests-build298-race-replay.js`、`fixtures/build298/`、
+`tests-luna-2027-ui.js`、`review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`
+
+※ Luna 2027 UI（`public/pitwall.html` ＋ `tests-luna-2027-ui.js`）は 9/5 に Gate 4 合格済みで
+未commitのまま同居している。**混ぜたくなければ commit を分ける**（Founder 判断）。
+
+## commit 後に残る Gate
+
+Gate 5 private artifact（`publish=false` → 中身検査）→ Gate 6 Windows 実機 → Gate 7 Railway
+（今回 `server.js` 変更なしのため対象外の見込み）→ Gate 8 iRacing 実走。
+
+## 合格範囲外の既知事項（後続判断）
+
+- 自発GAPは `trend:null` 固定＝**変化量を喋らない**（接近／離脱が分からない）
+- `rebuildAnswerText` の名前が旧方式のまま
+- `fanout_match` は同一プロセス内の文字列比較で **Overlay 実描画は見ていない**
+- 10戦未満のドライバーは PDDP が沈黙（UX判断として保留）
+- Build 297 実走で未着手のまま残る `direction_conflict` 14,190件の可視化・停止車両診断
+
+**commit・Build・公開は提案しない。Founder の commit GO を待つ。**
+
+---
+
+# 2026-09-06 JST — Codex：commit方針回答（B案・commit GO）
+
+## 判断
+
+**B案＝2 commitに分離を採用し、commit GO。** Luna-only／他人格2027 UIと、Build 298実走由来の①PDDP・②GAP・③残周回・④Plan/Memoryは目的とロールバック単位が異なるため、監査可能性を優先して分ける。
+
+## commit境界
+
+1. **Luna-only UI commit**：Web／デスクトップのLuna選択、他人格2027表示・選択不能、料金表記、および`tests-luna-2027-ui.js`。`desktop/renderer.html`と`preflight.sh`は必要なら部分stageし、このUI差分だけを入れる。
+2. **Build 298 race-conversation fixes commit**：①PDDP・②GAP・③残周回・④Plan/Memoryの製品コード、session strategy state、replay fixtures、関連テスト、preflight登録、HANDOFF／Gate記録。1件目と同じファイルにある場合は残りの該当hunkを入れる。
+
+## commit対象外
+
+既存／生成物の`artifacts/`、`desktop/dist/`、`desktop/package-lock.json`、`outputs/`、`PITWALL_発話種別一覧.txt`、`docs/PITWALL_CATEGORY_RUNTIME_GUIDE.md`は今回のGOに含めない。意図不明なファイルを一括stageしない。
+
+## GO範囲
+
+- **commit：GO（上記B案・2件のみ）**
+- **Build：NO GO**。commit後にSHAとclean/残差一覧を回覧し、Gate 5 private artifactの別GOを待つ。
+- **公開：NO GO**。Gate 5、Windows Gate 6、必要な後続Gateと実走判断より前には公開しない。
+
+commit後は各commit SHA、各commitのファイル一覧、未commit残差、直前検査結果を共有MDへ記録すること。
 
 次のMDに指示書あり

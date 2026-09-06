@@ -527,17 +527,23 @@ const resetSpoken = () => { spokenTexts.length = 0; };
 
     await ask('後ろとのギャップは？');
     const answered = sandbox.speakQueue.filter(q => /local_/.test(q.kind || ''));
-    check('統合① 回答が queue に入り uid と表示要素を持つ',
-      answered.length === 1 && !!answered[0].utteranceId && !!answered[0].displayEl,
-      JSON.stringify(answered.map(q => ({ k: q.kind, uid: q.utteranceId, el: !!q.displayEl }))));
+    // ★2026-09-06 ② 構造置換（Founder指示）：契約が変わった。
+    //   旧「候補を先に表示 → TTS直前に作り替える」→
+    //   新「authority確定 → 最終本文を1回生成 → Overlay・会話Box・TTS へ fan-out」。
+    //   したがって **enqueue 時点では表示要素も Overlay 行も会話turnも存在しない**。
+    check('統合① 回答が queue に入り uid を持つ（表示はまだ作らない）',
+      answered.length === 1 && !!answered[0].utteranceId
+      && answered[0].deferredRender === true && !answered[0].displayEl,
+      JSON.stringify(answered.map(q => ({ k: q.kind, uid: q.utteranceId, el: !!q.displayEl,
+        deferred: q.deferredRender }))));
 
     const it = answered[0];
-    const ovlId = it.displayEl && it.displayEl._ovlId;
-    const turnId = it.displayEl && it.displayEl._turnId;
     const candidateText = it.text;
-    check('統合② 候補が Overlay と会話Box へ出ている',
-      !!ovlId && sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].text === candidateText
-      && !!turnId, `ovl=${ovlId} turn=${turnId}`);
+    check('統合② 候補は Overlay にも会話Boxにも出ていない',
+      Object.keys(sandbox.__ovl || {}).every(k => sandbox.__ovl[k].text !== candidateText)
+      && !(JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null') || { turns: [] })
+        .turns.some(t => t && t.text === candidateText),
+      `cand=${candidateText} ovl=${JSON.stringify(sandbox.__ovl)}`);
 
     // 同じ車で値だけ動かして rebuild を起こす（既存テストと同じ作法）。
     fakeNow += 6000;
@@ -548,9 +554,14 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     await sleep(15);
 
     const finalTts = spokenTexts[spokenTexts.length - 1];
+    // 表示要素・Overlay行・会話turn は **確定後にここで初めて**作られている。
+    const ovlId = it.displayEl && it.displayEl._ovlId;
+    const turnId = it.displayEl && it.displayEl._turnId;
     const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
     const turnNow = boxNow && (boxNow.turns.find(t => t.turn_id === turnId) || {}).text;
     const ovlNow = sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].text;
+    check('統合③-d 確定後に表示要素・Overlay行・会話turnが作られる',
+      !!it.displayEl && !!ovlId && !!turnId, `el=${!!it.displayEl} ovl=${ovlId} turn=${turnId}`);
 
     // ★rebuild が本当に起きたことを先に確かめる。起きていなければ ④ は
     //   「候補のまま一致した」だけで、rebuild 配線を何も証明しない。
@@ -603,9 +614,13 @@ const resetSpoken = () => { spokenTexts.length = 0; };
 
     const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
     const turnGone = !boxNow || !boxNow.turns.some(t => t.turn_id === turnId);
-    check('統合⑥ stale discard で Overlay から消える',
-      !!ovlId && sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].removed === true,
-      JSON.stringify(sandbox.__ovl[ovlId]));
+    // ★2026-09-06 ② 構造置換：候補は**そもそも表示していない**ので「消える」ではなく
+    //   「一度も出ていない」が新しい正解。旧契約（出してから removed:true にする）は
+    //   一瞬だけ画面に出てから消える挙動そのものであり、置換の対象だった。
+    check('統合⑥ stale discard では Overlay に一度も出ない',
+      !ovlId && Object.keys(sandbox.__ovl || {}).every(
+        k => !/後ろ[\d.]+秒/.test(String(sandbox.__ovl[k].text || ''))),   // ドライバーの質問文は対象外
+      `ovlId=${ovlId} ovl=${JSON.stringify(sandbox.__ovl)}`);
     check('統合⑦ stale discard で会話Boxからも消える', turnGone,
       JSON.stringify(boxNow && boxNow.turns.map(t => t.turn_id)));
     const msgsD = sandbox.messages || [];
@@ -644,14 +659,19 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     const elG = sandbox.addMsg('ai', '後ろ3.8秒。', { uid: sandbox.nextUtteranceId() });
     const midG = sandbox.pushMsg({ role: 'assistant', content: '後ろ3.8秒。' });
     const laterMid = sandbox.pushMsg({ role: 'assistant', content: '後ろ3.8秒。' });  // 同文の別発話
+    // ★2026-09-06 ② 構造置換：`rebuilt` は**廃止**した（表示してから直す構造をやめた）。
+    //   代わりに「終端が来るまで履歴に候補を積まない」ことと、
+    //   drop が**自分の1件だけ**を消すことを検査する。同文の別発話は触らない、は不変。
     const gapItem = { text: '後ろ3.8秒。', kind: 'local_nearest_gap',
                       displayEl: elG, messageId: midG };
-    sandbox.finalizeUtterance(gapItem, 'rebuilt', '後ろ0.6秒。');
-
+    sandbox.finalizeUtterance(gapItem, 'spoken', '後ろ3.8秒。');
     const own = sandbox.messages.find(m => m._mid === midG);
     const other = sandbox.messages.find(m => m._mid === laterMid);
-    check('P1② rebuild は自分の履歴だけを直す',
-      own && own.content === '後ろ0.6秒。', JSON.stringify(own));
+    check('P1② spoken は履歴を書き換えない（確定本文が既に入っている）',
+      own && own.content === '後ろ3.8秒。', JSON.stringify(own));
+    check('P1②-b rebuilt 分岐が製品から消えている',
+      !/outcome === 'rebuilt'/.test(fs.readFileSync(path.join(ROOT, 'desktop/renderer.html'), 'utf8')),
+      '表示後に本文を差し替える分岐が残っている');
     check('P1③ 同文の別発話は触らない',
       other && other.content === '後ろ3.8秒。', JSON.stringify(other));
 
@@ -666,12 +686,17 @@ const resetSpoken = () => { spokenTexts.length = 0; };
 
     // ⑤ local intent 出口が実際に messageId を渡しているか（配線）
     const _rsrc = fs.readFileSync(path.join(ROOT, 'desktop/renderer.html'), 'utf8');
-    check('P1⑤ local intent 出口が messageId を speak へ渡す',
-      /const _ansMsgId = pushMsg\(\{role:'assistant',content:reply\}\);/.test(_rsrc)
+    // ★構造置換後：GAP を含む回答は enqueue 時に履歴へ積まない（`_ansIsGap ? null : pushMsg`）。
+    //   確定後の materialize で `_it.messageId = pushMsg(...)` を割り当てる。
+    //   非GAPの回答は従来どおり enqueue 時に積む。両方を名指しで検査する。
+    check('P1⑤ 非GAP回答は enqueue 時に messageId を speak へ渡す',
+      /const _ansMsgId = _ansIsGap \? null : pushMsg\(\{role:'assistant',content:reply\}\);/.test(_rsrc)
       && /messageId:_ansMsgId,/.test(_rsrc));
+    check('P1⑤-b GAP回答は確定後に履歴へ積む',
+      /_it\.messageId = pushMsg\(\{role:'assistant',content:_ansFinal\}\);/.test(_rsrc));
     check('P1⑥ finalizer は messageId が無ければ messages を触らない',
       /if\(item\.messageId\) removeMessageById\(item\.messageId\);/.test(_rsrc)
-      && /if\(item\.messageId\) amendMessageById\(item\.messageId, finalText\);/.test(_rsrc));
+      && !/amendMessageById\(item\.messageId, finalText\)/.test(_rsrc));
   }
 
   console.log(`\nGap answer queue: ${pass}/${pass + fail}`);

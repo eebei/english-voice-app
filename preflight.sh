@@ -316,6 +316,9 @@ if out=$(node tests-no-real-names-in-speech.js 2>&1); then echo "   ✅ ${out##*
 echo "▶ 表示と音声の一致（Overlay＝TTS・会話Box汚染防止）"
 if out=$(node tests-gap-display-sync.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格"; node tests-gap-display-sync.js 2>&1|tail -6; fail=1; fi
 
+echo "▶ Build 298 実走 replay（①PDDP ②GAP ③残周回 ④Plan/Memory）"
+if out=$(node tests-build298-race-replay.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格（Codex事後Gate 4系統・修正中）"; node tests-build298-race-replay.js 2>&1|tail -8; fail=1; fi
+
 echo "▶ 訂正検出の境界（Codex Gate 4 反例・独立オラクル）"
 if node tests-dispute-boundaries.js >/dev/null 2>&1; then echo "   ✅ 15ケース合格"; else echo "   ❌ 不合格"; node tests-dispute-boundaries.js 2>&1|tail -5; fail=1; fi
 

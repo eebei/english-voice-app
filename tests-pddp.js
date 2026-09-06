@@ -32,7 +32,20 @@ console.log('══ ⓪ 既存契約 ══');
   assert.strictEqual(s.primary_focus, 'incident_control');
   assert.strictEqual(Math.round(s.average_incidents * 10) / 10, 6.3);
   assert.strictEqual(nextFocus(s).key, 'incident_control');
-  assert.match(briefingLine(s, '八木さん'), /平均Incidents 6\.3/);
+  // ★2026-09-06 契約変更（Codex 事後Gate §1 / Founder 指示）:
+  //   実走 Build 298 は「直近10レース、平均Incidents 1.7…次の1レースは
+  //   同じ判断を再現するを一つだけ試そう」と86字を喋り、**採用行も集計式も
+  //   ログに無く独立再計算できなかった**。母数は直近5戦、発話は事実＋一行動、
+  //   横ばい・改善・証拠不足なら黙る、へ変更した。
+  //   3件では**比較する直前5戦が無い＝証拠不足**なので黙るのが新しい正解。
+  //   平均そのものは analyze / briefingEvidence 側で引き続き検査する。
+  //   さらに 2026-09-06（Codex ①P1-2）: **identity の無い行は採用しない**。
+  //   この fixture は `subsession_id` も `date` も持たないため証拠としては全件除外され、
+  //   `briefingEvidence` の平均は null になる。生の平均は `analyze` 側（上の 6.3）が持つ。
+  assert.strictEqual(briefingLine(s, '八木さん'), '');
+  assert.strictEqual(P.briefingEvidence(rows).incident_average, null);
+  assert.strictEqual(P.briefingEvidence(rows).excluded.length, 3);
+  assert.ok(P.briefingEvidence(rows).excluded.every(r => r.reason === 'identity_missing'));
   assert.doesNotMatch(briefingLine(s), /2500|3000/);
   assert.strictEqual(analyze([{ incidents: null, irating: null }]).average_incidents, null);
   ck('Codex の既存7アサーションが通る', true);
@@ -53,9 +66,27 @@ console.log('══ ① 既存の analyze / nextFocus / briefingLine を保持 �
   const s = P.analyze([row(), row({ incidents: 5 })]);
   ck('analyze は従来の形を返す',
     s.sample_size === 2 && s.average_incidents === 4 && !!s.issue_counts, JSON.stringify(s.issue_counts));
-  ck('briefingLine は一文で事実＋一つの重点',
-    /直近2レース/.test(P.briefingLine(s, '八木さん')) && /一つだけ試そう/.test(P.briefingLine(s, '八木さん')),
-    P.briefingLine(s, '八木さん'));
+  // ★新契約：**悪化している時だけ**、事実＋一行動の一文を返す。
+  //   直前5戦（0.0）→直近5戦（4.0）で悪化させた入力で確認する。
+  {
+    //   2026-09-06（Codex ①P1-1/P1-2）: 発話は**平均5以上かつ悪化**のときだけ。
+    //   採用5件・比較5件がそろい、identity が一意であることも条件。
+    //   `row()` は同じ date を返すので identity が衝突する → 日付を振り分ける。
+    const hist = Array.from({ length: 10 }, (_, i) => row({
+      date: `2026-08-${String(i + 1).padStart(2, '0')}`,
+      recordedAt: `2026-08-${String(i + 1).padStart(2, '0')}T10:00:00.000Z`,
+      incidents: i < 5 ? 2 : 6,
+    }));
+    const line = P.briefingLine(P.analyze(hist), '八木さん');
+    ck('briefingLine は悪化時に事実＋一行動を返す',
+      /直近5戦/.test(line) && /インシデント6\.0/.test(line) && /\+4\.0/.test(line)
+      && /インシデントを減らして/.test(line) && !/接触を減らして/.test(line)
+      && !/一つだけ試そう/.test(line) && line.length <= 60, `${line.length}字: ${line}`);
+    ck('briefingLine は横ばい・改善では黙る',
+      P.briefingLine(P.analyze(hist.slice().reverse()), '八木さん') === ''
+      && P.briefingLine(s, '八木さん') === '',
+      P.briefingLine(P.analyze(hist.slice().reverse()), '八木さん'));
+  }
   ck('desktop から読めるUMDになっている',
     /root\.PitwallPddp = api/.test(fs.readFileSync('desktop/pddp.js', 'utf8')));
 }

@@ -2,6 +2,25 @@
 
 最終更新: 2026-09-05 JST
 
+## 現在地（2026-09-06）：Build 298事後Gate 4系統 — ④③修正済み・①②赤
+
+Codex 事後Gate（共有ログ `2026-09-05 17:38`）の不合格4系統に対し、実走ログ由来の replay
+`tests-build298-race-replay.js`（58検査）を先に作り、Founder 固定順序 ④→③→①→② で修正中。
+**①②③④すべて Codex 独立 Gate 4 合格。replay 123/123・preflight ✅出荷可。commit GO待ち。**
+差戻しは計6ラウンド（④3・①2・②1）。いずれも「動くコードはあるが繋がっていない／値を検査していない」型。
+④はCodex差戻し3ラウンド（実経路未接続P1 4件／初回true誤判定／切断配線漏れ）をいずれも closure。
+pit観測は `unknown/off/on` の三値＋stale・切断・SessionNum境界の3箇所 reset。
+①は母数10→5、`briefingEvidence()`／`stableIdentity()` 新設で採用根拠を trace 化。
+発話は**平均Incidents 5以上かつ悪化**のときだけ（Founder数値基準）。
+現在窓5＋比較窓5の**10件すべてが別レース**と証明できなければ沈黙し、比較窓の内訳も trace へ出す。
+②は Build 297 の amend 方式を**構造ごと置換**した：候補時点では表示せず、`drainQueue` の
+authority 確定点で `buildGapUtterance()` が最終本文を1回生成し、chat・Overlay・会話Box・TTSへ
+同じ1本を fan-out する。終端は spoken/dropped のみで `rebuilt` は廃止。自発コールとPTT回答の両方。
+詳細は `review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`（追記1〜4）。
+④の根本は **STTが「周」を「週」と書き起こしていた**ことで、「何週目にピットインする？」は
+記憶以前に質問として認識されていなかった。詳細は `review/CODEX_HANDOFF_BUILD298_FIX_20260906.md`。
+`preflight.sh` に本スイートを登録済み＝**全緑まで出荷不可**。commit・Build・公開はいずれも未実施。
+
 ## 次Phase決定：音声ピット設定
 
 Founder決定により、現行のレース会話成立・GAP同期の実機確認後、次の主要Phaseへ**走行中の口頭指示によるiRacingブラックボックス設定**を追加する。共通command基盤は拡張可能に作るが、MVPは「タイヤ4本／交換なし」と「指定給油量／満タン／ゴール時3L残し」に限定。自然文→閉じたcommand→Luna復唱→Driver明示承認→実行→設定読み戻しを必須契約とする。ティアオフ、Fast Repair、左右タイヤ、全取消、画面切替はPhase 1.1、Brake Bias／TC／ABSは車種別安全契約後。全体進捗表と詳細は共有ログ末尾。中核差分と追加の実在テスター名修正はともにGate 4合格。実名修正は未commitで、commit／Build／公開は各GO待ち。
@@ -542,6 +561,23 @@ Build 270 は、Build 269 のピット直後燃料余裕・短いピット追加
 - 詳細指示は `review/PITWALL_SHARED_WORKING_LOG.md` の「2026-09-05 07:07 JST」、走行項目は `review/RACE_CHECKLIST_BUILD296_20260905.md` を参照。
 - Build／公開は別GO。まずBuild 296実走ログを解析する。
 - 追加申告: 9/4実走で自発GAPの音声とOverlayの数字が頻繁に不一致、数字も固定的に感じた。コード上、Overlay表示後にTTSキュー内だけGAP本文をrebuildしており表示へ反映しない欠陥を確認。最終TTS本文もログへ残らず個別照合不能。Build 297要件として同一発話IDで候補・Overlay・最終TTSを記録／一致させる。詳細は共有ログ末尾。
+
+# 2026-09-05 夕 — 公開Build 298実走事後Gate不合格
+
+- Build 298実走（Le Mans／Mercedes-AMG GT3）をログと公式resultで照合し、最優先のレース会話成立を不合格とした。公式結果はRace incidents 8、12 laps、overall 21位、class 8位。
+- PDDPは過去10件から平均Incidents 1.7を発話したが、採用各レースのidentity・値・集計がtraceに無く独立検証不能。車・コースのMemory／Decision／Setupは同時に`no_matching_record`。次は直近5件を証拠化し、増悪時のみ事実＋一行動へ短縮する。
+- GAPは12回中10回がTTS直前rebuild。うち8回で初期本文と最終値が0.6〜2.0秒変わり、Overlay／会話側の初期本文と音声最終本文が不一致。最終authority確定後に本文を一度だけ作り3出力へfan-outするまで未完。
+- 残周回は自動「残り5周」が1回ある一方、直接質問2回は周回を返せず、確認表現はpit decisionへ誤分類。自動callと質問回答が同じauthorityを共有していない。
+- MemoryはOFFではなく、燃費履歴・PDDP・Memory Brain・Decisionが分断。Plan未確定、Driverのpit申告後も旧Plan／誤った不足燃料を返し、debriefの戦略指摘には保存ACKだけを返した。
+- 次はBuildを増やさず、保存ログreplayでPDDP・GAP・残周回・Plan継続の失敗を赤にしてから、Claude実装→Codex Gate 4。詳細指示と受入条件は`review/PITWALL_SHARED_WORKING_LOG.md`末尾。コード変更・commit・Build・公開なし。
+
+# 2026-09-05 — 9月Luna-only会話完成モード
+
+- 9月の新規会話開発、実走評価、記憶品質の基準キャラクターをLunaへ一本化する。他キャラクターは削除せず既存UI・設定・最低限の回帰を維持するが、性格別の新規調整は一時凍結。
+- LunaでBefore／During／After／Next raceをつなぐ会話セッションを完成させる。数値authority、topic selector、Plan、memory identity、final utteranceはキャラクター非依存のEngineer Coreとして実装し、Luna固有層は口調・簡潔さ・関係性に限定する。
+- Lunaの実走合格後、共通Coreを他人格へ展開し、人格層だけ再構築する。複数人格を中核品質より優先しない。詳細は共有ログの同日Founder方針。料金・公開・販売施策の実行承認ではない。
+- Webサイトとデスクトップ内の選択画面もこの方針へ揃えた。Lunaだけを現在の開発・選択対象として表示し、他人格は削除せず、小さくグレー表示して「2027年登場予定」と明示し選択不能にした。料金欄の「All 4 engineers」表記もLuna日英対応へ修正。
+- UI契約テスト `tests-luna-2027-ui.js` を追加し、`preflight.sh`へ登録。32項目合格、HTML内script構文・`git diff --check`合格。Webはローカル表示確認済み。Windows/Electron実機、exe作成、本番デプロイは未実施。
 
 # 2026-09-05 Founder scope lock — minimum real AI Engineer
 

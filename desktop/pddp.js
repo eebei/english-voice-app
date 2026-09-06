@@ -28,9 +28,17 @@ function classify(row) {
   return 'consistency';
 }
 
+// ★2026-09-06 Build 298 実走（Codex 事後Gate §1）:
+//   17:49:42 に「直近10レース、平均Incidents 1.7」と話したが、
+//   採用した10件の identity も集計式もログに無く、**平均を独立再計算できなかった**。
+//   母数は直近5戦へ縮め、採用根拠を必ず外へ出せるようにする。
+const DEFAULT_LIMIT = 5;
+// Founder方針：会話判断の数値例は「直近5レース平均Incidents 5以上」。
+const SPEAK_INCIDENT_THRESHOLD = 5;
+
 function analyze(rows, options = {}) {
   const source = Array.isArray(rows) ? rows.filter(Boolean) : [];
-  const limit = Math.max(1, Math.min(50, Number(options.limit) || 10));
+  const limit = Math.max(1, Math.min(50, Number(options.limit) || DEFAULT_LIMIT));
   const recent = source.slice(-limit);
   const incidents = recent.map(r => finite(r.incidents)).filter(v => v !== null);
   const finishes = recent.map(r => finite(r.finishPos ?? r.finish_pos)).filter(v => v !== null);
@@ -46,6 +54,8 @@ function analyze(rows, options = {}) {
     irating_min: iratings.length ? Math.min(...iratings) : null,
     irating_max: iratings.length ? Math.max(...iratings) : null,
     issue_counts: counts,
+    // 採用根拠を summary へ同梱する（briefingLine が比較に使う・trace もこれを出す）
+    evidence: briefingEvidence(source, { limit }),
     primary_focus: focus,
     rows: recent,
   };
@@ -65,17 +75,95 @@ function nextFocus(summary) {
   return { key: 'consistency', metric: '完走順位のばらつき', target: '同じ判断を再現する' };
 }
 
-function briefingLine(summary, name = 'ドライバー') {
+/** 採用根拠。**これが無いとログから平均を再計算できない**（実走で監査不能だった）。
+ *  採用5件の identity と各 incidents、合計、平均、**直前5件との増減**、除外理由を出す。 */
+function briefingEvidence(rows, options = {}) {
+  const source = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  const limit = Math.max(1, Math.min(50, Number(options.limit) || DEFAULT_LIMIT));
+  const recent = source.slice(-limit);
+  const prev = source.slice(-limit * 2, -limit);
+  const adopted = [], excluded = [];
+  for (const r of recent) {
+    const inc = finite(r.incidents);
+    const id = stableIdentity(r);
+    const row = { subsession_id: (r.subsession_id ?? r.subsessionId ?? null),
+      identity: id, date: r.date || r.at || null, incidents: inc };
+    // ★identity が作れない行は採用しない。採用レースを**独立照合できない**まま
+    //   平均を語ると、実走 Build 298 の「監査不能」がそのまま残る（Codex P1-2）。
+    if (id === null) excluded.push({ ...row, reason: 'identity_missing' });
+    else if (inc === null) excluded.push({ ...row, reason: 'incidents_missing' });
+    else adopted.push(row);
+  }
+  const values = adopted.map(r => r.incidents);
+  const sum = values.reduce((a, b) => a + b, 0);
+  const avg = values.length ? sum / values.length : null;
+  const prevRows = prev.map(r => ({ identity: stableIdentity(r),
+    subsession_id: (r.subsession_id ?? r.subsessionId ?? null),
+    date: r.date || r.at || null, incidents: finite(r.incidents) }));
+  const prevOk = prevRows.filter(r => r.identity !== null && r.incidents !== null);
+  const prevValues = prevOk.map(r => r.incidents);
+  const prevAvg = prevValues.length ? prevValues.reduce((a, b) => a + b, 0) / prevValues.length : null;
+  // 現在窓・比較窓とも**完全**（limit 件そろい、identity と incidents が全部ある）でなければ
+  // 比較しない。欠けた窓どうしの平均を比べると、増減が観測ではなく欠損の影になる。
+  const complete = adopted.length === limit && prevOk.length === limit;
+  // ★Codex 再差戻し（2026-09-06）：一意性を**現在窓だけ**で見ていた。比較窓5行が
+  //   同一レースの重複でも通り、「前の5戦から+3.0」と喋った。
+  //   **要点は「5行ある」ではなく「異なる5レースを比較した」と証明できること。**
+  //   窓内重複・窓を跨ぐ重複のどちらも許さないので、10件まとめて一意性を見る。
+  const allIds = adopted.map(r => r.identity).concat(prevOk.map(r => r.identity));
+  const identitiesUnique = new Set(allIds).size === allIds.length;
+  return {
+    limit, adopted, excluded,
+    // 比較窓の内訳。**これが無いと前5件の平均を独立再計算できない。**
+    previous: prevOk,
+    incident_sum: values.length ? sum : null,
+    incident_average: avg,
+    prev_sample_size: prevOk.length,
+    prev_incident_sum: prevValues.length ? prevValues.reduce((a, b) => a + b, 0) : null,
+    prev_incident_average: prevAvg,
+    incident_delta_vs_prev: (avg !== null && prevAvg !== null) ? avg - prevAvg : null,
+    windows_complete: complete && identitiesUnique,
+  };
+}
+
+/** 独立照合できる race identity。`subsession_id` が正本。
+ *  旧 `pw_raceHistory` は持たないので、**再現可能な**組み合わせから作る。
+ *  日付だけでは同日2レースを潰すため、コース・車・記録時刻も混ぜる。
+ *  どれも無ければ null＝採用しない（推測でIDを作らない）。 */
+function stableIdentity(row) {
+  const r = row || {};
+  const sub = r.subsession_id ?? r.subsessionId ?? null;
+  if (sub !== null && sub !== undefined && String(sub).trim() !== '') return 'sub:' + String(sub);
+  const parts = [r.recordedAt || r.at || null, r.date || null, r.track || null, r.car || null]
+    .filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+  if (!parts.length || !(r.date || r.recordedAt || r.at)) return null;
+  return 'legacy:' + parts.join('|');
+}
+
+/** 発話。**事実＋一行動**の一文にする。
+ *  横ばい・改善・証拠不足なら無理に話さない（空文字を返す＝呼び側は喋らない）。
+ *  実走は「今回の重点は完走順位のばらつき。次の1レースは同じ判断を再現するを一つだけ試そう」
+ *  という86字の定型で、**具体的な行動になっていなかった**。 */
+function briefingLine(summary, name = 'ドライバー', rows = null) {
   const s = summary || {};
-  const f = nextFocus(s);
-  const n = Number.isInteger(s.sample_size) ? s.sample_size : 0;
-  const avgInc = finite(s.average_incidents);
-  const ir = finite(s.latest_irating);
-  const facts = [];
-  if (n) facts.push(`直近${n}レース`);
-  if (avgInc !== null) facts.push(`平均Incidents ${avgInc.toFixed(1)}`);
-  if (ir !== null) facts.push(`最新iRating ${Math.round(ir)}`);
-  return `${name}、${facts.join('、') || '確認できた実測がまだ少ない'}。今回の重点は${f.metric}。次の1レースは${f.target}を一つだけ試そう。`;
+  const ev = Array.isArray(rows) ? briefingEvidence(rows) : (s.evidence || null);
+  // ★`sample_size < 3` の門は**死んだコード**だった（変異で検出されず判明・2026-09-06）。
+  //   直前5戦が無ければ下の delta が null になるため、少数サンプルは既にここで黙る。
+  if (!ev) return '';
+  const avg = finite(ev.incident_average);
+  const delta = finite(ev.incident_delta_vs_prev);
+  if (avg === null) return '';
+  // ★窓の完全性（Codex P1-2）。identity か incidents が欠けた窓どうしを比べない。
+  if (ev.windows_complete !== true) return '';
+  // 比較窓が無い（delta=null）／横ばい・改善（delta<=0）はどちらもここで黙る。
+  // ★別々の門にすると `null <= 0` が true のため後段が死に、変異で検出できない。
+  if (!(delta > 0)) return '';
+  // ★発話閾値（Founder方針・Codex P1-1）。「直近5レース平均Incidents 5以上」。
+  //   悪化しているだけで喋ると、実走で問題になった**不要情報でのブリーフィング肥大**へ戻る。
+  if (avg < SPEAK_INCIDENT_THRESHOLD) return '';
+  // ★Incidents は接触だけではない（オフトラック・スピンも含む）。断定しない。
+  return `${name}、直近${ev.adopted.length}戦でインシデント${avg.toFixed(1)}、`
+    + `前の${ev.prev_sample_size}戦から+${delta.toFixed(1)}。今回はインシデントを減らしてチェッカーまで。`;
 }
 
 // ══ 2026-08-30 仕様 review/PDDP_SPEC_V1.md への追補 ══════════════════
@@ -221,7 +309,7 @@ function analyzeExcludingDisputed(rows, outcomes, options = {}) {
   return analyze(kept, options);
 }
 
-return { analyze, nextFocus, briefingLine,
+return { analyze, nextFocus, briefingLine, briefingEvidence,
   ALLOWED_CONTEXTS, GOAL_IRATING, GOAL_STREAK,
   isPddpContext, measuredRowCount, primaryIssue, debriefQuestion, goalStatus,
   outcomeId, buildOutcome, applyDriverCorrection, analyzeExcludingDisputed };

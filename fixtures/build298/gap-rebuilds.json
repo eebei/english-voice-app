@@ -1,0 +1,122 @@
+[
+  {
+    "t": "18:14:24",
+    "uid": "u13",
+    "candidate": "後ろ3.7秒。1.6秒縮んだ。",
+    "final": "後ろ4.8秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 3.7,
+      "now": 4.84,
+      "target": 21
+    }
+  },
+  {
+    "t": "18:15:20",
+    "uid": "u14",
+    "candidate": "後ろ3秒。2.2秒縮んだ。",
+    "final": "後ろ2.7秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 3,
+      "now": 2.7,
+      "target": 21
+    }
+  },
+  {
+    "t": "18:16:21",
+    "uid": "u17",
+    "candidate": "後ろ2.8秒。2.4秒縮んだ。",
+    "final": "後ろ4.4秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 2.8,
+      "now": 4.41,
+      "target": 21
+    }
+  },
+  {
+    "t": "18:16:55",
+    "uid": "u20",
+    "candidate": "後ろ4.5秒。1.9秒縮んだ。",
+    "final": "後ろ4.0秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 4.5,
+      "now": 4.05,
+      "target": 21
+    }
+  },
+  {
+    "t": "18:18:00",
+    "uid": "u22",
+    "candidate": "後ろ4.9秒。1.7秒縮んだ。",
+    "final": "後ろ4.3秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 4.9,
+      "now": 4.25,
+      "target": 21
+    }
+  },
+  {
+    "t": "18:30:42",
+    "uid": "u42",
+    "candidate": "後ろ4秒。1.7秒開いた。",
+    "final": "後ろ4.6秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 4,
+      "now": 4.6,
+      "target": 38
+    }
+  },
+  {
+    "t": "18:35:50",
+    "uid": "u60",
+    "candidate": "後ろ3.2秒。1.9秒縮んだ。",
+    "final": "後ろ3.8秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 3.2,
+      "now": 3.82,
+      "target": 38
+    }
+  },
+  {
+    "t": "18:39:43",
+    "uid": "u70",
+    "candidate": "前4秒。2秒縮んだ。",
+    "final": "前5.6秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 4,
+      "now": 5.6,
+      "target": 35
+    }
+  },
+  {
+    "t": "18:40:44",
+    "uid": "u72",
+    "candidate": "前3.6秒。2.4秒縮んだ。",
+    "final": "前5.6秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 3.6,
+      "now": 5.58,
+      "target": 35
+    }
+  },
+  {
+    "t": "18:41:24",
+    "uid": "u73",
+    "candidate": "前3.3秒。1.6秒縮んだ。",
+    "final": "前4.0秒。",
+    "fresh": {
+      "fate": "rebuild",
+      "was": 3.3,
+      "now": 4.03,
+      "target": 35
+    }
+  }
+]

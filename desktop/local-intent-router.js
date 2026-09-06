@@ -210,11 +210,30 @@
   //   届かなかった（「gdpのコード教えて」がプログラミング依頼と誤解され、
   //   「ごめん、わたしはレースエンジニア。」で拒否された）。各正規表現へ gdp を
   //   足して回るのは破綻するので、ここで一度だけ正規化する。
+  // ★2026-09-06 Build 298 実走 replay：STT が「周」を「週」と書き起こしていた。
+  //   これが残り周回とピット周回の質問を同時に殺していた実文字列である。
+  //
+  //     18:19:39 「何週目にピットインする？」 → unhandled → 「Plan Aのピット周はまだ成立していない。」
+  //     18:22:48 「この週でピットイン だ。」   → unhandled
+  //     18:42:57 「あと何週？」               → unhandled → 時間だけ回答
+  //     18:43:20 「この周囲 入れて あと2週かな？」→ unhandled → pit_decision へ誤分類
+  //
+  //   **一律に 週→周 とはしない。** 来週・今週・先週・毎週・週末・週明けは
+  //   曜日／週単位の本来の意味で、レース会話でも普通に出る。
+  //   周回を数えている文脈だけを直す。
+  function normalizeLapWords(text) {
+    return String(text)
+      // 「この週」＝現在周。「この週末」は除く。
+      .replace(/この週(?![末明])/g, 'この周')
+      // 数字・「何」に続く週＝周回数。「今週」「先週」は直前が数でないので残る。
+      .replace(/(?<=[0-9０-９一二三四五六七八九十何])\s*週(?![末明])/g, '周');
+  }
+
   function normalizeSttText(raw) {
-    return String(raw || '')
+    return normalizeLapWords(String(raw || '')
       .replace(/gdp|GDP|ジーディーピー|ジーティーピー/g, 'GTP')
       .replace(/GTP.{0,4}コード/g, 'GTPのギャップ')
-      .replace(/シュピート|シューピット/g, 'ピット');
+      .replace(/シュピート|シューピット/g, 'ピット'));
   }
 
   function route(input) {
@@ -234,6 +253,13 @@
       : { ahead: false, behind: false };
     const currentUserId = input && input.currentUserId !== undefined && input.currentUserId !== null
       ? String(input.currentUserId) : '';
+    // 合意Plan・pit実績の唯一の正本。渡されない場合は従来どおり live だけで答える。
+    const strategy = input && input.strategy && typeof input.strategy === 'object'
+      ? input.strategy : null;
+    const strategyState = strategy && strategy.state ? strategy.state : null;
+    const strategyModule = (strategy && strategy.api)
+      || (typeof globalThis !== 'undefined' ? globalThis.PitwallSessionStrategyState : null)
+      || null;
     if (!text || !live) return { handled:false };
 
     if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
@@ -255,6 +281,30 @@
       return answer('fuel_window_status', status.reply);
     }
     if (/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
+      // ★Codex P1-1：`fuelReply()` は `pit_timing_authority`（pit前の全レース距離を
+      //   前提にした旧権威）から「◯L不足」「Plan A継続」を作る。実走 18:44:53 は
+      //   ピット済み・残り約2周で足りているのに「完走まで8.3L不足。Plan Aを継続」と言った。
+      //   ピット実行後は**残り距離**に対してのみ答える。
+      if (strategyModule && strategyState
+          && typeof strategyModule.pitExecuted === 'function'
+          && strategyModule.pitExecuted(strategyState)) {
+        const timing = (live.fuel_strategy && live.fuel_strategy.pit_timing_authority) || {};
+        const range = finite(timing.range_laps);
+        const lapsLeft = integer(live.finish_crossings_authority);
+        if (range !== null && lapsLeft !== null) {
+          return answer('fuel_status', isJP(lang)
+            ? (range >= lapsLeft
+              ? `現燃料で約${range.toFixed(1)}周。残り${lapsLeft}周、足りている。`
+              : `現燃料で約${range.toFixed(1)}周。残り${lapsLeft}周には届かない。`)
+            : (range >= lapsLeft
+              ? `About ${range.toFixed(1)} laps of fuel for ${lapsLeft} to go. Enough.`
+              : `About ${range.toFixed(1)} laps of fuel, ${lapsLeft} to go. Not enough.`));
+        }
+        // 権威値が揃わない時は旧文へ落とさない。足りない情報だけを言う。
+        return answer('fuel_status', isJP(lang)
+          ? 'ピットは済んでいる。残り距離に対する燃料の権威値がまだ揃わない。'
+          : 'The stop is done. Authoritative fuel-vs-remaining-distance is not confirmed yet.');
+      }
       return answer('fuel_status', fuelReply(live, lang));
     }
     // Build 287 field replay: Google correctly transcribed both
@@ -291,6 +341,45 @@
       if (plan.kind === 'laps' && total !== null) return answer('race_format', isJP(lang) ? `全${total}周。` : `${total} laps total.`);
       return answer('race_format_unavailable', isJP(lang) ? 'このレースの時間・周回ルールはまだ確定できない。' : 'The race duration and lap rule are not confirmed yet.');
     }
+    // ★2026-09-06 Build 298 実走：ピット周の質問と申告を、残り周回より先に見る。
+    //   「何周目にピットインする？」は `何周` を含むため、順序を誤ると
+    //   残り周回の質問として食われる。実走ではそもそも `何週` で unhandled だった。
+    //   合意Plan・pit実績は session-strategy-state が唯一の正本。
+    if (/(?:何周目|いつ|どこ).{0,8}(?:ピット|ボックス|box)|(?:ピット|ボックス).{0,10}(?:何周目|いつ|予定)/i.test(text)
+        || /pit.{0,10}(?:which lap|what lap|when)|when.{0,10}pit/i.test(text)) {
+      if (strategyModule && strategyState) {
+        const a = strategyModule.answerPitDecision(strategyState,
+          { at: Date.now(), laps_remaining: integer(live.finish_crossings_authority) });
+        return answer('pit_plan_question', a && a.reply);
+      }
+      return answer('pit_plan_question', isJP(lang)
+        ? 'ピット周はまだ決めていない。'
+        : 'The pit lap is not agreed yet.');
+    }
+
+    // 「この周でピットイン だ。」＝Plan申告（質問ではない）。
+    // ★Codex P1-4：「この／今の」と「次の」を同じ分岐に潰していた。
+    //   S/F を1回またぐかどうかが違う。「次の周」は current+1 で保存し、復唱も変える。
+    //   現在周が取れない時は**推測しない**（周を確定できないまま合意扱いにしない）。
+    if (!/[?？]/.test(text)
+        && /(?:この|今の|次の)\s*周.{0,6}(?:ピット|ボックス|box)|(?:ピット|ボックス).{0,6}(?:この|今の|次の)\s*周/i.test(text)) {
+      const nextLap = /次の\s*周/.test(text);
+      const currentLap = integer(live.lap);
+      const planLap = currentLap === null ? null : (nextLap ? currentLap + 1 : currentLap);
+      if (strategyModule && strategyState && planLap !== null) {
+        strategyModule.agreePitPlan(strategyState,
+          { lap: planLap, source: 'driver', at: Date.now() });
+      }
+      if (planLap === null) {
+        return answer('pit_this_lap', isJP(lang)
+          ? '現在周を確定できない。周を教えて。'
+          : 'I cannot confirm the current lap. Tell me the lap.');
+      }
+      return answer('pit_this_lap', isJP(lang)
+        ? (nextLap ? `次の周の終わりでボックス。${planLap}周目。` : `この周の終わりでボックス。${planLap}周目。`)
+        : (nextLap ? `Box at the end of the next lap, lap ${planLap}.` : `Box at the end of this lap, lap ${planLap}.`));
+    }
+
     if (!/(?:トップ|首位|P1|leader)/i.test(text)
         && /残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(text)) {
       const crossings = integer(live.finish_crossings_authority);
@@ -480,5 +569,7 @@
     return { handled:false };
   }
 
-  return { route, formatDuration, formatLapTime, fuelWindowStatus };
+  // normalizeLapWords を公開するのは検査のため。route() 経由だけでは
+  // 「来週」を壊しても intent が変わらず**変異が検出できなかった**（2026-09-06）。
+  return { route, formatDuration, formatLapTime, fuelWindowStatus, normalizeLapWords };
 }));

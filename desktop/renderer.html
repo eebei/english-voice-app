@@ -704,6 +704,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="strategy-playbook.js"></script>
 <script src="fuel-plan-guard.js"></script>
 <script src="cost-meter.js"></script>
+<script src="session-strategy-state.js"></script>
 <script src="local-intent-router.js"></script>
 <script src="session-memory.js"></script>
 <script src="decision-memory.js"></script>
@@ -1143,6 +1144,16 @@ function amendLunaTurnById(turnId,newText){
   if(ok) saveConversationBox(box);
   return ok;
 }
+// 会話Boxに実際に入っている本文。fan-out が揃ったかを**箱側から**読むために要る。
+function lunaTurnTextById(turnId){
+  const B=window.PitwallConversationMemoryBox; if(!B||!turnId) return null;
+  const box=ensureConversationBox(); if(!box||!Array.isArray(box.turns)) return null;
+  // ★正本キーは `turn_id`（`conversation-memory-box.js` の保存形。`recordLunaTurn()` も
+  //   これを返す）。`id` で引いていたため常に null になり、4出力が同文でも
+  //   `fanout_match=false` を記録していた（Codex ②P1 差戻し・2026-09-06）。
+  const t=box.turns.find(x=>x&&x.turn_id===turnId);
+  return t ? String(t.text||'') : null;
+}
 function dropLunaTurnById(turnId){
   const B=window.PitwallConversationMemoryBox; if(!B||!turnId) return false;
   const box=ensureConversationBox(); if(!box) return false;
@@ -1176,6 +1187,34 @@ function removeMessageById(mid){
   return true;
 }
 
+// ★2026-09-06 ② GAP 構造置換（Founder指示 / Codex 事後Gate §2）
+//   旧方式は「候補文を先に表示 → TTS 直前に音声だけ作り替える」だった。
+//   実走 Build 298 では GAP_FRESHNESS 13回中 rebuild が10回、うち8回は
+//   0.6〜2.0秒ずれており、18:14:24 は表示「後ろ3.7秒。1.6秒縮んだ。」に対し
+//   音声「後ろ4.8秒。」。**表示してから直す構造そのものをやめる。**
+//
+//     authority確定 → 最終本文を1回生成 → Overlay・会話Box・TTS へ fan-out
+//
+//   ここが最終本文の**唯一の生成点**である。
+function buildGapUtterance(authority){
+  const a = authority && typeof authority==='object' ? authority : {};
+  const v = Number(a.gap_s);
+  if(!Number.isFinite(v) || !a.direction) return null;
+  const ja = !String(a.lang||'ja').toLowerCase().startsWith('en');
+  const head = ja
+    ? ((a.direction==='ahead' ? '前' : '後ろ') + v.toFixed(1) + '秒。')
+    : (v.toFixed(1) + ' seconds ' + (a.direction==='ahead' ? 'ahead' : 'behind') + '.');
+  // ★trend は**最終GAPと同一 snapshot 系列**で計算された時だけ語る。
+  //   旧方式の「1.6秒縮んだ」は古い snapshot 間の差で、作り直した値とは無関係だった。
+  const t = a.trend && typeof a.trend==='object' ? a.trend : null;
+  const change = t ? Number(t.change_s) : NaN;
+  if(!t || t.trend_snapshot_series !== true || !Number.isFinite(change) || change===0) return head;
+  const closing = change < 0;
+  return ja
+    ? head + Math.abs(change).toFixed(1) + '秒' + (closing ? '縮んだ。' : '開いた。')
+    : head + ' ' + Math.abs(change).toFixed(1) + (closing ? ' closer.' : ' further.');
+}
+
 function finalizeUtterance(item, outcome, finalText, reason){
   if(!item) return;
   // ★終端は 'spoken' と 'dropped' のみ。'rebuilt' はまだキューに居るので終端にしない。
@@ -1198,22 +1237,32 @@ function finalizeUtterance(item, outcome, finalText, reason){
       +' text='+JSON.stringify(String(item.text||'').slice(0,60)));
     return;
   }
-  if(outcome === 'rebuilt'){
-    if(el) el.textContent = finalText;
-    // ★第4回P1-4／第5回P1：履歴が候補のままだと次のターンで Luna が
-    //   **古いGAPを自分の発言として根拠に使う**。自分の1件だけを ID で直す。
-    if(item.messageId) amendMessageById(item.messageId, finalText);
-    // ★P1-1：原文だけ差し替えると、先に届いた**古い訳**が表示され続ける
-    //   （overlay の textFor は訳を原文より優先する）。訳も同時に無効化する。
-    if(el && el._ovlId && window.pitwall)
-      window.pitwall.overlayPush({ update:true, id:el._ovlId, text:finalText, tr:'', trLang:'' });
-    const _amended = (el && el._turnId) ? amendLunaTurnById(el._turnId, finalText) : false;
-    diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome=rebuilt amended_turn='+_amended
-      +' text='+JSON.stringify(finalText)+' was='+JSON.stringify(String(item.text||'')));
-    return;
-  }
+  // ★2026-09-06 ② 構造置換：`rebuilt`（表示してから作り替える）は**廃止**した。
+  //   GAP は authority 確定後に `buildGapUtterance()` で最終本文を1回だけ作り、
+  //   そこで初めて Overlay・会話Box・TTS へ fan-out する。終端は spoken / dropped のみ。
+  //
+  //   fan-out が本当に同じ本文だったかを**ログで独立検証できる**ようにする。
+  //   `ovl=Lxx` のようなID一致では、本文が揃った証拠にならない（Codex 反証依頼）。
+  const _tts = String(finalText||item.text||'');
+  const _chat = el ? String(el.textContent||'') : '';
+  const _ovlText = el ? String(el._ovlText||'') : '';
+  // ★会話Boxが読めない時（表示要素なし・turn未採番・drop済み）に false と書くと
+  //   「不一致」と「検証できない」を混ぜてしまう。**true を偽装せず、理由を残す。**
+  const _boxLookup = (el && el._turnId && typeof lunaTurnTextById==='function')
+    ? lunaTurnTextById(el._turnId) : null;
+  const _boxText = _boxLookup===null ? '' : String(_boxLookup);
+  const _boxReason = !el ? 'no_display_element'
+    : !el._turnId ? 'no_turn_id'
+    : _boxLookup===null ? 'turn_not_in_box' : '';
+  const _fanout = _boxReason ? 'unverifiable'
+    : ((_ovlText===_tts && _boxText===_tts && _chat===_tts) ? 'true' : 'false');
   diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome='+outcome+' kind='+(item.kind||'?')
-    +' turn='+((el&&el._turnId)||'-')+' ovl='+((el&&el._ovlId)||'-'));
+    +' turn='+((el&&el._turnId)||'-')+' ovl='+((el&&el._ovlId)||'-')
+    +' fanout_match='+_fanout+(_boxReason ? ' box_reason='+_boxReason : '')
+    +' tts_text='+JSON.stringify(_tts)
+    +' overlay_text='+JSON.stringify(_ovlText)
+    +' box_text='+JSON.stringify(_boxText)
+    +' chat_text='+JSON.stringify(_chat));
 }
 // キューから未再生のまま取り除く時は必ずここを通す。
 function discardQueuedUtterances(items, reason){
@@ -2174,6 +2223,7 @@ function addMsg(type, text, opts){
   //   チャット欄だけでなく **走行中に実際に見ている Overlay** も同じ行を更新できる。
   if(opts && opts.uid) div._uid = opts.uid;     // ★同一発話IDを表示要素にも持たせる
   if(text) div._ovlId = convoLog(type, text) || null;   // 空吹き出し(ストリーミング初期)はログしない
+  if(text) div._ovlText = text;   // ★Overlay へ実際に渡した本文（fan-out の証拠）
   // ★2026-09-03 Codex差戻し②：`recordLunaTurn()` を定義しただけで
   //   **41箇所ある addMsg('ai',…) のどこからも呼んでいなかった**。
   //   その状態では箱に Luna の発話が入らず、dispute_detector が参照する
@@ -2586,6 +2636,7 @@ async function sendMsg(inputSource){
   }
   const localRouterAvailable=!!(window.PitwallLocalIntentRouter
     && typeof window.PitwallLocalIntentRouter.route==='function');
+  const _strategyState = (typeof ensureStrategyState==='function') ? ensureStrategyState() : null;
   const localIntent = (selMode==='race' && iracingLive && lastTelemetry
     && localRouterAvailable)
     ? window.PitwallLocalIntentRouter.route({
@@ -2599,7 +2650,11 @@ async function sendMsg(inputSource){
       //   queue では破棄される古さの値を質問回答で喋ってしまう。
       snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null),
       // ★F2：訂正で保留中の方向は、古い値を今の事実として言い直さない。
-      gapHeld:(typeof currentGapHeld==='function'?currentGapHeld():null)
+      gapHeld:(typeof currentGapHeld==='function'?currentGapHeld():null),
+      // ★2026-09-06：合意Plan・pit実績の唯一の正本。質問ごとに別前提で
+      //   答えていた実走（18:43「ステイアウト」／18:44「Plan A継続」）を塞ぐ。
+      strategy:(_strategyState
+        ? { state:_strategyState, api:window.PitwallSessionStrategyState } : null)
     }) : null;
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;
@@ -2617,12 +2672,17 @@ async function sendMsg(inputSource){
     // ★第3回P1-1：**Yuji が報告した経路はこちら（PTTで尋ねた時のGAP）**。
     //   戻り値を捨てていたため、rebuild/discard しても Overlay と会話Box を直せなかった。
     const _ansUid = nextUtteranceId();
-    const _ansEl = addMsg('ai',reply,{uid:_ansUid});
-    const _ansMsgId = pushMsg({role:'assistant',content:reply});
+    // ★2026-09-06 ② 構造置換：GAP を含む回答は authority 確定まで**表示も履歴もしない**。
+    //   先に出すから、queue 待ちで値が動いたときに「表示と音声が違う」が生まれる。
+    const _ansIsGap = !!(Array.isArray(localIntent.gapIdentities) && localIntent.gapIdentities.length);
+    const _ansEl = _ansIsGap ? null : addMsg('ai',reply,{uid:_ansUid});
+    const _ansMsgId = _ansIsGap ? null : pushMsg({role:'assistant',content:reply});
     // ★G5：GAP の回答は queue 待ちで陳腐化する。どの方向の・どの車の値を述べたのかを
     //   一緒に queue へ渡し、TTS 開始直前に現在値と照合する（Codex Build 284 P1）。
     speak(reply,{prio:localPriority,kind:'local_'+localIntent.intent,
       displayEl:_ansEl, utteranceId:_ansUid, messageId:_ansMsgId,
+      deferredRender:_ansIsGap,
+      lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
       dedupeKey:'local|'+localIntent.intent+'|'+reply,
       gapIdentities:(Array.isArray(localIntent.gapIdentities)&&localIntent.gapIdentities.length)
         ?localIntent.gapIdentities:null});
@@ -2790,13 +2850,23 @@ function telemetryTruthFallback(live, userText, isJP){
     const m=raw.match(/(\d+(?:\.\d+)?)\s*(?:min|minute)/i);
     if(m) return isJP ? `レース時間は${Number(m[1])}分。` : `Race duration is ${Number(m[1])} minutes.`;
   }
-  if(/残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(asked)){
-    const crossings=Number(live?.finish_crossings_authority);
-    if(Number.isInteger(crossings)&&crossings>=1&&crossings<=10) return isJP ? `残り${crossings}周。` : `${crossings} lap${crossings===1?'':'s'} remaining.`;
-    const sec=Number(live?.session_time_remaining_s);
-    return Number.isFinite(sec)
-      ? (isJP ? `残り${fmtDuration(Math.max(0,sec),true)}。残り周回はまだ確定できない。` : `${fmtDuration(Math.max(0,sec),false)} remain; finish crossings are not confirmed.`)
-      : (isJP ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.');
+  // ★2026-09-06 Build 298 実走：残り周回の回答が、ここと
+  //   `local-intent-router.js` に**同じ正規表現ごと複製**されていた。
+  //   自動コール・直接質問・このフォールバックが別実装だったため、
+  //   18:30:42 は「残り5周。」、18:36:09 は「まだ確定できない」、
+  //   18:42:57 は時間だけ、と同じレースで三通りの答えが出た。
+  //   複製をやめ、router を唯一の権威にする。
+  const _router=(typeof globalThis!=='undefined')?globalThis.PitwallLocalIntentRouter:null;
+  if(_router && typeof _router.route==='function'){
+    const _st=(typeof ensureStrategyState==='function')?ensureStrategyState():null;
+    const _laps=_router.route({
+      text:asked, lang:isJP?'ja':'en', live,
+      strategy:_st ? { state:_st, api:globalThis.PitwallSessionStrategyState } : null
+    });
+    if(_laps && _laps.handled && (_laps.intent==='laps_remaining'
+       || _laps.intent==='pit_plan_question' || _laps.intent==='pit_this_lap')){
+      return _laps.reply;
+    }
   }
   if(/(?:ベスト|自己ベスト|ベストラップ).{0,10}(?:いくつ|何|わかる|分かる|わかります|分かります|教えて|タイム)|(?:best|personal best).{0,12}(?:what|time|know|tell)/i.test(asked)){
     const best=Number(live?.best);
@@ -3361,6 +3431,8 @@ function speak(text, opts){
   const kind = o.kind||'radio';
   const item = {text, prio, kind, ts:Date.now(), queuedAt:Date.now(), dedupeKey:o.dedupeKey||null,
                 gapIdentity:o.gapIdentity||null,
+                deferredRender:o.deferredRender===true,
+                lang:o.lang||null,
                 // ★2026-09-05：TTS直前に本文が作り替わる／破棄される経路があるのに、
                 //   Overlay と記憶は addMsg 時点の原文のまま残っていた。表示要素を
                 //   持ち歩いて、確定時に必ず揃える。
@@ -3509,21 +3581,30 @@ async function drainQueue(){
       setTimeout(drainQueue,0);
       return;
     }
-    if(_fresh.fate === 'rebuild'){
-      const _rebuilt = window.PitwallGapFreshness.rebuildText(
-        _it.gapIdentity.direction, _fresh.gapS,
-        (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
-      if(_rebuilt){
-        diagnosticLog('GAP_FRESHNESS','fate=rebuild was='+_it.gapIdentity.gap_s
-          +' now='+_fresh.gapS+' target='+_it.gapIdentity.target_car_idx);
-        // ★2026-09-05：音声だけ作り替えて表示と記憶を置き去りにしない。
-        //   翻訳の無効化も finalizer 側で行う（Codex P1-1）。
-        finalizeUtterance(_it,'rebuilt',_rebuilt);
-        _it.text = _rebuilt;
-      }
-    } else {
-      diagnosticLog('GAP_FRESHNESS','fate=play target='+_it.gapIdentity.target_car_idx
-        +' dir='+_it.gapIdentity.direction);
+    // ★2026-09-06 ② 構造置換：ここが **authority 確定点**である。
+    //   play / rebuild のどちらでも、最終本文は `buildGapUtterance()` が
+    //   **確定した authority 値から1回だけ**作る。作り替えではない。
+    //   trend は同一 snapshot 系列でしか語らないので、候補が持っていた
+    //   「1.6秒縮んだ」（古い snapshot 間の差）はここで捨てる。
+    const _lang = _it.lang || ((sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
+    const _final = buildGapUtterance({
+      direction:_it.gapIdentity.direction, gap_s:_fresh.gapS,
+      target_car_idx:_it.gapIdentity.target_car_idx, trend:null, lang:_lang });
+    diagnosticLog('GAP_FRESHNESS','fate='+_fresh.fate
+      +(_fresh.fate==='rebuild' ? ' was='+_it.gapIdentity.gap_s+' now='+_fresh.gapS : '')
+      +' target='+_it.gapIdentity.target_car_idx+' dir='+_it.gapIdentity.direction);
+    if(!_final){
+      // 権威値から本文が作れないなら喋らない。候補文へは落とさない。
+      diagnosticLog('GAP_AUTHORITY_TEXT','fate=drop reason=no_text_from_authority uid='+String(_it.utteranceId||'-'));
+      finalizeUtterance(_it,'dropped',null,'gap_no_text_from_authority');
+      draining=false; isSpeaking=false; setTimeout(drainQueue,0); return;
+    }
+    _it.text = _final;
+    // ★fan-out。表示・Overlay・会話Boxは**ここで初めて**作られる。
+    //   `addMsg` が chat / Overlay / 会話Box の3つへ同じ1本の文字列を配る。
+    if(_it.deferredRender && !_it.displayEl){
+      _it.displayEl = addMsg('ai', _final, {uid:_it.utteranceId});
+      _it.deferredRender = false;
     }
   }
   // ★G5（2026-08-25）PTT質問の回答も同じ出口で照合する（Codex Build 284 P1）。
@@ -3549,20 +3630,23 @@ async function drainQueue(){
       setTimeout(drainQueue,0);
       return;
     }
-    if(_ans.fate === 'rebuild'){
-      const _rebuiltAns = window.PitwallGapFreshness.rebuildAnswerText(_ans.entries,
-        (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
-      if(_rebuiltAns){
-        diagnosticLog('GAP_ANSWER_FRESHNESS','fate=rebuild reason='+_ans.reason
-          +' was="'+_it.text+'" now="'+_rebuiltAns+'"'
-          +' queue_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
-        // ★第3回P1-2：Overlay・会話Box も同時に最終本文へ揃える。
-        finalizeUtterance(_it,'rebuilt',_rebuiltAns);
-        _it.text = _rebuiltAns;
-      }
-    } else {
-      diagnosticLog('GAP_ANSWER_FRESHNESS','fate=play dirs='
-        +_ans.entries.map(e=>e.direction).join('/'));
+    // ★2026-09-06 ② 構造置換：回答も **authority 確定点で最終本文を1回だけ**作る。
+    //   `rebuildAnswerText` は「作り替え」ではなく、確定した entries からの生成として使う。
+    const _ansLang = _it.lang || ((sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en');
+    const _ansFinal = window.PitwallGapFreshness.rebuildAnswerText(_ans.entries, _ansLang);
+    diagnosticLog('GAP_ANSWER_FRESHNESS','fate='+_ans.fate+' reason='+(_ans.reason||'-')
+      +' dirs='+_ans.entries.map(e=>e.direction).join('/')
+      +' queue_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
+    if(!_ansFinal){
+      diagnosticLog('GAP_AUTHORITY_TEXT','fate=drop reason=no_answer_text_from_authority uid='+String(_it.utteranceId||'-'));
+      finalizeUtterance(_it,'dropped',null,'gap_answer_no_text_from_authority');
+      draining=false; isSpeaking=false; setTimeout(drainQueue,0); return;
+    }
+    _it.text = _ansFinal;
+    if(_it.deferredRender && !_it.displayEl){
+      _it.displayEl = addMsg('ai', _ansFinal, {uid:_it.utteranceId});
+      _it.messageId = pushMsg({role:'assistant',content:_ansFinal});
+      _it.deferredRender = false;
     }
   }
   const raw = (typeof _it === 'string') ? _it : _it.text;
@@ -3910,6 +3994,7 @@ function updateBridgeStatus(){
 function markTelemetryStale(reason){
   if(!iracingDetected||telemetryStaleNotified) return;
   iracingLive=false;usageIracingLive=false;lastTelemetry=null;lastSectors=null;
+  resetPitStateObservation();   // ★切断・stale：pit観測状態を持ち越さない
   telemetryStaleNotified=true;updateBridgeStatus();
   console.error('[TELEMETRY_STALE]',reason||'timeout');
   bridgeVoice('telemetry_stale');
@@ -3972,6 +4057,9 @@ function connectBridge(){
       if(data.type==='iracing_disconnected'){
         usageTick(); iracingDetected=false; iracingLive=false; usageIracingLive=false;
         iracingConnectionSeen=false;iracingConnectedAt=0;lastTelemetryAt=0;telemetryStaleNotified=false;
+        // ★切断を跨いで pit観測を持ち越さない。切断前の最終観測が off のままだと、
+        //   再接続後の**初回 on** を false→true と誤判定して偽の pit_executed になる。
+        resetPitStateObservation();
         speakGateActive=false; speakWindowOk=true; drainQueue();
         flushUsageTelemetry('iracing_disconnected',false,false);
         updateBridgeStatus(); bridgeVoice('iracing_lost'); return;
@@ -4010,6 +4098,7 @@ function connectBridge(){
           const nextSessionNum=(a&&Number.isInteger(Number(a.session_num)))?Number(a.session_num):null;
           if(nextSessionNum!==null && lastSessionNum!==null && nextSessionNum!==lastSessionNum){
             resetSessionScopedReviewState(nextSessionNum);
+            resetPitStateObservation();   // ★Qualify→Race 等の境界で持ち越さない
           }
           if(nextSessionNum!==null) lastSessionNum=nextSessionNum;
           lastSessionAuthority=a;
@@ -4039,6 +4128,7 @@ function connectBridge(){
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=applySessionFormatAuthority(data);
+        observePitState(lastTelemetry);   // ★権威pit-state。radio の有無に依存しない
         if(/race/i.test(String(lastSessionType||lastTelemetry.session_type||''))
             && strategyStartingFuelL===null && Number(lastTelemetry.fuel)>0){
           strategyStartingFuelL=Number(lastTelemetry.fuel);
@@ -4632,6 +4722,51 @@ function resetLapReadoutCounter(){
   lapReadoutLastCleanCountFromBridge = null;
 }
 // 英語キャラ（James/Luna/Hajime）はbridgeの英語messageをそのまま使う（既に自然な英語）
+// ★2026-09-06 Build 298 実走：合意Plan・pit実績・燃料判定の前提を1つに集約する。
+//   セッションが変われば作り直す（前レースのPlanを持ち越さない）。
+let _strategyStateBox = null, _strategyStateKey = '';
+function ensureStrategyState(){
+  const S = window.PitwallSessionStrategyState;
+  if(!S || typeof S.create!=='function') return null;
+  const key = (typeof conversationSessionKey==='function' ? conversationSessionKey() : '') || '';
+  if(!_strategyStateBox || _strategyStateKey!==key){
+    _strategyStateBox = S.create({ session_key:key });
+    _strategyStateKey = key;
+  }
+  return _strategyStateBox;
+}
+
+// ★ピット成立は**発話可否から独立**していなければならない。
+//   当初は radio `pit_entry` にだけ繋いだが、Codex の差戻し（2026-09-06 P1-3）のとおり
+//   Bridge はその broadcast を Speed>5m/s のときだけ流す。低速で転がり込んだ時や
+//   radio が抑止された時に Plan が失効しないのでは、実走 18:43「ステイアウト」が再発する。
+//   権威 telemetry の `on_pit_road` の false→true を唯一の遷移条件にする。
+//   ★Codex 第2回差戻し（2026-09-06）：`false` 初期化は誤爆する。
+//     接続時・セッション開始時の最初の telemetry が `on_pit_road=true`
+//     （＝**ピットボックスからのレーススタートは常にこれ**）だと、
+//     false→true の遷移が無いのに pit実行として扱ってしまう。
+//     Bridge 側は同じ誤爆を `prev['onPit'] is False` で既に塞いでいる。
+//     pit前状態は `unknown / off / on` の三値で持ち、**初回観測は seed だけ**にする。
+//     状態は関数自身に持たせる（宣言と実装が離れると検査時に取り違える）。
+function resetPitStateObservation(){ observePitState.prev = 'unknown'; }
+function observePitState(live){
+  if(observePitState.prev === undefined) observePitState.prev = 'unknown';
+  if(!live || typeof live !== 'object') return false;
+  const now = live.on_pit_road === true ? 'on' : 'off';
+  const entered = (observePitState.prev === 'off' && now === 'on');
+  observePitState.prev = now;   // unknown からの初回は seed のみ
+  if(!entered) return false;
+  const S = globalThis.PitwallSessionStrategyState;
+  const st = (typeof ensureStrategyState==='function') ? ensureStrategyState() : null;
+  if(!S || !st) return false;
+  const lap = Number(live.lap);
+  S.recordPitExecuted(st, { lap:Number.isFinite(lap)?lap:null, at:Date.now() });
+  if(typeof diagnosticLog==='function')
+    diagnosticLog('STRATEGY_STATE','pit_executed source=on_pit_road revision='
+      +S.revision(st)+' lap='+String(Number.isFinite(lap)?lap:'-'));
+  return true;
+}
+
 function injectRadio(data){
   if(selMode!=='race') return;
   if(data.trigger==='pit_exit') return;  // limiter_off直後の重複コールは全キャラクターで廃止
@@ -4748,7 +4883,11 @@ function injectRadio(data){
   if(data.trigger==='final_lap_notice') finalLapNoticeSeen = true;
   if(data.trigger==='checker_out_notice') checkerOutNoticeSeen = true;
   const _uid = nextUtteranceId();          // ★candidate 時点で採番する
-  const _radioEl = addMsg('ai',text,{uid:_uid});
+  // ★2026-09-06 ② 構造置換：GAP は**この時点では表示も記録もしない**。
+  //   候補文を先に出すから、TTS直前に値が動いたときに「表示と音声が違う」が生まれる。
+  //   authority が確定した drainQueue 側で最終本文を1回作り、そこで fan-out する。
+  const _isGapCandidate = !!(data.gap_identity && typeof data.gap_identity==='object');
+  const _radioEl = _isGapCandidate ? null : addMsg('ai',text,{uid:_uid});
   // ★2026-08-30 修正2 P0：無線を LLM 会話履歴へ入れない。
   //   Road Atlanta 実走で LLM が「左に車。」を自分で書き、reply_chunk(P2) として
   //   再生された（同時刻に side_by_side(P0) は無い＝捏造）。原因は無線を
@@ -4764,6 +4903,8 @@ function injectRadio(data){
   // ★G2：GAP候補は完成文だけで queue へ入れない。どの車のどちら向きの、
   //   いつの値かを一緒に持たせ、TTS開始直前に最新snapshotと照合する。
   speak(spokenText||text, {displayEl:_radioEl, utteranceId:_uid,
+               deferredRender:_isGapCandidate,
+               lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
                prio:(typeof data.prio==='number' ? data.prio : SPEAK_PRIO.P4_INFO),
                kind:data.trigger||'radio',
                gapIdentity:(data.gap_identity&&typeof data.gap_identity==='object')?data.gap_identity:null,
@@ -5107,14 +5248,26 @@ async function scheduleAutoBriefing(){
     // PDDP: 直近実測から次レースの重点を一つだけ提示する。
     // 戦略・燃料・反射の判断を横取りしないよう、briefing局面でのみ発話する。
     const _pddp=(window.PitwallPddp&&typeof window.PitwallPddp.analyze==='function')
-      ? window.PitwallPddp.analyze(loadRaceHistory(),{limit:10}) : null;
+      // ★2026-09-06 Codex 事後Gate §1：実走は10戦平均を喋っていた。母数は直近5戦。
+      //   既定値だけ直しても、ここで {limit:10} を明示していれば効かない。
+      ? window.PitwallPddp.analyze(loadRaceHistory()) : null;
     const _pddpLine=(window.PitwallPddp&&_pddp&&typeof window.PitwallPddp.briefingLine==='function')
       // ★2026-09-05：ここに実在テスターの名前がリテラルで残っており、
       //   **誰が走っても「八木さん」と呼んでいた**（Build 294〜297 が公開済み）。
       //   呼びかけ名は保存済みの `userName` を正本とし、無ければ一般名へ落とす。
       ? window.PitwallPddp.briefingLine(_pddp, driverAddressName(_decLang)) : '';
+    // ★採用根拠を必ず残す。実走は18,000行のログがあって「平均1.7」の
+    //   採用行も集計式も無く、**独立に再計算できなかった＝監査不能**だった。
+    const _pddpEv=(_pddp&&_pddp.evidence)||null;
     diagnosticLog('PDDP_BRIEFING',JSON.stringify({available:!!_pddpLine,
-      sample_size:_pddp&&_pddp.sample_size||0,focus:_pddp&&_pddp.primary_focus||null}));
+      sample_size:_pddp&&_pddp.sample_size||0,focus:_pddp&&_pddp.primary_focus||null,
+      adopted:_pddpEv&&_pddpEv.adopted||[], excluded:_pddpEv&&_pddpEv.excluded||[],
+      previous:_pddpEv&&_pddpEv.previous||[],
+      prev_incident_sum:_pddpEv&&_pddpEv.prev_incident_sum,
+      windows_complete:_pddpEv&&_pddpEv.windows_complete,
+      incident_sum:_pddpEv&&_pddpEv.incident_sum, incident_average:_pddpEv&&_pddpEv.incident_average,
+      prev_incident_average:_pddpEv&&_pddpEv.prev_incident_average,
+      incident_delta_vs_prev:_pddpEv&&_pddpEv.incident_delta_vs_prev}));
     if(_pddpLine){
       addMsg('ai',_pddpLine);
       speak(_pddpLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pddp_briefing',
@@ -5739,7 +5892,18 @@ function recordEvidenceAnswer(text){
   const preview=evidenceDebrief.questions.map((q,i)=>`・${q}\n  ${evidenceDebrief.answers[i]||'—'}`).join('\n');
   document.getElementById('debrief-guide-question').textContent=c.preview+'\n'+preview;
   document.getElementById('debrief-guide-actions').style.display='flex';
-  const msg=autoSaved?c.ready:c.failed;
+  // ★Codex P1-2：実走 18:51「戦略も毎回同じなんだけど、君が把握してないっていうのが
+  //   一番痛いね。」に対し、ここが定型の `ready`（「…保存したよ。」）だけを返していた。
+  //   **保存成功と会話成立は別**である。最後の回答内容を短く復唱してから保存を伝える。
+  let msg=autoSaved?c.ready:c.failed;
+  if(autoSaved){
+    const _S=globalThis.PitwallSessionStrategyState;
+    const _st=(typeof ensureStrategyState==='function')?ensureStrategyState():null;
+    if(_S && _st && typeof _S.restateDriverStrategy==='function'){
+      const _r=_S.restateDriverStrategy(_st,{text,at:Date.now()});
+      if(_r && _r.reply) msg=_r.reply+' '+msg;
+    }
+  }
   addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg);
   return autoSaved?'saved':'failed';
 }
