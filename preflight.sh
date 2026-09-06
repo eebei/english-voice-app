@@ -319,6 +319,9 @@ if out=$(node tests-gap-display-sync.js 2>&1); then echo "   ✅ ${out##*[}"; el
 echo "▶ 訂正検出の境界（Codex Gate 4 反例・独立オラクル）"
 if node tests-dispute-boundaries.js >/dev/null 2>&1; then echo "   ✅ 15ケース合格"; else echo "   ❌ 不合格"; node tests-dispute-boundaries.js 2>&1|tail -5; fail=1; fi
 
+echo "▶ 9月Luna-only表示：他キャラクターは2027年予定・選択不可"
+if out=$(node tests-luna-2027-ui.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格"; node tests-luna-2027-ui.js 2>&1|tail -8; fail=1; fi
+
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

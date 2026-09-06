@@ -115,6 +115,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .preview-btn.playing{border-color:var(--blue);background:var(--blue-dim)}
 .preview-btn svg{width:14px;height:14px;flex-shrink:0}
 .eng-card.hidden-eng{display:none}
+.eng-card.planned-2027{opacity:.5;filter:grayscale(1);transform:scale(.94)}
+.eng-card.planned-2027:hover{border-color:var(--border)}
+.planned-badge{display:inline-block;font-family:'Oxanium';font-size:10px;font-weight:700;letter-spacing:1px;color:#d7dce8;background:#272c3d;border:1px solid #596174;padding:4px 9px;border-radius:99px;margin:0 0 9px;text-transform:uppercase}
+.eng-card.planned-2027 .preview-btn{pointer-events:none;cursor:not-allowed;opacity:.55}
 .eng-more-wrap{text-align:center;margin-top:26px}
 .eng-more-btn{font-family:'Oxanium';font-size:13px;letter-spacing:1px;color:#e2e8f0;background:transparent;border:1px solid var(--blue);padding:11px 26px;border-radius:99px;cursor:pointer;transition:all .15s}
 .eng-more-btn:hover{background:var(--blue-dim)}
@@ -174,6 +178,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-sel-card .ename{font-family:'Oxanium';font-weight:700;font-size:15px;margin-bottom:2px}
 .eng-sel-card .erole{font-size:11px;color:var(--blue)}
 .eng-sel-card .elang{font-size:11px;color:var(--muted);margin-top:3px}
+.eng-sel-card.planned-2027{opacity:.45;filter:grayscale(1);cursor:not-allowed;transform:scale(.94);pointer-events:none}
+.eng-sel-card.planned-2027::after{content:'PLANNED FOR 2027';display:block;margin-top:8px;font-family:'Oxanium';font-size:9px;font-weight:700;letter-spacing:.8px;color:#d7dce8}
 
 /* Mode selection */
 .mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0 24px}
@@ -444,30 +450,32 @@ if (document.readyState === 'loading') {
 <section class="section" id="engineers">
   <div class="wrap-lg" data-lang="en">
     <div class="eyebrow">Your Pit Wall</div>
-    <h2 class="sec-title">Choose Your Engineer</h2>
-    <p class="sec-lead">Six engineers. Different voices, languages, and temperaments.<br>One mission: keep you informed, composed, and moving forward.</p>
+    <h2 class="sec-title">Meet Luna</h2>
+    <p class="sec-lead">Our first AI Race Engineer, being refined through real racing sessions.<br>Additional engineer personalities are planned for 2027.</p>
     <div class="eng-grid">
 
       <!-- James -->
-      <div class="eng-card v2">
+      <div class="eng-card v2 planned-2027">
         <div class="ec-photo"><img src="/James.png" alt="James Mitchell"></div>
         <div class="ec-body">
           <div class="nm">James Mitchell</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="subrole">Chief AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
           <div class="eng-langs"><span class="eng-lang">ENGLISH · UK</span></div>
           <div class="eng-styles">Direct · Strategic · Dry Wit</div>
           <div class="bio2">Clear priorities, concise calls, no wasted words. James keeps pressure from becoming panic.</div>
           <div class="eng-sig">“Reset. One target at a time.”</div>
-          <button class="preview-btn" onclick="previewVoice('James',this)">▶ Preview Voice</button>
+          <button class="preview-btn" disabled>Planned for 2027</button>
         </div>
       </div>
 
       <!-- Luna -->
-      <div class="eng-card v2">
+      <div class="eng-card v2 luna-current">
         <div class="ec-photo"><img src="/Luna.png" alt="Luna"></div>
         <div class="ec-body">
           <div class="nm">Luna</div>
+          <div class="planned-badge" style="color:#fff;background:var(--blue-dim);border-color:var(--blue)">In development now</div>
           <div class="subrole">AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
           <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
@@ -479,62 +487,66 @@ if (document.readyState === 'loading') {
       </div>
 
       <!-- Hajime -->
-      <div class="eng-card v2">
+      <div class="eng-card v2 planned-2027">
         <div class="ec-photo"><img src="/Hajime.png" alt="Hajime Omatsu"></div>
         <div class="ec-body">
           <div class="nm">Hajime Omatsu</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="subrole">AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
           <div class="eng-langs"><span class="eng-lang">JAPANESE</span><span class="eng-lang">ENGLISH</span></div>
           <div class="eng-styles">Bilingual · Precise · Motivating</div>
           <div class="bio2">Clear explanations with disciplined race communication. Hajime gives you the decision, then lets you drive.</div>
           <div class="eng-sig">“Keep it clean. The pace will come.”</div>
-          <button class="preview-btn" onclick="previewVoice('Hajime',this)">▶ Preview Voice</button>
+          <button class="preview-btn" disabled>Planned for 2027</button>
         </div>
       </div>
 
       <!-- Kanbe (hidden until View All) -->
-      <div class="eng-card v2 hidden-eng">
+      <div class="eng-card v2 hidden-eng planned-2027">
         <div class="ec-photo"><img src="/Kanbe.png" alt="Kanbei Ukita"></div>
         <div class="ec-body">
           <div class="nm">宇喜多 官兵衛 <span style="font-size:12px;color:var(--muted)">/ Kanbei Ukita</span></div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="subrole">AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
           <div class="eng-langs"><span class="eng-lang">JAPANESE · OKAYAMA DIALECT</span></div>
           <div class="eng-styles">Passionate · Assertive · Loyal</div>
           <div class="bio2">Warm, energetic radio with firm calls when the race gets difficult. Kanbei keeps the fighting spirit alive.</div>
           <div class="eng-sig">「おもれえ走りしとったで。次、取り返そうや。」</div>
-          <button class="preview-btn" onclick="previewVoice('Kanbe',this)">▶ Preview Voice</button>
+          <button class="preview-btn" disabled>Planned for 2027</button>
         </div>
       </div>
 
       <!-- Camila (hidden until View All) -->
-      <div class="eng-card v2 hidden-eng">
+      <div class="eng-card v2 hidden-eng planned-2027">
         <div class="ec-photo"><img src="/Camila.png" alt="Camila Sato"></div>
         <div class="ec-body">
           <div class="nm">Camila Sato</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="subrole">AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
           <div class="eng-langs"><span class="eng-lang soon">PORTUGUESE · BR · COMING SOON</span></div>
           <div class="eng-styles">Data-driven · Warm · Composed</div>
           <div class="bio2">Data-first calm with São Paulo warmth. Camila reads the patterns, keeps you steady — and lights up when you go for the move.</div>
           <div class="eng-sig">“Estou com você. Vamos buscar essa volta.”<span class="tr">I'm with you. Let's go get that lap.</span></div>
-          <button class="preview-btn" onclick="previewVoice('Camila',this)">▶ Preview Voice</button>
+          <button class="preview-btn" disabled>Planned for 2027</button>
         </div>
       </div>
 
       <!-- Matthias (hidden until View All) -->
-      <div class="eng-card v2 hidden-eng">
+      <div class="eng-card v2 hidden-eng planned-2027">
         <div class="ec-photo"><img src="/Matthias.png" alt="Matthias Richter"></div>
         <div class="ec-body">
           <div class="nm">Matthias Richter</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="subrole">AI Race Engineer</div>
           <div class="persona-tag">AI Engineer Persona</div>
           <div class="eng-langs"><span class="eng-lang soon">GERMAN · COMING SOON</span></div>
           <div class="eng-styles">Precise · Methodical · Technical</div>
           <div class="bio2">Structured, disciplined, and exact. Matthias turns race data into clear decisions.</div>
           <div class="eng-sig">“Ruhig bleiben. Wir bleiben beim Plan.”<span class="tr">Stay calm. We stick to the plan.</span></div>
-          <button class="preview-btn" onclick="previewVoice('Matthias',this)">▶ Preview Voice</button>
+          <button class="preview-btn" disabled>Planned for 2027</button>
         </div>
       </div>
 
@@ -542,35 +554,37 @@ if (document.readyState === 'loading') {
     <div class="eng-more-wrap">
       <button class="eng-more-btn" data-label-more="View All Engineers →" data-label-fewer="Show Fewer ↑" onclick="toggleAllEngineers(this)">View All Engineers →</button>
     </div>
-    <p class="eng-footer-note">You can change your engineer and communication language at any time.</p>
+    <p class="eng-footer-note">Luna is the active development engineer. Additional personalities are planned for 2027.</p>
   </div>
 
   <div class="wrap-lg" data-lang="jp" style="display:none">
     <div class="eyebrow">あなたのピットウォール</div>
-    <h2 class="sec-title">エンジニアを選ぶ</h2>
-    <p class="sec-lead">6人のエンジニア。声も、言語も、気質も違う。<br>使命はひとつ——あなたに情報を届け、平常心を保たせ、前へ進ませること。</p>
+    <h2 class="sec-title">Lunaを紹介します</h2>
+    <p class="sec-lead">最初のAIレースエンジニア、Luna。実際のレースセッションを通じて、会話・判断・記憶を磨いています。<br>ほかのエンジニアは2027年登場予定です。</p>
     <div class="eng-grid">
 
       <!-- James -->
-      <div class="eng-card v2">
+      <div class="eng-card v2 planned-2027">
         <div class="ec-photo"><img src="/James.png" alt="James Mitchell"></div>
         <div class="ec-body">
           <div class="nm">James Mitchell</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="subrole">チーフAIレースエンジニア</div>
           <div class="persona-tag">AIエンジニア・ペルソナ</div>
           <div class="eng-langs"><span class="eng-lang">英語 · イギリス</span></div>
           <div class="eng-styles">率直 · 戦略的 · 乾いたユーモア</div>
           <div class="bio2">明確な優先順位、簡潔な指示、無駄のない言葉。ジェームスはプレッシャーがパニックに変わるのを防ぐ。</div>
           <div class="eng-sig">「リセットしろ。一つずつ狙っていこう。」</div>
-          <button class="preview-btn" onclick="previewVoice('James',this)">▶ 声を聴く</button>
+          <button class="preview-btn" disabled>2027年登場予定</button>
         </div>
       </div>
 
       <!-- Luna -->
-      <div class="eng-card v2">
+      <div class="eng-card v2 luna-current">
         <div class="ec-photo"><img src="/Luna.png" alt="Luna"></div>
         <div class="ec-body">
           <div class="nm">Luna</div>
+          <div class="planned-badge" style="color:#fff;background:var(--blue-dim);border-color:var(--blue)">現在開発中</div>
           <div class="subrole">AIレースエンジニア</div>
           <div class="persona-tag">AIエンジニア・ペルソナ</div>
           <div class="eng-langs"><span class="eng-lang">日本語</span><span class="eng-lang">英語</span></div>
@@ -582,62 +596,66 @@ if (document.readyState === 'loading') {
       </div>
 
       <!-- Hajime -->
-      <div class="eng-card v2">
+      <div class="eng-card v2 planned-2027">
         <div class="ec-photo"><img src="/Hajime.png" alt="Hajime Omatsu"></div>
         <div class="ec-body">
           <div class="nm">Hajime Omatsu</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="subrole">AIレースエンジニア</div>
           <div class="persona-tag">AIエンジニア・ペルソナ</div>
           <div class="eng-langs"><span class="eng-lang">日本語</span><span class="eng-lang">英語</span></div>
           <div class="eng-styles">バイリンガル · 正確 · 鼓舞する</div>
           <div class="bio2">明快な説明と、規律あるレース無線。ハジメは判断を伝えたら、あとはドライバーに任せる。</div>
           <div class="eng-sig">「クリーンにいけ。ペースは後からついてくる。」</div>
-          <button class="preview-btn" onclick="previewVoice('Hajime',this)">▶ 声を聴く</button>
+          <button class="preview-btn" disabled>2027年登場予定</button>
         </div>
       </div>
 
       <!-- Kanbe (hidden until View All) -->
-      <div class="eng-card v2 hidden-eng">
+      <div class="eng-card v2 hidden-eng planned-2027">
         <div class="ec-photo"><img src="/Kanbe.png" alt="Kanbei Ukita"></div>
         <div class="ec-body">
           <div class="nm">宇喜多 官兵衛</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="subrole">AIレースエンジニア</div>
           <div class="persona-tag">AIエンジニア・ペルソナ</div>
           <div class="eng-langs"><span class="eng-lang">日本語 · 岡山弁</span></div>
           <div class="eng-styles">情熱的 · 芯が強い · 忠実</div>
           <div class="bio2">温かく熱のこもった無線で、厳しい局面では芯のある指示を出す。官兵衛は闘志を絶やさせない。</div>
           <div class="eng-sig">「おもれえ走りしとったで。次、取り返そうや。」</div>
-          <button class="preview-btn" onclick="previewVoice('Kanbe',this)">▶ 声を聴く</button>
+          <button class="preview-btn" disabled>2027年登場予定</button>
         </div>
       </div>
 
       <!-- Camila (hidden until View All) -->
-      <div class="eng-card v2 hidden-eng">
+      <div class="eng-card v2 hidden-eng planned-2027">
         <div class="ec-photo"><img src="/Camila.png" alt="Camila Sato"></div>
         <div class="ec-body">
           <div class="nm">Camila Sato</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="subrole">AIレースエンジニア</div>
           <div class="persona-tag">AIエンジニア・ペルソナ</div>
           <div class="eng-langs"><span class="eng-lang soon">ポルトガル語 · ブラジル · 近日公開</span></div>
           <div class="eng-styles">データ重視 · 温かい · 落ち着き</div>
           <div class="bio2">データ第一の冷静さと、サンパウロ仕込みの温かさ。カミラはパターンを読み取り、あなたを落ち着かせる——そして、あなたが仕掛ける瞬間には共に燃える。</div>
           <div class="eng-sig">「Estou com você. Vamos buscar essa volta.」<span class="tr">一緒にいるよ。そのラップ、獲りにいこう。</span></div>
-          <button class="preview-btn" onclick="previewVoice('Camila',this)">▶ 声を聴く</button>
+          <button class="preview-btn" disabled>2027年登場予定</button>
         </div>
       </div>
 
       <!-- Matthias (hidden until View All) -->
-      <div class="eng-card v2 hidden-eng">
+      <div class="eng-card v2 hidden-eng planned-2027">
         <div class="ec-photo"><img src="/Matthias.png" alt="Matthias Richter"></div>
         <div class="ec-body">
           <div class="nm">Matthias Richter</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="subrole">AIレースエンジニア</div>
           <div class="persona-tag">AIエンジニア・ペルソナ</div>
           <div class="eng-langs"><span class="eng-lang soon">ドイツ語 · 近日公開</span></div>
           <div class="eng-styles">正確 · 体系的 · 技術志向</div>
           <div class="bio2">構造的で、規律正しく、正確。マティアスはレースデータを明確な判断へと変える。</div>
           <div class="eng-sig">「Ruhig bleiben. Wir bleiben beim Plan.」<span class="tr">落ち着け。プランどおりにいく。</span></div>
-          <button class="preview-btn" onclick="previewVoice('Matthias',this)">▶ 声を聴く</button>
+          <button class="preview-btn" disabled>2027年登場予定</button>
         </div>
       </div>
 
@@ -645,7 +663,7 @@ if (document.readyState === 'loading') {
     <div class="eng-more-wrap">
       <button class="eng-more-btn" data-label-more="全エンジニアを見る →" data-label-fewer="閉じる ↑" onclick="toggleAllEngineers(this)">全エンジニアを見る →</button>
     </div>
-    <p class="eng-footer-note">エンジニアとやり取りする言語は、いつでも変更できます。</p>
+    <p class="eng-footer-note">現在選択できるエンジニアはLunaです。ほかの人格は2027年登場予定です。</p>
   </div>
 </section>
 
@@ -843,7 +861,7 @@ if (document.readyState === 'loading') {
           <li>Gap alerts & strategy calls</li>
           <li>Post-race debrief</li>
           <li>Personal memory — your bests, fuel & race history, per course and car</li>
-          <li>All 4 engineers</li>
+          <li>Luna in Japanese and English</li>
           <li>iRacing telemetry</li>
           <li>Priority access to new engineers & features</li>
           <li>Your own PITWALL share page — ready-made posts for X, Instagram, TikTok</li>
@@ -980,7 +998,7 @@ if (document.readyState === 'loading') {
       <input class="field-input" id="user-name-input" type="text" placeholder="Your name" oninput="onNameInput()" maxlength="30" style="margin-bottom:24px">
       <div class="field-label">Select Your Engineer</div>
       <div class="eng-select-grid">
-        <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
+        <div class="eng-sel-card planned-2027" id="card-James" aria-disabled="true">
           <img src="/James.png" alt="James">
           <div class="ename">James</div>
           <div class="erole">Chief Engineer</div>
@@ -992,19 +1010,19 @@ if (document.readyState === 'loading') {
           <div class="erole">Race Engineer</div>
           <div class="elang">🇬🇧 English</div>
         </div>
-        <div class="eng-sel-card" id="card-Hajime" onclick="selectEng('Hajime')">
+        <div class="eng-sel-card planned-2027" id="card-Hajime" aria-disabled="true">
           <img src="/Hajime.png" alt="Hajime">
           <div class="ename">Hajime</div>
           <div class="erole">Race Engineer</div>
           <div class="elang">🇯🇵🇬🇧 EN / JP</div>
         </div>
-        <div class="eng-sel-card" id="card-Kanbe" onclick="selectEng('Kanbe')">
+        <div class="eng-sel-card planned-2027" id="card-Kanbe" aria-disabled="true">
           <img src="/Kanbe.png" alt="Kanbe">
           <div class="ename">官兵衛</div>
           <div class="erole">チーフエンジニア</div>
           <div class="elang">🇯🇵 岡山弁</div>
         </div>
-        <div class="eng-sel-card" id="card-Oishi" onclick="selectEng('Oishi')">
+        <div class="eng-sel-card planned-2027" id="card-Oishi" aria-disabled="true">
           <img src="/Oishi.png" alt="Oishi">
           <div class="ename">大石</div>
           <div class="erole">チーフストラテジスト</div>
@@ -1111,6 +1129,7 @@ function showScreen(id){
 
 // ── Engineer selection ──
 function selectEng(name){
+  if(name!=='Luna') return;
   sel = name;
   document.querySelectorAll('.eng-sel-card').forEach(c=>c.classList.remove('selected'));
   document.getElementById('card-'+name).classList.add('selected');

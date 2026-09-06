@@ -82,6 +82,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-card .nm{font-family:'Oxanium';font-weight:700;font-size:17px;margin-bottom:3px}
 .eng-card .role{font-size:13px;color:var(--blue);margin-bottom:6px}
 .eng-card .bio{font-size:13px;color:var(--muted);line-height:1.5}
+.eng-card.planned-2027{opacity:.42;filter:grayscale(1);transform:scale(.94)}
+.eng-card.planned-2027:hover{border-color:#5866a8}
+.eng-card .planned-badge{display:inline-block;font-family:'Oxanium';font-size:9px;font-weight:700;letter-spacing:.8px;color:#d7dce8;border:1px solid #596174;border-radius:99px;padding:3px 8px;margin:3px 0 6px;text-transform:uppercase}
 .luna-badge{display:inline-block;font-size:10px;font-family:'Oxanium';letter-spacing:1px;color:var(--muted);border:1px solid var(--border);padding:2px 10px;border-radius:99px;margin-top:6px}
 
 /* Pricing */
@@ -130,6 +133,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 .eng-sel-card .erole{font-size:12px;color:var(--blue);margin-bottom:1px}
 .eng-sel-card .elang{font-size:11px;color:var(--muted)}
 .eng-sel-card .etrait{font-size:12.5px;color:var(--silver);margin-top:6px;line-height:1.5}
+.eng-sel-card.planned-2027{opacity:.42;filter:grayscale(1);cursor:not-allowed;transform:scale(.96);pointer-events:none}
+.eng-sel-card.planned-2027::after{content:'2027年登場予定';display:block;margin-left:auto;font-family:'Oxanium';font-size:10px;font-weight:700;letter-spacing:.6px;color:#d7dce8;border:1px solid #596174;border-radius:99px;padding:4px 8px;white-space:nowrap}
+.eng-sel-card.luna-current::after{content:'開発・検証中';display:block;margin-left:auto;font-size:10px;font-weight:700;color:#fff;background:var(--blue-dim);border:1px solid var(--blue);border-radius:99px;padding:4px 8px;white-space:nowrap}
 .lang-toggle{display:flex;gap:8px;margin-top:10px}
 .lang-pill{font-size:12px;padding:6px 12px;border-radius:20px;border:1.5px solid #5866a8;background:transparent;color:var(--silver);cursor:pointer}
 .lang-pill.active{border-color:var(--blue);background:var(--blue-dim);color:var(--blue)}
@@ -357,61 +363,68 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <section class="section" id="engineers">
   <div class="wrap-lg">
     <div class="eyebrow">Your Crew</div>
-    <h2 class="sec-title">Choose Your Engineer</h2>
-    <p class="sec-lead">Eight engineers. Different styles, same mission — get you across the line.</p>
+    <h2 class="sec-title">Meet Luna</h2>
+    <p class="sec-lead">Luna is the active development engineer. Additional personalities are planned for 2027.</p>
     <div class="eng-grid">
-      <div class="eng-card">
+      <div class="eng-card planned-2027">
         <img src="James.png" alt="James">
         <div>
           <div class="nm">James Mitchell</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="role">Chief Engineer · OMORAY Racing</div>
           <div class="bio">British. Sharp, direct, dry wit. Former F1 midfield engineer. Calls it straight — no fluff. "Well, that happened."</div>
         </div>
       </div>
-      <div class="eng-card">
+      <div class="eng-card luna-current">
         <img src="Luna.png" alt="Luna">
         <div>
           <div class="nm">Luna</div>
+          <div class="planned-badge" style="color:#fff;border-color:var(--blue)">In development now</div>
           <div class="role">Race Engineer · OMORAY Racing</div>
           <div class="bio">Japanese returnee, fluent English. Calm and perceptive — reads the driver behind the data. Notices what you feel before you say it. "I've got your data. You've got this."</div>
         </div>
       </div>
-      <div class="eng-card">
+      <div class="eng-card planned-2027">
         <img src="Hajime.png" alt="Hajime">
         <div>
           <div class="nm">Hajime Omatsu</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="role">Race Engineer · OMORAY Racing</div>
           <div class="bio">Japanese-born, European-based. Cool exterior, fire inside. Broke the language barrier to reach the top. Bilingual. "Data doesn't lie. Let's keep it clean."</div>
         </div>
       </div>
-      <div class="eng-card">
+      <div class="eng-card planned-2027">
         <img src="Kanbe.png" alt="Kanbe">
         <div>
           <div class="nm">宇喜多 官兵衛</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="role">チーフエンジニア · OMORAY Racing</div>
           <div class="bio">岡山弁で語りかける熱血エンジニア。戦略眼と兄貴肌の兼ね備えた策士。「おもれえ走りしとったで。」</div>
         </div>
       </div>
-      <div class="eng-card">
+      <div class="eng-card planned-2027">
         <img src="Oishi.png" alt="Oishi">
         <div>
           <div class="nm">大石 蔵之助</div>
+          <div class="planned-badge">2027年登場予定</div>
           <div class="role">チーフストラテジスト · OMORAY Racing</div>
           <div class="bio">忍耐と緻密さの策士。慌てず機を読み、ここぞで仕掛ける。「見事な走りだった。」</div>
         </div>
       </div>
-      <div class="eng-card">
+      <div class="eng-card planned-2027">
         <img src="Matthias.png" alt="Matthias">
         <div>
           <div class="nm">Matthias Richter</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="role">Race Engineer · OMORAY Racing</div>
           <div class="bio">German. Direct, process-driven, precise. Factory motorsport background. "Die Daten lügen nicht."</div>
         </div>
       </div>
-      <div class="eng-card">
+      <div class="eng-card planned-2027">
         <img src="Camila.png" alt="Camila">
         <div>
           <div class="nm">Camila Sato</div>
+          <div class="planned-badge">Planned for 2027</div>
           <div class="role">Race Engineer · OMORAY Racing</div>
           <div class="bio">Brazilian (Nikkei, São Paulo). Data-first calm, Paulista warmth. "Estou com você. Vamos buscar essa volta."</div>
         </div>
@@ -533,7 +546,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
       <div id="starter-pass-banner" class="profile-banner" style="display:none;margin-bottom:16px"></div>
       <div class="field-label" data-i18n="select_title">エンジニアを選ぶ</div>
       <div class="eng-select-grid">
-        <div class="eng-sel-card" id="card-James" onclick="selectEng('James')">
+        <div class="eng-sel-card planned-2027" id="card-James" aria-disabled="true">
           <img src="James.png" alt="James">
           <div class="einfo">
             <div class="ename">James</div>
@@ -542,7 +555,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="etrait" data-i18n="trait_james">冷静・データ重視のチーフ。ブレない司令塔。</div>
           </div>
         </div>
-        <div class="eng-sel-card" id="card-Luna" onclick="selectEng('Luna')">
+        <div class="eng-sel-card luna-current" id="card-Luna" onclick="selectEng('Luna')">
           <img src="Luna.png" alt="Luna">
           <div class="einfo">
             <div class="ename">Luna</div>
@@ -554,19 +567,19 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             </div>
           </div>
         </div>
-        <div class="eng-sel-card" id="card-Hajime" onclick="selectEng('Hajime')">
+        <div class="eng-sel-card planned-2027" id="card-Hajime" aria-disabled="true">
           <img src="Hajime.png" alt="Hajime">
           <div class="einfo">
             <div class="ename">Hajime</div>
             <div class="erole" data-i18n="role_race_engineer">Race Engineer</div>
             <div class="elang" data-i18n="trait_hajime">氷と炎。要点だけを、鋭く。単身で結果を出してきた侍。</div>
             <div class="lang-toggle">
-              <button class="lang-pill" id="langpill-Hajime-en" data-i18n="pill_en" onclick="event.stopPropagation();selectEng('Hajime')">🇬🇧 English</button>
-              <button class="lang-pill" id="langpill-Hajime-jp" data-i18n="pill_jp" onclick="event.stopPropagation();selectEng('HajimeJP')">🇯🇵 日本語</button>
+              <button class="lang-pill" id="langpill-Hajime-en" data-i18n="pill_en" disabled>🇬🇧 English</button>
+              <button class="lang-pill" id="langpill-Hajime-jp" data-i18n="pill_jp" disabled>🇯🇵 日本語</button>
             </div>
           </div>
         </div>
-        <div class="eng-sel-card" id="card-Kanbe" onclick="selectEng('Kanbe')">
+        <div class="eng-sel-card planned-2027" id="card-Kanbe" aria-disabled="true">
           <img src="Kanbe.png" alt="Kanbe">
           <div class="einfo">
             <div class="ename">官兵衛</div>
@@ -575,7 +588,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="etrait" data-i18n="trait_kanbe">熱と知略。岡山弁の軍師。</div>
           </div>
         </div>
-        <div class="eng-sel-card" id="card-Oishi" onclick="selectEng('Oishi')">
+        <div class="eng-sel-card planned-2027" id="card-Oishi" aria-disabled="true">
           <img src="Oishi.png" alt="Oishi">
           <div class="einfo">
             <div class="ename">大石</div>
@@ -584,7 +597,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="etrait" data-i18n="trait_oishi">静かな策士。大局を見る武士。</div>
           </div>
         </div>
-        <div class="eng-sel-card" id="card-Matthias" onclick="selectEng('Matthias')">
+        <div class="eng-sel-card planned-2027" id="card-Matthias" aria-disabled="true">
           <img src="Matthias.png" alt="Matthias">
           <div class="einfo">
             <div class="ename">Matthias</div>
@@ -593,7 +606,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
             <div class="etrait" data-i18n="trait_matthias">直接的・プロセス重視。ドイツ流の精密さ。</div>
           </div>
         </div>
-        <div class="eng-sel-card" id="card-Camila" onclick="selectEng('Camila')">
+        <div class="eng-sel-card planned-2027" id="card-Camila" aria-disabled="true">
           <img src="Camila.png" alt="Camila">
           <div class="einfo">
             <div class="ename">Camila</div>
@@ -1975,6 +1988,7 @@ function returnToSession(){ if(sessionActive) showScreen('screen-chat'); }
 
 // ── Engineer selection ──
 function selectEng(name){
+  if(name!=='Luna'&&name!=='LunaJP') return;
   sel = name;
   // Hajime/Lunaは1人枠の中でEN/JPを切り替える方式（同じ人物が2枚のカードに分かれるのは不自然、との
   // Yuji指摘・2026/7/5で統合）。カードのハイライトはスロットID(HajimeJP→Hajime等)に対して行う。
