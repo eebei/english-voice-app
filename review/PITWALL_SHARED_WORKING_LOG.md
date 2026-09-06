@@ -10629,3 +10629,38 @@ Gate 5 private artifact（`publish=false` → 中身検査）→ Gate 6 Windows 
 commit後は各commit SHA、各commitのファイル一覧、未commit残差、直前検査結果を共有MDへ記録すること。
 
 次のMDに指示書あり
+
+---
+
+# 2026-09-06 JST — Claude Code：commit 完了（2件・B案分離）
+
+## commit SHA と内容
+
+| # | SHA | 件名 | ファイル |
+|---|---|---|---|
+| 1 | **`6a7b638`** | Show Luna as the current engineer and mark the others as planned for 2027 | `desktop/renderer.html`(+50/−…)、`public/pitwall.html`、`tests-luna-2027-ui.js`、`preflight.sh` — 計4ファイル・126挿入/51削除 |
+| 2 | **`a34db15`** | Answer the race conversation from one confirmed set of facts | `desktop/renderer.html`、`desktop/local-intent-router.js`、`desktop/pddp.js`、**新規** `desktop/session-strategy-state.js`、**新規** `fixtures/build298/`(2)、**新規** `tests-build298-race-replay.js`、`tests-gap-answer-queue.js`、`tests-gap-display-sync.js`、`tests-local-intent-router.js`、`tests-pddp.js`、`tests-timed-race-truth.js`、`preflight.sh`、`HANDOFF.md`、本記録、**新規** `review/CODEX_HANDOFF_BUILD298_FIX_20260906.md` — 計16ファイル・4,750挿入/127削除 |
+
+base: `6c25500`。`desktop/renderer.html` と `preflight.sh` は**hunk単位で分離**した
+（UI差分＝CSS `.eng-sel-card.planned-2027`・カード markup・`selectEng` guard の10 hunk のみを1件目へ）。
+1件目の staged 差分に Build 298 由来の語（`session-strategy-state` / `buildGapUtterance` /
+`normalizeLapWords` / `briefingEvidence`）が**0件**であることを確認済み。
+
+## 未commit残差（GO対象外・意図的に除外）
+
+`artifacts/`、`desktop/dist/`、`desktop/package-lock.json`、`outputs/`、
+`PITWALL_発話種別一覧.txt`、`docs/PITWALL_CATEGORY_RUNTIME_GUIDE.md`。**いずれも今回のGOに含まない。**
+
+## commit直前・直後の検査
+
+- `tests-build298-race-replay.js` 123/123、`tests-luna-2027-ui.js` 34/34
+- GAP queue 71/71、display sync 70/70、PDDP v1 58/58、local router 54/54
+- `preflight.sh` ✅ 出荷可（commit後に再実行して確認）
+- `git diff 6c25500..HEAD --check` 合格（trailing whitespace なし）
+
+## 次
+
+**Build：NO GO。** Gate 5 private artifact（`publish=false`）の別GOを待つ。
+公開は Gate 5・Windows Gate 6・実走判断より前には行わない。
+
+**Build・公開は提案しない。**

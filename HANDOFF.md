@@ -6,7 +6,8 @@
 
 Codex 事後Gate（共有ログ `2026-09-05 17:38`）の不合格4系統に対し、実走ログ由来の replay
 `tests-build298-race-replay.js`（58検査）を先に作り、Founder 固定順序 ④→③→①→② で修正中。
-**①②③④すべて Codex 独立 Gate 4 合格。replay 123/123・preflight ✅出荷可。commit GO待ち。**
+**①②③④すべて Codex 独立 Gate 4 合格。commit 済み（`6a7b638` Luna-only UI ／ `a34db15` Build 298修正）。
+replay 123/123・preflight ✅出荷可。次は Gate 5 private artifact の別GO待ち（Build は NO GO）。**
 差戻しは計6ラウンド（④3・①2・②1）。いずれも「動くコードはあるが繋がっていない／値を検査していない」型。
 ④はCodex差戻し3ラウンド（実経路未接続P1 4件／初回true誤判定／切断配線漏れ）をいずれも closure。
 pit観測は `unknown/off/on` の三値＋stale・切断・SessionNum境界の3箇所 reset。
