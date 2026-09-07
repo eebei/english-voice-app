@@ -31,6 +31,42 @@
     const n = finite(value);
     return n !== null && Number.isInteger(n) ? n : null;
   };
+  // ★Codex P2（2026-09-06）：注入された strategy API が部分実装（例：`pitExecuted`
+  //   だけを持つテストダブル）だと、`answerFuel` 等の未定義メソッド呼出しで
+  //   router 全体が throw していた。呼ぶ前に**能力を確認**し、欠けていれば
+  //   fail-closed（unhandled もしくは既存の未配線時フォールバック）へ落とす。
+  const stratCan = (mod, name) => !!(mod && typeof mod[name] === 'function');
+  // ★Codex P1-2（2026-09-07 第2回差戻し）：固定 `NO_AUTHORITY_MAX_AHEAD=20` を廃止した。
+  //   耐久では20周より先の正当なPlanが普通にある（現在10周・35周目でピット、等）。
+  //   優先順位は (1) 正式な総周回 authority (2) 正式な残りcrossings authority
+  //   (3) どちらも無ければ「現在周・次周だけ自明」として、それ以外は確定も拒否もせず聞き返す。
+  //
+  //   ★off-by-one 契約（当方の解釈・**未確認**。`irsdk-bridge/final_lap.py` の
+  //   `estimated_crossings_to_finish` は「S/Fをあと何回通過するか」。現在ラップを
+  //   走行中に crossings=N なら、最終有効ラップ = currentLap + N - 1 と解釈した
+  //   （現在ラップの完走で1回、以降の各ラップ完走で1回ずつ通過するため）。
+  //   実テレメトリでの検証はしていない。境界を誤っていれば1周分ずれる。
+  const resolvePitLapCeiling = (currentLap, live) => {
+    // ★Codex P1-2（2026-09-07 第3回差戻し）：bridge側の未検証センチネル
+    //   （iRacing SessionLapsTotal の32767等）が `laps_total` としてそのまま
+    //   desktopへ届き、`finish_crossings_authority` が正しくても上書きしていた。
+    //   bridge側（`bridge.py` の broadcast）を `_laps_total_ok` で検証済みの時だけ
+    //   公開するよう直したが、desktop側にも**二重の防御**を置く。
+    //   `race_plan.kind==='timed'` と分かっている時は、`laps_total` が届いても
+    //   周回レースの総周回として信用しない（時間制に周回総数は存在しない）。
+    const plan = live.race_plan && typeof live.race_plan === 'object' ? live.race_plan : null;
+    const isTimedRace = plan && plan.kind === 'timed';
+    const totalLaps = isTimedRace ? null : integer(live.laps_total);
+    if (totalLaps !== null) return { total: totalLaps, source: 'laps_total' };
+    // ★1〜10という上限は他所（Last-N周回コールの表示範囲）由来の値を
+    //   そのまま転用していた「恣意的な制限」（Codex指摘）。ここでは外す。
+    const crossings = integer(live.finish_crossings_authority);
+    if (crossings !== null && crossings >= 0) {
+      return { total: currentLap + crossings - 1, source: 'finish_crossings_authority' };
+    }
+    return null;   // authority 無し
+  };
+
   const formatDuration = (seconds, lang) => {
     const value = finite(seconds);
     if (value === null) return '';
@@ -285,26 +321,29 @@
       //   前提にした旧権威）から「◯L不足」「Plan A継続」を作る。実走 18:44:53 は
       //   ピット済み・残り約2周で足りているのに「完走まで8.3L不足。Plan Aを継続」と言った。
       //   ピット実行後は**残り距離**に対してのみ答える。
-      if (strategyModule && strategyState
-          && typeof strategyModule.pitExecuted === 'function'
-          && strategyModule.pitExecuted(strategyState)) {
-        const timing = (live.fuel_strategy && live.fuel_strategy.pit_timing_authority) || {};
-        const range = finite(timing.range_laps);
-        const lapsLeft = integer(live.finish_crossings_authority);
-        if (range !== null && lapsLeft !== null) {
-          return answer('fuel_status', isJP(lang)
-            ? (range >= lapsLeft
-              ? `現燃料で約${range.toFixed(1)}周。残り${lapsLeft}周、足りている。`
-              : `現燃料で約${range.toFixed(1)}周。残り${lapsLeft}周には届かない。`)
-            : (range >= lapsLeft
-              ? `About ${range.toFixed(1)} laps of fuel for ${lapsLeft} to go. Enough.`
-              : `About ${range.toFixed(1)} laps of fuel, ${lapsLeft} to go. Not enough.`));
-        }
-        // 権威値が揃わない時は旧文へ落とさない。足りない情報だけを言う。
-        return answer('fuel_status', isJP(lang)
-          ? 'ピットは済んでいる。残り距離に対する燃料の権威値がまだ揃わない。'
-          : 'The stop is done. Authoritative fuel-vs-remaining-distance is not confirmed yet.');
+      // ★Codex P2（2026-09-06／2026-09-07 差戻し）：`pitExecuted` だけを持つ部分APIが
+      //   注入されると `answerFuel` 未定義で throw していた。能力確認してから使う。
+      //   **pit済みと分かっているのに answerFuel が無い場合は、`fuelReply()`（pit前提の
+      //   旧権威）へ落とさない。** 落とすと、ピット済みなのに「完走まで◯L不足」という
+      //   実走18:44:53の誤りをそのまま再現する。答えられないなら fail-closed で黙る。
+      const pitKnownExecuted = strategyModule && strategyState
+        && stratCan(strategyModule, 'pitExecuted') && strategyModule.pitExecuted(strategyState);
+      if (pitKnownExecuted) {
+        if (!stratCan(strategyModule, 'answerFuel')) return { handled:false };
+        // ★2026-09-06：ここは独自に文を組み立てていたため、`answerFuel()` が
+        //   **製品から一度も呼ばれない**まま残っていた（wiring lint が検出）。
+        //   燃料判定の正本は state 側に一本化する。
+        const fs2 = (live.fuel_strategy && typeof live.fuel_strategy === 'object') ? live.fuel_strategy : {};
+        const a = strategyModule.answerFuel(strategyState, {
+          fuel_l: finite(live.fuel),
+          per_lap_l: finite(fs2.avg_fuel_per_lap) !== null ? finite(fs2.avg_fuel_per_lap)
+            : finite(live.fuel_per_lap_l),
+          laps_remaining: integer(live.finish_crossings_authority),
+          at: Date.now(),
+        });
+        return answer('fuel_status', a && a.reply);
       }
+      // pit未実行・または pit実行の可否自体が分からない：唯一の材料は旧経路。
       return answer('fuel_status', fuelReply(live, lang));
     }
     // Build 287 field replay: Google correctly transcribed both
@@ -347,7 +386,7 @@
     //   合意Plan・pit実績は session-strategy-state が唯一の正本。
     if (/(?:何周目|いつ|どこ).{0,8}(?:ピット|ボックス|box)|(?:ピット|ボックス).{0,10}(?:何周目|いつ|予定)/i.test(text)
         || /pit.{0,10}(?:which lap|what lap|when)|when.{0,10}pit/i.test(text)) {
-      if (strategyModule && strategyState) {
+      if (strategyModule && strategyState && stratCan(strategyModule, 'answerPitDecision')) {
         const a = strategyModule.answerPitDecision(strategyState,
           { at: Date.now(), laps_remaining: integer(live.finish_crossings_authority) });
         return answer('pit_plan_question', a && a.reply);
@@ -355,6 +394,94 @@
       return answer('pit_plan_question', isJP(lang)
         ? 'ピット周はまだ決めていない。'
         : 'The pit lap is not agreed yet.');
+    }
+
+    // ★2026-09-06：訂正・取消をPlan状態へ繋ぐ。Founder 固定要件
+    //   「訂正・取消・聞き返し後もPlan状態を追跡する」に対し、
+    //   これまで `amendPitPlan` / `cancelPitPlan` は **API を作っただけで製品経路が無かった**
+    //   （wiring lint が未配線として検出）。合意済みのPlanがある時だけ受ける。
+    // ★Codex P1-1（2026-09-06 差戻し・第2回）：`やめない`／`取り消さない`のような
+    //   語尾直結の否定形は塞いだが、**助詞を挟む自然な否定**
+    //   （「キャンセルは**しない**」「中止に**しない**」「やめることは**しない**」
+    //   「取り消すつもりは**ない**」）を落としていた。取消語の**否定scope**を
+    //   広く見る：取消語から10文字以内に「ない」が現れたら、確定表現として扱わない。
+    //   窓を広げた分、無関係な文をまたいで誤検出する余地は残る（当方の判断・要確認）。
+    // ★Codex P1-1（2026-09-07 第3回差戻し）：10文字窓は「ピット中止、タイヤ交換は
+    //   **しない**。」のような**別命令の否定**を巻き込んでいた。
+    //   最初に節（読点・句点・！・？区切り）へ分割してから判定する版を作ったが、
+    //   実際に節境界を効かせているのは**否定側の正規表現に読点を除外文字として
+    //   含めていること**であり、分割は何もしていなかった（変異試験 M-W12 で発覚：
+    //   分割を無効化しても結果が変わらなかった）。分割を削り、正規表現1本にする。
+    //   `[^、。！?？]{0,10}` が読点・句点をまたげないので、「中止、タイヤ交換は
+    //   しない」の`ない`は`中止`から見て読点の先にあり、そもそも到達できない。
+    const PIT_CANCEL_WORD = /(?:ピット|ボックス|box).{0,8}(?:やめ|取り消|キャンセル|中止)|(?:やめ|取り消|キャンセル|中止).{0,8}(?:ピット|ボックス|box)/i;
+    const PIT_CANCEL_NEGATED = /(?:やめ|取り消|キャンセル|中止)[^、。！?？]{0,10}ない/;
+    if (!/[?？]/.test(text) && PIT_CANCEL_WORD.test(text) && !PIT_CANCEL_NEGATED.test(text)) {
+      if (!stratCan(strategyModule, 'pitPlan') || !stratCan(strategyModule, 'cancelPitPlan')) {
+        return { handled:false };   // P2：能力が無ければ確定させず fail-closed
+      }
+      const had = strategyModule.pitPlan(strategyState) || null;
+      if (!had) {
+        return answer('pit_plan_cancel', isJP(lang)
+          ? '取り消すピット予定が無い。' : 'There is no agreed pit plan to cancel.');
+      }
+      strategyModule.cancelPitPlan(strategyState, { source: 'driver', at: Date.now() });
+      return answer('pit_plan_cancel', isJP(lang)
+        ? `${had.lap}周目のピットは取り消した。`
+        : `Cancelled the pit stop planned for lap ${had.lap}.`);
+    }
+
+    // 「やっぱり14周目」＝合意済みPlanの訂正。周が読めない訂正は受けない（推測しない）。
+    // ★Codex P1-2（2026-09-06 差戻し）：現在9周・合意12周の状態で「やっぱり5周」（過去）
+    //   「やっぱり999周」（範囲外）を**無検証で確定保存**していた。current lap・
+    //   総周回／残り周回のauthorityがあれば範囲検証し、authority不足でも
+    //   999のような値を無条件確定しない。成立しない指定はPlanを維持したまま聞き返す。
+    if (!/[?？]/.test(text)
+        && /(?:やっぱり|やはり|変更|訂正|じゃなくて)/.test(text)
+        && /(?:ピット|ボックス|box)|周/.test(text)) {
+      if (!stratCan(strategyModule, 'pitPlan') || !stratCan(strategyModule, 'amendPitPlan')) {
+        return { handled:false };   // P2：能力が無ければ確定させず fail-closed
+      }
+      const lapM = text.match(/([0-9０-９]{1,3})\s*周/);
+      const lap = lapM ? integer(lapM[1].replace(/[０-９]/g, d => '０１２３４５６７８９'.indexOf(d))) : null;
+      const cur = strategyModule.pitPlan(strategyState) || null;
+      if (!cur) return { handled:false };
+      if (lap === null) {
+        return answer('pit_plan_amend', isJP(lang)
+          ? `今は${cur.lap}周目で合意している。何周目に変える？`
+          : `We agreed on lap ${cur.lap}. Which lap instead?`);
+      }
+      const currentLap = integer(live.lap);
+      // 現在周が分からなければ、過去／範囲外の判定ができないので確定しない。
+      if (currentLap === null) {
+        return answer('pit_plan_amend', isJP(lang)
+          ? `今の周回が確認できない。今は${cur.lap}周目で合意したまま。`
+          : `Current lap is not confirmed. Keeping the agreed stop at lap ${cur.lap}.`);
+      }
+      if (lap < currentLap) {
+        return answer('pit_plan_amend', isJP(lang)
+          ? `${lap}周目は既に過ぎている。今は${currentLap}周目。何周目に変える？`
+          : `Lap ${lap} has already passed (we're on lap ${currentLap}). Which lap instead?`);
+      }
+      const ceiling = resolvePitLapCeiling(currentLap, live);
+      if (ceiling !== null) {
+        if (lap > ceiling.total) {
+          return answer('pit_plan_amend', isJP(lang)
+            ? `${lap}周目はレース範囲外（全${ceiling.total}周）。今は${cur.lap}周目で合意したまま。`
+            : `Lap ${lap} is beyond the race (${ceiling.total} laps total). Keeping lap ${cur.lap}.`);
+        }
+      } else if (lap > currentLap + 1) {
+        // ★Codex 指摘：authority が無い時に「999等を無条件確定しない」ための固定capは
+        //   耐久で正当な先の周（+20超）まで拒否してしまうため廃止した。現在周・次周を
+        //   超える指定は、authority が無い限り**確定も拒否もせず**、一度だけ確認する。
+        return answer('pit_plan_amend', isJP(lang)
+          ? `${lap}周目まで有効か確認できない。今は${cur.lap}周目で合意したまま。何周目に変える？`
+          : `Cannot confirm lap ${lap} is valid yet. Keeping lap ${cur.lap}. Which lap instead?`);
+      }
+      strategyModule.amendPitPlan(strategyState, { lap, source: 'driver', at: Date.now() });
+      return answer('pit_plan_amend', isJP(lang)
+        ? `${cur.lap}周目から${lap}周目へ変更した。`
+        : `Moved the stop from lap ${cur.lap} to lap ${lap}.`);
     }
 
     // 「この周でピットイン だ。」＝Plan申告（質問ではない）。
@@ -366,7 +493,8 @@
       const nextLap = /次の\s*周/.test(text);
       const currentLap = integer(live.lap);
       const planLap = currentLap === null ? null : (nextLap ? currentLap + 1 : currentLap);
-      if (strategyModule && strategyState && planLap !== null) {
+      if (strategyModule && strategyState && planLap !== null
+          && stratCan(strategyModule, 'agreePitPlan')) {
         strategyModule.agreePitPlan(strategyState,
           { lap: planLap, source: 'driver', at: Date.now() });
       }

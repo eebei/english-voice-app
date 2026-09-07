@@ -710,6 +710,323 @@ const pddp = require('./desktop/pddp.js');
       rNext && !/この周/.test(String(rNext.reply || '')), JSON.stringify(rNext));
   }
 
+  // ★④-5（2026-09-06 次スライス）：訂正・取消・燃料を**製品経路**へ繋いだ分。
+  //   wiring lint が「API はあるが製品呼出し0件」と検出した箇所である。
+  if (hasState) {
+    const S = require(statePath);
+    // ★2026-09-07 Codex 第2回・第3回差戻し：無authorityで14周（現在+5）を無条件確定
+    //   するのはもう許されない。この既存シナリオは「authority ありで訂正が成立する」
+    //   ことの検証へ位置づけ直し、`laps_total` を足す。`race_plan.kind:'timed'` と
+    //   `laps_total` を同居させると、Codex 第3回差戻しが指摘したセンチネル漏れの
+    //   誤り方をこのfixture自身が再現してしまうため、**周回レース（'laps'）**にする。
+    //   authority 無しでの挙動は ④-7 が持つ。
+    const liveP = { session_time_remaining_s: 1200, lap: 9, laps_total: 30,
+      race_plan: { kind: 'laps', configured_duration_s: null } };
+
+    // 取消：合意済みPlanがある時だけ受ける
+    const stC = S.create({ session_key: 'k' });
+    S.agreePitPlan(stC, { lap: 12, source: 'driver', at: 1 });
+    const rc = router.route({ text: 'ピットやめる。', lang: 'ja', live: liveP,
+      strategy: { state: stC, api: S } });
+    check(G, '④-5 「ピットやめる」でPlanが取り消される',
+      rc && rc.handled && S.pitPlan(stC) === null, JSON.stringify({ rc, plan: S.pitPlan(stC) }));
+    check(G, '④-5 取消の復唱に対象の周が出る',
+      rc && /12周目/.test(String(rc.reply || '')), JSON.stringify(rc));
+
+    // 取消：Planが無ければ何も消さず、その旨を返す
+    const stC2 = S.create({ session_key: 'k' });
+    const rc2 = router.route({ text: 'ピット取り消し。', lang: 'ja', live: liveP,
+      strategy: { state: stC2, api: S } });
+    check(G, '④-5 Planが無い時の取消は「無い」と答える',
+      rc2 && rc2.handled && /無い/.test(String(rc2.reply || '')), JSON.stringify(rc2));
+
+    // 訂正：周が読めれば変更、読めなければ聞き返す（推測しない）
+    const stA = S.create({ session_key: 'k' });
+    S.agreePitPlan(stA, { lap: 12, source: 'driver', at: 1 });
+    const ra = router.route({ text: 'やっぱり14周でピット。', lang: 'ja', live: liveP,
+      strategy: { state: stA, api: S } });
+    check(G, '④-5 「やっぱり14周」でPlanが訂正される',
+      S.pitPlan(stA) && S.pitPlan(stA).lap === 14, JSON.stringify(S.pitPlan(stA)));
+    check(G, '④-5 訂正の復唱に旧周と新周が出る',
+      ra && /12周目/.test(String(ra.reply || '')) && /14周目/.test(String(ra.reply || '')),
+      JSON.stringify(ra));
+
+    const stA2 = S.create({ session_key: 'k' });
+    S.agreePitPlan(stA2, { lap: 12, source: 'driver', at: 1 });
+    const ra2 = router.route({ text: 'やっぱりピット変更。', lang: 'ja', live: liveP,
+      strategy: { state: stA2, api: S } });
+    check(G, '④-5 周が読めない訂正は推測せず聞き返す',
+      S.pitPlan(stA2).lap === 12 && ra2 && /何周目/.test(String(ra2.reply || '')),
+      JSON.stringify({ plan: S.pitPlan(stA2), ra2 }));
+
+    // 燃料：pit後は state の answerFuel 経由（router 独自文ではない）
+    const stF = S.create({ session_key: 'k' });
+    S.agreePitPlan(stF, { lap: 12, source: 'driver', at: 1 });
+    S.recordPitExecuted(stF, { lap: 12, at: 2 });
+    const liveF = { fuel: 15.9, finish_crossings_authority: 2,
+      fuel_strategy: { avg_fuel_per_lap: 7.865,
+        pit_timing_authority: { available: true, range_laps: 2.0, shortfall_to_finish_l: 8.3,
+          decision: 'hold', selected_plan: 'A' } } };
+    const rf = router.route({ text: '燃料 どのくらい残ってますか？', lang: 'ja', live: liveF,
+      strategy: { state: stF, api: S } });
+    check(G, '④-5 pit後の燃料回答が state 経由の文言になる',
+      rf && /残り2周に対して燃料15\.9L/.test(String(rf.reply || '')), JSON.stringify(rf));
+    check(G, '④-5 pit後の燃料回答が旧権威の「不足」を出さない',
+      rf && !/不足/.test(String(rf.reply || '')) && !/Plan A/.test(String(rf.reply || '')),
+      JSON.stringify(rf));
+  }
+
+  // ★④-6（2026-09-06 Codex 差戻し P1-1）：STTで自然に出る**否定形**を
+  //   取消確定として実行してはならない。「やめない」「取り消さない」
+  //   「キャンセルしない」「中止しない」の4形＋質問形が反例。肯定形4種は回帰維持。
+  if (hasState) {
+    const S = require(statePath);
+    const liveP = { lap: 9 };
+    // ★2026-09-07 Codex 第2回差戻し：助詞を挟む自然な否定（「キャンセルは**しない**」
+    //   「中止に**しない**」「やめることは**しない**」「取り消すつもりは**ない**」）を
+    //   語尾直結の正規表現が落としていた。4件追加する。
+    const negations = ['ピットはやめない。', 'ピット取り消さない。', 'ピットキャンセルしない。', 'ピット中止しない。',
+      'ピットキャンセルはしない。', 'ピットは中止にしない。', 'ピットやめることはしない。', 'ピット取り消すつもりはない。'];
+    for (const text of negations) {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text, lang: 'ja', live: liveP, strategy: { state: st, api: S } });
+      check(G, `④-6 否定形は取消にならない：「${text}」`,
+        S.pitPlan(st) && S.pitPlan(st).lap === 12,
+        JSON.stringify({ text, plan: S.pitPlan(st), r }));
+    }
+    // 質問形（？付き）も取消として実行しない
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'ピットやめた方がいい？', lang: 'ja', live: liveP,
+        strategy: { state: st, api: S } });
+      check(G, '④-6 質問形「ピットやめた方がいい？」は取消として実行しない',
+        S.pitPlan(st) && S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // 肯定形4種は引き続き取消として通る（回帰）
+    const affirmatives = ['ピットやめる。', 'ピット取り消し。', 'ピットキャンセル。', 'ピット中止。'];
+    for (const text of affirmatives) {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text, lang: 'ja', live: liveP, strategy: { state: st, api: S } });
+      check(G, `④-6 肯定形は取消になる（回帰）：「${text}」`,
+        S.pitPlan(st) === null, JSON.stringify({ text, plan: S.pitPlan(st), r }));
+    }
+
+    // ★2026-09-07 Codex 第3回差戻し：10文字窓が「ピット中止、タイヤ交換はしない。」の
+    //   ような**別命令の否定**を巻き込んでいた。句（読点・句点区切り）単位で見る。
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'ピット中止、タイヤ交換はしない。', lang: 'ja', live: liveP,
+        strategy: { state: st, api: S } });
+      check(G, '④-6b 別節の否定に巻き込まれず取消は実行される（ピット中止、タイヤ交換はしない）',
+        S.pitPlan(st) === null, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    for (const text of ['ピットキャンセルはしない。', 'ピットを中止にしない。']) {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text, lang: 'ja', live: liveP, strategy: { state: st, api: S } });
+      check(G, `④-6b 同一節内の否定は取消にならない：「${text}」`,
+        S.pitPlan(st) && S.pitPlan(st).lap === 12, JSON.stringify({ text, plan: S.pitPlan(st), r }));
+    }
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'ピットをキャンセルするわけではない。', lang: 'ja', live: liveP,
+        strategy: { state: st, api: S } });
+      check(G, '④-6b 「わけではない」も同一節内の否定として扱う',
+        S.pitPlan(st) && S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+  }
+
+  // ★④-7（2026-09-06 Codex 差戻し P1-2）：現在周・総周回のauthorityで無検証の
+  //   Plan変更を止める。過去周・範囲外・authority不足時の非現実値を境界別に検査する。
+  if (hasState) {
+    const S = require(statePath);
+
+    // 過去周：現在9周・合意12周で「やっぱり5周」→過去なので拒否・Planは12のまま
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり5周でピット。', lang: 'ja', live: { lap: 9 },
+        strategy: { state: st, api: S } });
+      check(G, '④-7 過去周への訂正は拒否しPlanを維持する',
+        S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7 過去周は理由つきで短く聞き返す',
+        r && /過ぎている/.test(String(r.reply || '')), JSON.stringify(r));
+    }
+    // 範囲外：総周回30が分かっている状態で「やっぱり999周」→拒否
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり999周でピット。', lang: 'ja',
+        live: { lap: 9, laps_total: 30 }, strategy: { state: st, api: S } });
+      check(G, '④-7 範囲外（総周回既知）への訂正は拒否する',
+        S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7 範囲外は総周回を示して聞き返す',
+        r && /30周/.test(String(r.reply || '')), JSON.stringify(r));
+    }
+    // authority不足：総周回が分からない状態でも999を無条件確定しない
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり999周でピット。', lang: 'ja', live: { lap: 9 },
+        strategy: { state: st, api: S } });
+      check(G, '④-7 authority不足でも999を無条件確定しない',
+        S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // 境界：現在周（この周終わり相当）は成立してよい
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり9周でピット。', lang: 'ja', live: { lap: 9 },
+        strategy: { state: st, api: S } });
+      check(G, '④-7 現在周そのものへの訂正は成立する',
+        S.pitPlan(st).lap === 9, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // 境界：次周は成立してよい
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり10周でピット。', lang: 'ja', live: { lap: 9 },
+        strategy: { state: st, api: S } });
+      check(G, '④-7 次周への訂正は成立する',
+        S.pitPlan(st).lap === 10, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // 境界：最終有効周（総周回と同じ）は成立してよい
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり30周でピット。', lang: 'ja',
+        live: { lap: 9, laps_total: 30 }, strategy: { state: st, api: S } });
+      check(G, '④-7 最終有効周（総周回と同一）への訂正は成立する',
+        S.pitPlan(st).lap === 30, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // 現在周が確認できない時は確定しない
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり14周でピット。', lang: 'ja', live: {},
+        strategy: { state: st, api: S } });
+      check(G, '④-7 現在周が不明なら確定しない',
+        S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+
+    // ★2026-09-07 Codex 第2回差戻し：残りcrossings authorityを 1〜10 に恣意的に
+    //   制限していた。現在9周・crossings=25（耐久で正当な値）でも成立すること。
+    //   off-by-one契約（当方の解釈）：ceiling = currentLap + crossings - 1。
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり30周でピット。', lang: 'ja',
+        live: { lap: 9, finish_crossings_authority: 25 }, strategy: { state: st, api: S } });
+      check(G, '④-7b crossings authority は 1〜10 に制限されない（25でも成立）',
+        S.pitPlan(st).lap === 30, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // 境界：crossings=2・現在9周 → ceiling=10。10は成立、11は範囲外。
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり10周でピット。', lang: 'ja',
+        live: { lap: 9, finish_crossings_authority: 2 }, strategy: { state: st, api: S } });
+      check(G, '④-7b crossings由来の最終有効周（ceiling）は成立する',
+        S.pitPlan(st).lap === 10, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり11周でピット。', lang: 'ja',
+        live: { lap: 9, finish_crossings_authority: 2 }, strategy: { state: st, api: S } });
+      check(G, '④-7b crossings由来のceilingを1周超えると範囲外になる',
+        S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+    // ★耐久：authority が無い時、+20固定capはもう存在しない。現在10周・35周先の
+    //   指定は「拒否」でも「無条件確定」でもなく、Planを維持して一度だけ聞き返す。
+    {
+      const st = S.create({ session_key: 'k' });
+      S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
+      const r = router.route({ text: 'やっぱり35周でピット。', lang: 'ja', live: { lap: 10 },
+        strategy: { state: st, api: S } });
+      check(G, '④-7c authority無しの耐久先読み（+25）は確定せず聞き返す（拒否の固定文言にしない）',
+        S.pitPlan(st).lap === 12 && r && /何周目/.test(String(r.reply || '')),
+        JSON.stringify({ plan: S.pitPlan(st), r }));
+    }
+
+    // ★2026-09-07 Codex 第3回差戻し：`laps_total` に未検証センチネル（例：32767）が
+    //   届いた時、それを最優先で信用すると `finish_crossings_authority` が正しくても
+    //   上書きされ、範囲外の周を誤って成立させ得た。desktop側の防御
+    //   （`race_plan.kind==='timed'` なら `laps_total` を信用しない）を検査する。
+    {
+      const liveSentinel = { lap: 9, laps_total: 32767, finish_crossings_authority: 2,
+        race_plan: { kind: 'timed', configured_duration_s: 2400 } };
+      const st11 = S.create({ session_key: 'k' });
+      S.agreePitPlan(st11, { lap: 12, source: 'driver', at: 1 });
+      const r11 = router.route({ text: 'やっぱり11周でピット。', lang: 'ja', live: liveSentinel,
+        strategy: { state: st11, api: S } });
+      check(G, '④-7d センチネルlaps_totalに惑わされず、crossings由来のceiling超えは不成立',
+        S.pitPlan(st11).lap === 12, JSON.stringify({ plan: S.pitPlan(st11), r11 }));
+
+      const st10 = S.create({ session_key: 'k' });
+      S.agreePitPlan(st10, { lap: 12, source: 'driver', at: 1 });
+      const r10 = router.route({ text: 'やっぱり10周でピット。', lang: 'ja', live: liveSentinel,
+        strategy: { state: st10, api: S } });
+      check(G, '④-7d センチネルlaps_totalがあっても、crossings由来のceiling内は成立する',
+        S.pitPlan(st10).lap === 10, JSON.stringify({ plan: S.pitPlan(st10), r10 }));
+    }
+  }
+
+  // ★④-8（2026-09-06 Codex 差戻し P2）：`pitExecuted` だけを持つ部分APIでも
+  //   throw せず、fail-closed（unhandled）で終わる。答えられる時は答える。
+  if (hasState) {
+    const S = require(statePath);
+    // ★2026-09-07 Codex 第2回差戻し：pitExecuted=true（pit済みと分かっている）のに
+    //   answerFuel が無い場合、以前は `fuelReply()`（pit前提の旧権威）へ
+    //   フォールバックしていた。これは実走18:44:53の「完走まで◯L不足」誤りを
+    //   pit済みの状態でも再現し得るため、**fail-closedで黙る**へ変更した。
+    const partial = { pitExecuted: () => true };   // answerFuel が無い
+    let threw = false, r = null;
+    try {
+      r = router.route({ text: '燃料 どのくらい残ってますか？', lang: 'ja',
+        live: { fuel: 10, fuel_strategy: {} }, strategy: { state: {}, api: partial } });
+    } catch (e) { threw = true; }
+    check(G, 'P2 部分APIで燃料質問はthrowしない', !threw, String(threw));
+    check(G, 'P2 pit済みでanswerFuelが無い時はfail-closed（旧権威へ落とさない）',
+      r && r.handled === false, JSON.stringify(r));
+
+    // 対照：pitExecuted 自体が無い（pit済みかどうか分からない）時は、
+    // 唯一の材料である旧経路（fuelReply）へ委譲してよい＝黙らせすぎない。
+    const partialNoPit = {};   // pitExecuted も answerFuel も無い
+    let threwNoPit = false, rNoPit = null;
+    try {
+      rNoPit = router.route({ text: '燃料 どのくらい残ってますか？', lang: 'ja',
+        live: { fuel_per_lap_l: 7.865 }, strategy: { state: {}, api: partialNoPit } });
+    } catch (e) { threwNoPit = true; }
+    check(G, 'P2 pit済みか不明な時はthrowせず旧経路へ委譲する',
+      !threwNoPit && rNoPit && typeof rNoPit.handled === 'boolean', JSON.stringify(rNoPit));
+
+    const partial2 = {};   // pitPlan も cancelPitPlan も無い
+    let threw2 = false, r2 = null;
+    try {
+      r2 = router.route({ text: 'ピットやめる。', lang: 'ja', live: { lap: 9 },
+        strategy: { state: {}, api: partial2 } });
+    } catch (e) { threw2 = true; }
+    check(G, 'P2 部分APIで取消発話はthrowしない', !threw2, String(threw2));
+    check(G, 'P2 cancelPitPlan が無い時は fail-closed（unhandled）',
+      r2 && r2.handled === false, JSON.stringify(r2));
+
+    const partial3 = {};   // amendPitPlan も pitPlan も無い
+    let threw3 = false, r3 = null;
+    try {
+      r3 = router.route({ text: 'やっぱり14周でピット。', lang: 'ja', live: { lap: 9 },
+        strategy: { state: {}, api: partial3 } });
+    } catch (e) { threw3 = true; }
+    check(G, 'P2 部分APIで訂正発話はthrowしない', !threw3, String(threw3));
+    check(G, 'P2 amendPitPlan が無い時は fail-closed（unhandled）',
+      r3 && r3.handled === false, JSON.stringify(r3));
+  }
+
   // ④-2 「何週目にピットインする？」が pit 周回の質問として成立する。
   //      実走では 週 のせいで unhandled → LLM → 「まだ成立していない」。
   const live = {

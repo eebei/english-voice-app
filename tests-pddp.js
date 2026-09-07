@@ -10,7 +10,7 @@
 // ══════════════════════════════════════════════════════════════════════
 const assert = require('assert');
 const P = require('./desktop/pddp.js');
-const { analyze, nextFocus, briefingLine } = P;
+const { analyze, briefingLine } = P;
 const fs = require('fs');
 
 let pass = 0, fail = 0;
@@ -31,7 +31,9 @@ console.log('══ ⓪ 既存契約 ══');
   assert.strictEqual(s.sample_size, 3);
   assert.strictEqual(s.primary_focus, 'incident_control');
   assert.strictEqual(Math.round(s.average_incidents * 10) / 10, 6.3);
-  assert.strictEqual(nextFocus(s).key, 'incident_control');
+  // ★2026-09-06：`nextFocus()` は削除（新 briefingLine が使わなくなった＝wiring lint が検出）。
+  //   「重大な分類を選ぶ」契約は `primaryIssue()` が持つので、そちらで検査する。
+  assert.strictEqual(P.primaryIssue(rows).category, 'incident_control');
   // ★2026-09-06 契約変更（Codex 事後Gate §1 / Founder 指示）:
   //   実走 Build 298 は「直近10レース、平均Incidents 1.7…次の1レースは
   //   同じ判断を再現するを一つだけ試そう」と86字を喋り、**採用行も集計式も
@@ -59,9 +61,9 @@ const row = (o = {}) => Object.assign({
 }, o);
 
 // ── ① 既存APIを壊していない ─────────────────────────────────────────
-console.log('══ ① 既存の analyze / nextFocus / briefingLine を保持 ══');
+console.log('══ ① 既存の analyze / briefingLine を保持 ══');
 {
-  ['analyze', 'nextFocus', 'briefingLine'].forEach(fn =>
+  ['analyze', 'briefingLine', 'primaryIssue'].forEach(fn =>
     ck(`${fn} が残っている`, typeof P[fn] === 'function'));
   const s = P.analyze([row(), row({ incidents: 5 })]);
   ck('analyze は従来の形を返す',
@@ -132,8 +134,9 @@ console.log('══ ③ 主因を一つに絞る ══');
   ck('それ以外は consistency',
     P.primaryIssue([row({ incidents: 1, startPos: 8, finishPos: 8 })]).category === 'consistency');
 
-  const focus = P.nextFocus(P.analyze([row({ incidents: 9 })]));
-  ck('改善案も一つだけ', !!focus.key && !!focus.target && !Array.isArray(focus.target), JSON.stringify(focus));
+  // 「改善案は一つだけ」の契約は primaryIssue が担う（nextFocus 削除に伴い移設）。
+  const single = P.primaryIssue([row({ incidents: 9 })]);
+  ck('改善案も一つだけ', !!single.category && !Array.isArray(single.category), JSON.stringify(single));
 }
 
 // ── ④ レース後は事実1つ＋答えやすい質問1つ ──────────────────────────

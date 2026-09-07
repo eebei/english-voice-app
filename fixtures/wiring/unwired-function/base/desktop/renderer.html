@@ -1,0 +1,7 @@
+<script src="existing.js"></script>
+<script>
+function connectBridge(){
+  irBridge.onmessage=(ev)=>{ const data=JSON.parse(ev.data); handleTelemetry(data); };
+}
+function handleTelemetry(data){ if(data.type==='telemetry_live'){ existingCall(data); } }
+</script>

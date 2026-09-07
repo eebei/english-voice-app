@@ -1,0 +1,132 @@
+[
+  {
+    "id": "R1",
+    "why": "ランナー: 出現件数の事前検査を外す（0件/複数件を素通り）",
+    "file": "tools/mutate.js",
+    "from": "    if (count !== 1) errors.push(`${id}: from の一致が ${count} 件（1件でなければ実行しない）`);",
+    "to": "    if (false) errors.push('x');",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R2",
+    "why": "ランナー: 基準の緑確認をやめる（赤い基準で変異を回す）",
+    "file": "tools/mutate.js",
+    "from": "    if (!r.ok) bailout(`❌ 基準確認: ${t} が変異前から赤。先に直すこと`, 1);",
+    "to": "    if (false) bailout('x', 1);",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R3",
+    "why": "ランナー: 競合定義の拒否をやめる",
+    "file": "tools/mutate.js",
+    "from": "        errors.push(`${id}: ${prev.id} と適用範囲が競合している（from が包含関係）`);",
+    "to": "        void 0;",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R4",
+    "why": "ランナー: 生存変異でも exit 0 にする",
+    "file": "tools/mutate.js",
+    "from": "  const bad = summary.survived || summary.unusable || summary.restore_failures",
+    "to": "  const bad = false && summary.unusable || summary.restore_failures",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R5",
+    "why": "ランナー: 起動不能を「赤」と数える",
+    "file": "tools/mutate.js",
+    "from": "        return resolve({ ok: false, usable: false, why: 'runner 起動不能', out });",
+    "to": "        return resolve({ ok: false, usable: true, status: 1, out });",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R6",
+    "why": "ランナー: 復旧ジャーナルを書かない（強制終了で変異が残る）",
+    "file": "tools/mutate.js",
+    "from": "    journalBegin(abs, before);",
+    "to": "    void 0;",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R7",
+    "why": "ランナー: lock を排他生成しない（同時実行を許す）",
+    "file": "tools/mutate.js",
+    "from": "  try { fs.writeFileSync(LOCK, mine, { flag: 'wx' }); lockOwned = true; return { ok: true }; }",
+    "to": "  try { fs.writeFileSync(LOCK, mine); lockOwned = true; return { ok: true }; }",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R8",
+    "why": "ランナー: 起動時のジャーナル復旧をやめる",
+    "file": "tools/mutate.js",
+    "from": "  const recovered = recoverFromJournal();",
+    "to": "  const recovered = null;",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R9",
+    "why": "ランナー: 生きている lock でも奪う",
+    "file": "tools/mutate.js",
+    "from": "  if (holderAlive(pid)) return { ok: false, busy: true, pid };",
+    "to": "  if (false) return { ok: false, busy: true, pid };",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R10",
+    "why": "ランナー: シグナルで復元しない（次回起動頼みへ戻す）",
+    "file": "tools/mutate.js",
+    "from": "  restoreAll();\n  journalEnd();\n  releaseLock();\n  if (restoreFailures.length) {",
+    "to": "  releaseLock();\n  if (restoreFailures.length) {",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R11",
+    "why": "ランナー: backup を後片付けしない（残差が溜まる）",
+    "file": "tools/mutate.js",
+    "from": "  if (bak) { try { fs.unlinkSync(bak); } catch (e) {} }",
+    "to": "  if (false) { }",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R12",
+    "why": "ランナー: --json の repo 外書き込みを許す",
+    "file": "tools/mutate.js",
+    "from": "    if (!jsonOut) { process.stderr.write('❌ --json の出力先が repo 外\\n'); process.exit(1); }",
+    "to": "    if (!jsonOut) { jsonOut = path.resolve(ROOT, args[jsonIdx + 1]); }",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  },
+  {
+    "id": "R13",
+    "why": "ランナー: 所有していない lock も消す",
+    "file": "tools/mutate.js",
+    "from": "    if (held && held.pid === process.pid) fs.unlinkSync(LOCK);",
+    "to": "    fs.unlinkSync(LOCK);",
+    "expect_red": [
+      "tests-mutate-runner.js"
+    ]
+  }
+]

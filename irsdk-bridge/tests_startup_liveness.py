@@ -43,6 +43,25 @@ def main():
     total_ok, timed, remaining = bridge.classify_race_clock(True, 1, 32767, 3599.0)
     check("timed race first poll", (total_ok, timed, remaining) == (False, True, None))
 
+    # ★Codex P1（2026-09-07 第4回差戻し）：`laps_total > lap + 1` という旧margin条件は
+    #   30周レースの29/30周目で `laps_total_ok` を False へ反転させ、
+    #   Final Lap・残周回・pit Planの上限判定を無認可のまま時間制経路へ誤配線していた。
+    #   終盤（total と同じか、その1周前）でも失効しないことを固定する。
+    total_ok, timed, remaining = bridge.classify_race_clock(True, 28, 30, 1800.0)
+    check("30-lap race, lap 28: total authority holds (2 to go)",
+          (total_ok, timed, remaining) == (True, False, 2))
+    total_ok, timed, remaining = bridge.classify_race_clock(True, 29, 30, 1800.0)
+    check("30-lap race, lap 29: total authority holds through the penultimate lap (1 to go)",
+          (total_ok, timed, remaining) == (True, False, 1))
+    total_ok, timed, remaining = bridge.classify_race_clock(True, 30, 30, 1800.0)
+    check("30-lap race, lap 30 (the final lap): total authority holds (0 to go)",
+          (total_ok, timed, remaining) == (True, False, 0))
+
+    # センチネル（32767等）は終盤の緩和後も timed/unknown のまま：<3000 の上限が別途弾く。
+    total_ok, timed, remaining = bridge.classify_race_clock(True, 29, 32767, 1800.0)
+    check("sentinel laps_total stays rejected even near a plausible lap number",
+          (total_ok, timed, remaining) == (False, True, None))
+
     formation_plan = bridge.derive_race_plan(True, {'session_time': '20 min'}, 32767, -1.0)
     check("known timed format survives formation without live remaining clock",
           formation_plan == {'kind': 'timed', 'configured_duration_s': 1200.0})

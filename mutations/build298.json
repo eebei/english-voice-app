@@ -1,0 +1,275 @@
+[
+  {
+    "id": "M-G1",
+    "why": "②GAP: 候補を先に表示する旧方式へ戻す",
+    "file": "desktop/renderer.html",
+    "from": "const _radioEl = _isGapCandidate ? null : addMsg('ai',text,{uid:_uid});",
+    "to": "const _radioEl = addMsg('ai',text,{uid:_uid});",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-G2",
+    "why": "②GAP: authority本文を使わず候補文のまま喋る（自発）",
+    "file": "desktop/renderer.html",
+    "from": "    _it.text = _final;",
+    "to": "    _it.text = _it.text;",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-G3",
+    "why": "②GAP: PTT回答も候補を先に表示する",
+    "file": "desktop/renderer.html",
+    "from": "const _ansEl = _ansIsGap ? null : addMsg('ai',reply,{uid:_ansUid});",
+    "to": "const _ansEl = addMsg('ai',reply,{uid:_ansUid});",
+    "expect_red": [
+      "tests-build298-race-replay.js",
+      "tests-gap-display-sync.js"
+    ]
+  },
+  {
+    "id": "M-G4",
+    "why": "②GAP: 会話Boxを実在しないキー id で引く（Codex ②P1 差戻し前）",
+    "file": "desktop/renderer.html",
+    "from": "x.turn_id===turnId",
+    "to": "x.id===turnId",
+    "expect_red": [
+      "tests-gap-display-sync.js"
+    ]
+  },
+  {
+    "id": "M-G5",
+    "why": "②GAP: fan-out 比較を潰して常に一致と書く",
+    "file": "desktop/renderer.html",
+    "from": "    : ((_ovlText===_tts && _boxText===_tts && _chat===_tts) ? 'true' : 'false');",
+    "to": "    : 'true';",
+    "expect_red": [
+      "tests-gap-display-sync.js"
+    ]
+  },
+  {
+    "id": "M-G6",
+    "why": "②GAP: 検証不能でも true と書く（drop済みturnを偽装）",
+    "file": "desktop/renderer.html",
+    "from": "  const _fanout = _boxReason ? 'unverifiable'",
+    "to": "  const _fanout = _boxReason ? 'true'",
+    "expect_red": [
+      "tests-gap-display-sync.js"
+    ]
+  },
+  {
+    "id": "M-P1",
+    "why": "④Plan: pit観測を off 初期化に戻す（ボックス発進で即失効の誤爆）",
+    "file": "desktop/renderer.html",
+    "from": "function resetPitStateObservation(){ observePitState.prev = 'unknown'; }",
+    "to": "function resetPitStateObservation(){ observePitState.prev = 'off'; }",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-P2",
+    "why": "④Plan: on_pit_road の遷移条件を「onなら常に」へ",
+    "file": "desktop/renderer.html",
+    "from": "const entered = (observePitState.prev === 'off' && now === 'on');",
+    "to": "const entered = (now === 'on');",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-P3",
+    "why": "④Plan: 実切断分岐の reset を外す（再接続の初回onを実進入と誤判定）",
+    "file": "desktop/renderer.html",
+    "from": "        //   再接続後の**初回 on** を false→true と誤判定して偽の pit_executed になる。\n        resetPitStateObservation();",
+    "to": "        //   再接続後の**初回 on** を false→true と誤判定して偽の pit_executed になる。",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-P4",
+    "why": "④Plan: 燃料の pit実行判定を無効化（8.3L不足の再発）",
+    "file": "desktop/local-intent-router.js",
+    "from": "        && stratCan(strategyModule, 'pitExecuted') && strategyModule.pitExecuted(strategyState);",
+    "to": "        && false;",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-L1",
+    "why": "③残周回: 数字/何＋週の正規化を外す（あと何週？が通らない）",
+    "file": "desktop/local-intent-router.js",
+    "from": ".replace(/(?<=[0-9０-９一二三四五六七八九十何])\\s*週(?![末明])/g, '周')",
+    "to": ".replace(/__never__/g, '周')",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-D1",
+    "why": "①PDDP: 母数を10戦へ戻す",
+    "file": "desktop/pddp.js",
+    "from": "const DEFAULT_LIMIT = 5;",
+    "to": "const DEFAULT_LIMIT = 10;",
+    "expect_red": [
+      "tests-build298-race-replay.js",
+      "tests-pddp.js"
+    ]
+  },
+  {
+    "id": "M-D2",
+    "why": "①PDDP: 発話閾値（平均5以上）を外す",
+    "file": "desktop/pddp.js",
+    "from": "  if (avg < SPEAK_INCIDENT_THRESHOLD) return '';",
+    "to": "  if (false) return '';",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-D3",
+    "why": "①PDDP: identity一意性を現在窓だけで見る（比較窓の重複を通す）",
+    "file": "desktop/pddp.js",
+    "from": "const allIds = adopted.map(r => r.identity).concat(prevOk.map(r => r.identity));",
+    "to": "const allIds = adopted.map(r => r.identity);",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-D4",
+    "why": "①PDDP: 比較窓の内訳 previous を出さない（独立再計算不能へ戻す）",
+    "file": "desktop/pddp.js",
+    "from": "    previous: prevOk,",
+    "to": "    previous_removed: prevOk,",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W1",
+    "why": "次スライス: 燃料を state 経由でなく旧独自文へ戻す",
+    "file": "desktop/local-intent-router.js",
+    "from": "        const a = strategyModule.answerFuel(strategyState, {",
+    "to": "        const a = ({ reply: '現燃料で約2.0周。完走まで8.3L不足。Plan Aを継続。' }) || strategyModule.answerFuel(strategyState, {",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W2",
+    "why": "次スライス: 取消をPlanへ反映しない",
+    "file": "desktop/local-intent-router.js",
+    "from": "      strategyModule.cancelPitPlan(strategyState, { source: 'driver', at: Date.now() });",
+    "to": "      void 0;",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W3",
+    "why": "次スライス: 訂正をPlanへ反映しない",
+    "file": "desktop/local-intent-router.js",
+    "from": "      strategyModule.amendPitPlan(strategyState, { lap, source: 'driver', at: Date.now() });",
+    "to": "      void 0;",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W5",
+    "why": "次スライス: 否定ガードそのものを外す（やめない等が取消として実行される）",
+    "file": "desktop/local-intent-router.js",
+    "from": "    if (!/[?？]/.test(text) && PIT_CANCEL_WORD.test(text) && !PIT_CANCEL_NEGATED.test(text)) {",
+    "to": "    if (!/[?？]/.test(text) && PIT_CANCEL_WORD.test(text)) {",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W6",
+    "why": "次スライス2次: authority無しの遠い先読みでも確認せず即確定する（999再発の余地）",
+    "file": "desktop/local-intent-router.js",
+    "from": "      } else if (lap > currentLap + 1) {",
+    "to": "      } else if (false) {",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W9",
+    "why": "次スライス2次: crossings authorityの1〜10上限を復活させる（耐久の25等が拒否される）",
+    "file": "desktop/local-intent-router.js",
+    "from": "    if (crossings !== null && crossings >= 0) {",
+    "to": "    if (crossings !== null && crossings >= 1 && crossings <= 10) {",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W10",
+    "why": "次スライス2次: off-by-oneを崩す（crossingsのceilingを+1する）",
+    "file": "desktop/local-intent-router.js",
+    "from": "      return { total: currentLap + crossings - 1, source: 'finish_crossings_authority' };",
+    "to": "      return { total: currentLap + crossings, source: 'finish_crossings_authority' };",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W11",
+    "why": "次スライス2次: pit済みでanswerFuel欠損時にfail-closedをやめる（旧権威8.3L不足の再発余地）",
+    "file": "desktop/local-intent-router.js",
+    "from": "        if (!stratCan(strategyModule, 'answerFuel')) return { handled:false };",
+    "to": "        if (false) return { handled:false };",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W12",
+    "why": "次スライス3次: 否定側正規表現の読点除外を外す（別命令の否定を再び巻き込む）",
+    "file": "desktop/local-intent-router.js",
+    "from": "    const PIT_CANCEL_NEGATED = /(?:やめ|取り消|キャンセル|中止)[^、。！?？]{0,10}ない/;",
+    "to": "    const PIT_CANCEL_NEGATED = /(?:やめ|取り消|キャンセル|中止)[^。！?？]{0,10}ない/;",
+    "expect_red": [
+      "tests-build298-race-replay.js"
+    ]
+  },
+  {
+    "id": "M-W13",
+    "why": "次スライス3次: bridge.pyのlaps_totalゲートを外す（未検証センチネルが再び漏れる）",
+    "file": "irsdk-bridge/bridge.py",
+    "from": "                'laps_total': lapsTot if (_laps_total_ok and lapsTot and lapsTot > 0) else None,",
+    "to": "                'laps_total': lapsTot if (lapsTot and lapsTot > 0) else None,",
+    "expect_red": [
+      "tests-timed-race-truth.js"
+    ]
+  },
+  {
+    "id": "M-W14",
+    "why": "次スライス3次: desktop側の時間制ガードを外す（laps_totalを無条件で最優先採用する）",
+    "file": "desktop/local-intent-router.js",
+    "from": "    const totalLaps = isTimedRace ? null : integer(live.laps_total);",
+    "to": "    const totalLaps = integer(live.laps_total);",
+    "expect_red": [
+      "tests-build298-race-replay.js",
+      "tests-timed-race-truth.js"
+    ]
+  },
+  {
+    "id": "M-W15",
+    "why": "次スライス4次: classify_race_clockの終盤margin条件を復活させる（30周レース29/30周目が誤って時間制へ落ちる）",
+    "file": "irsdk-bridge/bridge.py",
+    "from": "        and laps_total >= lap)",
+    "to": "        and laps_total > lap + 1)",
+    "expect_red": [
+      "tests-timed-race-truth.js"
+    ]
+  }
+]

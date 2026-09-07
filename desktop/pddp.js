@@ -61,19 +61,12 @@ function analyze(rows, options = {}) {
   };
 }
 
-function nextFocus(summary) {
-  const s = summary || {};
-  const avgInc = finite(s.average_incidents);
-  if (s.primary_focus === 'completion') return { key: 'completion', metric: 'DNF率', target: '完走率を上げる' };
-  if (s.primary_focus === 'incident_control' || (avgInc !== null && avgInc >= 8)) {
-    return { key: 'incident_control', metric: '平均Incidents', target: 'まず平均4未満' };
-  }
-  if (s.primary_focus === 'racecraft' || (avgInc !== null && avgInc >= 4)) {
-    return { key: 'racecraft', metric: '接触・オフトラック', target: '直近レースで半減' };
-  }
-  if (s.primary_focus === 'conversion') return { key: 'conversion', metric: 'スタート順位→決勝順位', target: '失う順位を2以下' };
-  return { key: 'consistency', metric: '完走順位のばらつき', target: '同じ判断を再現する' };
-}
+// ★2026-09-06：`nextFocus()` は削除した。
+//   ①PDDP の書き換えで `briefingLine()` が「重点＋目標」の定型をやめ、
+//   **事実＋一行動の一文**（平均5以上かつ悪化のときだけ）へ変わったため、
+//   参照が製品から消えた。wiring lint が「製品呼出し0件」で検出。
+//   使うか削るかの二択で、**契約が指定した文言と衝突するので削る**方を選んだ。
+//   分類そのものは `primaryIssue()`（重大度順・材料不足を区別する）が持っている。
 
 /** 採用根拠。**これが無いとログから平均を再計算できない**（実走で監査不能だった）。
  *  採用5件の identity と各 incidents、合計、平均、**直前5件との増減**、除外理由を出す。 */
@@ -167,7 +160,7 @@ function briefingLine(summary, name = 'ドライバー', rows = null) {
 }
 
 // ══ 2026-08-30 仕様 review/PDDP_SPEC_V1.md への追補 ══════════════════
-// 既存の analyze / nextFocus / briefingLine は変えない。仕様のうち未実装だった
+// 既存の analyze / briefingLine は変えない。仕様のうち未実装だった
 // 「レース後の質問」「目標状態」「成功と失敗の保存」「訂正の反映」「横取り禁止」
 // と、欠損を推測へ化かさない分類の穴を足す。
 
@@ -309,7 +302,7 @@ function analyzeExcludingDisputed(rows, outcomes, options = {}) {
   return analyze(kept, options);
 }
 
-return { analyze, nextFocus, briefingLine, briefingEvidence,
+return { analyze, briefingLine, briefingEvidence,
   ALLOWED_CONTEXTS, GOAL_IRATING, GOAL_STREAK,
   isPddpContext, measuredRowCount, primaryIssue, debriefQuestion, goalStatus,
   outcomeId, buildOutcome, applyDriverCorrection, analyzeExcludingDisputed };

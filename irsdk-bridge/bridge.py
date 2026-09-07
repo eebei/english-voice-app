@@ -2311,13 +2311,25 @@ def classify_race_clock(is_race_session, lap, laps_total, time_remaining):
     the same values only inside ``lap_time_changed`` and then referenced them
     from the first ``telemetry_live`` snapshot, killing the polling thread with
     UnboundLocalError before any lap could complete.
+
+    ``lap`` is 1-indexed (the driver is currently running lap 1 through
+    ``laps_total``; ``remaining = laps_total - lap`` is "how many more laps
+    after this one", which is 0 on the final lap).  Codex P1 (2026-09-07,
+    third round): the previous bound was ``laps_total > lap + 1``, a margin
+    that was meant to distrust ``laps_total`` when it sits implausibly close
+    to ``lap`` but instead invalidated the *last two laps of every real
+    lap-count race* -- at lap 29/30 of a 30-lap race this flipped
+    ``is_time_race`` True and routed Final Lap / remaining-laps / pit-plan
+    ceiling through the timed-race path with no lap-count authority left.
+    The floor is simply that ``laps_total`` must not be *behind* the current
+    lap; being level with it (the final lap) is valid.
     """
     laps_total_ok = (
         bool(is_race_session)
         and isinstance(lap, (int, float))
         and isinstance(laps_total, (int, float))
         and 0 < laps_total < 3000
-        and laps_total > lap + 1)
+        and laps_total >= lap)
     is_time_race = bool(
         is_race_session
         and not laps_total_ok
@@ -6663,7 +6675,15 @@ def poll_iracing():
                 'best': round(personal_best, 3) if personal_best else None,
                 'last': round(lapTime, 3) if (lapTime and lapTime > 0) else None,
                 'lap': lap,
-                'laps_total': lapsTot if (lapsTot and lapsTot > 0) else None,
+                # ★Codex P1-2（2026-09-07 差戻し）：この生の `lapsTot` は
+                #   `classify_race_clock()` の検証（0<total<3000・現在周より先・
+                #   is_race_session）を通していなかった。時間制レースでも iRacing の
+                #   SessionLapsTotal は未使用センチネル（例：32767）を返すことがあり、
+                #   それがそのまま desktop へ「総周回」として届いていた。desktop 側の
+                #   `resolvePitLapCeiling()` はこれを最優先の authority として使うため、
+                #   `finish_crossings_authority` が正しくても上書きされ、範囲外の周を
+                #   誤って成立させ得た。**検証済みの `_laps_total_ok` の時だけ公開する**。
+                'laps_total': lapsTot if (_laps_total_ok and lapsTot and lapsTot > 0) else None,
                 'lap_valid_clean': _telemetry_lap_valid_clean,
                 'incidents_this_lap': _telemetry_incidents_this_lap,
                 'pit_in_this_lap': bool(_lap_had_pit_road),
