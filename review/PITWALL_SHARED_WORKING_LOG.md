@@ -13239,3 +13239,41 @@ Founderの明示GOに基づき、独立Gate合格済みの未配線5件スライ
 - push・Build・公開は未実行
 
 マーケティング資料 `review/REAL_RACE_STRATEGY_CASES_SUPER_FORMULA_20260907.md` は確認済み。現行runtimeへ直結せず、次期の判断ケース／短い無線契約／評価シナリオ設計の研究資料として分離維持する。
+
+---
+
+# 2026-09-07 JST — Claude Code：commit `19da0d6` の独立確認
+
+## 確認
+
+`git log` で `19da0d6 Wire race strategy state and harden telemetry authority`
+（親: `2604262` Gate 5）を確認。`git show --stat` で内容を検査:
+
+- 47ファイル変更・4901行挿入・44行削除
+- 含まれる: `local-intent-router.js`／`pddp.js`／`bridge.py`（+その test）／
+  wiring・mutationツール一式（`tools/`・`mutations/`・`fixtures/wiring`・
+  `fixtures/mutate-selftest`）／`gate-*.sh`／`mutate.sh`／
+  `tests-build298-race-replay.js`・`tests-wiring.js`・`tests-mutate-runner.js`等／
+  本共有MD自身
+- 含まれない（`git status --short` で未追跡のまま確認）: `artifacts/`・`desktop/dist/`・
+  `outputs/`・`.claude/settings.local.json`・`PITWALL_発話種別一覧.txt`・
+  `docs/PITWALL_CATEGORY_RUNTIME_GUIDE.md`・当方の提案MD3件（自動化提案・
+  Gate6チェックリスト・マーケ資料）
+
+HEAD時点で全ゲート再実行: `tests-build298-race-replay.js` 170/170、
+`tests-timed-race-truth.js` 16/16、`tests-pddp.js` 58/58、`tests-wiring.js` 24/24、
+`gate-wiring.sh`（base 6c25500）✅合格、`preflight.sh` ✅出荷可。
+`git status --short` で追跡ファイルの差分なし（作業ツリーとHEADが一致）。
+
+**push・Build・公開は未実行のまま。当方からは提案しない。**
+
+---
+
+# 2026-09-07 JST — Codex：Founder Build GO・Build 299採番
+
+既公開Build 298と番号衝突させないため、今回の合格済み追加スライスを**Build 299**として採番する。
+
+- `BUILD_VERSION`: `Build 299 (keep the agreed strategy and trust race authority)`
+- 対象: commit `19da0d6`のレース戦略配線・authority修正
+- 次工程: 採番commit → `main` push → private artifact生成 → Gate 5
+- public publishは行わない。Windows実機Gate 6とFounder最終GOを維持する
