@@ -1229,7 +1229,9 @@ function finalizeUtterance(item, outcome, finalText, reason){
     //   **自分が pushMsg した1件だけ**を ID で名指す。ID が無い item
     //   （無線＝そもそも履歴へ積んでいない）は messages を一切触らない。
     if(item.messageId) removeMessageById(item.messageId);
-    if(el && el.parentNode) el.parentNode.removeChild(el);
+    // ★Phase 3（2026-09-08 Haiku版）：voice_off で drop しても display は残す（display_only + suppressed_by_user）。
+    //   ドライバーが「何が喋られなかったか」を後で確認できるようにする。他の reason での drop は display削除。
+    if(reason !== 'voice_off' && el && el.parentNode) el.parentNode.removeChild(el);
     if(el && el._ovlId && window.pitwall) window.pitwall.overlayPush({ remove:true, id:el._ovlId });
     const _dropped = (el && el._turnId) ? dropLunaTurnById(el._turnId) : false;
     diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome=dropped reason='+(reason||'?')
