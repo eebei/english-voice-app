@@ -3979,7 +3979,7 @@ function bridgeVoiceNow(key){
     ptt_mismatch:{ James:"Your push-to-talk button isn't responding. Please rebind it in Setup.", Luna:"Your push-to-talk isn't responding — rebind it in Setup when you get a chance.", Hajime:"PTT not responding. Rebind in Setup.", Kanbe:"PTTのボタンが反応しとらんで。設定画面で登録し直してくれ。", Oishi:"PTTが反応していない。設定画面で登録し直してほしい。", HajimeJP:"PTTが反応していない。設定画面で登録し直してくれ。", LunaJP:"PTTが反応してないわ。設定画面で登録し直して。", Matthias:"Push-to-talk reagiert nicht. Bitte in den Einstellungen neu zuweisen." }
   };
   const msg=(lines[key]||{})[sel];
-  if(msg){ addMsg('ai',msg); speak(msg); }
+  if(msg){ addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg); }
 }
 function updateBridgeStatus(){
   let bar=document.getElementById('bridge-status-bar');
@@ -4793,6 +4793,7 @@ function injectRadio(data){
       // 黄旗と停止車両が同時に立った時は、到着順に沿った決定論の文だけを喋る。
       _hazardLines.forEach(line=>{
         addMsg('ai',line);
+        pushMsg({role:'assistant',content:line});
         speak(line,{prio:SPEAK_PRIO.P0_SAFETY,kind:'reflex_hazard',dedupeKey:'reflex|'+line});
       });
       return;
@@ -5176,6 +5177,7 @@ async function scheduleAutoBriefing(){
       memory_id:selfRecord?.memory_id||null,spoken:!!selfLine}));
     if(selfLine){
       addMsg('ai',selfLine);
+      pushMsg({role:'assistant',content:selfLine});
       speak(selfLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'luna_self_memory',
         dedupeKey:'luna_self_memory|'+String(selfRecord.memory_id)});
     }
@@ -5198,6 +5200,7 @@ async function scheduleAutoBriefing(){
     //   片道配線を禁止する。
     if(memoryLine){
       addMsg('ai',memoryLine);
+      pushMsg({role:'assistant',content:memoryLine});
       speak(memoryLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'memory_strategy_briefing',
         dedupeKey:'memory_strategy_briefing|'+String(memoryFacts.date||'')+'|'+String(memoryFacts.track||'')});
       diagnosticLog('MEMORY_BRIEFING','queue=queued kind=memory_strategy_briefing');
@@ -5224,6 +5227,7 @@ async function scheduleAutoBriefing(){
       +' advice='+_decAdvice.action+' advice_fate='+_decAdvice.fate);
     if(_decLine){
       addMsg('ai',_decLine);
+      pushMsg({role:'assistant',content:_decLine});
       speak(_decLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'decision_strategy_briefing',
         dedupeKey:'decision_strategy_briefing|'+String(_decSel.record.decision_id)});
       diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_strategy_briefing');
@@ -5240,6 +5244,7 @@ async function scheduleAutoBriefing(){
       +' fate='+(_setupLine?'spoken':'missing_required_evidence'));
     if(_setupLine){
       addMsg('ai',_setupLine);
+      pushMsg({role:'assistant',content:_setupLine});
       speak(_setupLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'setup_comparison_briefing',
         dedupeKey:'setup_comparison|'+String(_setupCmp.previousDate||'')});
       diagnosticLog('SETUP_MEMORY','queue=queued kind=setup_comparison_briefing');
@@ -5270,11 +5275,13 @@ async function scheduleAutoBriefing(){
       incident_delta_vs_prev:_pddpEv&&_pddpEv.incident_delta_vs_prev}));
     if(_pddpLine){
       addMsg('ai',_pddpLine);
+      pushMsg({role:'assistant',content:_pddpLine});
       speak(_pddpLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pddp_briefing',
         dedupeKey:'pddp_briefing|'+String(_pddp.sample_size)+'|'+String(_pddp.primary_focus)});
     }
     if(_decAdvice.reply){
       addMsg('ai',_decAdvice.reply);
+      pushMsg({role:'assistant',content:_decAdvice.reply});
       speak(_decAdvice.reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'decision_plan_advice',
         dedupeKey:'decision_plan_advice|'+String(_decSel.record&&_decSel.record.decision_id)});
       diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_plan_advice action='+_decAdvice.action);
