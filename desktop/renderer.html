@@ -1217,14 +1217,19 @@ function buildGapUtterance(authority){
 
 function finalizeUtterance(item, outcome, finalText, reason){
   if(!item) return;
-  // ★終端は 'spoken' と 'dropped' のみ。'rebuilt' はまだキューに居るので終端にしない。
-  //   rebuilt を終端にすると「作り替えた後にキューが消えた」時に drop を阻止してしまい、
-  //   耳で聞いていない文が記憶に残る（P1-2 と同じ穴を自分で作ることになる）。
-  if(item._finalized==='spoken'||item._finalized==='dropped') return;
-  item._finalized = outcome;
+  // 終端は「聞こえ始めた」ことと「最終的にどう止まったか」を混同しない。
+  // spoken の直後にドライバー操作で止めた時だけ audible_interrupted へ遷移し、
+  // 既表示の chat / Overlay / Conversation Box / LLM 履歴は保つ。
+  if(item._finalized==='spoken'){
+    if(outcome!=='audible_interrupted') return;
+  }else if(item._finalized) return;
+  // 旧 caller の dropped は「開始前に耳へ届かなかった」の互換表現。外部に
+  // dropped を残さず、利用者操作・開始済み割込みと区別できる状態へ正規化する。
+  const terminalOutcome = outcome==='dropped' ? 'dropped_before_audible' : outcome;
+  item._finalized = terminalOutcome;
   const el = item.displayEl || null;
   const _uid = item.utteranceId || (el && el._uid) || null;
-  if(outcome === 'dropped'){
+  if(terminalOutcome === 'dropped_before_audible'){
     // ★第4回P1-4／第5回P1：一度も喋っていないので LLM履歴からも外す。
     //   **自分が pushMsg した1件だけ**を ID で名指す。ID が無い item
     //   （無線＝そもそも履歴へ積んでいない）は messages を一切触らない。
@@ -1232,7 +1237,7 @@ function finalizeUtterance(item, outcome, finalText, reason){
     if(el && el.parentNode) el.parentNode.removeChild(el);
     if(el && el._ovlId && window.pitwall) window.pitwall.overlayPush({ remove:true, id:el._ovlId });
     const _dropped = (el && el._turnId) ? dropLunaTurnById(el._turnId) : false;
-    diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome=dropped reason='+(reason||'?')
+    diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome=dropped_before_audible reason='+(reason||'?')
       +' kind='+(item.kind||'?')+' dropped_turn='+_dropped
       +' text='+JSON.stringify(String(item.text||'').slice(0,60)));
     return;
@@ -1256,7 +1261,7 @@ function finalizeUtterance(item, outcome, finalText, reason){
     : _boxLookup===null ? 'turn_not_in_box' : '';
   const _fanout = _boxReason ? 'unverifiable'
     : ((_ovlText===_tts && _boxText===_tts && _chat===_tts) ? 'true' : 'false');
-  diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome='+outcome+' kind='+(item.kind||'?')
+  diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome='+terminalOutcome+' kind='+(item.kind||'?')
     +' turn='+((el&&el._turnId)||'-')+' ovl='+((el&&el._ovlId)||'-')
     +' fanout_match='+_fanout+(_boxReason ? ' box_reason='+_boxReason : '')
     +' tts_text='+JSON.stringify(_tts)
@@ -1267,7 +1272,8 @@ function finalizeUtterance(item, outcome, finalText, reason){
 // キューから未再生のまま取り除く時は必ずここを通す。
 function discardQueuedUtterances(items, reason){
   if(!Array.isArray(items)) return;
-  for(const _q of items) finalizeUtterance(_q,'dropped',null,reason);
+  const outcome = reason==='voice_off' ? 'suppressed_by_user' : 'dropped_before_audible';
+  for(const _q of items) finalizeUtterance(_q,outcome,null,reason);
 }
 function recordReflexEvent(ev){
   const B=window.PitwallConversationMemoryBox; if(!B||!ev) return;
@@ -3514,7 +3520,7 @@ function speechMayStart(item){
 //   次の drainQueue() が `draining || isSpeaking` で即returnして止まっていた。
 //   pause() は onended を発火しないため、watchdog(最大40秒)まで安全コールが待たされ得た。
 //   割り込みを「1つの状態遷移」として扱い、旧再生の後始末・draining解除・次の再生開始まで必ず行う。
-function stopCurrentAudio(){
+function stopCurrentAudio(reason){
   speakGeneration++;           // ★これ以降、古い世代の再生・状態変更を全て無効化する
   if(speakFetchCtrl){ try{speakFetchCtrl.abort();}catch(e){} speakFetchCtrl=null; }
   window.speechSynthesis.cancel();
@@ -3523,11 +3529,14 @@ function stopCurrentAudio(){
   isSpeaking=false;
   draining=false;              // ←これが無いとキューが二度と流れない
   currentSpeakPrio=9;
-  // ★2026-09-05 第2回P1-4：割込みで消える発話の最終状態を必ず残す。
-  //   再生開始前に消えたなら耳に届いていない＝drop。開始済みは 'spoken' のまま触らない。
-  if(currentSpeakItem && typeof finalizeUtterance==='function'
-     && currentSpeakItem._finalized!=='spoken')
-    finalizeUtterance(currentSpeakItem,'dropped',null,'interrupted_before_start');
+  // 割込み時は、まだ開始していなければ開始前drop、開始済みなら表示を保つ
+  // audible_interrupted。voice_off の開始前はドライバーが抑止しただけなので同じく保持する。
+  if(currentSpeakItem && typeof finalizeUtterance==='function'){
+    const hadStarted=currentSpeakItem._finalized==='spoken';
+    const outcome=hadStarted ? 'audible_interrupted'
+      : (reason==='voice_off' ? 'suppressed_by_user' : 'dropped_before_audible');
+    finalizeUtterance(currentSpeakItem,outcome,null,reason||'interrupted_before_start');
+  }
   currentSpeakItem=null;       // 割り込み後は再生対象なし
   setTimeout(drainQueue, 0);   // 割り込んだ側を即座に再生へ
 }
@@ -3882,7 +3891,7 @@ function toggleVoice(){
   btn.textContent=voiceOn?t('voice_on'):t('voice_off');
   btn.classList.toggle('on',voiceOn);
   persistentSet('pw_voice_on', voiceOn?'1':'0');
-  if(!voiceOn){ discardQueuedUtterances(speakQueue,'voice_off'); speakQueue=[]; stopCurrentAudio(); }   // ★P1-2
+  if(!voiceOn){ discardQueuedUtterances(speakQueue,'voice_off'); speakQueue=[]; stopCurrentAudio('voice_off'); }   // ★P1-2
 }
 
 // ── STT (manual) ──
@@ -3979,7 +3988,7 @@ function bridgeVoiceNow(key){
     ptt_mismatch:{ James:"Your push-to-talk button isn't responding. Please rebind it in Setup.", Luna:"Your push-to-talk isn't responding — rebind it in Setup when you get a chance.", Hajime:"PTT not responding. Rebind in Setup.", Kanbe:"PTTのボタンが反応しとらんで。設定画面で登録し直してくれ。", Oishi:"PTTが反応していない。設定画面で登録し直してほしい。", HajimeJP:"PTTが反応していない。設定画面で登録し直してくれ。", LunaJP:"PTTが反応してないわ。設定画面で登録し直して。", Matthias:"Push-to-talk reagiert nicht. Bitte in den Einstellungen neu zuweisen." }
   };
   const msg=(lines[key]||{})[sel];
-  if(msg){ addMsg('ai',msg); pushMsg({role:'assistant',content:msg}); speak(msg); }
+  if(msg){ addMsg('ai',msg); const messageId=pushMsg({role:'assistant',content:msg}); speak(msg,{messageId}); }
 }
 function updateBridgeStatus(){
   let bar=document.getElementById('bridge-status-bar');
@@ -5177,9 +5186,9 @@ async function scheduleAutoBriefing(){
       memory_id:selfRecord?.memory_id||null,spoken:!!selfLine}));
     if(selfLine){
       addMsg('ai',selfLine);
-      pushMsg({role:'assistant',content:selfLine});
+      const messageId=pushMsg({role:'assistant',content:selfLine});
       speak(selfLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'luna_self_memory',
-        dedupeKey:'luna_self_memory|'+String(selfRecord.memory_id)});
+        dedupeKey:'luna_self_memory|'+String(selfRecord.memory_id),messageId});
     }
     // ★スライス1の出口②：前回事実を決定論層が文にして渡す。数字はここが唯一の出所で、
     //   LLMは選ばない。事実が無ければ空文字＝言わない。
@@ -5200,9 +5209,9 @@ async function scheduleAutoBriefing(){
     //   片道配線を禁止する。
     if(memoryLine){
       addMsg('ai',memoryLine);
-      pushMsg({role:'assistant',content:memoryLine});
+      const messageId=pushMsg({role:'assistant',content:memoryLine});
       speak(memoryLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'memory_strategy_briefing',
-        dedupeKey:'memory_strategy_briefing|'+String(memoryFacts.date||'')+'|'+String(memoryFacts.track||'')});
+        dedupeKey:'memory_strategy_briefing|'+String(memoryFacts.date||'')+'|'+String(memoryFacts.track||''),messageId});
       diagnosticLog('MEMORY_BRIEFING','queue=queued kind=memory_strategy_briefing');
       noteMemoryUtterance('race',memoryFacts.date);
     }
@@ -5227,9 +5236,9 @@ async function scheduleAutoBriefing(){
       +' advice='+_decAdvice.action+' advice_fate='+_decAdvice.fate);
     if(_decLine){
       addMsg('ai',_decLine);
-      pushMsg({role:'assistant',content:_decLine});
+      const messageId=pushMsg({role:'assistant',content:_decLine});
       speak(_decLine,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'decision_strategy_briefing',
-        dedupeKey:'decision_strategy_briefing|'+String(_decSel.record.decision_id)});
+        dedupeKey:'decision_strategy_briefing|'+String(_decSel.record.decision_id),messageId});
       diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_strategy_briefing');
       noteMemoryUtterance('decision',_decSel.record.decision_id);
     }
@@ -5244,9 +5253,9 @@ async function scheduleAutoBriefing(){
       +' fate='+(_setupLine?'spoken':'missing_required_evidence'));
     if(_setupLine){
       addMsg('ai',_setupLine);
-      pushMsg({role:'assistant',content:_setupLine});
+      const messageId=pushMsg({role:'assistant',content:_setupLine});
       speak(_setupLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'setup_comparison_briefing',
-        dedupeKey:'setup_comparison|'+String(_setupCmp.previousDate||'')});
+        dedupeKey:'setup_comparison|'+String(_setupCmp.previousDate||''),messageId});
       diagnosticLog('SETUP_MEMORY','queue=queued kind=setup_comparison_briefing');
       noteMemoryUtterance('race',_setupCmp.previousDate);
     }
@@ -5275,15 +5284,15 @@ async function scheduleAutoBriefing(){
       incident_delta_vs_prev:_pddpEv&&_pddpEv.incident_delta_vs_prev}));
     if(_pddpLine){
       addMsg('ai',_pddpLine);
-      pushMsg({role:'assistant',content:_pddpLine});
+      const messageId=pushMsg({role:'assistant',content:_pddpLine});
       speak(_pddpLine,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pddp_briefing',
-        dedupeKey:'pddp_briefing|'+String(_pddp.sample_size)+'|'+String(_pddp.primary_focus)});
+        dedupeKey:'pddp_briefing|'+String(_pddp.sample_size)+'|'+String(_pddp.primary_focus),messageId});
     }
     if(_decAdvice.reply){
       addMsg('ai',_decAdvice.reply);
-      pushMsg({role:'assistant',content:_decAdvice.reply});
+      const messageId=pushMsg({role:'assistant',content:_decAdvice.reply});
       speak(_decAdvice.reply,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'decision_plan_advice',
-        dedupeKey:'decision_plan_advice|'+String(_decSel.record&&_decSel.record.decision_id)});
+        dedupeKey:'decision_plan_advice|'+String(_decSel.record&&_decSel.record.decision_id),messageId});
       diagnosticLog('DECISION_BRIEFING','queue=queued kind=decision_plan_advice action='+_decAdvice.action);
     }
     const body = {
