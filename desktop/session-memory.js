@@ -54,8 +54,13 @@
     if (!normTrack(identity.track)) return false;
     if (normTrack(record.track) !== normTrack(identity.track)) return false;
     const wantUser = identity.userId;
+    const wantCust = identity.custId;
+    if (!wantUser && !wantCust) return false;  // userId or custId 必須
     if (wantUser !== null && wantUser !== undefined && wantUser !== '') {
       if (String(record.userId ?? '') !== String(wantUser)) return false;
+    }
+    if (wantCust !== null && wantCust !== undefined && wantCust !== '') {
+      if (String(record.custId ?? record.cust_id ?? '') !== String(wantCust)) return false;
     }
     const wantCar = norm(identity.car || identity.carClass);
     if (wantCar) {
@@ -111,6 +116,58 @@
       handled: true,
       intent: 'historical_weather',
       reply: ja ? `${when}の${record.track}は${body}。` : `On ${when} at ${record.track}: ${body}.`,
+      record,
+    };
+  }
+
+  // 「前回給油は？」への決定論回答。Spa 等の過去レース給油実績から応答。
+  function answerPreviousFuel(history, identity, lang, nowMs) {
+    const ja = isJP(lang);
+    // ★P0-3修正：本人不明を拒否（custId が必須）
+    if (!identity || !identity.custId) {
+      return {
+        handled: true,
+        intent: 'previous_fuel_unavailable',
+        reply: ja ? '現在のドライバーが不明。' : 'Current driver unknown.',
+        record: null,
+      };
+    }
+    const record = selectPrevious(history, identity, nowMs);
+    if (!record) {
+      return {
+        handled: true,
+        intent: 'previous_fuel_unavailable',
+        reply: ja ? '同じ条件の過去給油記録がない。' : 'No matching fuel record.',
+        record: null,
+      };
+    }
+    const pitEntry = finite(record.pitEntryLap);
+    const fuelAtPit = finite(record.fuelAtPitEntry);
+    const fuelAtFinish = finite(record.fuelAtFinish);
+    if (pitEntry === null || fuelAtPit === null || fuelAtFinish === null) {
+      return {
+        handled: true,
+        intent: 'previous_fuel_incomplete',
+        reply: ja ? 'かつての給油記録は不完全。' : 'Fuel record is incomplete.',
+        record,
+      };
+    }
+    // ★P0-3修正：公式未確認を拒否（official_result_arrived が明示的に true）
+    if (record.official_result_arrived !== true) {
+      return {
+        handled: true,
+        intent: 'previous_fuel_pending',
+        reply: ja ? '前回レースの公式結果待ち。' : 'Official result pending.',
+        record,
+      };
+    }
+    const reply = ja
+      ? `前回は${pitEntry}周終了後に入り、${fuelAtPit}L給油。チェッカー時${fuelAtFinish}L残。`
+      : `Last time: pit entry at lap ${pitEntry}, refueled ${fuelAtPit}L, finished with ${fuelAtFinish}L.`;
+    return {
+      handled: true,
+      intent: 'previous_fuel_reference',
+      reply,
       record,
     };
   }
@@ -316,6 +373,54 @@
   }
   function nowOrMs(ms) { return Number.isFinite(ms) ? ms : Date.now(); }
 
-  return { matchesIdentity, selectPrevious, answerHistoricalWeather, briefingFacts, briefingLine, strategyFuelEvidence, strategyLapEvidence, isFreshRecord,
-    setupComparison, setupComparisonLine, attachSetupDeclaration };
+  // ★Phase 3：race record を持続記憶へ保存。Bridge pit event & official result を
+  // 同一record へマージし、次セッションで再読込可能にする。
+  //
+  // 契約（「決定論」の出口）：
+  //   - 入力: Bridge pit_events (array) + official_result_arrived (boolean) + metadata
+  //   - 処理: identity 照合で既存 record 検索 → found なら merge、なければ新規作成
+  //   - 出力: 同じhistoryを返すか、新規保存済みrecordを含むhistoryを返す
+  //   - 保存先: caller が pw_raceHistory localStorage/IndexedDB へ責任を持つ
+  //     （ここは格納logic のみ提供）
+  //
+  function mergeRaceRecord(existingRecord, bridgeData, nowMs) {
+    if (!existingRecord || !bridgeData) return existingRecord;
+    const merged = Object.assign({}, existingRecord);
+    // pit_events: Bridge from raw pit data
+    if (Array.isArray(bridgeData.pit_events) && bridgeData.pit_events.length > 0) {
+      merged.pit_events = bridgeData.pit_events;
+    }
+    // official_result_arrived: Bridge from session final state
+    if (typeof bridgeData.official_result_arrived === 'boolean') {
+      merged.official_result_arrived = bridgeData.official_result_arrived;
+    }
+    // recordedAt: update if official result just arrived
+    if (bridgeData.official_result_arrived && !existingRecord.official_result_arrived) {
+      merged.recordedAt = new Date(nowMs || Date.now()).toISOString();
+    }
+    return merged;
+  }
+
+  function persistRaceRecord(history, newRecordFromBridge, identity, nowMs) {
+    if (!newRecordFromBridge || !identity) return history || [];
+    const now = nowMs || Date.now();
+    // 既存record検索
+    const existingIndex = (history || []).findIndex(r => matchesIdentity(r, identity, now));
+    if (existingIndex >= 0) {
+      // 既存を merge・上書き
+      const merged = mergeRaceRecord(history[existingIndex], newRecordFromBridge, now);
+      const updated = [...history];
+      updated[existingIndex] = merged;
+      return updated;
+    } else {
+      // 新規追加
+      const fresh = Object.assign({}, newRecordFromBridge, {
+        recordedAt: new Date(now).toISOString(),
+      });
+      return [...(history || []), fresh];
+    }
+  }
+
+  return { matchesIdentity, selectPrevious, answerHistoricalWeather, answerPreviousFuel, briefingFacts, briefingLine, strategyFuelEvidence, strategyLapEvidence, isFreshRecord,
+    setupComparison, setupComparisonLine, attachSetupDeclaration, mergeRaceRecord, persistRaceRecord };
 }));

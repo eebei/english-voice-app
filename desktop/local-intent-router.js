@@ -298,6 +298,41 @@
       || null;
     if (!text || !live) return { handled:false };
 
+    // ★Phase 3：過去レース記録への質問（「前回給油は？」等）
+    // session-memory.answerPreviousFuel() へ delegate。raceHistory + currentUserId で照合。
+    if (/(?:前回|前の|この前).{0,10}(?:給油|ガソリン|ピット|フューエル|fuel)|last.*fuel|prev.*refuel/i.test(text)) {
+      const sessionMem = input && input.sessionMemory && typeof input.sessionMemory === 'object'
+        ? input.sessionMemory : null;
+      const history = Array.isArray(input.raceHistory) ? input.raceHistory : [];
+      if (sessionMem && typeof sessionMem.answerPreviousFuel === 'function' && history.length > 0) {
+        // ★P0-3：現セッション cust_id は live state から（Bridge → renderer live 保持 → router input.live）
+        //   履歴は identity の検索対象のみ（発行元ではない）。別セッション誤認を防止
+        const currentCustId = (input && input.live && input.live.cust_id) || null;
+        // ★P0-3修正：car_model も identity へ渡し、session-memory の car 比較を可能に
+        const identity = {
+          userId: currentUserId || null,
+          custId: currentCustId,
+          track: live.track || null,
+          car: live.car_model || null,
+          carClass: live.car_class || null,
+        };
+        const fuelAnswer = sessionMem.answerPreviousFuel(history, identity, lang, Date.now());
+        if (fuelAnswer && fuelAnswer.handled) {
+          // intent を維持（pending/incomplete/unavailable も適切に返す）
+          // ★Codex差戻し（残件1続き）：recordedAtはミリ秒精度で同時保存時に衝突しうるため、
+          //   race識別子のfallbackとして使わない（実際に同一recordedAtの別2recordで再現
+          //   された）。旧record（raceRecordId未付与）は renderer.html の loadRaceHistory()
+          //   が読込時に一度だけ永続IDを付与するマイグレーションで解消する——ここでは
+          //   recordedAtへの黙示フォールバックを行わず、raceRecordIdが無ければnullのまま
+          //   出す（衝突しうる値を安定識別子として偽装しない）。
+          const raceRecordId = (fuelAnswer.record && fuelAnswer.record.raceRecordId) || null;
+          return answer(fuelAnswer.intent, fuelAnswer.reply,
+            { source:'race_history', raceRecordId });
+        }
+      }
+      return { handled:false };
+    }
+
     if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
       return answer('acknowledgement', isJP(lang) ? '了解。' : 'Copy.');
     }

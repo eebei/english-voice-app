@@ -1,6 +1,20 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-09-05 JST
+最終更新: 2026-09-11 JST
+
+## 現在地：Build 301 private candidate準備
+
+本節が以下の過去記録より優先。公開中DesktopはBuild 300（GitHub Releaseを9/11確認）。
+9/11 Yujiの「OK! GO!」により、レビュー済み前回給油スライスのcommit・push・private Buildへ進む。
+製品実装はClaude Code、独立確認はCodex。旧記録への永続ID移行を含むレビュー差戻しは解消済み。
+変更領域はDesktopと同梱／単体Bridge。server・認証・決済・公開ページの変更はない。
+Build 301として二系統のprivate candidateを作り、対象SHA・installer・app.asar・Bridgeを照合する。
+Windows/iRacing、実音声、installer実起動は未確認。公開済み／実走合格とは扱わない。
+全体preflightは通常権限で最終exit 0。追加JS 5本・Python 2本もexit 0。
+旧契約を前提としていた回帰テスト2本のみ追従修正（表示同期71/71、Build 298 replay170/170）。
+製品動作ロジックへのCodex追加修正なし。結果とcandidate証拠は共有MD末尾へ記録する。
+原価：過去給油回答はローカルで生成。通常のTTS経路は維持し、検証では外部有料API呼出なし。
+次の行動はprivate artifact検査。公開判断は検査結果を揃えて行う。
 
 ## 現在地（2026-09-06）：Build 298事後Gate 4系統 — ④③修正済み・①②赤
 

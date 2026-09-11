@@ -70,7 +70,7 @@ for (const [name, re] of [
   ['TTS失敗 text-only', /finalizeUtterance\(_it,'dropped',null,'tts_failed_text_only'\)/],
   ['WebSpeech onerror', /finalizeUtterance\(currentSpeakItem,'dropped',null,'webspeech_onerror'\)/],
   ['WebSpeech throw', /finalizeUtterance\(currentSpeakItem,'dropped',null,'webspeech_throw'\)/],
-  ['現在発話の割込み', /finalizeUtterance\(currentSpeakItem,'dropped',null,'interrupted_before_start'\)/],
+  ['現在発話の割込み', /finalizeUtterance\(currentSpeakItem,outcome,null,reason\|\|'interrupted_before_start'\)/],
   ['実再生開始→spoken', /finalizeUtterance\(_it,'spoken'\)/],
   // ★2026-09-06 ② 構造置換：authority から本文が作れない時も終端へ落とす。
   ['authority から本文を作れない（自発）', /finalizeUtterance\(_it,'dropped',null,'gap_no_text_from_authority'\)/],
@@ -358,12 +358,12 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
     !lunaTexts().includes('後ろ4.0秒。') && ovlTextOf(ctx.elD._ovlId) === null,
     JSON.stringify(lunaTexts()));
 
-  // ── ②-b rebuild した後にキューが消えたら drop される ────────────
-  //   'rebuilt' を終端扱いにすると drop が阻止され、耳で聞いていない文が記憶に残る。
+  // ── ②-b 未発話候補の本文更新後、失敗でキューが消えたら drop される ──
+  // rebuilt終端は廃止済み。候補更新と終端を分け、全TTS失敗での削除を検査する。
   vm.runInContext("var elR = addMsg('ai','後ろ8.0秒。');"
     + "var itR = {text:'後ろ8.0秒。',kind:'gap_trend',displayEl:elR};"
-    + "finalizeUtterance(itR,'rebuilt','後ろ6.5秒。');"
-    + "discardQueuedUtterances([itR],'voice_off');", ctx);
+    + "itR.text='後ろ6.5秒。';"
+    + "discardQueuedUtterances([itR],'tts_failed');", ctx);
   check('②-b rebuild 後にキューが消えたら記憶からも消える',
     !lunaTexts().includes('後ろ6.5秒。') && !lunaTexts().includes('後ろ8.0秒。')
       && ovlTextOf(ctx.elR._ovlId) === null,
@@ -373,11 +373,19 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
   vm.runInContext("var elQ1 = addMsg('ai','前2.0秒。'); var elQ2 = addMsg('ai','前3.0秒。');"
     + "discardQueuedUtterances(["
     + "{text:'前2.0秒。',kind:'gap_trend',displayEl:elQ1},"
-    + "{text:'前3.0秒。',kind:'gap_trend',displayEl:elQ2}],'voice_off');", ctx);
+    + "{text:'前3.0秒。',kind:'gap_trend',displayEl:elQ2}],'tts_failed');", ctx);
   check('④ キュー全消去で表示・記憶が残らない（P1-2）',
     !lunaTexts().includes('前2.0秒。') && !lunaTexts().includes('前3.0秒。')
       && ovlTextOf(ctx.elQ1._ovlId) === null && ovlTextOf(ctx.elQ2._ovlId) === null,
     JSON.stringify(lunaTexts()));
+
+  // voice_offは利用者による抑止。TTS失敗とは別で、表示・記憶を保持する現契約。
+  vm.runInContext("var elMute=addMsg('ai','前4.4秒。');"
+    + "var itMute={text:'前4.4秒。',kind:'gap_trend',displayEl:elMute};"
+    + "discardQueuedUtterances([itMute],'voice_off');", ctx);
+  check('利用者のvoice_offは抑止終端として表示・記憶を保持する',
+    ctx.itMute._finalized === 'suppressed_by_user' && lunaTexts().includes('前4.4秒。')
+      && ovlTextOf(ctx.elMute._ovlId) !== null);
 
   // ── 受入④⑥ 製品の実 speak() を通し、同一 utterance_id で三者一致を証明する ──
   //   helper を直接叩くのではなく、**製品関数**へ候補を投入して終端まで動かす。

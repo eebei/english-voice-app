@@ -56,7 +56,7 @@ import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 300 (voice terminal contract and message identity)"
+BUILD_VERSION = "Build 301 (previous race fuel and persistent record identity)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -888,6 +888,10 @@ def _session_scoped_reset_values():
         '_pace_dev_episode': 0,
         # Handoff must never carry a tyre measurement across a new session.
         'last_tire_report': None,
+        # ★P0-1（2026-09-10 Codex差戻し）：checker_fuel_freeze を個別リセット箇所
+        #   （sig変更・SessionNum変更）に直書きしていたら、この辞書のコメントが警告する
+        #   「resetし忘れ」パターンを自ら再現していた。単一の真実源へ統合する。
+        'checker_fuel_freeze': None,
     }
 
 
@@ -925,6 +929,48 @@ def derive_pit_phase(lifecycle_state, on_pit_road, lap, pit_exit_lap):
     return 'racing'
 
 
+def build_telemetry_identity_field(info):
+    """★P0-3（2026-09-10 Codex差戻し対応）：telemetry_live payload の 'cust_id'
+    フィールドを生成する共用純粋関数。poll_iracing() の telemetry_live broadcast
+    から呼ばれる本番コード（切り出しただけ・ロジックは同一）。単体テストから
+    直接呼べる——文字列grepでの間接確認ではなく、実際にこの関数を呼んで
+    telemetry_live へ渡る値そのものを検証できる。
+
+    Args:
+      info: parse_session_info() の戻り値（player_cust_id を含む dict）
+
+    Returns:
+      telemetry_live payload の 'cust_id' に入れる値（int または None）
+    """
+    return info.get('player_cust_id') if isinstance(info, dict) else None
+
+
+def build_summary_identity_and_freeze_fields(info, checker_fuel_freeze):
+    """★P0-1/P0-3（2026-09-10 Codex差戻し対応）：session_summary payload の
+    'cust_id' / 'fuel_at_finish' / 'checker_fuel_l' フィールドを生成する
+    共用純粋関数。poll_iracing() の session_summary 構築2箇所（sig変更時の
+    途中summary・通常のsummary）から呼ばれる本番コード。単体テストから直接呼べる。
+
+    Args:
+      info: parse_session_info() の戻り値（player_cust_id を含む dict）
+      checker_fuel_freeze: evaluate_checker_fuel_freeze() が返した freeze 値
+
+    Returns:
+      {'cust_id': ..., 'fuel_at_finish': ..., 'checker_fuel_l': ...} の dict。
+      非有限値(NaN/inf)や非数値は fuel フィールドで None に落とす（捏造しない）。
+    """
+    cust_id = info.get('player_cust_id') if isinstance(info, dict) else None
+    fuel_ok = (checker_fuel_freeze is not None
+               and isinstance(checker_fuel_freeze, (int, float))
+               and math.isfinite(checker_fuel_freeze))
+    fuel_value = checker_fuel_freeze if fuel_ok else None
+    return {
+        'cust_id': cust_id,
+        'fuel_at_finish': fuel_value,
+        'checker_fuel_l': fuel_value,
+    }
+
+
 def maybe_reset_on_session_num_change(cur_snum, last_session_num, race_lifecycle_fsm):
     """★P0（2026-07-21 Codexレビュー・再々指摘で拡張）：SessionNumが変わっていたら
     race_lifecycle_fsmと、セッションをまたいではいけない全状態（_session_scoped_reset_values参照）を
@@ -944,6 +990,30 @@ def maybe_reset_on_session_num_change(cur_snum, last_session_num, race_lifecycle
         _gate_state['since'] = 0.0
         return True, _session_scoped_reset_values()
     return False, None
+
+
+def evaluate_checker_fuel_freeze(previous_lifecycle_state, lifecycle_state,
+                                  checker_fuel_freeze, current_fuel):
+    """★P0-1（2026-09-10 Codex差戻し対応）：プレイヤー完走時点のfuelを一度だけfreezeする
+    判定を純粋関数化。poll_iracing()から毎フレーム呼ばれる本番コード（切り出しただけ・
+    ロジックは同一）。単体テストから直接呼べる。
+
+    Args:
+      previous_lifecycle_state: 前フレームのrace_lifecycle_fsm.state
+      lifecycle_state:          今フレームのrace_lifecycle_fsm.state（update後）
+      checker_fuel_freeze:      現在のfreeze値（Noneならまだfreeze前 or reset済み）
+      current_fuel:             今フレームのtelemetry fuel値
+
+    Returns:
+      新しいcheckerFuelFreeze値。PLAYER_FINISHEDへの遷移エッジで、まだfreezeされて
+      いなければcurrent_fuelをfreeze。それ以外は入力のcheckerFuelFreezeをそのまま返す
+      （既にfreeze済みなら上書きしない・遷移エッジでなければ変化なし）。
+    """
+    if (previous_lifecycle_state != 'PLAYER_FINISHED'
+            and lifecycle_state == 'PLAYER_FINISHED'
+            and checker_fuel_freeze is None):
+        return current_fuel
+    return checker_fuel_freeze
 
 
 def evaluate_post_contact_watch(watch_start, speed_ok, now_time, current_speed,
@@ -2084,6 +2154,11 @@ def parse_session_info(yaml_str):
                         current_driver['class_rel_speed'] = int(stripped.split(':')[1].strip())
                     except:
                         pass
+                elif stripped.startswith('CustID:'):
+                    try:
+                        current_driver['cust_id'] = int(stripped.split(':')[1].strip())
+                    except:
+                        pass
 
         if current_driver:
             drivers.append(current_driver)
@@ -2138,6 +2213,7 @@ def parse_session_info(yaml_str):
             result['player_irating'] = player.get('irating', 0)
             result['player_car_class'] = player.get('class_name', '')  # 例"GT3"。記憶のキー(コース×車種)に使う
             result['player_car_model'] = player.get('car_model', '')
+            result['player_cust_id'] = player.get('cust_id')  # ★P0-2：iRacing公式 CustID
             lic_level = player.get('lic_level', 0)
             lic_sublevel = player.get('lic_sublevel', 0)
             # Convert to SR display (e.g., B 4.50)
@@ -2561,6 +2637,7 @@ def poll_iracing():
     consistent_lap_count = 0   # (旧lap_consistent用・同上)
     pace_check_last_lap = -99  # ペース判断を最後に投げた周回（3周に1回までに制限＝連呼防止）
     pit_box_pct = None         # 自分のピットボックスのLapDistPct（初回入庫で学習・以後カウントダウンに使う）
+    checker_fuel_freeze = None  # ★P0-1：チェッカー到達時点のtlemetry fuelを一度だけ freeze。session_summary生成時のみ使用、以後上書きしない
     pit_marks_called = set()   # 今回の入庫で読み上げ済みの距離マーカー
     pit_prev_dist_m = None     # 前サンプルのボックスまでの距離（閾値横断の判定用）
     track_length_m = None      # コース長(m)。ピット距離の換算用
@@ -2885,6 +2962,7 @@ def poll_iracing():
                         _pace_dev_episode = _sig_reset['_pace_dev_episode']
                         last_tire_report = _sig_reset['last_tire_report']
                         latest_endurance_plan = None
+                        checker_fuel_freeze = _sig_reset['checker_fuel_freeze']  # ★P0-1：単一の真実源から取得
                         _gate_state['pending'] = None
                         _gate_state['since'] = 0.0
                         last_session_num = _authority_session_num
@@ -3014,6 +3092,11 @@ def poll_iracing():
                         'active_decision_id': active_decision_id,
                         'active_decision_plan': active_decision_plan,
                         'weather': dict(last_weather) if isinstance(last_weather, dict) else None,
+                        'pit_entry_lap': (pit_events[-1].get('entry_lap') if pit_events else None),
+                        'fuel_at_pit_entry': (pit_events[-1].get('fuel_added_l') if pit_events else None),
+                        # ★共用生成関数（build_summary_identity_and_freeze_fields）で
+                        #   cust_id / fuel_at_finish を生成。文字列grepではなく実処理で検証可能。
+                        **build_summary_identity_and_freeze_fields(info, checker_fuel_freeze),
                     }
                     _transition_summary = _old_summary
             checker_out_notice_sent = _reset['checker_out_notice_sent']
@@ -3074,6 +3157,8 @@ def poll_iracing():
             strategy_options_box_call_sent = False
             latest_endurance_plan = None
             pit_enter_lap = None
+            # ★P0-1：checker_fuel_freeze も SessionNum 変更で破棄（次セッション誤認防止・単一の真実源から取得）
+            checker_fuel_freeze = _reset['checker_fuel_freeze']
             # ★v3 Codex P0-4：pending summary もSessionNum変更で破棄
             _pending_summary = _reset['_pending_summary']
             _pending_non_race_summary = _reset['_pending_non_race_summary']
@@ -3164,6 +3249,12 @@ def poll_iracing():
             session_state=cur_ss, lap_last_lap_time=lapTime, telemetry_active=active,
             driver_state=driver_state, car_idx_lap_completed=_car_idx_lap_completed)
         _lifecycle_state = lifecycle_state  # ★P0：director_gate（module-level）から参照できるようにする
+        # ★P0-1：プレイヤー完走時にチェッカー時点の fuel を一度だけ freeze（純粋関数・単体テスト可能）
+        _prev_checker_fuel_freeze = checker_fuel_freeze
+        checker_fuel_freeze = evaluate_checker_fuel_freeze(
+            _previous_lifecycle_state, lifecycle_state, checker_fuel_freeze, fuel)
+        if checker_fuel_freeze != _prev_checker_fuel_freeze:
+            log('CHECKER FUEL FREEZE: %.1f L' % checker_fuel_freeze if isinstance(checker_fuel_freeze, (int, float)) else 'null')
         if final_lap.should_dispatch_checker_notice(
                 _previous_lifecycle_state, lifecycle_state,
                 bool(final_lap_notice_sent.get(1, False)),
@@ -3404,6 +3495,11 @@ def poll_iracing():
                         'active_decision_id': active_decision_id,
                         'active_decision_plan': active_decision_plan,
                         'weather': dict(last_weather) if isinstance(last_weather, dict) else None,
+                        'pit_entry_lap': (pit_events[-1].get('entry_lap') if pit_events else None),
+                        'fuel_at_pit_entry': (pit_events[-1].get('fuel_added_l') if pit_events else None),
+                        # ★共用生成関数（build_summary_identity_and_freeze_fields）で
+                        #   cust_id / fuel_at_finish / checker_fuel_l を生成。
+                        **build_summary_identity_and_freeze_fields(info, checker_fuel_freeze),
                     }
                     _official_rows = latest_session_results.get(cur_snum, [])
                     _official_player = next((r for r in _official_rows
@@ -4587,6 +4683,7 @@ def poll_iracing():
                     'time': round(lapTime, 3),
                     'class_pos': class_pos,
                     'pb': is_personal_best,
+                    'fuel': round(fuel, 2) if fuel is not None and isinstance(fuel, (int, float)) and math.isfinite(fuel) else None,
                 }
                 if lap_sector_times:
                     lap_record['sectors'] = [round(s, 2) for s in lap_sector_times]
@@ -6824,6 +6921,9 @@ def poll_iracing():
                               and car_laps_all[player_car_idx] > 0 else None)}
                      if class_pos == 1 else None)),
                 },
+                # ★P0-3修正：現在セッション CustID を telemetry_live で送出（renderer が初期化時など summary 受信不可時に取得可能）
+                #   共用生成関数（build_telemetry_identity_field）を使用。文字列grepではなく実処理で検証可能。
+                'cust_id': build_telemetry_identity_field(info),
             })
             last_telem_ts = _tnow
 

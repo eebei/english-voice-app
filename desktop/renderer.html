@@ -1263,6 +1263,7 @@ function finalizeUtterance(item, outcome, finalText, reason){
     : ((_ovlText===_tts && _boxText===_tts && _chat===_tts) ? 'true' : 'false');
   diagnosticLog('UTTERANCE_FINAL','uid='+_uid+' outcome='+terminalOutcome+' kind='+(item.kind||'?')
     +' turn='+((el&&el._turnId)||'-')+' ovl='+((el&&el._ovlId)||'-')
+    +' race_record_id='+(item.raceRecordId||'-')
     +' fanout_match='+_fanout+(_boxReason ? ' box_reason='+_boxReason : '')
     +' tts_text='+JSON.stringify(_tts)
     +' overlay_text='+JSON.stringify(_ovlText)
@@ -1319,6 +1320,9 @@ let bridgeConnected = false, iracingDetected = false, iracingLive = false;
 let iracingConnectionSeen = false, iracingConnectedAt = 0, lastTelemetryAt = 0, telemetryStaleNotified = false;
 const TELEMETRY_STALE_MS = 12000;
 let lastSectors = null, driverState = null, lastTelemetry = null, lastSessionType = null, lastSessionNum = null;
+let currentSessionCustId = null;  // ★P0-3修正（Codex差戻しで訂正）：現在 driver identity。唯一の入口は
+                                   //   telemetry_live 受信（4148行）。session_summary からは更新しない
+                                   //   （過去記録保存が現在 identity を乗っ取るP0バグの再発防止）
 let pendingDrivingStyleAdvice = null;
 let lastDrivingStyleCapturedLap = null;
 function drivingStyleReferences(){
@@ -2648,10 +2652,19 @@ async function sendMsg(inputSource){
     ? window.PitwallLocalIntentRouter.route({
       text,
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
-      live:lastTelemetry,
+      // ★P0-3修正（本セッションで新規発見）：Bridge の telemetry_live ペイロードには
+      //   track/car_class/car_model が含まれない（session_info 経由でのみ届く）。
+      //   lastTelemetry をそのまま live として渡すと、router の identity.track が
+      //   常に null になり「前回給油は？」等の過去記録参照が常に不成立になっていた。
+      //   session_info 由来の確定値（lastTrack/lastCarClass/lastCarModel）で補う。
+      live:{...lastTelemetry,
+        track:lastTelemetry.track||lastTrack||null,
+        car_class:lastTelemetry.car_class||lastCarClass||null,
+        car_model:lastTelemetry.car_model||lastCarModel||null},
       sessionAuthority:(typeof lastSessionAuthority!=='undefined'?lastSessionAuthority:null),
       raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[]),
       currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null),
+      sessionMemory:(typeof window!=='undefined'&&window.PitwallSessionMemory?window.PitwallSessionMemory:null),
       // ★G3：GAP は数秒で意味が変わる。接続判定(12秒)のままだと、
       //   queue では破棄される古さの値を質問回答で喋ってしまう。
       snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null),
@@ -2670,7 +2683,10 @@ async function sendMsg(inputSource){
     }
     const localPriority=localIntent.confidence==='confirmed'
       ? SPEAK_PRIO.P2_PROCEDURE : SPEAK_PRIO.P3_INFO;
-    diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=${localIntent.source||'bridge_local'} confidence=${localIntent.confidence||'unknown'}`);
+    // ★Codex差戻し：採用したraceの識別子を出口(trace/queue)まで追えるようにする。
+    //   route()が渡すaction.raceRecordId（前回給油recordのrecordedAt）を必ずログへ残す。
+    const _ansRaceRecordId=(localIntent.action&&localIntent.action.raceRecordId)||null;
+    diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=${localIntent.source||'bridge_local'} confidence=${localIntent.confidence||'unknown'} race_record_id=${_ansRaceRecordId||'-'}`);
     if(localIntent.action&&localIntent.action.type==='arm_fuel_window_watch'){
       fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
       diagnosticLog('FUEL_WINDOW_WATCH','armed session='+fuelWindowWatch.sessionKey);
@@ -2691,7 +2707,8 @@ async function sendMsg(inputSource){
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
       dedupeKey:'local|'+localIntent.intent+'|'+reply,
       gapIdentities:(Array.isArray(localIntent.gapIdentities)&&localIntent.gapIdentities.length)
-        ?localIntent.gapIdentities:null});
+        ?localIntent.gapIdentities:null,
+      raceRecordId:_ansRaceRecordId});
     return;
   }
   // ★スライス2の出口③：「それ違う」は会話ではなく**記録への操作**。
@@ -3446,6 +3463,10 @@ function speak(text, opts){
                 utteranceId:o.utteranceId||(o.displayEl&&o.displayEl._uid)||nextUtteranceId(),
                 messageId:o.messageId||null,   // ★自分が積んだ履歴だけを直す
                 gapIdentities:(Array.isArray(o.gapIdentities)&&o.gapIdentities.length)?o.gapIdentities:null,
+                // ★Codex差戻し：previous_fuel等の過去record参照発話が、どのraceを
+                //   元に答えたかをqueue itemに保持する（gapIdentitiesと同じ「出口まで
+                //   識別子を持ち歩く」契約）。
+                raceRecordId:o.raceRecordId||null,
                 costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
   typeof costRecord==='function'&&costRecord('queued', {id:item.costId, kind:kind});
@@ -4003,6 +4024,8 @@ function updateBridgeStatus(){
 function markTelemetryStale(reason){
   if(!iracingDetected||telemetryStaleNotified) return;
   iracingLive=false;usageIracingLive=false;lastTelemetry=null;lastSectors=null;
+  // ★P0-3修正：切断時に currentSessionCustId をリセット（古い ID の残留防止）
+  currentSessionCustId=null;
   resetPitStateObservation();   // ★切断・stale：pit観測状態を持ち越さない
   telemetryStaleNotified=true;updateBridgeStatus();
   console.error('[TELEMETRY_STALE]',reason||'timeout');
@@ -4108,6 +4131,14 @@ function connectBridge(){
           if(nextSessionNum!==null && lastSessionNum!==null && nextSessionNum!==lastSessionNum){
             resetSessionScopedReviewState(nextSessionNum);
             resetPitStateObservation();   // ★Qualify→Race 等の境界で持ち越さない
+            // ★P0-3修正（Codex差戻しで発見）：router.route() が実際に見る現在driverの
+            //   cust_idは currentSessionCustId ではなく live.cust_id（＝lastTelemetryを
+            //   スプレッドした値）。currentSessionCustId だけリセットしても、新セッション
+            //   の telemetry_live を一度も受信していない間、古いセッションの
+            //   lastTelemetry.cust_id が生き残り、別レースの記録に正答してしまっていた。
+            //   lastTelemetry 自体もリセットし、新telemetry受信まで「現在driver不明」にする。
+            currentSessionCustId=null;
+            lastTelemetry=null;
           }
           if(nextSessionNum!==null) lastSessionNum=nextSessionNum;
           lastSessionAuthority=a;
@@ -4137,6 +4168,10 @@ function connectBridge(){
         lastTelemetryAt=Date.now();telemetryStaleNotified=false;iracingLive=true;usageIracingLive=true;
         if(!_wasFresh){updateBridgeStatus();bridgeVoice('iracing_live');}
         lastTelemetry=applySessionFormatAuthority(data);
+        // ★P0-3修正：telemetry_live から現在 CustID を取得（Bridge が毎フレーム送出）
+        if(data&&typeof data.cust_id==='number'){
+          currentSessionCustId=data.cust_id;
+        }
         observePitState(lastTelemetry);   // ★権威pit-state。radio の有無に依存しない
         if(/race/i.test(String(lastSessionType||lastTelemetry.session_type||''))
             && strategyStartingFuelL===null && Number(lastTelemetry.fuel)>0){
@@ -4179,6 +4214,10 @@ function connectBridge(){
       if(data.type==='session_summary'){
         data=sanitizeSessionEvidence(data);
         lastSessionSummary=data;
+        // ★P0-3修正（Codex差戻し）：session_summary は過去レースの記録保存であり、
+        //   現在の driver identity（currentSessionCustId）を更新してはならない。
+        //   現在 identity の唯一の入口は telemetry_live（4148行）。ここで上書きすると
+        //   別 driver の summary 到達時に現在 identity が誤って乗っ取られる。
         saveSessionSummary(data);
         // ★スライス2：完走時だけでなく、途中終了・DNF でも同じ判断へ追記する。
         //   ここを落とすと「実行されなかった」と「事故で終わった」が区別できない。
@@ -6862,7 +6901,42 @@ function saveSessionSummary(data){
     //   値はBridge由来のみを採用し、欠けていればnullで残す（推測で埋めない）。
     const _w=(data&&typeof data.weather==='object'&&data.weather)?data.weather:null;
     const _rp=(lastTelemetry&&typeof lastTelemetry.race_plan==='object')?lastTelemetry.race_plan:{};
-    history.push({date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),custId:data.cust_id??data.customer_id??null,subsessionId:data.subsession_id??null,track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,startOverallPos:Number.isInteger(data.start_overall_position)?data.start_overall_position:null,finishOverallPos:Number.isInteger(data.finish_overall_position)?data.finish_overall_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||lastSessionType||null,raceFormat:_rp.kind||null,configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,totalLapsRule:Number.isInteger(Number(lastTelemetry&&lastTelemetry.laps_total))?Number(lastTelemetry.laps_total):null,fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,iratingBefore:Number.isFinite(Number(data.irating_before))?Number(data.irating_before):null,iratingAfter:Number.isFinite(Number(data.irating_after))?Number(data.irating_after):(lastIrating||null),iratingDelta:Number.isFinite(Number(data.irating_delta))?Number(data.irating_delta):null,sof:Number.isFinite(Number(data.sof))?Number(data.sof):null,planName:data.plan_name||null,planSuccess:data.plan_success===true,pitEntryLap:Number.isInteger(data.pit_entry_lap)?data.pit_entry_lap:null,pitExitLap:Number.isInteger(data.pit_exit_lap)?data.pit_exit_lap:null,driverStatement:data.driver_statement||null,irating:lastIrating||null,sr:lastSr||null});
+    const _official=(data&&data.official_result_arrived===true)?true:false;
+    // pit_events から fuel_added_l と entry_lap, exit_lap を抽出（最後の pit）
+    let _fuelAtPitEntry=null;
+    let _pitEntryLap=null;
+    let _pitExitLap=null;
+    if(Array.isArray(data.pit_events)&&data.pit_events.length>0){
+      const lastPit=data.pit_events[data.pit_events.length-1];
+      if(lastPit){
+        if(typeof lastPit.fuel_added_l==='number'&&Number.isFinite(lastPit.fuel_added_l)){
+          _fuelAtPitEntry=lastPit.fuel_added_l;
+        }
+        if(Number.isInteger(lastPit.entry_lap)&&lastPit.entry_lap>0){
+          _pitEntryLap=lastPit.entry_lap;
+        }
+        if(Number.isInteger(lastPit.exit_lap)&&lastPit.exit_lap>0){
+          _pitExitLap=lastPit.exit_lap;
+        }
+      }
+    }
+    // checker fuel（Bridge 側で checker_fuel_l として渡される）
+    let _fuelAtFinish=null;
+    if(data&&typeof data.checker_fuel_l==='number'&&Number.isFinite(data.checker_fuel_l)){
+      _fuelAtFinish=data.checker_fuel_l;
+    }
+    // ★P0-3修正（Codex差戻し）：過去記録の保存(cust_id)と現在driver identity
+    //   (lastTelemetry / currentSessionCustId)は別物。ここでlastTelemetryへ書くと、
+    //   別driverのsummary到達時に現在identityが乗っ取られる。現在identityの唯一の
+    //   入口はtelemetry_live受信（currentSessionCustId、renderer.html 4148行）。
+    // ★Codex差戻し（残件1）：recordedAtはミリ秒精度のISO時刻で、同時保存・履歴取り込み等で
+    //   衝突しうる（一意性が保証されない）。保存時に一度だけ生成する永続的な一意IDを別途持つ。
+    //   crypto.randomUUID()が使えない環境（テストVM等）ではタイムスタンプ+乱数へフォールバック。
+    //   一度生成したら再読込のたびに作り直さない（値はhistory配列にそのまま保存される）。
+    const _raceRecordId=(typeof crypto!=='undefined'&&crypto&&typeof crypto.randomUUID==='function')
+      ?crypto.randomUUID()
+      :(Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10));
+    history.push({raceRecordId:_raceRecordId,date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:currentMemoryUserId(),custId:data.cust_id??data.customer_id??null,subsessionId:data.subsession_id??null,track:data.track||lastTrack||'',car:data.car_model||lastCarModel||data.car_class||lastCarClass||'',carClass:data.car_class||lastCarClass||'',bestLap:data.best_lap||'',avgLap:data.avg_lap||'',totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,startOverallPos:Number.isInteger(data.start_overall_position)?data.start_overall_position:null,finishOverallPos:Number.isInteger(data.finish_overall_position)?data.finish_overall_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||lastSessionType||null,raceFormat:_rp.kind||null,configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,totalLapsRule:(lastTelemetry&&Number.isInteger(Number(lastTelemetry.laps_total)))?Number(lastTelemetry.laps_total):null,fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null,iratingBefore:Number.isFinite(Number(data.irating_before))?Number(data.irating_before):null,iratingAfter:Number.isFinite(Number(data.irating_after))?Number(data.irating_after):(lastIrating||null),iratingDelta:Number.isFinite(Number(data.irating_delta))?Number(data.irating_delta):null,sof:Number.isFinite(Number(data.sof))?Number(data.sof):null,planName:data.plan_name||null,planSuccess:data.plan_success===true,pitEntryLap:_pitEntryLap,pitExitLap:_pitExitLap,fuelAtPitEntry:_fuelAtPitEntry,fuelAtFinish:_fuelAtFinish,driverStatement:data.driver_statement||null,irating:lastIrating||null,sr:lastSr||null,official_result_arrived:_official});
     while(history.length>10) history.shift();
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
   }catch{}
@@ -7553,7 +7627,9 @@ function currentMemoryIdentity(){
     sessionType:lastSessionType||null,
     raceFormat:_rp.kind||null,
     configuredDurationS:Number.isFinite(Number(_rp.configured_duration_s))?Number(_rp.configured_duration_s):null,
-    totalLapsRule:Number.isInteger(Number(lastTelemetry&&lastTelemetry.laps_total))?Number(lastTelemetry.laps_total):null,
+    // ★バグ修正：lastTelemetry=null の時 Number(null)=0 で isInteger(0)=true となり、
+    //   後続の Number(lastTelemetry.laps_total) が TypeError になっていた（旧式）。
+    totalLapsRule:(lastTelemetry&&Number.isInteger(Number(lastTelemetry.laps_total)))?Number(lastTelemetry.laps_total):null,
     fuelRule:(lastSessionAuthority&&lastSessionAuthority.fuel_rule)||null,
     tyreRule:(lastSessionAuthority&&lastSessionAuthority.tyre_rule)||null,
     trackTempC:Number.isFinite(Number(_weather.track_temp_c))?Number(_weather.track_temp_c):null,
@@ -7622,8 +7698,33 @@ function answerHistoricalWeatherLocally(text, lang){
   if(out.record) noteMemoryUtterance('race',out.record.date);
   return out;
 }
+// ★Codex差戻し（残件1続き・2026-09-11）：raceRecordId が付与される前に保存された
+//   旧記録は recordedAt（ミリ秒精度・衝突しうる）しか持たない。router側の
+//   フォールバックを削除したため、ここで旧記録へ一度だけ永続IDを付与する
+//   「読込時マイグレーション」を行う。既存の本文・燃料値・raceRecordId（既に
+//   ある場合）は一切変更しない。localStorageへの書き戻しに失敗したら、
+//   生成したIDを永続として扱わず（=返す配列に含めず）元のまま返す。
+//   次回の読込でまた移行を試みられる状態を保つ。
 function loadRaceHistory(){
-  try{ const h=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]'); return Array.isArray(h)?h:[]; }
+  try{
+    const h=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
+    if(!Array.isArray(h)) return [];
+    const needsMigration=h.some(r=>r&&typeof r==='object'&&!r.raceRecordId);
+    if(!needsMigration) return h;
+    const migrated=h.map(r=>{
+      if(!r||typeof r!=='object'||r.raceRecordId) return r;   // 既存IDは上書きしない
+      const id=(typeof crypto!=='undefined'&&crypto&&typeof crypto.randomUUID==='function')
+        ?crypto.randomUUID()
+        :(Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10));
+      return {...r,raceRecordId:id};
+    });
+    try{
+      localStorage.setItem('pw_raceHistory',JSON.stringify(migrated));
+      return migrated;   // 永続化に成功した時だけ新IDを反映した配列を返す
+    }catch{
+      return h;   // 保存失敗：一時生成したIDを永続として扱わない。元のまま返す
+    }
+  }
   catch{ return []; }
 }
 // ══════════════════════════════════════════════════════════════════

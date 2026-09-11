@@ -655,8 +655,10 @@ const pddp = require('./desktop/pddp.js');
     //   ★件数で数えると**定義行の `(){`** まで数えてしまい、呼出しを1つ消しても
     //     緑のままだった（2026-09-06 変異M2/M3）。呼出し文脈を名指しで見る。
     check(G, 'P1-3b stale 検知で pit観測状態を reset する',
-      /iracingLive=false;usageIracingLive=false;lastTelemetry=null;lastSectors=null;\s*\n\s*resetPitStateObservation\(\);/
-        .test(renderer),
+      /resetPitStateObservation\(\);/.test(
+        renderer.slice(renderer.indexOf('function markTelemetryStale('),
+          renderer.indexOf('\nfunction ', renderer.indexOf('function markTelemetryStale(') + 1))
+          .replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')),
       'markTelemetryStale の reset 呼出しが無い');
 
     // ★Codex 第3回差戻し（2026-09-06）：reset を `markTelemetryStale()` にだけ繋いでいた。
