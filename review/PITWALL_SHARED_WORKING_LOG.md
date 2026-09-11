@@ -15511,3 +15511,39 @@ Yujiの「OK! GO!」を受領。前節のcommit・Build待機を解除し、ま�
 | 次の担当 | Codexがcommit後SHAを固定してprivate候補を照合。Claudeはレビュー済み製品コードを並行変更しない。公開候補の証拠と実機確認項目を次報へ記載 |
 
 次のMDに指示書あり
+
+---
+
+# 2026-09-11 JST — Codex：Build 301公開・公開後実物照合完了
+
+Yujiの「OK! GO!」に基づき、Gate 5合格後、検査済みの実物を再BuildせずReleaseへ昇格した。**Desktop／単体Bridgeは公開済み。Windows・iRacing・実音声は未確認。**
+
+| 項目 | 結果・証拠 |
+| --- | --- |
+| 作業者／確認者 | 製品実装Claude Code、独立確認・出荷操作Codex。確認日2026-09-11 JST |
+| 製品SHA | `4bad610981c931adb46ad596367714ff1b565bc0`。private候補と公開資産は同じ実物。origin/mainへ通常fast-forward済み |
+| Git履歴の処理 | 最初のローカルcommitは`73cabf7`。未pushの`f0da4fb`で大型artifact追加、その後revertしており、履歴の大型blobをGitHubが拒否。公開中`a75eab3`を親とする配布commitへまとめ、`git diff 73cabf7 4bad610`がゼロを確認。元履歴はローカル`archive/pre-build301-artifact-history`へ保存。強制push・履歴削除なし |
+| 機械検証 | preflight最終exit 0、追加JS5／Python2スイートexit 0。回帰テスト保守に対する3変異（stale reset削除、全失敗を抑止扱い、voice_offをdrop扱い）も全検出。製品ロジックの追加変更なし |
+| Desktop private CI | `34552511274`、SHA一致、success、Publish step skipped |
+| Bridge private CI | `34552511197`、同SHA、success、Publish step skipped |
+| Gate 5 | `verify-artifact.sh 34552511274 4bad610981c931adb46ad596367714ff1b565bc0 301`で合格。installerを展開し18/18 runtime module存在、全JSとrendererが対象SHAと一致。build-info=301。同梱Bridge内のBuild 301・pygameを確認。manifestのSHA／Build／3ファイルのサイズとhashは追加assertでも一致 |
+| Desktop installer | 100754247 bytes、SHA-256 `cf06e3a9e38798b5406142cd0257f87b8b82d267a7355123e90662a8ff35d7be` |
+| app.asar | 4551712 bytes、SHA-256 `4a239ee79ea493f0021704de17f3e1cefd4159ace9d125dcb8d8b1b5caf02ea7` |
+| 同梱Bridge | 17031606 bytes、SHA-256 `c0d34ac913c9413e7ca94526016b01fc0dc26fdd6527d95277f66e4677032234` |
+| 単体Bridge | 17034281 bytes、SHA-256 `e1bc957d5fcdadfcee50435949a3da5e48121209e8bab80843eed367ba374426`。圧縮コード内のBuild 301・checker/identity helperを確認 |
+| 単体Bridge installer | 16329747 bytes、SHA-256 `5edc7011d3969104ec6d8dd8bac966e97c639811eb9640d1f3d9bf8ee76e6c2c` |
+| 公開方法 | public workflowで再生成せず、上記private artifactを`gh release upload --clobber`で直接昇格。Desktop／Bridge Release名・説明をBuild 301と対象SHAへ更新。既存Releaseタグは継続利用するため、製品SHAは説明と本表を正本とする |
+| 公開後照合 | 公開Setup-latest URLから100754247 bytesを実取得してSHA-256一致。日付版`20260911-0155`、Setup-latest、旧Desktop-latestの3資産は同サイズ・同digest。単体Bridge公開資産も実測hashとRelease digest一致 |
+| Gate 7／原価 | server・auth・payment・public page変更なし。過去給油回答はローカル、TTSは既存経路。機械検証の外部有料API呼出0 |
+| 未確認 | Windows新規／上書きインストール、PTT・実音声・Overlay実描画、iRacing telemetry・実走。公開成功と実走合格は別 |
+
+公開先：
+- Desktop: https://github.com/eebei/english-voice-app/releases/tag/desktop-latest
+- 更新installer: https://github.com/eebei/english-voice-app/releases/download/desktop-latest/OMORAY-PITWALL-Setup-latest.exe
+- 単体Bridge: https://github.com/eebei/english-voice-app/releases/tag/bridge-latest
+
+次の実機確認（Yuji）：公開更新経路で導入し、Desktop／BridgeがともにBuild 301で起動すること、PTT・TTS・Overlay、現在driver／車／コースの認識、前回給油の履歴照合を確認する。Spaの固定履歴がある場合のみ「前回は9周終了後に入り、26.83L給油。チェッカー時3.9L残。」と照合し、実データが違えば固定値を期待しない。別driver・別車・切断／session切替で古い記録を誤採用しないこと、checker時点の燃料と次回回答の一致を診断ログで確認する。
+
+Claudeへの指示：次は実機ログの回収・反証。公開済みBuild 301を未公開と扱わず、新しい製品変更／再Buildを追加しない。新ログで問題が出た場合はGate 10に沿い影響と対処候補を報告する。
+
+次のMDに指示書あり

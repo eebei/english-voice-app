@@ -2,19 +2,23 @@
 
 最終更新: 2026-09-11 JST
 
-## 現在地：Build 301 private candidate準備
+## 現在地：Build 301公開済み・Windows/iRacing確認待ち
 
-本節が以下の過去記録より優先。公開中DesktopはBuild 300（GitHub Releaseを9/11確認）。
-9/11 Yujiの「OK! GO!」により、レビュー済み前回給油スライスのcommit・push・private Buildへ進む。
+本節が以下の過去記録より優先。9/11 Yujiの「OK! GO!」により、Build 301を実機テスト用候補として公開済み。
+製品SHAは `4bad610981c931adb46ad596367714ff1b565bc0`。Desktop／単体Bridgeとも同SHA。
+Desktop private run `34552511274`、Bridge private run `34552511197`。再Buildせず検査済み実物をReleaseへ昇格した。
 製品実装はClaude Code、独立確認はCodex。旧記録への永続ID移行を含むレビュー差戻しは解消済み。
 変更領域はDesktopと同梱／単体Bridge。server・認証・決済・公開ページの変更はない。
-Build 301として二系統のprivate candidateを作り、対象SHA・installer・app.asar・Bridgeを照合する。
-Windows/iRacing、実音声、installer実起動は未確認。公開済み／実走合格とは扱わない。
+Gate 5：installer展開、18/18モジュール、全JS／rendererの対象SHA一致、同梱BridgeのBuild 301を確認。
+公開URLからinstallerを再取得し、100754247 bytes／SHA-256 `cf06e3a9e38798b5406142cd0257f87b8b82d267a7355123e90662a8ff35d7be`で一致。
+日付版・latest・旧互換版も同サイズ／digest。Windows/iRacing、実音声、installer実起動は未確認。
 全体preflightは通常権限で最終exit 0。追加JS 5本・Python 2本もexit 0。
 旧契約を前提としていた回帰テスト2本のみ追従修正（表示同期71/71、Build 298 replay170/170）。
 製品動作ロジックへのCodex追加修正なし。結果とcandidate証拠は共有MD末尾へ記録する。
 原価：過去給油回答はローカルで生成。通常のTTS経路は維持し、検証では外部有料API呼出なし。
-次の行動はprivate artifact検査。公開判断は検査結果を揃えて行う。
+次はYujiが公開更新経路でBuild 301を導入し、起動・PTT・前回給油回答・session切替・checker記録を実機確認する。
+過去の未push中間commitには大型artifact追加→revertがあり、GitHubがpushを拒否したため、同一ツリーを公開中SHA上へまとめた。
+元のローカル履歴 `73cabf7` は `archive/pre-build301-artifact-history` に保存。現mainは配布用履歴へ整合済み。強制push・履歴削除なし。
 
 ## 現在地（2026-09-06）：Build 298事後Gate 4系統 — ④③修正済み・①②赤
 
