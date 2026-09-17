@@ -186,6 +186,19 @@ vm.runInContext(productionCode, sandbox, { filename: 'renderer.html' });
 sandbox.PitwallSessionMemory = sandbox.window.PitwallSessionMemory;
 
 check('本番の router が読めた', typeof sandbox.window.PitwallLocalIntentRouter.route === 'function');
+
+// ★2026-09-14 Codex差戻しP1：renderer が router へ渡す identity に series・session種別・
+//   レース形式・燃料/タイヤ規則・setup・路温が含まれていないと、履歴燃費の同条件照合が
+//   すべて「不明」で素通りする。実 sendMsg → 実 route() 呼び出しを spy で捕まえ、
+//   renderer が実際に何を渡しているかを確認する（call siteの文字列検査ではない）。
+const routeCalls = [];
+{
+  const realRoute = sandbox.window.PitwallLocalIntentRouter.route;
+  sandbox.window.PitwallLocalIntentRouter.route = function (input) {
+    routeCalls.push(input);
+    return realRoute.call(this, input);
+  };
+}
 check('本番の sessionMemory が読めた', typeof sandbox.window.PitwallSessionMemory.answerPreviousFuel === 'function');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -243,6 +256,23 @@ async function finishCurrentUtterance() {
   check('保存した2件の raceRecordId が異なる', spaRecord.raceRecordId !== monzaRecord.raceRecordId);
 
   await ask('前回給油は？');
+  {
+    const withIdentity = routeCalls.filter(c => c && c.memoryIdentity);
+    check('★renderer は router へ memoryIdentity を渡している（実 route 呼び出しを捕捉）',
+      withIdentity.length > 0, JSON.stringify(routeCalls.map(c => Object.keys(c || {}))));
+    const ident = (withIdentity[0] || {}).memoryIdentity || null;
+    // 中身そのものは renderer の currentMemoryIdentity() の責務（tests-fuel-history-fallback.js
+    // ④で実関数を抽出実行して検査する）。ここで確かめるのは「欠落・加工せず渡している」こと。
+    // ★2026-09-14 Codex MD#6 P1：残り周回の訂正保留は「同じsnapshotでの再質問は保持、
+    //   新しい観測なら値が同じでも解除」で判定する。その観測IDを renderer が実際に
+    //   渡しているかを、実 route 呼び出しで確認する。
+    check('★renderer は route へ snapshotId（観測の識別子）を渡している',
+      withIdentity.some(c => c.snapshotId !== null && c.snapshotId !== undefined),
+      JSON.stringify(routeCalls.map(c => c && c.snapshotId)));
+    check('★渡す memoryIdentity は currentMemoryIdentity() の戻り値そのもの（欠落なく転送）',
+      !!ident && JSON.stringify(ident) === JSON.stringify(sandbox.currentMemoryIdentity()),
+      JSON.stringify(ident));
+  }
   const queued = sandbox.speakQueue.find(q => q.kind === 'local_previous_fuel_reference')
     || (sandbox.currentSpeakItem && sandbox.currentSpeakItem.kind === 'local_previous_fuel_reference' ? sandbox.currentSpeakItem : null);
   check('回答が queue に入った', !!queued, JSON.stringify(sandbox.speakQueue.map(q => q.kind)));

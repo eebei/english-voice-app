@@ -118,10 +118,14 @@
     if (/(?:measuring|確認中|次の計測|あと\d+周|まだ。)/i.test(String(intent) + ' ' + String(reply))) return 'estimated';
     return 'confirmed';
   };
-  const answer = (intent, reply, action) => reply
+  const answer = (intent, reply, action, overrides) => reply
     ? { handled:true, intent, reply, source:'local_authority',
       confidence: replyConfidence(intent, reply),
-      ...(action ? { action } : {}) }
+      ...(action ? { action } : {}),
+      // ★2026-09-14 Codex差戻し：本文で「暫定」と言いながら機械契約が
+      //   `confidence:'confirmed'` では矛盾する。推定根拠で答えた回答は、
+      //   呼び出し側が確度と差異を上書きできるようにする。
+      ...(overrides && typeof overrides === 'object' ? overrides : {}) }
     : { handled:false };
 
   // ★G5（2026-08-25）Codex Build 284 P1：GAP の回答は queue 待ちで陳腐化しうる。
@@ -189,6 +193,88 @@
       reply:isJP(lang) ? 'まだ。燃費と完走距離を確認中。'
         : 'Not yet. I am still confirming fuel burn and the finish distance.'
     };
+  }
+
+  const strategyCallKind = text => {
+    if (/アンダー\s*カット|under\s*cut/i.test(text)) return 'B';
+    if (/オーバー\s*カット|over\s*cut/i.test(text)) return 'C';
+    if (/(?:通常|基準|予定通り).{0,8}(?:ピット|ボックス|プラン)|(?:normal|baseline|scheduled).{0,8}(?:pit|stop|plan)/i.test(text)) return 'A';
+    if (/(?:今|この周|次周|次の周)?.{0,8}(?:ピット|ボックス).{0,10}(?:入る|行く|どう|べき|判断)|(?:戦略|作戦).{0,10}(?:どう|どれ|判断)|(?:pit|box).{0,12}(?:now|this lap|next lap|should|strategy)/i.test(text)) return 'recommendation';
+    return null;
+  };
+
+  function strategyCallAnswer(input, live, text, lang) {
+    const requested = strategyCallKind(text);
+    if (!requested) return null;
+    const wiring = input && input.strategyEvaluation && typeof input.strategyEvaluation === 'object'
+      ? input.strategyEvaluation : null;
+    const engine = wiring && wiring.api;
+    const playbook = wiring && wiring.playbook;
+    if (!engine || typeof engine.evaluateStrategies !== 'function' || !playbook) return null;
+    const snapshot = engine.evaluateStrategies(playbook, live);
+    const meta = {
+      type:'strategy_consultation', requestedPlan:requested,
+      selectedPlan:snapshot && snapshot.recommendation
+        ? snapshot.recommendation.selected_plan : null,
+      snapshotId:snapshot ? snapshot.snapshot_id : null,
+    };
+    if (!snapshot || snapshot.available !== true) {
+      return answer('strategy_consultation_unavailable', isJP(lang)
+        ? 'まだ戦略を判定できない。燃料窓と復帰予測を確認中。'
+        : 'I cannot judge the strategy yet. I am confirming the fuel window and rejoin forecast.',
+      meta, { confidence:'unavailable', strategySnapshot:snapshot || null });
+    }
+    const recommendation = snapshot.recommendation;
+    const candidate = requested === 'recommendation' ? null : snapshot.candidates[requested];
+    const recId = recommendation && recommendation.selected_plan;
+    const planName = id => isJP(lang)
+      ? ({A:'通常プラン',B:'アンダーカット',C:'オーバーカット'}[id] || '戦略')
+      : ({A:'the normal stop',B:'the undercut',C:'the overcut'}[id] || 'the strategy');
+    const normalTarget = snapshot.candidates.A && snapshot.candidates.A.target_lap;
+    const normalLine = isJP(lang)
+      ? `通常プラン継続${normalTarget ? `、${normalTarget}周を終えてピット予定` : ''}。`
+      : `Continue the normal plan${normalTarget ? ` and stop after lap ${normalTarget}` : ''}.`;
+
+    if (!recommendation) {
+      const held = candidate && candidate.status === 'held_for_latest_evidence';
+      return answer('strategy_consultation_held', isJP(lang)
+        ? `${requested === 'recommendation' ? '推奨' : planName(requested)}はまだ確定できない。最新のペースと復帰位置を確認中。`
+        : `${requested === 'recommendation' ? 'The recommendation' : planName(requested)} is not confirmed yet. I am checking the latest pace and rejoin position.`,
+      meta, { confidence:held ? 'held' : 'unavailable', strategySnapshot:snapshot });
+    }
+
+    if (requested === 'B' && recId !== 'B') {
+      return answer('strategy_undercut', isJP(lang)
+        ? `今はアンダーカット条件未成立。${recId === 'A' ? normalLine : `${planName(recId)}を推す。`}`
+        : `The undercut conditions are not met. ${recId === 'A' ? normalLine : `I recommend ${planName(recId)}.`}`,
+      meta, { strategySnapshot:snapshot });
+    }
+    if (requested === 'C' && recId !== 'C') {
+      return answer('strategy_overcut', isJP(lang)
+        ? `今はオーバーカット条件未成立。${recId === 'A' ? normalLine : `${planName(recId)}を推す。`}`
+        : `The overcut conditions are not met. ${recId === 'A' ? normalLine : `I recommend ${planName(recId)}.`}`,
+      meta, { strategySnapshot:snapshot });
+    }
+
+    const e = recommendation.evidence || {};
+    let reply;
+    if (recId === 'B') {
+      const gap = finite(e.gap_ahead_s), pace = finite(e.player_pace_advantage_s);
+      const pos = integer(e.physical_rejoin_position);
+      reply = isJP(lang)
+        ? `アンダーカット成立、今周ピットを推す。${gap !== null ? `前まで${gap.toFixed(1)}秒、` : ''}${pace !== null ? `こちらが${pace.toFixed(1)}秒速い。` : ''}${pos !== null ? `復帰予測P${pos}。` : ''}`
+        : `Undercut conditions are met; I recommend pitting this lap.${gap !== null ? ` Gap ahead ${gap.toFixed(1)} seconds.` : ''}${pace !== null ? ` We are ${pace.toFixed(1)} seconds faster.` : ''}${pos !== null ? ` Predicted rejoin P${pos}.` : ''}`;
+    } else if (recId === 'C') {
+      const nowPos = integer(e.pit_now_position), nextPos = integer(e.pit_next_lap_position);
+      reply = isJP(lang)
+        ? `オーバーカット成立、もう1周走る案を推す。${nowPos !== null && nextPos !== null ? `今入るとP${nowPos}、次周ならP${nextPos}予測。` : ''}`
+        : `Overcut conditions are met; I recommend one more lap.${nowPos !== null && nextPos !== null ? ` Rejoin is P${nowPos} now versus P${nextPos} next lap.` : ''}`;
+    } else {
+      reply = normalLine;
+    }
+    return answer(requested === 'recommendation' ? 'strategy_recommendation'
+      : (requested === 'A' ? 'strategy_normal' : requested === 'B' ? 'strategy_undercut' : 'strategy_overcut'),
+    reply, meta, { strategySnapshot:snapshot });
   }
 
   function fuelReply(live, lang) {
@@ -272,13 +358,62 @@
       .replace(/シュピート|シューピット/g, 'ピット'));
   }
 
-  function route(input) {
+  // ★2026-09-14 本人・同条件の過去燃費。ライブ実測が無い時だけ使う暫定根拠で、
+  //   実測とは呼ばない。条件照合（series・session種別・レース形式・燃料/タイヤ規則・
+  //   setup・路温）は session-memory.strategyFuelEvidence() の契約に従う。ここでの
+  //   仕事は「現在側の条件を欠けなく渡す」こと——渡さないと全てが不明として
+  //   素通りする（Codex 2026-09-14 P1）。燃料分岐と残り周回の係争判断で共有する。
+  function historyFuelEvidence(input, live, sessionAuthority, currentUserId) {
+    const mem = input && input.sessionMemory && typeof input.sessionMemory === 'object'
+      ? input.sessionMemory : null;
+    const history = input && Array.isArray(input.raceHistory) ? input.raceHistory : [];
+    if (!mem || typeof mem.strategyFuelEvidence !== 'function' || history.length === 0) return null;
+    const liveNow = live && typeof live === 'object' ? live : {};
+    const memIdent = (input && input.memoryIdentity && typeof input.memoryIdentity === 'object')
+      ? input.memoryIdentity : {};
+    const auth = (sessionAuthority && typeof sessionAuthority === 'object') ? sessionAuthority : {};
+    const racePlan = (liveNow.race_plan && typeof liveNow.race_plan === 'object') ? liveNow.race_plan : {};
+    const weather = (liveNow.weather && typeof liveNow.weather === 'object') ? liveNow.weather : {};
+    const pick = (a, b) => (a === undefined || a === null || a === '') ? (b === undefined || b === '' ? null : b) : a;
+    const identity = {
+      userId: pick(currentUserId, memIdent.userId),
+      custId: pick(liveNow.cust_id, memIdent.custId),
+      track: pick(liveNow.track, memIdent.track),
+      car: pick(liveNow.car_model, memIdent.car),
+      carClass: pick(liveNow.car_class, memIdent.carClass),
+      seriesId: Number.isInteger(memIdent.seriesId) ? memIdent.seriesId
+        : (Number.isInteger(auth.series_id) ? auth.series_id : null),
+      sessionType: pick(memIdent.sessionType, pick(auth.session_type, liveNow.session_type)),
+      raceFormat: pick(memIdent.raceFormat, racePlan.kind),
+      fuelRule: pick(memIdent.fuelRule, auth.fuel_rule),
+      tyreRule: pick(memIdent.tyreRule, auth.tyre_rule),
+      setupFingerprint: pick(memIdent.setupFingerprint,
+        auth.setup_fingerprint === 'unknown' ? null : auth.setup_fingerprint),
+      trackTempC: finite(memIdent.trackTempC) !== null ? finite(memIdent.trackTempC)
+        : finite(weather.track_temp_c),
+    };
+    const evidence = mem.strategyFuelEvidence(history, identity, Date.now());
+    return (evidence && evidence.available && finite(evidence.avgFuelPerLap) > 0) ? evidence : null;
+  }
+
+  function routeInner(input) {
     const text = normalizeSttText(String(input && input.text || '').trim());
     const lang = input && input.lang === 'en' ? 'en' : 'ja';
     const live = input && input.live && typeof input.live === 'object' ? input.live : null;
     // PTT の直接質問も snapshot 時刻を検査する。渡されない場合は従来どおり
     // 検査しない（呼び出し側が古さを判断できない時に黙らせないため）。
     const snapshotAgeMs = finite(input && input.snapshotAgeMs);
+    // ★2026-09-14 Codex MD#6 P1：残り周回の保留解除は「値が変わったか」ではなく
+    //   **新しい観測が来たか**で決める。renderer が渡す snapshotId（telemetry 受信の
+    //   識別子）を使い、無ければ live 側の時計で代用する。どちらも無い時は state 側が
+    //   従来の値変化規則へ落ちる（黙って永久保留にしない）。
+    const observationIdNow = (() => {
+      const direct = input && input.snapshotId;
+      if (direct !== null && direct !== undefined && direct !== '') return String(direct);
+      const t = live ? (finite(live.session_time_s) !== null ? finite(live.session_time_s)
+        : finite(live.session_time_remaining_s)) : null;
+      return t === null ? null : 'session_time:' + t;
+    })();
     const sessionAuthority = input && input.sessionAuthority
       && typeof input.sessionAuthority === 'object' ? input.sessionAuthority : null;
     const raceHistory = input && Array.isArray(input.raceHistory) ? input.raceHistory : [];
@@ -333,8 +468,47 @@
       return { handled:false };
     }
 
-    if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood)[。.!！?？]?$/i.test(text)) {
+    // ★2026-09-13：裸の「はい」を合意へ昇格させるのは、直前に何を提案したかが
+    //   session-strategy-state 側に残っている時だけ（pending_proposal・期限内）。
+    //   提案が無い／期限切れなら、これまでどおり相槌のまま何も確定しない
+    //   （8/29の教訓「裸のはいは確定にならない」はここでは崩さない）。
+    // ★Codex差戻し（P2）：「了解」等は既に拾えていたが、提案への最も自然な
+    //   肯定応答である裸の「はい／うん／ええ」がどの分岐にも無く handled:false
+    //   だった（新規24検査は「了解」のみで「はい」は未検証だった）。
+    if (/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood|はい|うん|ええ)[。.!！?？]?$/i.test(text)) {
+      if (strategyModule && strategyState && stratCan(strategyModule, 'resolvePendingProposal')) {
+        const resolved = strategyModule.resolvePendingProposal(strategyState,
+          { accepted: true, at: Date.now() });
+        if (resolved && resolved.accepted && resolved.plan) {
+          // ★2026-09-17 Codex MD#6/#7差戻し：状態機械が実際に適用した結果
+          //   （accepted:true・このdecision_id）をrendererへ返す。Bridge発の提案
+          //   だったかどうかはrenderer側が追跡し、該当する時だけ
+          //   `strategy_decision_response`を送り返す——ここ（純粋な意思決定層）は
+          //   I/Oを持たず、結果を返すだけ。
+          return answer('plan_confirmed', isJP(lang)
+            ? `了解、${resolved.plan.lap}周目でボックス。合意した。`
+            : `Copy. Box on lap ${resolved.plan.lap}, agreed.`,
+          { planId: resolved.proposal.plan_id || null },
+          { resolvedProposal: { decisionId: resolved.proposal.decision_id || null, accepted: true } });
+        }
+      }
       return answer('acknowledgement', isJP(lang) ? '了解。' : 'Copy.');
+    }
+    // 提案への明示的な否定（「いや」「やめて」等）。提案が無ければ通常経路へ流す
+    // （既存の pit 取消・訂正パターンと衝突しないよう、pending_proposal がある時だけ拾う）。
+    if (/^(?:いや|いいえ|やめ(?:て|とく|とこう)?|ちがう|違う|no|not now|not yet)[。.!！?？]?$/i.test(text)) {
+      if (strategyModule && strategyState && stratCan(strategyModule, 'resolvePendingProposal')) {
+        const declined = strategyModule.resolvePendingProposal(strategyState,
+          { accepted: false, at: Date.now() });
+        if (declined && declined.accepted === false) {
+          return answer('plan_declined', isJP(lang)
+            ? '了解、今回は見送り。基準プランを継続。'
+            : 'Copy, holding off. Continuing the baseline plan.', null,
+          { resolvedProposal: {
+              decisionId: (declined.proposal && declined.proposal.decision_id) || null,
+              accepted: false } });
+        }
+      }
     }
     // A future fuel-window instruction is a monitor command, not a request
     // for the current generic fuel total.  Build 279 sent this through
@@ -351,6 +525,10 @@
       const status = fuelWindowStatus(live, lang);
       return answer('fuel_window_status', status.reply);
     }
+    // Driver strategy calls consume the same A/B/C snapshot as proactive
+    // radio.  The LLM must not independently recalculate or rename the plan.
+    const strategyCall = strategyCallAnswer(input, live, text, lang);
+    if (strategyCall) return strategyCall;
     if (/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
       // ★Codex P1-1：`fuelReply()` は `pit_timing_authority`（pit前の全レース距離を
       //   前提にした旧権威）から「◯L不足」「Plan A継続」を作る。実走 18:44:53 は
@@ -361,6 +539,63 @@
       //   **pit済みと分かっているのに answerFuel が無い場合は、`fuelReply()`（pit前提の
       //   旧権威）へ落とさない。** 落とすと、ピット済みなのに「完走まで◯L不足」という
       //   実走18:44:53の誤りをそのまま再現する。答えられないなら fail-closed で黙る。
+      // ★2026-09-14 Yuji指示：session-memory.strategyFuelEvidence()（本人・同条件の
+      //   過去燃費）が answerFuel の梯子へ一度も配線されていなかった（2026-09-13独立
+      //   調査で既知）。ライブ実測が無い時だけ暫定根拠として渡す——ライブが有る限り
+      //   ライブを優先する（「本人履歴を先に見つけたから終了」にしない、Codex 9/13指摘）。
+      const fuelEvidenceNow = historyFuelEvidence(input, live, sessionAuthority, currentUserId);
+      const historyEvidence = fuelEvidenceNow;
+      const historyPerLapL = fuelEvidenceNow ? finite(fuelEvidenceNow.avgFuelPerLap) : null;
+      // ★2026-09-14 Codex差戻し：履歴根拠で答えた時は confidence を推定へ落とし、
+      //   setup違い・路温差は本文にも明示する（本文の「暫定」と機械契約を一致させる）。
+      const historyOverrides = () => {
+        const ev = historyEvidence;
+        const warns = (ev && Array.isArray(ev.warnings)) ? ev.warnings : [];
+        return { confidence: warns.length ? 'estimate_low' : 'estimate',
+          basis: 'memory_previous', evidence_warnings: warns,
+          evidence_date: (ev && ev.recordDate) || null };
+      };
+      const historyDiffNote = () => {
+        const ev = historyEvidence;
+        const warns = (ev && Array.isArray(ev.warnings)) ? ev.warnings : [];
+        if (!warns.length) return '';
+        const bits = [];
+        if (warns.indexOf('setup_mismatch') >= 0) bits.push(isJP(lang) ? 'セットアップが違う' : 'different setup');
+        if (warns.indexOf('track_temp_delta') >= 0) {
+          const d = ev && finite(ev.trackTempDeltaC);
+          bits.push(isJP(lang)
+            ? `路温差${d !== null ? d.toFixed(0) : ''}℃`
+            : `track temp differs by ${d !== null ? d.toFixed(0) : ''}C`);
+        }
+        if (!bits.length) return '';
+        return isJP(lang) ? `（前回とは${bits.join('・')}）` : ` (vs last time: ${bits.join(', ')})`;
+      };
+
+      // ★e09：残り周回が係争中なら、燃料の答えも一方の数を事実として断定しない。
+      //   両方の数で条件付きに答える。再観測が来ていれば解除され、確定値で答える。
+      const lapsStateForFuel = (stratCan(strategyModule, 'lapsRemainingStatus') && strategyState)
+        ? strategyModule.lapsRemainingStatus(strategyState,
+          { laps_remaining: integer(live.finish_crossings_authority), at: Date.now(),
+            observation_id: observationIdNow })
+        : null;
+      if (lapsStateForFuel && lapsStateForFuel.held === true
+          && stratCan(strategyModule, 'answerFuel') && finite(live.fuel) !== null) {
+        const fsH = (live.fuel_strategy && typeof live.fuel_strategy === 'object') ? live.fuel_strategy : {};
+        const a = strategyModule.answerFuel(strategyState, {
+          fuel_l: finite(live.fuel),
+          per_lap_l: finite(fsH.avg_fuel_per_lap) !== null ? finite(fsH.avg_fuel_per_lap)
+            : finite(live.fuel_per_lap_l),
+          history_per_lap_l: historyPerLapL,
+          laps_dispute: { driver_laps: lapsStateForFuel.driver_laps, sdk_laps: lapsStateForFuel.sdk_laps },
+          at: Date.now(),
+        });
+        if (a && a.laps_disputed === true && a.reply) {
+          return answer('fuel_status_laps_disputed', a.reply, null, { confidence: 'held' });
+        }
+      }
+      const lapsForFuel = lapsStateForFuel && lapsStateForFuel.laps_remaining !== null
+        ? integer(lapsStateForFuel.laps_remaining)
+        : integer(live.finish_crossings_authority);
       const pitKnownExecuted = strategyModule && strategyState
         && stratCan(strategyModule, 'pitExecuted') && strategyModule.pitExecuted(strategyState);
       if (pitKnownExecuted) {
@@ -373,13 +608,38 @@
           fuel_l: finite(live.fuel),
           per_lap_l: finite(fs2.avg_fuel_per_lap) !== null ? finite(fs2.avg_fuel_per_lap)
             : finite(live.fuel_per_lap_l),
-          laps_remaining: integer(live.finish_crossings_authority),
+          history_per_lap_l: historyPerLapL,
+          laps_remaining: lapsForFuel,
           at: Date.now(),
         });
+        if (a && a.fuel_basis === 'memory_previous') {
+          return answer('fuel_status', a.reply + historyDiffNote(), null, historyOverrides());
+        }
         return answer('fuel_status', a && a.reply);
       }
-      // pit未実行・または pit実行の可否自体が分からない：唯一の材料は旧経路。
-      return answer('fuel_status', fuelReply(live, lang));
+      // pit未実行・または pit実行の可否自体が分からない：まず旧経路（pit_timing_authority
+      // やendurance計画等、履歴より詳しい権威があればそちらを優先する）。
+      const preFuelReply = fuelReply(live, lang);
+      // ★旧経路が最終の「実測がまだ足りない」catch-allまで落ちた時だけ、履歴フォールバックで
+      //   置き換える——fuelReplyの他の分岐（pit_timing_authority等）を迂回しない。
+      const isWeakestFallback = isJP(lang)
+        ? preFuelReply === '燃料の実測がまだ足りない。クリーンラップを待つ。'
+        : preFuelReply === 'I need clean-lap fuel data before I can calculate the requirement.';
+      if (isWeakestFallback && historyPerLapL !== null && stratCan(strategyModule, 'answerFuel')) {
+        const liveFuel = finite(live.fuel);
+        if (liveFuel !== null) {
+          const a = strategyModule.answerFuel(strategyState, {
+            fuel_l: liveFuel, per_lap_l: null, history_per_lap_l: historyPerLapL,
+            laps_remaining: lapsForFuel, at: Date.now(),
+          });
+          if (a && a.reply) {
+            return a.fuel_basis === 'memory_previous'
+              ? answer('fuel_status', a.reply + historyDiffNote(), null, historyOverrides())
+              : answer('fuel_status', a.reply);
+          }
+        }
+      }
+      return answer('fuel_status', preFuelReply);
     }
     // Build 287 field replay: Google correctly transcribed both
     // "ベストラップ いくつ？" and the punctuation-shifted
@@ -543,8 +803,73 @@
         : (nextLap ? `Box at the end of the next lap, lap ${planLap}.` : `Box at the end of this lap, lap ${planLap}.`));
     }
 
+    // ★2026-09-14 fixture e09：「残り、一周少なく数えてない？ あと9周だよ。」
+    //   driver の申告と SDK の残り周回が食い違う。GAP には gapHeld（保留）が
+    //   あるのに laps_remaining には無く、申告を黙って採用する（＝申告を実測と偽る）か
+    //   無視して旧案を押し通すかしか無かった。保留を立て、**両方の数を区別したまま
+    //   条件付きで答える**。確定は次の観測に委ねる（session-strategy-state 参照）。
+    if (stratCan(strategyModule, 'disputeLapsRemaining') && strategyState) {
+      const claim = text.match(/(?:あと|残り)\s*(\d{1,2})\s*(?:周|ラップ)/)
+        || text.match(/(\d{1,2})\s*laps?\s*(?:to go|left|remaining)/i);
+      const isCommand = /ピット|ボックス|給油|入る|入れ|box\b|pit\b|fuel/i.test(text);
+      const claimLaps = claim ? integer(claim[1]) : null;
+      const sdkLaps = integer(live.finish_crossings_authority);
+      const correctionMark = /少なく|多く|数え|違う|ちがう|間違|おかしい|ずれ|miscount|wrong|off by/i.test(text);
+      // 申告が現在のSDK値と食い違う時、または明示的な訂正表現がある時だけ扱う。
+      // 「あと5周でピットイン」のような指示文は対象外（命令語を含む）。
+      if (claimLaps !== null && !isCommand
+          && (correctionMark || (sdkLaps !== null && claimLaps !== sdkLaps))) {
+        const d = strategyModule.disputeLapsRemaining(strategyState,
+          { driver_laps: claimLaps, laps_remaining: sdkLaps, at: Date.now(),
+            observation_id: observationIdNow });
+        if (d && d.agreed === true) {
+          return answer('laps_remaining_confirmed', isJP(lang)
+            ? `こちらの計測も残り${claimLaps}周。合っている。`
+            : `My count agrees: ${claimLaps} laps remaining.`);
+        }
+        if (d && d.held === true) {
+          const disputeHistoryEvidence = historyFuelEvidence(input, live, sessionAuthority, currentUserId);
+          const fsD = (live.fuel_strategy && typeof live.fuel_strategy === 'object') ? live.fuel_strategy : {};
+          const perLapD = finite(fsD.avg_fuel_per_lap) !== null ? finite(fsD.avg_fuel_per_lap)
+            : finite(live.fuel_per_lap_l);
+          if (isJP(lang) && stratCan(strategyModule, 'answerFuel')
+              && finite(live.fuel) !== null && (perLapD !== null || (disputeHistoryEvidence ? finite(disputeHistoryEvidence.avgFuelPerLap) : null) !== null)) {
+            const a = strategyModule.answerFuel(strategyState, {
+              fuel_l: finite(live.fuel), per_lap_l: perLapD,
+              history_per_lap_l: (disputeHistoryEvidence ? finite(disputeHistoryEvidence.avgFuelPerLap) : null),
+              laps_dispute: { driver_laps: claimLaps, sdk_laps: sdkLaps }, at: Date.now(),
+            });
+            if (a && a.reply && a.laps_disputed === true) {
+              return answer('laps_remaining_disputed', a.reply, null, { confidence: 'held' });
+            }
+          }
+          return answer('laps_remaining_disputed', isJP(lang)
+            ? `こちらの計測は残り${sdkLaps === null ? '不明' : sdkLaps + '周'}、君の申告は${claimLaps}周。`
+              + `どちらか確定するまで${sdkLaps === null ? '' : sdkLaps + '周前提の'}判断は続けない。次の計測で言い直す。`
+            : `My count is ${sdkLaps === null ? 'unavailable' : sdkLaps + ' laps'}, yours is ${claimLaps}. `
+              + 'I will hold that call until the next observation.', null, { confidence: 'held' });
+        }
+      }
+    }
     if (!/(?:トップ|首位|P1|leader)/i.test(text)
         && /残り.{0,5}(?:周|ラップ)|あと.{0,5}(?:周|ラップ)|何周|laps? (?:left|remaining)/i.test(text)) {
+      // 保留中は SDK 値を唯一の事実として断定しない。再観測が来ていれば自動で解ける。
+      if (stratCan(strategyModule, 'lapsRemainingStatus') && strategyState) {
+        const st9 = strategyModule.lapsRemainingStatus(strategyState,
+          { laps_remaining: integer(live.finish_crossings_authority), at: Date.now(),
+            observation_id: observationIdNow });
+        if (st9 && st9.held === true) {
+          return answer('laps_remaining_disputed', isJP(lang)
+            ? `残り周回はまだ確定していない。こちらの計測は${st9.sdk_laps === null ? '不明' : st9.sdk_laps + '周'}、君の申告は${st9.driver_laps}周。次の計測で言い直す。`
+            : `Laps remaining are unresolved: my count ${st9.sdk_laps === null ? 'unavailable' : st9.sdk_laps}, yours ${st9.driver_laps}. I will confirm at the next observation.`,
+            null, { confidence: 'held' });
+        }
+        if (st9 && st9.released === true && st9.laps_remaining !== null) {
+          return answer('laps_remaining', isJP(lang)
+            ? `残り${st9.laps_remaining}周で確定。${st9.matched_driver ? '君の申告どおりだった。' : 'さっきの申告とは違う値だ。'}`
+            : `Confirmed: ${st9.laps_remaining} laps remaining.${st9.matched_driver ? ' Your count was right.' : ''}`);
+        }
+      }
       const crossings = integer(live.finish_crossings_authority);
       if (crossings !== null && crossings >= 1 && crossings <= 10) return answer('laps_remaining', isJP(lang) ? `残り${crossings}周。` : `${crossings} lap${crossings === 1 ? '' : 's'} remaining.`);
       const remaining = finite(live.session_time_remaining_s);
@@ -730,6 +1055,91 @@
       return answer('race_comment_ack', isJP(lang) ? '了解。落ち着いていこう。' : 'Copy. Stay calm and keep it clean.');
     }
     return { handled:false };
+  }
+
+  // ★2026-09-13 Codex差戻し（P1-B）：pending_proposal は「直前に提案したことへの
+  //   応答だけを合意にする」契約のはずだったが、実装は「まだ期限内で失効していない
+  //   提案があるか」しか見ていなかった。提案の直後に無関係な話（「データ入ってる？」
+  //   等）を挟んでから「了解」が来ても、古い提案をそのまま合意させてしまう
+  //   （何を承認したか不明な裸の相槌で作戦を確定させない、という要求に反する）。
+  //   route() 全体を1回だけ包み、**提案を承認／却下する応答以外の何かを
+  //   routeInner が処理したら、その時点で pending_proposal を無効化する**。
+  //   個々の意図分岐（十数箇所ある return の全て）へ失効処理を書いて回らずに
+  //   1箇所へ集約する。handled:false（LLMへ渡る＝別の話）でも同様に無効化する。
+  //
+  // ★2026-09-13 Codex第3回差戻し：上の無効化が広すぎた。12周合意→14周新提案の
+  //   直後に「何周目にピット？」（pit_plan_question）を挟むと、これは提案**その
+  //   ものについての確認**なのに「別の話題」として提案を消してしまい、続く
+  //   「はい」が合意にならなくなった。「固定質問ごとに例外を足す」のではなく、
+  //   pit/戦略の**同じ意図ドメイン**の質問（何周目か・訂正・取消・この周申告・
+  //   燃料・フォーマット）は無効化の対象から外す。answerPitDecision 側も
+  //   pendingProposalMention() で確定Planと保留提案を区別して両方伝えるため、
+  //   曖昧な質問文のまま片方だけを答えて終わらせない。
+  const STRATEGY_TOPIC_INTENTS = new Set([
+    'pit_plan_question', 'pit_plan_amend', 'pit_plan_cancel', 'pit_this_lap',
+    'fuel_status', 'fuel_window_watch', 'fuel_window_status', 'race_format',
+    'strategy_recommendation', 'strategy_normal', 'strategy_undercut', 'strategy_overcut',
+    'strategy_consultation_held', 'strategy_consultation_unavailable',
+  ]);
+  // ★2026-09-13 Codex第6回差戻し対応中に発見：意味判定待ち(awaiting_judgment)の
+  //   間に来た裸の「了解」は resolvePendingProposal のゲートで弾かれ、
+  //   intent='acknowledgement' の中身の無い相槌へ落ちる。これは「別の話題を処理した」
+  //   のではなく「まだ何も判定されていない」だけなので、無効化の対象にしない。
+  //   中身を持たない相槌は、それ単体では話題判定の根拠にならない。
+  const NEUTRAL_NON_TOPIC_INTENTS = new Set(['acknowledgement']);
+  // ★2026-09-13 Codex第4回差戻し→第5回差戻しで撤回：handled:false（ローカルで
+  //   意味が決まらずLLMへ渡る）発話について、いったん「提案・戦略ドメインの語彙
+  //   （ピット/プラン/その案 等）を含むかどうか」で即時無効化を見送る緩和を入れたが、
+  //   Codexが実routerで両方向の反例を示した——「どうして？」（語彙を含まないが
+  //   同じ相談の継続）を誤って無効化し、「その案という英語を教えて」（語彙を含むが
+  //   実際は無関係な語学質問）を誤って温存して次の裸の「はい」が誤確定しうる状態を
+  //   作った。「90秒TTLは古さの上限であり、意味の同一性の根拠にならない」という
+  //   指摘のとおりで、語彙の有無というヒューリスティックそのものを撤回する。
+  //
+  //   代わりに、意味理解を要する分類は`applyProposalClassification()`という
+  //   接続層（このファイルの外、session-strategy-state.js）を用意した——実際の
+  //   分類（confirm/decline/same_topic/unrelated）は将来、実LLM呼出等の外部処理が
+  //   行う設計で、まだ本番経路には接続していない。それが接続されるまでの間、
+  //   handled:false は**フェイルクローズ**（即時無効化）をデフォルトに戻す。
+  //   「同じ相談の継続を誤って切る」より「無関係な相槌でpitを誤確定させる」方が
+  //   レース戦略ツールとして被害が大きいため、未接続の間は安全側に倒す。
+  //
+  // ★2026-09-13 Codex第6回差戻し：上の「フェイルクローズへ戻した」判断自体は
+  //   間違っていないが、「立ち止まって良い理由」にしてはいけないという指摘を受けた。
+  //   handled:false（LLMで意味を判定する）の場合だけ、無効化ではなく
+  //   `markAwaitingJudgment()`（意味判定待ち）へ変える。この間 pending_proposal は
+  //   消えないが、`resolvePendingProposal`側のゲートにより裸の相槌
+  //   （「了解」「はい」）では確定しない——確定させるのは
+  //   `renderer.html`のcallAPI()がLLM応答から抽出し`applyProposalClassification()`へ
+  //   渡す実際の判定結果だけ。判定が届かなければ従来どおり90秒TTLで自然に失効する。
+  //   handled:true で許可リスト外の意図（天気・ベストラップ等、ローカルで確定的に
+  //   別トピックと分かる場合）は引き続き即時無効化する——ここは変えない。
+  function route(input) {
+    const strategy = input && input.strategy && typeof input.strategy === 'object' ? input.strategy : null;
+    const strategyState = strategy && strategy.state ? strategy.state : null;
+    const strategyModule = (strategy && strategy.api)
+      || (typeof globalThis !== 'undefined' ? globalThis.PitwallSessionStrategyState : null)
+      || null;
+    const canTrack = !!(strategyModule && strategyState && stratCan(strategyModule, 'pendingProposal')
+      && stratCan(strategyModule, 'invalidatePendingProposal'));
+    const hadPending = canTrack && !!strategyModule.pendingProposal(strategyState, { at: Date.now() });
+    const result = routeInner(input);
+    const sameTopic = !!(result && (STRATEGY_TOPIC_INTENTS.has(result.intent)
+      || NEUTRAL_NON_TOPIC_INTENTS.has(result.intent)));
+    if (hadPending && !sameTopic && result
+        && result.intent !== 'plan_confirmed' && result.intent !== 'plan_declined') {
+      const stillPending = strategyModule.pendingProposal(strategyState, { at: Date.now() });
+      if (stillPending) {
+        if (result.handled === false && stratCan(strategyModule, 'markAwaitingJudgment')) {
+          strategyModule.markAwaitingJudgment(strategyState,
+            { decision_id: stillPending.decision_id, at: Date.now() });
+        } else {
+          strategyModule.invalidatePendingProposal(strategyState,
+            { at: Date.now(), reason: 'other_exchange' });
+        }
+      }
+    }
+    return result;
   }
 
   // normalizeLapWords を公開するのは検査のため。route() 経由だけでは

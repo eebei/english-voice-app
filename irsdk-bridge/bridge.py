@@ -7,6 +7,7 @@ Usage: python bridge.py
 """
 
 import asyncio
+import copy
 import os
 import sys
 import json
@@ -17,6 +18,7 @@ import struct
 import time
 import math
 import random
+import uuid
 import hashlib
 from datetime import datetime
 import threading
@@ -56,7 +58,7 @@ import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 301 (previous race fuel and persistent record identity)"
+BUILD_VERSION = "Build 302 (strategy proposal agreement, delivery lifecycle, race-scoped decision IDs)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -141,6 +143,8 @@ RAILWAY_URL = "https://english-voice-app-production.up.railway.app"
 # 実走テストで誤検知/未検知が出たら、この2値をチューニングする(Yuji方針・2026-07-14)。
 CORNER_ENTRY_RAD = 0.10   # 約5.7度。これを超えたら「コーナー進入」候補
 CORNER_EXIT_RAD = 0.04    # 約2.3度。これを下回ったら「コーナー脱出」候補（ヒステリシスで閾値付近のふらつき対策）
+STOPPED_WARN_SEC = 10.0   # 前方停止車両は10秒圏内で警告（高速接近時の回避時間を確保）
+STOPPED_REARM_SEC = 12.0  # 10秒境界付近の揺れによる連呼を防ぐ再武装ヒステリシス
 
 # ── 発話タイミング「間合い」ゲート（Version A・2026-07-16 Yuji設計。舵角も加味）──
 # よく喋るAIでなく"間合いを読むエンジニア"。プロアクティブ無線(ラップタイム/ペース/ギャップ等)は
@@ -635,6 +639,45 @@ def _forecast_positions(forecast):
     return {'likely': likely, 'worst': worst}
 
 
+def derive_plan_c_live_conditions(*, battle_context, car_on_pitroad_all,
+                                  pit_now_forecast, pit_next_lap_forecast):
+    """Read Plan C's 3 live-evidence conditions (rival pitted first / clean
+    air / rejoin not worse) from the CURRENT frame's authority data.
+
+    ★2026-09-16 Codex MD#4差戻し：以前はPlan Cの再検証をrecalculationが起きた
+    frameの結果だけに頼り、decision-lock（周目境界で実際に確定・発話する箇所）は
+    それをそのまま信じていた。poll loopの順序はdecision-lockが先・recalculation
+    実行が後なので、frame Nの末尾で証明されたCを frame N+1 の decision-lock が
+    「同一frameの証拠」のつもりで確定していたが、実際には1frame古い証拠だった。
+    交通が塞がった・復帰予測が悪化した等、frame間でCの条件が崩れても検出できない。
+
+    この関数はPlan Cの生条件導出そのものを一箇所へ集約し、①`_pending_recalculations`
+    実行ブロック（既存の再計算）②decision-lock直前の再検証（新規）の両方が、
+    重複実装ではなく**同じ関数**を呼ぶ。示せない条件はNoneのまま返す——「満たされている」
+    と推測しない。
+    """
+    rival_pitted_first = None
+    ahead_idx = (battle_context or {}).get('ahead_car_idx')
+    if (isinstance(ahead_idx, int) and car_on_pitroad_all
+            and ahead_idx < len(car_on_pitroad_all)):
+        rival_pitted_first = bool(car_on_pitroad_all[ahead_idx])
+
+    clean_air = None
+    gap_ahead = (battle_context or {}).get('gap_ahead_s')
+    if isinstance(gap_ahead, (int, float)):
+        clean_air = bool(gap_ahead >= PLAN_C_CLEAN_AIR_GAP_S)
+
+    rejoin_not_worse = None
+    now_pos = _forecast_positions(pit_now_forecast)
+    next_pos = _forecast_positions(pit_next_lap_forecast)
+    if now_pos and next_pos:
+        rejoin_not_worse = bool(next_pos['likely'] <= now_pos['likely']
+                                and next_pos['worst'] <= now_pos['worst'])
+
+    return {'rival_pitted_first': rival_pitted_first, 'clean_air': clean_air,
+            'rejoin_not_worse': rejoin_not_worse}
+
+
 def queue_recalculation(pending, *, reason, dedupe_key, driver_message=None,
                         broadcast_payload=None):
     """Add one pending recalculation.  Same (reason, dedupe_key) is never
@@ -662,8 +705,11 @@ def execute_recalculation(state, item, *, inputs, srs_mod, options_mod):
     old assumption is never silently reused as if it had been re-checked.
     """
     reason = item.get('reason')
+    # ★2026-09-16 Codex MD#5差戻し（P1）：次回再計算のpreviousも「最新の推薦」を使う
+    #   （合意済みactiveではない）——Aの latched fuel-save target 等、推薦同士の連続性は
+    #   合意の有無と無関係に保たれるべき契約のため。
     verdict = options_mod.reevaluate_plans(
-        previous=state.get('active_plan_snapshot'),
+        previous=state.get('recommended_plan_snapshot'),
         snapshot_id='recalc:%s:%s:%s' % (
             reason, inputs.get('session_num'), inputs.get('current_lap')),
         trigger_reason=reason,
@@ -685,7 +731,15 @@ def execute_recalculation(state, item, *, inputs, srs_mod, options_mod):
         fuel_save_recent_l_per_lap=inputs.get('fuel_save_recent_l_per_lap'),
         relative_pace_advantage_s=inputs.get('relative_pace_advantage_s'))
     if verdict.get('available') and isinstance(verdict.get('options'), dict):
-        state = srs_mod.register_active_plan(
+        # ★2026-09-16 Codex MD#5差戻し（P1）：以前はここで`register_active_plan()`を
+        #   無条件に呼んでいた。これはDriver合意より前——B推薦を作った直後、Desktop応答前
+        #   でも`_session_race_state['active_plan']=='B'`になり得た。`plan_fuel_authority`
+        #   等が`active_plan_snapshot`をフォールバックに読むため、未合意の推薦を
+        #   「実行中の計画」として扱い得た。ここは`register_recommended_plan()`
+        #   （合意を意味しない、推薦専用の状態）だけを更新する。合意済みactiveへの昇格は
+        #   `build_strategy_decision()`のcommit（Plan A）と`resolve_strategy_proposal()`の
+        #   accepted（Plan B/C）だけが行う。
+        state = srs_mod.register_recommended_plan(
             state, plan_id=verdict.get('selected_plan'),
             plan_snapshot=verdict['options'],
             snapshot_id=(verdict['options'] or {}).get('snapshot_id'))
@@ -710,6 +764,540 @@ def execute_recalculation(state, item, *, inputs, srs_mod, options_mod):
     return state, verdict
 
 
+def sync_desktop_strategy_options(*, verdict, strategy_options, active_decision_plan,
+                                  strategy_options_decision_sent,
+                                  strategy_options_box_call_sent,
+                                  pending_strategy_proposal=None,
+                                  strategy_options_proposal_sent=False):
+    """Reflect a successful recalculation into the desktop-facing snapshot,
+    and invalidate the decision/box-call lock when the recalculated plan
+    differs from the plan that lock was opened for.
+
+    ★2026-09-16 Codex MD#2差戻し（P1-1・P1-2）への対応:
+
+    P1-1: 以前は `poll_iracing()` 内にこの代入をインライン（`if verdict...: strategy_options =
+    verdict['options']`）で書き、テストは別実装の`apply_fix()`でそれを模倣していた。本番行を
+    削除してもテストは合格し続けるため、証明になっていなかった。**この関数自体が本番の同期行**
+    であり、`poll_iracing()`とテストの両方がこれを呼ぶ。どちらかが削除／改変されれば、
+    もう一方の呼び出し元で振る舞いが変わり、テストが検出する。
+
+    P1-2: `strategy_options`（最新の計算推薦）を更新するだけでは足りない。`strategy_options_decision_sent`
+    と`strategy_options_box_call_sent`は、`active_decision_plan`（Driverへ提示・合意・採点対象になった
+    決定）を基準に立てたフラグであり、再計算だけで進んだ`strategy_options.selected_plan`とは
+    別の状態である。両者が食い違ったまま（＝decisionはPlan Aで開いたのに、strategy_optionsだけ
+    Bへ進んだ）box call判定へ進むと、
+      - 旧Aで`decision_sent=True`・box call未送信のままBへ再計算されると、Bが一度も
+        「decision opened」を経ていないのに旧フラグでBの box call が発火し得る
+        （未提示のPlanを提示済みとして扱う）
+      - 旧Aで既に`box_call_sent=True`だと、Bへ再計算された後もその旧フラグがBの正当な
+        box callを抑止し得る（提示すべきPlanを黙って握りつぶす）
+    のどちらも起きる。再計算が実際にactive_decision_planの選択と異なるPlanへ動いた時だけ、
+    両フラグをFalseへ戻し、decision-lock ブロックがそのPlanのために新しい`active_decision_id`
+    を発行してから box call へ進むようにする（＝一度確定した決定を後から作り直さない、という
+    既存の「捏造しない」契約は保つ——ここで戻すのは decision の中身ではなく、次に新しい決定を
+    開く許可だけ）。Planが変わっていない再計算では何も戻さない（毎回の燃費更新で無駄な
+    reannounceを起こさない）。
+
+    ★2026-09-16 Codex MD#4差戻し（P1-2/P1-3）への対応で`pending_strategy_proposal`
+    （Driver合意待ちの提案。合意されるまでactive_decision_planへ昇格しない）も同じ規律で
+    無効化する。再計算が実際にPlanを動かした時、まだDriverが応答していない古い提案を
+    残したまま新しい提案を出すと、どちらの応答か区別できなくなる——古い提案は無効化し、
+    次のdecision-lockが新しい`decision_id`で提案し直す。
+
+    ★2026-09-16 Codex MD#5差戻し（P1）：Plan**文字**が同じなだけでは「同じ提案」と
+    みなさない。`plan_actionable_signature()`（Plan・対象周・給油量）で比較する。
+    pending B (target_lap=6) に対し再計算が新しいB (target_lap=7) を作った場合も
+    無効化する——古いpendingへの「はい」が現在の中身と違う内容を合意化するのを防ぐ。
+    合意済みで凍結された`active_decision_plan`はこの対象**外**——一度合意したPlanの
+    実行内容は途中で動かさない（凍結の意味そのもの）。実行安全条件が後で崩れた場合は
+    別IDの変更提案／cancelで扱う（未実装・次段の課題）。
+
+    Returns `(strategy_options, strategy_options_decision_sent, strategy_options_box_call_sent,
+    pending_strategy_proposal, strategy_options_proposal_sent)`.
+    """
+    if not (verdict.get('available') and isinstance(verdict.get('options'), dict)):
+        # 入力不足：更新したふりをしない。全部そのまま返す。
+        return (strategy_options, strategy_options_decision_sent, strategy_options_box_call_sent,
+                pending_strategy_proposal, strategy_options_proposal_sent)
+    new_options = verdict['options']
+    new_plan = new_options.get('selected_plan')
+    new_plan_detail = new_options.get('plan_' + str(new_plan).lower()) if new_plan else None
+    new_signature = plan_actionable_signature({
+        'selected_plan': new_plan,
+        'target_lap': (new_plan_detail or {}).get('target_lap'),
+        'add_fuel_l': (new_plan_detail or {}).get('add_fuel_l'),
+        'set_fuel_l': (new_plan_detail or {}).get('set_fuel_l'),
+        # ★2026-09-17 Codex MD#7差戻し（P1-1）：この推薦側signatureが
+        #   `evidence_snapshot_id`/`conditions`を欠いたままだと、pending側
+        #   （`build_strategy_decision()`が両方を埋めて作る）と常に不一致になり、
+        #   同じ根拠のままの再計算でもpendingが毎回破棄されていた。
+        #   `plan_conditions_from_options()`で同じソース（options自体）から
+        #   同じ組み立て方でconditionsを再構築し、snapshot_idも載せる——
+        #   pending側と同じ根拠が生む同じsignatureを保証する。
+        'evidence_snapshot_id': new_options.get('snapshot_id'),
+        'conditions': plan_conditions_from_options(new_options, new_plan),
+    })
+    decided_plan = (active_decision_plan or {}).get('selected_plan')
+    if (strategy_options_decision_sent and decided_plan is not None
+            and new_plan != decided_plan):
+        strategy_options_decision_sent = False
+        strategy_options_box_call_sent = False
+    if (strategy_options_proposal_sent and isinstance(pending_strategy_proposal, dict)
+            and new_signature != plan_actionable_signature(pending_strategy_proposal)):
+        pending_strategy_proposal = None
+        strategy_options_proposal_sent = False
+    return (new_options, strategy_options_decision_sent, strategy_options_box_call_sent,
+            pending_strategy_proposal, strategy_options_proposal_sent)
+
+
+def decide_plan_at_target(strategy_options, *, current_lap, current_fuel_l,
+                          avg_fuel_per_lap_l, pit_now_forecast, pit_next_lap_forecast,
+                          relative_pace_advantage_s, options_mod,
+                          battle_context=None, car_on_pitroad_all=None,
+                          fuel_save_recent_l_per_lap=None):
+    """Decide which Plan to PROPOSE when the decision-lock window arrives.
+
+    ★2026-09-16 Codex MD#3差戻し：この呼び出しは元々`options_mod.decide_at_plan_a()`を
+    無条件に呼んでいた。`decide_at_plan_a()`はA/B専用（Plan Cの証拠を一切見ない）ため、
+    直前の再計算（`sync_desktop_strategy_options()`経由）がPlan Cを成立させ
+    `strategy_options.selected_plan == 'C'`になっていても、この呼び出しが黙ってA/Bへ
+    上書きしていた。
+
+    ★2026-09-16 Codex MD#4差戻し（P1-1）：MD#3の対応は`strategy_options['plan_c']`に
+    ラッチされた証拠（直前の再計算＝1frame前）をそのまま信じていた。poll loopの順序は
+    decision-lockが先・recalculation実行が後なので、それは常に1frame古い。交通が塞がった・
+    復帰予測が悪化した・燃費セーブが外れた場合でも古い証拠でCを確定・発話し得た。
+    ここでは`derive_plan_c_live_conditions()`（現在frameの`battle_context`/pit forecast）
+    と`fuel_save_recent_l_per_lap`（現在frameのクリーン燃費中央値）を使って
+    `decide_plan_c()`を**この瞬間**再実行し、ラッチされたフラグではなく現在frameの証拠で
+    Cを再検証する。再検証に失敗する（証拠が現在は崩れている）場合はA/Bへフォールバックする
+    ——古いCを確定・発話しない。
+    """
+    plan_c_now = strategy_options.get('plan_c') or {}
+    if strategy_options.get('selected_plan') == 'C' and plan_c_now.get('available') is True:
+        live_conditions = derive_plan_c_live_conditions(
+            battle_context=battle_context, car_on_pitroad_all=car_on_pitroad_all,
+            pit_now_forecast=pit_now_forecast, pit_next_lap_forecast=pit_next_lap_forecast)
+        fresh_verdict = options_mod.decide_plan_c(
+            strategy_options,
+            fuel_save_recent_l_per_lap=fuel_save_recent_l_per_lap,
+            rival_pitted_first=live_conditions['rival_pitted_first'],
+            clean_air=live_conditions['clean_air'],
+            rejoin_not_worse=live_conditions['rejoin_not_worse'])
+        if fresh_verdict.get('available'):
+            prior_decision_id = (
+                (strategy_options.get('decision_evidence') or {}).get('decision_id'))
+            return {
+                'available': True, 'selected_plan': 'C',
+                'reason': fresh_verdict.get('reason') or 'plan_c_conditions_proven',
+                'decision_id': prior_decision_id or ('%s:decision-lap:%s' % (
+                    strategy_options.get('snapshot_id'), current_lap)),
+                'plan_b_evidence': None,
+                'plan_c_evidence': fresh_verdict,
+            }
+        # 現在frameでは再検証に失敗した＝ラッチされた証拠は既に崩れている。
+        # 古いCを確定しない——A/Bへフォールバックする。
+    return options_mod.decide_at_plan_a(
+        strategy_options, current_lap=current_lap, current_fuel_l=current_fuel_l,
+        avg_fuel_per_lap_l=avg_fuel_per_lap_l, pit_now_forecast=pit_now_forecast,
+        pit_next_lap_forecast=pit_next_lap_forecast,
+        relative_pace_advantage_s=relative_pace_advantage_s)
+
+
+def plan_conditions_from_options(options, selected_plan):
+    """Reconstruct the Plan-specific key conditions dict PURELY from an
+    `options`/`strategy_options` snapshot — no `battle_context` or other live
+    parameter required.
+
+    ★2026-09-17 Codex MD#7差戻し（発見）：`build_strategy_decision()`と
+    `sync_desktop_strategy_options()`が別々にconditionsを組み立てていた
+    （前者はdecision-lock時点の`option_decision`/`battle_context`から、
+    後者は何も渡さず常にNoneのまま）。新しい推薦側のsignatureが常に
+    `conditions=None`になり、pending側の実conditionsと**必ず**不一致になって
+    いた——毎回の再計算でpendingが無条件に破棄され、B/Cは一度もDriverへ
+    届く前に消えていた。
+
+    `reevaluate_plans()`は`rebuilt['plan_b_evidence']`/`rebuilt['plan_c_evidence']`
+    へ、判定に使った生条件（`decide_plan_b`の`relative_pace_advantage_s`・
+    `conditions_met.rejoin_clear`、`decide_plan_c`の`conditions_met`）を
+    そのまま載せている——`options`（＝strategy_options）だけから、
+    `decide_at_plan_a`/`decide_plan_c`をもう一度呼ばずに再構築できる。
+    この関数を`build_strategy_decision()`と`sync_desktop_strategy_options()`の
+    **両方**が呼ぶことで、同じ根拠なら必ず同じconditionsになることを保証する。
+    """
+    if not isinstance(options, dict) or selected_plan not in ('B', 'C'):
+        return None
+    if selected_plan == 'C':
+        evidence = options.get('plan_c_evidence')
+        return (evidence or {}).get('conditions_met') if isinstance(evidence, dict) else None
+    evidence = options.get('plan_b_evidence')
+    if not isinstance(evidence, dict):
+        return None
+    met = evidence.get('conditions_met') if isinstance(evidence.get('conditions_met'), dict) else {}
+    return {
+        'fuel_window_open': (options.get('plan_b') or {}).get('fuel_window_open'),
+        'relative_pace_advantage_s': evidence.get('relative_pace_advantage_s'),
+        # ★同時に修正：旧コードは存在しない'rejoin_not_worse'キーを読んでいたため
+        #   常にNoneだった。decide_plan_b()の実フィールド名は'rejoin_clear'。
+        'rejoin_not_worse': met.get('rejoin_clear'),
+    }
+
+
+def build_strategy_decision(strategy_options, option_decision, *, lap, class_pos,
+                            cur_snum, race_instance_id, battle_context=None):
+    """Build the frozen plan record for what `decide_plan_at_target()` picked,
+    and say whether it may be promoted immediately or must be proposed first.
+
+    ★2026-09-16 Codex MD#4差戻し（P1-2・P1-3）:
+
+    P1-2: 以前はB/Cも含め、decision-lock相当の箇所がここで即座に`active_decision_id`/
+    `active_decision_plan`へ昇格し、'strategy_plan_decision'という「決定済み」の無線を
+    直接broadcastしていた。Desktopには既に`session-strategy-state.js`の
+    `pending_proposal`/`PW_JUDGE`という提案→合意状態機械があるのに、Bridgeはそれを
+    一切通さず、Driverが実際に合意する前に「決定済み」として扱っていた。
+    ここではPlan A（変更を伴わない既定Plan）だけ即座に確定（'commit'）してよく、
+    B/C（変更の提案）は必ず'propose'——呼び出し側は`active_decision_id`/`plan`を
+    まだ更新せず、Driver合意（新設の`strategy_decision_response`コマンド経由）を
+    待ってから昇格させる。
+
+    P1-3: 同じPlan文字（例えばB）でも、再計算のたびにtarget_lap/set_fuel_l/根拠が
+    変わり得る。box call・pit outcome・summaryが後から読む値はこの関数が返す
+    **凍結された**`plan`レコードであり、その後`strategy_options`（最新の計算推薦、
+    変わり続ける）が動いても、この`plan`レコード自体は変わらない。
+
+    Returns {'mode': 'commit' | 'propose', 'plan': {...}}.
+    """
+    selected = option_decision.get('selected_plan') or 'A'
+    plan = strategy_options.get('plan_' + selected.lower()) or {}
+    # ★2026-09-17 Codex MD#7差戻し：Cは`option_decision.plan_c_evidence`
+    #   （decision-lock直前に現在frameの証拠で再検証した、`decide_plan_at_target`の
+    #   出力——P1-1の鮮度修正そのもの）を使う。Bは以前`battle_context`から直接
+    #   読んでいたが、`decide_plan_b()`の評価結果自体（`evidence.relative_pace_advantage_s`）
+    #   を使う方が自己完結し、かつ`plan_conditions_from_options()`（後で
+    #   sync_desktop_strategy_optionsが同じPlanについて再構築する時に使う関数）と
+    #   同じソースを指す——両者が同じ根拠から出発することを保証する。
+    #   旧実装は存在しない'rejoin_not_worse'キーを読んでおり常にNoneだった
+    #   （実フィールド名は'rejoin_clear'）。
+    if selected == 'C':
+        conditions = (option_decision.get('plan_c_evidence') or {}).get('conditions_met') \
+            if isinstance(option_decision.get('plan_c_evidence'), dict) else None
+    elif selected == 'B':
+        _b_evidence = option_decision.get('plan_b_evidence')
+        _b_met = (_b_evidence or {}).get('conditions_met') if isinstance(_b_evidence, dict) else {}
+        conditions = {
+            'fuel_window_open': (strategy_options.get('plan_b') or {}).get('fuel_window_open'),
+            'relative_pace_advantage_s': (_b_evidence or {}).get('relative_pace_advantage_s'),
+            'rejoin_not_worse': (_b_met or {}).get('rejoin_clear'),
+        } if isinstance(_b_evidence, dict) else None
+    else:
+        conditions = None
+    evidence_snapshot_id = strategy_options.get('snapshot_id')
+    record = {
+        'selected_plan': selected,
+        'reason': option_decision.get('reason'),
+        'decided_at_lap': int(lap) if isinstance(lap, (int, float)) else None,
+        'entry_class_position': class_pos if isinstance(class_pos, int) else None,
+        'target_lap': plan.get('target_lap'),
+        'add_fuel_l': plan.get('add_fuel_l'),
+        'set_fuel_l': plan.get('set_fuel_l'),
+        'session_num': cur_snum,
+        'conditions': conditions,
+        # ★2026-09-17 Codex MD#6差戻し（P1）：`plan_actionable_signature()`は文字＋
+        #   対象周／給油量だけでは足りない——targetとfuelが同じままpace優位やclean air等の
+        #   *根拠*だけ変わった場合を区別できなかった。`evidence_snapshot_id`
+        #   （この提案を計算したrecalculationのsnapshot_id）をsignatureへ含める。
+        'evidence_snapshot_id': evidence_snapshot_id,
+        # ★同P1：以前はacceptedへ昇格した時、この時点の`strategy_options`ではなく
+        #   **昇格処理時点で変動し得るlive変数**をplan_snapshotとしてSession Race State
+        #   へ保存していた。Driverが合意したのはこの瞬間の根拠であって、後から動いた
+        #   ものではない——ここで丸ごと凍結し、accepted昇格はこのコピーだけを使う。
+        'options_snapshot': copy.deepcopy(strategy_options),
+    }
+    # ★2026-09-17 Codex MD#9再差戻し（残件）：`decision_id`は`decide_at_plan_a()`が
+    #   `<snapshot_id>:decision-lap:<lap>`という**内容を一切見ない**文字列として早期に
+    #   割り当てていた。この外側の決定ロック（`poll_iracing()`内、本関数の呼び出し元）は
+    #   `_proposal_suppressed`（拒否済みsignatureと一致）の間、`strategy_options_decision_sent`
+    #   /`strategy_options_proposal_sent`のどちらも立たないため**毎frame再実行**され、
+    #   `battle_context`の変化で`conditions`（rejoin_clear・relative_pace_advantage_s等）が
+    #   frameごとに変わり得るのに、`decision_id`はsnapshot_id＋lapが同じままなので**同一**に
+    #   なっていた（Codex実測：signatureが異なるのに同一decision_idを確認）。
+    #   `decision_id`は採点・学習（pit outcome→次回提案）を結ぶ判断内容のキーであり、
+    #   `dispatch_id`（配送試行の識別・別関心事）で代用できない。ここで`decision_id`を
+    #   **この関数が組み立てた最終contentそのもの**（plan_actionable_signature()と同じ
+    #   6要素）から導出し直す——同じ内容なら同じID、内容が変われば必ず別IDになる。
+    #   人間が読める接頭辞（snapshot_id・lap）は保つが、識別性は中身のhashが担う。
+    _sig = plan_actionable_signature(dict(record, selected_plan=selected))
+    _sig_hash = hashlib.sha1(
+        repr(_sig).encode('utf-8')).hexdigest()[:12]
+    # ★2026-09-17 MD#9残件：同じ内容（同じsig）が別レースで再現しても衝突しない
+    #   よう、レース固有ID（`resolve_race_instance_id()`）を先頭に含める。同じ
+    #   レース内で同じ内容の再提案は引き続き同じdecision_id（dispatch_idが試行を
+    #   区別する）。
+    record['decision_id'] = '%s:%s:decision-lap:%s:sig-%s' % (
+        race_instance_id, evidence_snapshot_id, lap, _sig_hash)
+    return {'mode': 'commit' if selected == 'A' else 'propose', 'plan': record}
+
+
+def plan_actionable_signature(plan_record):
+    """The 'what would actually happen' part of a plan record — used to tell
+    whether two proposals for the SAME Plan letter are actually the same
+    proposal, or a materially different one dressed in the same letter.
+
+    ★2026-09-16 Codex MD#5差戻し（P1）：`sync_desktop_strategy_options()`以前は
+    Plan文字（'B' vs 'B'）だけで「同じ提案」とみなしていた。反例：pending B
+    (target_lap=6, set_fuel_l=20) に対し、再計算が新しいB (target_lap=7) を作っても
+    文字が同じなので古いpendingがそのまま残り、Driverが古い内容へ「はい」と言うのを
+    許してしまう。ここでは対象周・給油量というactionableな中身まで比較する。
+
+    ★2026-09-17 Codex MD#6差戻し（P1）：4要素だけでは、target/fuelが同じまま
+    *根拠*（pace優位・rejoin予測・clean air・rival pitted first・fuel save達成）が
+    変わった場合を見逃す——実行内容は同じでも、その実行を選んだ理由が変わったのは
+    「同じ提案」ではない。`evidence_snapshot_id`（この提案を生んだ再計算のID）と
+    `conditions`（Plan別の主要条件、`build_strategy_decision()`が記録）まで含める。
+    `conditions`は辞書のため、キー順に依存しないタプルへ正規化してから比較する。
+    """
+    if not isinstance(plan_record, dict):
+        return None
+    conditions = plan_record.get('conditions')
+    conditions_key = (tuple(sorted(conditions.items())) if isinstance(conditions, dict)
+                       else None)
+    return (plan_record.get('selected_plan'), plan_record.get('target_lap'),
+            plan_record.get('add_fuel_l'), plan_record.get('set_fuel_l'),
+            plan_record.get('evidence_snapshot_id'), conditions_key)
+
+
+def remember_declined_signature(declined_plan_signatures, signature):
+    """Record a declined actionable signature so the SAME content is not
+    re-proposed every frame while conditions stay unchanged.
+
+    ★2026-09-16 Codex MD#5差戻し（P1）：`resolve_strategy_proposal()`のdeclinedは
+    それまで`pending_strategy_proposal`をNoneに戻すだけで、「何を拒否されたか」の記憶が
+    無かった。条件が変わっていない次frameに、decision-lockが同じB/Cを再提案でき、
+    Driverの拒否を無視した無線反復を生んでいた。ここは拒否済みsignatureを覚え、
+    `is_signature_declined()`が同じsignatureの再提案を止める——単なるframe経過では
+    解除されず、signature自体（対象周・給油量等）が実際に変われば自動的に対象外になる
+    （＝「条件の意味ある変化」で解ける）。上限20件で単純に古い順から捨てる
+    （無限に肥大させない、セッション内の実用上十分な件数）。
+    """
+    if signature is None:
+        return declined_plan_signatures
+    existing = [s for s in declined_plan_signatures if s != signature]
+    return (existing + [signature])[-20:]
+
+
+def is_signature_declined(declined_plan_signatures, signature):
+    return signature is not None and signature in (declined_plan_signatures or [])
+
+
+def resolve_race_instance_id(info, fallback_id=None):
+    """Derive a race-instance identifier that stays stable for the SAME
+    joined race (across Practice/Qualify/Race) and is guaranteed to differ
+    for a DIFFERENT race — even when SessionNum, lap, and Plan conditions
+    happen to repeat.
+
+    ★2026-09-17 MD#9残件（Codex実測①）：`decision_id`は
+    `<evidence_snapshot_id>:decision-lap:<lap>:sig-<hash>`まで内容を反映するよう
+    直したが、`evidence_snapshot_id`自体が`recalc:<reason>:<session_num>:<lap>`
+    ——`session_num`は週末内のPractice/Qualify/Race番号でしかなく、**別レース**でも
+    同じ値を取り得る。同じ周・同じPlan条件が別レースで再現すれば、decision_id全体が
+    一致し、Desktop台帳（decision_idで既存レコードを引き当てる）とサーバー正本
+    （`PRIMARY KEY (owner_key, decision_id)`）が別レースの判断・結果を同一レコードへ
+    混ぜてしまう。
+
+    ★2026-09-17 MD#9再々差戻し（Codex実測②）：初版は`SubSessionID`／`SessionID`が
+    両方取れない時、**bridgeプロセスの起動ごとに一意**な定数へフォールバックしていた。
+    同じプロセスを起動したまま（オフライン／プライベートlobbyのように権威あるIDが
+    存在しない環境で）別レースへ移ると、フォールバック値は同じプロセス起動IDのまま
+    変わらず、decision_idが別レースで衝突する反例をCodexが再現した。
+
+    フォールバックは呼び出し側が**セッション境界のたびに作り直す**値
+    （`race_instance_fallback_id`、`_session_scoped_reset_values()`がSessionNum変更／
+    signature変更の両リセット経路で毎回新しく発行する）を`fallback_id`として渡す
+    契約に変更した——これにより、権威あるIDが無い環境でも「別レースへ移る＝SessionNum
+    が変わる＝新しいfallback」が保証される（同一レース内のP/Q/R境界も含め、
+    セッション境界でリセットされる他の全状態と同じ規律）。
+
+    優先順位：`SubSessionID`（同じ参加中はP/Q/Rを通じて安定・別の参加では必ず別値）
+    → `SessionID`（ホストセッションID、プライベートlobby等の次善）→ 呼び出し側が渡す
+    セッション境界フォールバック（iRacingから権威あるIDが一切取れない時のみ使う）。
+    """
+    sub = info.get('sub_session_id') if isinstance(info, dict) else None
+    if isinstance(sub, int) and sub > 0:
+        return 'sub:%d' % sub
+    weekend_sid = info.get('weekend_session_id') if isinstance(info, dict) else None
+    if isinstance(weekend_sid, int) and weekend_sid > 0:
+        return 'sid:%d' % weekend_sid
+    return 'fallback:%s' % (fallback_id or 'unset')
+
+
+PROPOSAL_DELIVERY_OUTCOMES = frozenset({
+    'audible', 'dropped_before_audible', 'audible_interrupted', 'suppressed_by_user'})
+
+
+def apply_proposal_delivery(pending_strategy_proposal, strategy_options_proposal_sent,
+                            proposal_delivery_state, report):
+    """Apply one Desktop delivery report to the pending Bridge proposal.
+
+    ★2026-09-17 Codex MD#8差戻し（P1）：Bridgeは`broadcast()`がWebSocketキューへ
+    `DISPATCHED`しただけで`strategy_options_proposal_sent=True`にしていた。
+    Desktopは発話前drop・precheck stale・voice off では`onSpoken`を呼ばず、
+    発話開始後の中断ではlocal pendingを取り消すが、**いずれもBridgeへ結果を返して
+    いなかった**。MD#7でsignature同期を直した結果「条件が同じなら再計算でpendingを
+    維持する」が正しく効くようになったため、「次の再計算で自然に無効化される」は
+    もはや成立しない——Bridgeはproposal_sentのまま再送せず、Desktopには合意可能な
+    pendingが無い、という**両者が固まる**状態になる。
+
+    そこで配送を`dispatched/inflight → audible → accepted|declined`として明示する。
+    この関数はDesktopからの配送結果1件を適用する。
+
+    - `audible`：実際にDriverの耳へ届いた。pendingを維持し、状態だけ'audible'へ。
+      ここで初めて「提示済み」が確定する（それ以前はinflight＝送っただけ）。
+    - `dropped_before_audible` / `audible_interrupted` / `suppressed_by_user`：
+      届かなかった、または最後まで聞けていない。pendingとsentを**解除（再武装）**し、
+      条件が現在も有効なら次のdecision-lockが同じ内容を再提案できるようにする。
+      拒否ではないので`declined_plan_signatures`には何も記録しない。
+
+    session＋decision IDの一致は`resolve_strategy_proposal()`と同じfail-closed規律で
+    要求する——確認できない配送結果で現在の保留提案を壊さない。
+
+    Returns `(pending, sent, delivery_state, outcome)` where `outcome` is
+    'audible' | 'released' | 'stale' | 'no_match'.
+    """
+    if not isinstance(pending_strategy_proposal, dict) or not pending_strategy_proposal.get('decision_id'):
+        return (pending_strategy_proposal, strategy_options_proposal_sent,
+                proposal_delivery_state, 'no_match')
+    if report.get('decision_id') != pending_strategy_proposal.get('decision_id'):
+        return (pending_strategy_proposal, strategy_options_proposal_sent,
+                proposal_delivery_state, 'stale')
+    _pending_session = pending_strategy_proposal.get('session_num')
+    _report_session = report.get('session_num')
+    if (not isinstance(_pending_session, int) or not isinstance(_report_session, int)
+            or _pending_session != _report_session):
+        return (pending_strategy_proposal, strategy_options_proposal_sent,
+                proposal_delivery_state, 'stale')
+    # ★2026-09-17 Codex MD#9チェック差戻し（P1-1）：decision_idは
+    #   `<snapshot_id>:decision-lap:<lap>`という決定論的な文字列なので、配送に失敗して
+    #   解除した後、同じ周・同じsnapshotで再提案すると**まったく同じdecision_id**になる。
+    #   そのため「切断中に溜まっていた1回目の失敗通知」が再接続で遅れて届くと、
+    #   2回目に**実際に聞こえて成立している**提案をそのまま解除できた（Codex反例で再現）。
+    #   session＋decision IDでは配送**試行**を区別できない——Bridgeがdispatchのたびに
+    #   発行する`dispatch_id`の一致を要求する。欠落・不一致はstale（fail-closed）。
+    _pending_dispatch = pending_strategy_proposal.get('dispatch_id')
+    _report_dispatch = report.get('dispatch_id')
+    if (not isinstance(_pending_dispatch, str) or not isinstance(_report_dispatch, str)
+            or _pending_dispatch != _report_dispatch):
+        return (pending_strategy_proposal, strategy_options_proposal_sent,
+                proposal_delivery_state, 'stale')
+    _outcome = report.get('outcome')
+    if _outcome not in PROPOSAL_DELIVERY_OUTCOMES:
+        return (pending_strategy_proposal, strategy_options_proposal_sent,
+                proposal_delivery_state, 'stale')
+    if _outcome == 'audible':
+        return pending_strategy_proposal, True, 'audible', 'audible'
+    # 届かなかった／最後まで聞けなかった：再武装する。
+    return None, False, None, 'released'
+
+
+def resolve_strategy_proposal(pending_strategy_proposal, response):
+    """Apply one desktop decision-response to a pending Bridge proposal.
+
+    ★2026-09-16 Codex MD#4差戻し（P1-2）：Driverの合意は、それが**今まさに保留中の
+    その提案**に対する応答である時だけ意味を持つ。`decision_id`が一致しない応答
+    （＝この提案が既に別の再計算で差し替わった後に届いた古い応答、または無関係な
+    提案への応答）は 'stale' として無視し、古い提案を今の合意として扱わない。
+
+    ★2026-09-17 Codex MD#6差戻し（P1）：`decision_id`だけでは足りない——セッション
+    境界（再起動・SessionNum変化）を跨いだ遅延応答が、たまたま同じ文字列の
+    decision_idを持つ別セッションの提案として誤って適用され得る。`session_num`も
+    一致を要求する（応答側が省略した/不明な場合は従来どおりdecision_idだけで判定し、
+    未対応の呼び出し元を壊さない——ただし双方が分かる時は必ず一致させる）。
+
+    Returns (still_pending_proposal, promoted_plan, outcome, declined_signature)
+    where `outcome` is 'accepted' | 'declined' | 'stale' | 'no_match'.
+    `promoted_plan` is the frozen plan dict to install as `active_decision_plan`,
+    set only on 'accepted'. `declined_signature`（P1・declined再送抑止）は
+    'declined' の時だけ、この提案の`plan_actionable_signature()`を返す——
+    呼び出し側はこれを記憶し、同じ内容の再提案を抑止する。
+    """
+    if not isinstance(pending_strategy_proposal, dict) or not pending_strategy_proposal.get('decision_id'):
+        return pending_strategy_proposal, None, 'no_match', None
+    if response.get('decision_id') != pending_strategy_proposal.get('decision_id'):
+        return pending_strategy_proposal, None, 'stale', None
+    # ★2026-09-17 Codex MD#7差戻し（P1-2）：以前は両側にsession_numがある時だけ
+    #   比較し、どちらかが省略／不明ならdecision_idだけで'accepted'まで通していた。
+    #   これは「未対応の呼び出し元を壊さない」ための後方互換だったが、この新しい
+    #   提案→合意コマンドではDesktop側の実装は既にsession_numを運ぶ契約——
+    #   欠落・型不正・不一致のいずれも「一致を確認できない」であり、fail-closedで
+    #   'stale'として拒否する。同一session・同一decision_idの両方が確認できた
+    #   時だけ次のaccepted/declined判定へ進む。
+    _pending_session = pending_strategy_proposal.get('session_num')
+    _response_session = response.get('session_num')
+    if (not isinstance(_pending_session, int) or not isinstance(_response_session, int)
+            or _pending_session != _response_session):
+        return pending_strategy_proposal, None, 'stale', None
+    # ★2026-09-17 Codex MD#9チェック差戻し（P1-1）：応答も配送試行で区別する。
+    #   同一decision_idが再提案され得る以上、前の試行に対する遅延応答を今の提案への
+    #   合意として昇格させない。
+    _pending_dispatch = pending_strategy_proposal.get('dispatch_id')
+    _response_dispatch = response.get('dispatch_id')
+    if (not isinstance(_pending_dispatch, str) or not isinstance(_response_dispatch, str)
+            or _pending_dispatch != _response_dispatch):
+        return pending_strategy_proposal, None, 'stale', None
+    if response.get('accepted') is True:
+        return None, pending_strategy_proposal, 'accepted', None
+    return None, None, 'declined', plan_actionable_signature(pending_strategy_proposal)
+
+
+_pending_strategy_decision_responses = []
+
+
+def _queue_strategy_decision_response(decision_id, accepted, session_num=None,
+                                      dispatch_id=None):
+    """WebSocket cmd 'strategy_decision_response' 受信時に呼ぶ。
+
+    ★2026-09-17 Codex MD#6差戻し（P1）：`session_num`も運ぶ——
+    `resolve_strategy_proposal()`がセッション境界を跨いだ遅延応答を拒否できるように。
+    """
+    global _pending_strategy_decision_responses
+    if isinstance(decision_id, str) and decision_id:
+        _pending_strategy_decision_responses.append(
+            {'decision_id': decision_id, 'accepted': accepted is True,
+             'session_num': session_num, 'dispatch_id': dispatch_id})
+
+
+def _consume_strategy_decision_responses():
+    global _pending_strategy_decision_responses
+    v = _pending_strategy_decision_responses
+    _pending_strategy_decision_responses = []
+    return v
+
+
+_pending_strategy_delivery_reports = []
+
+
+def _queue_strategy_delivery_report(decision_id, outcome, session_num=None,
+                                    dispatch_id=None):
+    """WebSocket cmd 'strategy_decision_delivery' 受信時に呼ぶ。
+
+    ★2026-09-17 Codex MD#8差戻し（P1）：Desktopが実際に発話できたか
+    （audible）／届かなかったか（dropped_before_audible・audible_interrupted・
+    suppressed_by_user）をBridgeへ返す経路。`apply_proposal_delivery()`が
+    これを適用する。
+    """
+    global _pending_strategy_delivery_reports
+    if isinstance(decision_id, str) and decision_id:
+        _pending_strategy_delivery_reports.append(
+            {'decision_id': decision_id, 'outcome': outcome, 'session_num': session_num,
+             'dispatch_id': dispatch_id})
+
+
+def _consume_strategy_delivery_reports():
+    global _pending_strategy_delivery_reports
+    v = _pending_strategy_delivery_reports
+    _pending_strategy_delivery_reports = []
+    return v
+
+
 # ★2026-07-26 Unit E0 v2 (Codex P0-4)：allow-list ゲート（deny-by-default）。
 #   activity!=ACTIVE 中に通す type だけを明示列挙。radio / judge_call / pace_check
 #   等の音声関連は全部 deny。PTT/接続/デバイス等の非音声メタと session_summary
@@ -727,6 +1315,10 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     'session_info',
     # データのみ（音声化されない・renderer 内部で消費）
     'driver_state', 'driver_activity', 'speak_gate', 'lap_sectors', 'pit_timing',
+    # ★2026-09-17 Codex MD#8差戻し（P1）：Driver応答の受領ack。Desktopはackが
+    #   返るまでoutboxに保持して再送するため、非搭乗ゲートで落とすと永久に
+    #   再送し続ける。音声イベントではない。
+    'strategy_decision_ack', 'strategy_delivery_ack',
     # ACTIVE -> DRIVER_HANDOFF の遷移後に生成される耐久引き継ぎパケット。
     # 通常 radio にすると非搭乗ゲートで破棄されるため、データイベントとして届け、
     # renderer が一度だけ本人向け無線へ変換する。
@@ -840,6 +1432,23 @@ def _session_scoped_reset_values():
         #   毎回捨てられていた。ここに置いて両リセット経路から同じ値を取る。
         'active_decision_id': None,
         'active_decision_plan': None,
+        # ★2026-09-16 Codex MD#4差戻し：Driver応答待ちの提案も同じリセット経路で捨てる
+        #   （前セッションの未合意提案を次セッションへ持ち越さない）。
+        'pending_strategy_proposal': None,
+        'strategy_options_proposal_sent': False,
+        # ★2026-09-17 Codex MD#8差戻し（P1）：配送状態（None／'inflight'／'audible'）も
+        #   セッション境界で捨てる。前セッションの「提示済み」を持ち越さない。
+        'strategy_proposal_delivery_state': None,
+        # ★2026-09-17 MD#9チェック差戻し（P1-1）：配送試行の連番。decision_idは
+        #   再提案で同一になるため、試行の区別にはこれが要る。
+        'strategy_proposal_dispatch_seq': 0,
+        # ★2026-09-17 MD#9再々差戻し（Codex実測②）：SubSessionID／SessionIDが
+        #   両方取れない環境向けのdecision_idフォールバック。**この関数が呼ばれる
+        #   たび**（＝SessionNum変更・signature変更のどちらのリセット経路でも）新しく
+        #   発行する——同じbridgeプロセスを起動したまま別レースへ移っても、
+        #   セッション境界を跨げば必ず別のfallback値になる。
+        'race_instance_fallback_id': uuid.uuid4().hex[:12],
+        'declined_plan_signatures': [],
         'gap_authority_records': {},
         'session_setup_fingerprint': '',
         'session_series_id': None,
@@ -1957,6 +2566,24 @@ def parse_session_info(yaml_str):
                     result['series_id'] = int(line.split(':', 1)[1].strip())
                 except Exception:
                     pass
+            # ★2026-09-17 MD#9残件（Codex指摘）：decision_idはsnapshot_id
+            #   （recalc:<reason>:<session_num>:<lap>）＋lap＋内容hashから作るが、
+            #   別レースでも同じsession_num・同じlap・同じPlan条件になり得る——
+            #   実測でIDが衝突し、過去レースと今回の判断・結果が混ざる。iRacingが
+            #   割り当てるレース固有ID（WeekendInfoの`SubSessionID`——同じ参加中は
+            #   Practice/Qualify/Raceを通じて安定し、別の参加では必ず別値になる）を
+            #   decision_idへ含める。オフライン/プライベートlobby等では-1や欠落が
+            #   あり得るため`SessionID`（ホストセッションID）へフォールバックする。
+            elif line.startswith('SubSessionID:'):
+                try:
+                    result['sub_session_id'] = int(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith('SessionID:'):
+                try:
+                    result['weekend_session_id'] = int(line.split(':', 1)[1].strip())
+                except Exception:
+                    pass
             elif line.startswith('SeasonID:'):
                 try:
                     result['season_id'] = int(line.split(':', 1)[1].strip())
@@ -2154,7 +2781,15 @@ def parse_session_info(yaml_str):
                         current_driver['class_rel_speed'] = int(stripped.split(':')[1].strip())
                     except:
                         pass
-                elif stripped.startswith('CustID:'):
+                elif stripped.startswith('UserID:'):
+                    # ★P0-3根本原因修正（2026-09-11 実走Gate 8不合格で判明）：
+                    #   旧コードは'CustID'というキーを探していたが、9/11実走の
+                    #   DriverInfo.Drivers[]では一度も出現せず、cust_idが常に未設定
+                    #   だった（実走ログ review/local-evidence/20260911/ で確認）。
+                    #   コミュニティ資料 https://sajax.github.io/irsdkdocs/yaml/driverinfo.html
+                    #   のフィールド一覧には'UserID'はあるが'CustID'は無く、これが
+                    #   一致する。iRacing社の公式仕様書ではなく参考情報として扱う。
+                    #   「現在のドライバーが不明」を実走全編で返し続けていた根本原因。
                     try:
                         current_driver['cust_id'] = int(stripped.split(':')[1].strip())
                     except:
@@ -2213,7 +2848,7 @@ def parse_session_info(yaml_str):
             result['player_irating'] = player.get('irating', 0)
             result['player_car_class'] = player.get('class_name', '')  # 例"GT3"。記憶のキー(コース×車種)に使う
             result['player_car_model'] = player.get('car_model', '')
-            result['player_cust_id'] = player.get('cust_id')  # ★P0-2：iRacing公式 CustID
+            result['player_cust_id'] = player.get('cust_id')  # ★P0-2：YAML上のフィールド名は'UserID'（'CustID'ではない）。cust_idはBridge内部名
             lic_level = player.get('lic_level', 0)
             lic_sublevel = player.get('lic_sublevel', 0)
             # Convert to SR display (e.g., B 4.50)
@@ -2564,7 +3199,23 @@ def poll_iracing():
     session_series_id = None         # 同一シリーズ判定キー
     race_start_class_pos = None      # ★スタート順位。捕捉できるのは Racing 遷移の一度だけ
     active_decision_id = None        # ★スライス2：提案→pit exit→blend→終了 を貫く結合キー
+    # ★2026-09-17 MD#9再々差戻し：初期値も_session_scoped_reset_values()と同じ発行元から
+    #   取る（起動直後、まだ一度もリセットが走っていない間のフォールバック）。
+    race_instance_fallback_id = _session_scoped_reset_values()['race_instance_fallback_id']
     active_decision_plan = None      # 同上。提案時点の Plan 根拠（採点の相手）
+    # ★2026-09-16 Codex MD#4差戻し（P1-2）：B/Cは合意されるまでactive_decision_id/planへ
+    #   昇格しない。Driver応答待ちの間、この提案自体をここへ保持する（Aは変更を伴わない
+    #   既定Planなので合意往復を要さず、従来どおり即座にactive_decision_planへ昇格する）。
+    pending_strategy_proposal = None
+    strategy_options_proposal_sent = False
+    # ★2026-09-17 Codex MD#8差戻し（P1）：配送のライフサイクルを明示する。
+    #   None（提案なし）→'inflight'（WSへdispatchしただけ）→'audible'（Desktopが
+    #   実際に発話できたとackした）。dispatchだけで「提示済み」にしない。
+    strategy_proposal_delivery_state = None
+    strategy_proposal_dispatch_seq = 0
+    # ★2026-09-16 Codex MD#5差戻し（P1）：拒否された提案のactionable signature
+    # （Plan・対象周・給油量）を覚え、条件が変わらないまま毎frame再提案しない。
+    declined_plan_signatures = []
     last_weather = None              # 直近の実測天候。summary へ「その日の条件」として残す
     session_effective_fuel_capacity_l = None
     pit_enter_time = None   # ピットレーン進入時のSessionTime（所要時間実測用）
@@ -2919,6 +3570,12 @@ def poll_iracing():
                         race_start_class_pos = _sig_reset['race_start_class_pos']
                         active_decision_id = _sig_reset['active_decision_id']
                         active_decision_plan = _sig_reset['active_decision_plan']
+                        pending_strategy_proposal = _sig_reset['pending_strategy_proposal']
+                        strategy_options_proposal_sent = _sig_reset['strategy_options_proposal_sent']
+                        strategy_proposal_delivery_state = _sig_reset['strategy_proposal_delivery_state']
+                        strategy_proposal_dispatch_seq = _sig_reset['strategy_proposal_dispatch_seq']
+                        race_instance_fallback_id = _sig_reset['race_instance_fallback_id']
+                        declined_plan_signatures = _sig_reset['declined_plan_signatures']
                         gap_authority_records = _sig_reset['gap_authority_records']
                         session_setup_fingerprint = _sig_reset['session_setup_fingerprint']
                         session_series_id = _sig_reset['session_series_id']
@@ -3132,6 +3789,12 @@ def poll_iracing():
             race_start_class_pos = _reset['race_start_class_pos']
             active_decision_id = _reset['active_decision_id']
             active_decision_plan = _reset['active_decision_plan']
+            pending_strategy_proposal = _reset['pending_strategy_proposal']
+            strategy_options_proposal_sent = _reset['strategy_options_proposal_sent']
+            strategy_proposal_delivery_state = _reset['strategy_proposal_delivery_state']
+            strategy_proposal_dispatch_seq = _reset['strategy_proposal_dispatch_seq']
+            race_instance_fallback_id = _reset['race_instance_fallback_id']
+            declined_plan_signatures = _reset['declined_plan_signatures']
             gap_authority_records = _reset['gap_authority_records']
             session_setup_fingerprint = _reset['session_setup_fingerprint']
             session_series_id = _reset['session_series_id']
@@ -3155,6 +3818,12 @@ def poll_iracing():
             strategy_options_dispatch = None
             strategy_options_decision_sent = False
             strategy_options_box_call_sent = False
+            pending_strategy_proposal = None
+            strategy_options_proposal_sent = False
+            strategy_proposal_delivery_state = None
+            strategy_proposal_dispatch_seq = 0
+            race_instance_fallback_id = uuid.uuid4().hex[:12]
+            declined_plan_signatures = []
             latest_endurance_plan = None
             pit_enter_lap = None
             # ★P0-1：checker_fuel_freeze も SessionNum 変更で破棄（次セッション誤認防止・単一の真実源から取得）
@@ -4838,10 +5507,20 @@ def poll_iracing():
         # ★Build 266 Phase E：ドライバー申告（会話STT経由）の損傷報告を消費する。
         #   SDK確定と混同しないよう source='driver_report' を必ず付ける
         #   （session_race_state.record_driver_reported_damage が保証）。
+        # ★2026-09-11 Codex差戻し（P1）：話題の一致(parse_driver_reported_damage)
+        #   だけで記録すると、疑問「無くしてる？これ？」や否定「壊れてない」まで
+        #   肯定の損傷申告として扱い、Plan前提を無効化してしまう。
+        #   classify_damage_assertion_role で発話の役割を判定し、
+        #   'assertion'（断定申告）の時だけ記録・再計算をトリガーする。
         for _dmg_text in _consume_driver_damage_reports():
             _dmg_category = session_race_state_mod.parse_driver_reported_damage(_dmg_text)
             if not _dmg_category:
                 log('DRIVER DAMAGE REPORT unclassified (no known phrase matched): ' + _dmg_text)
+                continue
+            _dmg_role = session_race_state_mod.classify_damage_assertion_role(_dmg_text)
+            if _dmg_role != 'assertion':
+                log('DRIVER DAMAGE REPORT not an assertion (role=%s, category=%s): %s'
+                    % (_dmg_role, _dmg_category, _dmg_text))
                 continue
             _session_race_state = session_race_state_mod.record_driver_reported_damage(
                 _session_race_state, category=_dmg_category, raw_text=_dmg_text,
@@ -5504,7 +6183,7 @@ def poll_iracing():
                 stopped_check_ts = _snow
 
             # ── 停止/クラッシュ車両の警告（前方のみ、2秒以上停止確定）──
-            # Yuji方針：5秒圏内に入ったら1回だけ知らせる。IR側スポッターと同じ役割。
+            # Yuji方針：10秒圏内に入ったら1回だけ知らせる。高速接近でも回避時間を残す。
             # ⚠️2026-07-13実走で一度も発火しないバグが発覚：上のバトル検知ループは
             #   「同一周回の車同士でしか判定しない」フィルターが掛かっており（EstTimeが
             #   周回ごとにリセットされる値のため、異なる周回の車を比較すると誤検知するのが理由）、
@@ -5545,7 +6224,7 @@ def poll_iracing():
                                           and pct_diff <= 0.0015
                                           and isinstance(_speech_speed, (int, float))
                                           and _speech_speed >= 5.0)
-                        if _has_lap_time and _sdist > 6.0:
+                        if _has_lap_time and _sdist > STOPPED_REARM_SEC:
                             stopped_armed[idx] = True
                         # ★2026-07-19 停止車警告が一度も鳴らない2つの穴を塞ぐ（Yuji: Monza/Interlagosで
                         #   GT3が数台止まってたのに無言＝クレーム）。
@@ -5554,7 +6233,7 @@ def poll_iracing():
                         #        衝突リスク直結の警告を雑談のクールダウンで殺すのは本末転倒なので撤廃。
                         #   穴2: stopped_armed（6秒圏外で一度"武装"が必要）。目の前でスピンした車は遠距離の観測
                         #        履歴が無く永久に武装できない＝一番危ない瞬間に黙る。未警告の車は武装なしでも鳴らす。
-                        elif ((_has_lap_time and _sdist <= 5.0) or _startup_close) and (stopped_armed.get(idx, False) or idx not in stopped_warned):
+                        elif ((_has_lap_time and _sdist <= STOPPED_WARN_SEC) or _startup_close) and (stopped_armed.get(idx, False) or idx not in stopped_warned):
                             _lastw = stopped_warned.get(idx, 0)
                             if _now2 - _lastw > 20:
                                 # P0 hazard invalidates any older P4 gap sentence
@@ -6396,6 +7075,13 @@ def poll_iracing():
                         _session_race_state, plan_id=(strategy_options.get('selected_plan') or 'A'),
                         plan_snapshot=strategy_options,
                         snapshot_id=strategy_options.get('snapshot_id'))
+                    # ★2026-09-16 Codex MD#5差戻し：推薦チェーンにも起点を与える
+                    #   （最初のrecalculationのpreviousがNoneのまま、latched Plan C目標等の
+                    #   連続性が失われないように）。開始時点は推薦=合意なので両方へ書く。
+                    _session_race_state = session_race_state_mod.register_recommended_plan(
+                        _session_race_state, plan_id=(strategy_options.get('selected_plan') or 'A'),
+                        plan_snapshot=strategy_options,
+                        snapshot_id=strategy_options.get('snapshot_id'))
                     _option_a = strategy_options.get('plan_a') or {}
                     _option_b = strategy_options.get('plan_b') or {}
                     strategy_options_dispatch = broadcast({
@@ -6423,6 +7109,9 @@ def poll_iracing():
             if (isinstance(strategy_options, dict)
                     and strategy_options.get('available')
                     and not strategy_options_decision_sent
+                    # ★2026-09-16 Codex MD#4差戻し：B/Cは提案してDriver応答を待つ。
+                    #   応答が届くまで、まだ確定していない同じ提案を毎frame再送しない。
+                    and not strategy_options_proposal_sent
                     and is_race_session and onTrack and not onPit
                     # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
                     #   新規Plan決定を発話しない。
@@ -6436,7 +7125,11 @@ def poll_iracing():
                 if (isinstance(_decision_target, int)
                         and isinstance(lap, (int, float))
                         and int(lap) >= max(0, _decision_target - 1)):
-                    _option_decision = strategy_options_mod.decide_at_plan_a(
+                    # ★2026-09-16 Codex MD#3/MD#4差戻し：この呼び出しは`decide_plan_at_target()`
+                    #   （本番関数。A/B専用`decide_at_plan_a()`の無条件呼び出しを、Cが
+                    #   現在frameの証拠で再検証できた時だけ迂回する）へ集約した。
+                    #   詳細は同関数のdocstring。
+                    _option_decision = decide_plan_at_target(
                         strategy_options,
                         current_lap=int(lap),
                         current_fuel_l=fuel,
@@ -6446,80 +7139,206 @@ def poll_iracing():
                         pit_now_forecast=_pit_now_forecast,
                         pit_next_lap_forecast=_pit_next_forecast,
                         relative_pace_advantage_s=(
-                            (_battle_context or {}).get('player_pace_advantage_s')))
+                            (_battle_context or {}).get('player_pace_advantage_s')),
+                        options_mod=strategy_options_mod,
+                        battle_context=_battle_context,
+                        car_on_pitroad_all=car_on_pitroad_all,
+                        fuel_save_recent_l_per_lap=session_race_state_mod.recent_median(
+                            clean_fuel_per_lap_hist))
                     _selected_option = _option_decision.get('selected_plan') or 'A'
                     strategy_options['selected_plan'] = _selected_option
                     strategy_options['decision_reason'] = _option_decision.get('reason')
                     strategy_options['decision_evidence'] = _option_decision
-                    _selected_plan = strategy_options.get(
+                    # ★2026-09-16 Codex MD#4差戻し（P1-2・P1-3）：`build_strategy_decision()`
+                    #   （本番関数）が凍結されたplanレコードを作る。'commit'（Plan A、変更なし
+                    #   ＝合意往復不要）はここで即座に`active_decision_plan`へ昇格する。
+                    #   'propose'（Plan B/C、変更の提案）は`pending_strategy_proposal`として
+                    #   保留し、Driverの合意（`strategy_decision_response`コマンド）が届くまで
+                    #   `active_decision_id`/`active_decision_plan`を一切更新しない——box call・
+                    #   pit outcome・summaryは合意済みのものだけを読む契約を守る。
+                    _decision_record = build_strategy_decision(
+                        strategy_options, _option_decision, lap=lap, class_pos=class_pos,
+                        cur_snum=cur_snum,
+                        race_instance_id=resolve_race_instance_id(info, race_instance_fallback_id),
+                        battle_context=_battle_context)
+                    _decision_plan = _decision_record['plan']
+                    # ★2026-09-16 Codex MD#5差戻し（P1）：Driverが同じ内容（Plan・対象周・
+                    #   給油量）を既に拒否している時は、毎frame再提案しない
+                    #   （拒否済みsignatureが実際に変わるまで沈黙する）。commit(A)は
+                    #   対象外——Aは変更提案ではないので拒否という概念自体が無い。
+                    _proposal_suppressed = (
+                        _decision_record['mode'] == 'propose'
+                        and is_signature_declined(
+                            declined_plan_signatures,
+                            plan_actionable_signature(_decision_plan)))
+                    _plan_target = strategy_options.get(
                         'plan_' + _selected_option.lower()) or _decision_a
-                    # ★スライス2：提案時点の根拠をここで確定させる。以降の pit exit /
-                    #   blend / session終了 はこの id へ追記するだけで、後から
-                    #   「何を根拠に選んだのか」を作り直さない（＝捏造しない）。
-                    active_decision_id = _option_decision.get('decision_id')
-                    active_decision_plan = {
-                        'decision_id': active_decision_id,
-                        'selected_plan': _selected_option,
-                        'reason': strategy_options['decision_reason'],
-                        'decided_at_lap': int(lap) if isinstance(lap, (int, float)) else None,
-                        'entry_class_position': class_pos if isinstance(class_pos, int) else None,
-                        'target_lap': _selected_plan.get('target_lap'),
-                        'add_fuel_l': _selected_plan.get('add_fuel_l'),
-                        'set_fuel_l': _selected_plan.get('set_fuel_l'),
-                        'session_num': cur_snum,
-                        'conditions': {
-                            'fuel_window_open': (strategy_options.get('plan_b') or {}).get('fuel_window_open'),
-                            'relative_pace_advantage_s': (
-                                (_battle_context or {}).get('player_pace_advantage_s')),
-                            'rejoin_not_worse': (_option_decision.get('plan_b_evidence') or {}).get('rejoin_not_worse')
-                            if isinstance(_option_decision.get('plan_b_evidence'), dict) else None,
-                        },
-                    }
-                    log('DECISION opened: ' + json.dumps(
-                        active_decision_plan, ensure_ascii=False, separators=(',', ':')))
-                    _decision_dispatch = broadcast({
-                        'type': 'radio',
-                        'trigger': 'strategy_plan_decision',
-                        'selected_plan': _selected_option,
-                        'reason': strategy_options['decision_reason'],
-                        'decision_id': active_decision_id,
-                        'decision_plan': active_decision_plan,
-                        'strategy_options': strategy_options,
-                        'message': (('Undercut window next lap. Hold pace this lap; set %s liters.'
-                                     % _selected_plan.get('set_fuel_l'))
-                                    if _selected_option == 'B' else
-                                    ('Baseline selected. Hold pace; box on the planned lap, set %s liters.'
-                                     % _selected_plan.get('set_fuel_l'))),
-                    })
-                    if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
-                        strategy_options_decision_sent = True
-                    # ★Build 266 Phase E フィックス③：ブリーフィング/ライブPlanが決定した瞬間、
-                    #   必ず active_plan を同フレームで登録する（no_active_plan 誤爆の根絶）。
-                    _prev_active_plan = _session_race_state.get('active_plan')
-                    _session_race_state = session_race_state_mod.register_active_plan(
-                        _session_race_state, plan_id=_selected_option,
-                        plan_snapshot=strategy_options,
-                        snapshot_id=strategy_options.get('snapshot_id'))
-                    # ★トリガー⑥：相手のピット／リジョイン予測でPlan選択が変わった時に再計算する。
-                    if (_prev_active_plan != _selected_option
-                            and session_race_state_mod.should_recalculate(
-                                _session_race_state, 'rival_pit_or_rejoin_shift',
-                                dedupe_key=_option_decision.get('decision_id'))):
-                        # ★Codex差戻し#2：このトリガーだけ別経路で「記録」していると、
-                        #   Plan C を含む再評価を通らない。他の6トリガーと同じ待ち行列へ
-                        #   積み、下の実行ブロックで同じ入力・同じ手順で再計算する。
-                        _pending_recalculations = queue_recalculation(
-                            _pending_recalculations, reason='rival_pit_or_rejoin_shift',
-                            dedupe_key=_option_decision.get('decision_id'))
-                    log('STRATEGY OPTIONS decision: snapshot_id=%s selected=%s '
-                        'reason=%s decision_id=%s dispatch=%s evidence=%s'
+                    _radio_message = (
+                        ('Undercut window next lap. Hold pace this lap; set %s liters.'
+                         % _plan_target.get('set_fuel_l'))
+                        if _selected_option == 'B' else
+                        ('Extending the stint. Save fuel to lap %s; set %s liters.'
+                         % (_plan_target.get('target_lap'), _plan_target.get('set_fuel_l')))
+                        if _selected_option == 'C' else
+                        ('Baseline selected. Hold pace; box on the planned lap, set %s liters.'
+                         % _plan_target.get('set_fuel_l')))
+                    if _proposal_suppressed:
+                        log('STRATEGY PROPOSAL suppressed (already declined this signature): '
+                            + json.dumps(_decision_plan, ensure_ascii=False, separators=(',', ':')))
+                    elif _decision_record['mode'] == 'commit':
+                        # ★スライス2：提案時点の根拠をここで確定させる。以降の pit exit /
+                        #   blend / session終了 はこの id へ追記するだけで、後から
+                        #   「何を根拠に選んだのか」を作り直さない（＝捏造しない）。
+                        active_decision_id = _decision_plan['decision_id']
+                        active_decision_plan = _decision_plan
+                        log('DECISION opened: ' + json.dumps(
+                            active_decision_plan, ensure_ascii=False, separators=(',', ':')))
+                        _decision_dispatch = broadcast({
+                            'type': 'radio', 'trigger': 'strategy_plan_decision',
+                            'selected_plan': _selected_option,
+                            'reason': strategy_options['decision_reason'],
+                            'decision_id': active_decision_id,
+                            'decision_plan': active_decision_plan,
+                            'strategy_options': strategy_options, 'message': _radio_message,
+                        })
+                        if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
+                            strategy_options_decision_sent = True
+                        # ★Build 266 Phase E フィックス③：ブリーフィング/ライブPlanが決定した瞬間、
+                        #   必ず active_plan を同フレームで登録する（no_active_plan 誤爆の根絶）。
+                        _prev_active_plan = _session_race_state.get('active_plan')
+                        _session_race_state = session_race_state_mod.register_active_plan(
+                            _session_race_state, plan_id=_selected_option,
+                            plan_snapshot=strategy_options,
+                            snapshot_id=strategy_options.get('snapshot_id'))
+                        # ★トリガー⑥：相手のピット／リジョイン予測でPlan選択が変わった時に再計算する。
+                        if (_prev_active_plan != _selected_option
+                                and session_race_state_mod.should_recalculate(
+                                    _session_race_state, 'rival_pit_or_rejoin_shift',
+                                    dedupe_key=_option_decision.get('decision_id'))):
+                            # ★Codex差戻し#2：このトリガーだけ別経路で「記録」していると、
+                            #   Plan C を含む再評価を通らない。他の6トリガーと同じ待ち行列へ
+                            #   積み、下の実行ブロックで同じ入力・同じ手順で再計算する。
+                            _pending_recalculations = queue_recalculation(
+                                _pending_recalculations, reason='rival_pit_or_rejoin_shift',
+                                dedupe_key=_option_decision.get('decision_id'))
+                    else:
+                        # 'propose'：Driverの合意が届くまでactive_decision_id/planは
+                        # 更新しない。Desktop側の提案→合意状態機械（`proposePlan`/
+                        # `PW_JUDGE`）がこの提案をLunaの発話として扱い、確定後に
+                        # `strategy_decision_response`で送り返す。
+                        # ★2026-09-17 MD#9チェック差戻し（P1-1）：配送試行ごとに一意なID。
+                        #   decision_idは同じ周・同じsnapshotなら再提案でも同一になるため、
+                        #   これが無いと前の試行への遅延通知が今の提案を壊す。
+                        strategy_proposal_dispatch_seq += 1
+                        _dispatch_id = '%s#%d' % (_decision_plan['decision_id'],
+                                                  strategy_proposal_dispatch_seq)
+                        _decision_plan = dict(_decision_plan, dispatch_id=_dispatch_id)
+                        pending_strategy_proposal = _decision_plan
+                        log('PROPOSAL opened (awaiting driver agreement): ' + json.dumps(
+                            pending_strategy_proposal, ensure_ascii=False, separators=(',', ':')))
+                        _decision_dispatch = broadcast({
+                            'type': 'radio', 'trigger': 'strategy_plan_proposal',
+                            'selected_plan': _selected_option,
+                            'reason': strategy_options['decision_reason'],
+                            'decision_id': pending_strategy_proposal['decision_id'],
+                            'dispatch_id': _dispatch_id,
+                            'decision_plan': pending_strategy_proposal,
+                            'strategy_options': strategy_options, 'message': _radio_message,
+                        })
+                        if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
+                            # ★2026-09-17 Codex MD#8差戻し（P1）：DISPATCHEDは
+                            #   「WebSocketキューへ入れた」だけで、Driverの耳へ届いた
+                            #   証拠ではない。sentは「この提案がチャネルを占有している」
+                            #   （＝毎frame再提案しない）意味に留め、提示済みの確定は
+                            #   Desktopの'audible'ackを受けた時だけ行う。届かなければ
+                            #   `apply_proposal_delivery()`がpending/sentを解除する。
+                            strategy_options_proposal_sent = True
+                            strategy_proposal_delivery_state = 'inflight'
+                    log('STRATEGY OPTIONS decision: snapshot_id=%s selected=%s mode=%s '
+                        'suppressed=%s reason=%s decision_id=%s dispatch=%s evidence=%s'
                         % (strategy_options.get('snapshot_id'),
-                           _selected_option,
+                           _selected_option, _decision_record['mode'], _proposal_suppressed,
                            strategy_options.get('decision_reason'),
                            _option_decision.get('decision_id'),
-                           _decision_dispatch,
+                           None if _proposal_suppressed else _decision_dispatch,
                            json.dumps(_option_decision, ensure_ascii=False,
                                       separators=(',', ':'))))
+            # ★2026-09-16 Codex MD#4差戻し（P1-2）：Desktopから届いたDriver応答（websocket
+            #   cmd 'strategy_decision_response'）をここで消費する。`resolve_strategy_proposal()`
+            #   （本番関数）が保留中の提案と同じdecision_idの時だけ昇格させ、無関係／
+            #   陳腐化した応答は無視する。ここで初めて`active_decision_id`/`active_decision_plan`
+            #   が更新される——box call・pit outcome・summaryはこの後だけそれらを読む。
+            # ★2026-09-17 Codex MD#8差戻し（P1）：Driver応答より先に配送結果を消費する。
+            #   届かなかった提案（drop・precheck stale・voice off・中断）はここで
+            #   pending/sentを解除し、条件が現在も有効なら次のdecision-lockが同じ内容を
+            #   再提案できるようにする。audibleを受けた時だけ「提示済み」を確定する。
+            for _delivery_report in _consume_strategy_delivery_reports():
+                (pending_strategy_proposal, strategy_options_proposal_sent,
+                 strategy_proposal_delivery_state, _delivery_outcome) = apply_proposal_delivery(
+                    pending_strategy_proposal, strategy_options_proposal_sent,
+                    strategy_proposal_delivery_state, _delivery_report)
+                # ★2026-09-17 Codex MD#9差戻し（P1-1）：Desktopは配送結果もoutboxへ保持し、
+                #   ackが返るまで接続復帰のたびに再送する（切断中に発話失敗した提案が
+                #   Bridgeへ永久に届かず、inflightのまま固まるのを防ぐ）。報告された
+                #   outcomeをそのまま返し、Desktopがそのキーだけを外せるようにする。
+                #   適用できなかった場合（stale/no_match）もackする——既に処理済み／
+                #   対象外で、再送しても意味が無いことを伝える唯一の手段。
+                broadcast({'type': 'strategy_delivery_ack',
+                           'decision_id': _delivery_report.get('decision_id'),
+                           'session_num': _delivery_report.get('session_num'),
+                           'dispatch_id': _delivery_report.get('dispatch_id'),
+                           'outcome': _delivery_report.get('outcome'),
+                           'applied': _delivery_outcome})
+                log('STRATEGY DELIVERY resolved: decision_id=%s reported=%s outcome=%s state=%s'
+                    % (_delivery_report.get('decision_id'), _delivery_report.get('outcome'),
+                       _delivery_outcome, strategy_proposal_delivery_state))
+            for _decision_response in _consume_strategy_decision_responses():
+                (pending_strategy_proposal, _promoted_plan, _resolve_outcome,
+                 _declined_signature) = resolve_strategy_proposal(
+                    pending_strategy_proposal, _decision_response)
+                strategy_options_proposal_sent = pending_strategy_proposal is not None
+                if pending_strategy_proposal is None:
+                    strategy_proposal_delivery_state = None
+                # ★2026-09-17 Codex MD#8差戻し（P1）：Desktopは応答をoutboxへ保持し、
+                #   ack が返るまで再送する（切断中に確定した合意を失わないため）。
+                #   受理・拒否だけでなくstale/no_matchもackする——Bridgeが既に
+                #   処理済み（＝再送しても意味が無い）ことをDesktopへ伝える唯一の手段。
+                #   同じdecision_idの重複応答は2回目以降no_matchとなり冪等。
+                broadcast({'type': 'strategy_decision_ack',
+                           'decision_id': _decision_response.get('decision_id'),
+                           'session_num': _decision_response.get('session_num'),
+                           'dispatch_id': _decision_response.get('dispatch_id'),
+                           'outcome': _resolve_outcome})
+                if _resolve_outcome == 'declined':
+                    # ★2026-09-16 Codex MD#5差戻し（P1）：拒否された内容（Plan・対象周・
+                    #   給油量）を覚え、次frameに同じ内容を毎frame再提案しない。
+                    declined_plan_signatures = remember_declined_signature(
+                        declined_plan_signatures, _declined_signature)
+                if _resolve_outcome == 'accepted' and isinstance(_promoted_plan, dict):
+                    active_decision_id = _promoted_plan['decision_id']
+                    active_decision_plan = _promoted_plan
+                    strategy_options_decision_sent = True
+                    _prev_active_plan = _session_race_state.get('active_plan')
+                    # ★2026-09-17 Codex MD#6差戻し（P1）：ここで**その時点のlive
+                    #   `strategy_options`**をplan_snapshotとして保存していた。Driverが
+                    #   合意したのは提案時点の根拠であって、応答が届くまでの間に動いた
+                    #   ものではない——`_promoted_plan['options_snapshot']`
+                    #   （`build_strategy_decision()`が凍結したコピー）を使う。
+                    _frozen_options = (
+                        _promoted_plan.get('options_snapshot') or strategy_options)
+                    _session_race_state = session_race_state_mod.register_active_plan(
+                        _session_race_state, plan_id=_promoted_plan['selected_plan'],
+                        plan_snapshot=_frozen_options,
+                        snapshot_id=_frozen_options.get('snapshot_id'))
+                    if (_prev_active_plan != _promoted_plan['selected_plan']
+                            and session_race_state_mod.should_recalculate(
+                                _session_race_state, 'rival_pit_or_rejoin_shift',
+                                dedupe_key=_promoted_plan['decision_id'])):
+                        _pending_recalculations = queue_recalculation(
+                            _pending_recalculations, reason='rival_pit_or_rejoin_shift',
+                            dedupe_key=_promoted_plan['decision_id'])
+                log('STRATEGY DECISION RESPONSE resolved: decision_id=%s outcome=%s'
+                    % (_decision_response.get('decision_id'), _resolve_outcome))
             # ★Build 266 Codex差戻し#2：待ち行列に積まれた再計算を、ここで実行する。
             #   この位置は fuel_strategy / _fuel_strategy_live / ピットリジョイン予測が
             #   全て今フレームの値に更新された後である。トリガーが立った場所（損傷検出・
@@ -6528,25 +7347,15 @@ def poll_iracing():
             #   ここで実際に Plan A/B/C を組み直し、選び直し、active_plan を更新する。
             if _pending_recalculations:
                 # ── Plan C の成立条件を実測から導く ──────────────────────
-                # ①前走車が先にピットした：同クラス前走車が今ピットロード上にいる
-                _recalc_rival_pitted = None
-                _recalc_ahead_idx = (_battle_context or {}).get('ahead_car_idx')
-                if (isinstance(_recalc_ahead_idx, int) and car_on_pitroad_all
-                        and _recalc_ahead_idx < len(car_on_pitroad_all)):
-                    _recalc_rival_pitted = bool(car_on_pitroad_all[_recalc_ahead_idx])
-                # ②クリーンエア：前走車とのギャップが汚れた空気の外にある
-                _recalc_clean_air = None
-                _recalc_gap_ahead = (_battle_context or {}).get('gap_ahead_s')
-                if isinstance(_recalc_gap_ahead, (int, float)):
-                    _recalc_clean_air = bool(_recalc_gap_ahead >= PLAN_C_CLEAN_AIR_GAP_S)
-                # ③リジョインが悪化しない：延長後の予測が現状より悪くない
-                _recalc_rejoin_ok = None
-                _recalc_now_pos = _forecast_positions(_pit_now_forecast)
-                _recalc_next_pos = _forecast_positions(_pit_next_forecast)
-                if _recalc_now_pos and _recalc_next_pos:
-                    _recalc_rejoin_ok = bool(
-                        _recalc_next_pos['likely'] <= _recalc_now_pos['likely']
-                        and _recalc_next_pos['worst'] <= _recalc_now_pos['worst'])
+                # ★2026-09-16 Codex MD#4差戻し：`derive_plan_c_live_conditions()`
+                #   （本番関数）へ集約した。decision-lock直前の再検証（下）と
+                #   同じ関数を呼ぶ——重複実装で片方だけ直し忘れることを防ぐ。
+                _plan_c_live = derive_plan_c_live_conditions(
+                    battle_context=_battle_context, car_on_pitroad_all=car_on_pitroad_all,
+                    pit_now_forecast=_pit_now_forecast, pit_next_lap_forecast=_pit_next_forecast)
+                _recalc_rival_pitted = _plan_c_live['rival_pitted_first']
+                _recalc_clean_air = _plan_c_live['clean_air']
+                _recalc_rejoin_ok = _plan_c_live['rejoin_not_worse']
                 _recalc_crossings = None
                 if isinstance(_fuel_strategy_live, dict):
                     _recalc_crossings = _fuel_strategy_live.get(
@@ -6599,6 +7408,25 @@ def poll_iracing():
                         _session_race_state, _recalc_item, inputs=_item_inputs,
                         srs_mod=session_race_state_mod,
                         options_mod=strategy_options_mod)
+                    # ★2026-09-16 Codex MD#1差戻し→MD#2差戻し：desktop向け`strategy_options`
+                    #   （telemetry payloadのフィールド、6409で一度だけラッチされる）が
+                    #   Bridge内部の再計算（`_session_race_state['active_plan_snapshot']`）と
+                    #   同期していなかった問題と、同期させただけでは
+                    #   `strategy_options_decision_sent`/`strategy_options_box_call_sent`
+                    #   （Driverへ提示・合意・採点対象になった「active decision」を基準にした
+                    #   フラグ）が古いPlanのまま残り、誤ったbox call・旧Planへの誤採点を
+                    #   起こし得る問題——の両方を、本番関数`sync_desktop_strategy_options()`
+                    #   （このpoll loopとテストが同じ関数を呼ぶ。詳細は同関数のdocstring）へ
+                    #   集約した。
+                    (strategy_options, strategy_options_decision_sent,
+                     strategy_options_box_call_sent, pending_strategy_proposal,
+                     strategy_options_proposal_sent) = sync_desktop_strategy_options(
+                        verdict=_recalc_verdict, strategy_options=strategy_options,
+                        active_decision_plan=active_decision_plan,
+                        strategy_options_decision_sent=strategy_options_decision_sent,
+                        strategy_options_box_call_sent=strategy_options_box_call_sent,
+                        pending_strategy_proposal=pending_strategy_proposal,
+                        strategy_options_proposal_sent=strategy_options_proposal_sent)
                     log(session_race_state_mod.format_recalculation_trace(
                         _session_race_state['last_recalculation']).replace('\n', ' | '))
                     log('STRATEGY RECALCULATION OUTCOME reason=%s available=%s '
@@ -6623,38 +7451,48 @@ def poll_iracing():
                         })
                 _pending_recalculations = []
 
-            # A selected Plan B creates a second, mandatory trigger at its target lap.
-            # 現行契約では確定したPlan A/Bの両方を対象周の短いbox callへ接続する。
+            # A selected Plan B/C creates a second, mandatory trigger at its target lap.
+            # 現行契約では確定したPlan A/B/Cのすべてを対象周の短いbox callへ接続する。
             # 事前決定済みPlanは対象周に一度だけ短いbox callを出す。
-            if (isinstance(strategy_options, dict)
+            # ★2026-09-16 Codex MD#3差戻し：ここは元々('A','B')限定で、Cが正しく決定
+            #   されるようになっても(上のdecision-lock修正)、Cには一生box callが
+            #   出ない欠陥が別にあった（decide_at_plan_aへのC上書きに隠れて未発見だった）。
+            #   Cのtarget_lapもA/Bと同じ意味（その周にボックス）なので同じ経路で良い。
+            # ★2026-09-16 Codex MD#4差戻し（P1-3）：以前はここで最新の`strategy_options`
+            #   （常に変わり続ける計算推薦）を読んでいた。同じPlan文字（例えばB）のままでも
+            #   再計算のたびにtarget_lap/set_fuel_lが変わり得るため、合意した内容と
+            #   box callで指示する内容がずれ得た。合意済みで凍結された`active_decision_plan`
+            #   だけを読む——`strategy_options_decision_sent`は、A（即時確定）またはB/Cが
+            #   実際にDriver合意を経た（`resolve_strategy_proposal`が'accepted'を返した）
+            #   時だけTrueになる契約なので、このゲート自体が「合意済み」を保証する。
+            if (isinstance(active_decision_plan, dict)
                     and strategy_options_decision_sent
-                    and strategy_options.get('selected_plan') in ('A', 'B')
+                    and active_decision_plan.get('selected_plan') in ('A', 'B', 'C')
                     and not strategy_options_box_call_sent
                     and is_race_session and onTrack and not onPit
                     # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
                     #   予定していたBox callも発話しない。
                     and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
-                _box_selected = strategy_options.get('selected_plan') or 'A'
-                _box_plan = strategy_options.get('plan_' + _box_selected.lower()) or {}
-                _box_target = _box_plan.get('target_lap')
+                _box_selected = active_decision_plan.get('selected_plan') or 'A'
+                _box_target = active_decision_plan.get('target_lap')
                 if (isinstance(_box_target, int)
                         and isinstance(lap, (int, float))
                         and int(lap) >= _box_target):
-                    _box_evidence = strategy_options.get('decision_evidence') or {}
                     _box_dispatch = broadcast({
                         'type': 'radio',
                         'trigger': 'strategy_plan_box_call',
                         'selected_plan': _box_selected,
-                        'decision_id': _box_evidence.get('decision_id'),
+                        'decision_id': active_decision_plan.get('decision_id'),
+                        'decision_plan': active_decision_plan,
                         'strategy_options': strategy_options,
                         'message': ('Box this lap. Set %s liters.'
-                                    % _box_plan.get('set_fuel_l')),
+                                    % active_decision_plan.get('set_fuel_l')),
                     })
                     if _box_dispatch is True or _box_dispatch == 'DISPATCHED':
                         strategy_options_box_call_sent = True
                     log('STRATEGY OPTIONS box call: decision_id=%s target_lap=%s '
                         'actual_lap=%s dispatch=%s'
-                        % (_box_evidence.get('decision_id'), _box_target,
+                        % (active_decision_plan.get('decision_id'), _box_target,
                            int(lap), _box_dispatch))
             _pit_phase_state = derive_pit_phase(
                 lifecycle_state, onPit, lap, pit_exit_lap)
@@ -7213,6 +8051,30 @@ async def handler(websocket):
                     if isinstance(_text, str) and _text.strip():
                         _queue_driver_damage_report(_text)
                         log('DRIVER DAMAGE REPORT queued: ' + _text.strip())
+                elif cmd == 'strategy_decision_response':
+                    # ★2026-09-16 Codex MD#4差戻し（P1-2）：DesktopのLuna会話（提案→合意
+                    #   状態機械）でDriverが戦略提案に応答した結果をBridgeへ送り返す。
+                    #   Bridgeはこれを見るまでactive_decision_id/planへ昇格しない
+                    #   （＝box call・pit outcome・summaryの正本にしない）。
+                    _decision_id = msg.get('decision_id')
+                    _accepted = msg.get('accepted')
+                    _response_session_num = msg.get('session_num')
+                    _queue_strategy_decision_response(
+                        _decision_id, _accepted, session_num=_response_session_num,
+                        dispatch_id=msg.get('dispatch_id'))
+                    log('STRATEGY DECISION RESPONSE queued: decision_id=%s accepted=%s '
+                        'session_num=%s' % (_decision_id, _accepted, _response_session_num))
+                elif cmd == 'strategy_decision_delivery':
+                    # ★2026-09-17 Codex MD#8差戻し（P1）：Desktopの配送結果
+                    #   （audible／dropped_before_audible／audible_interrupted／
+                    #   suppressed_by_user）。audibleを受けるまで「提示済み」を確定せず、
+                    #   失敗ではpending/sentを解除して再提案できるようにする。
+                    _queue_strategy_delivery_report(
+                        msg.get('decision_id'), msg.get('outcome'),
+                        session_num=msg.get('session_num'),
+                        dispatch_id=msg.get('dispatch_id'))
+                    log('STRATEGY DELIVERY queued: decision_id=%s outcome=%s session_num=%s'
+                        % (msg.get('decision_id'), msg.get('outcome'), msg.get('session_num')))
                 elif cmd == "ptt_stop":
                     stop_ptt_record()
                 elif cmd == 'ptt_setup':

@@ -36,10 +36,13 @@ function grabFn(name, isAsync) {
 }
 
 const fnNames = ['callAPI', 'recordLunaTurn', 'ensureConversationBox',
-  'saveConversationBox', 'conversationSessionKey', 'addMsg', 'convoLog'];
+  'saveConversationBox', 'conversationSessionKey', 'addMsg', 'convoLog',
+  'stripProposalJudgeTag'];
 const fnSrc = fnNames.map(n => grabFn(n, n === 'callAPI'));
 check('rendererの再生対象関数を取得できる', fnSrc.every(Boolean),
   fnSrc.map((v, i) => v ? 'ok' : fnNames[i]));
+const judgeConstDecl = (renderer.match(/const PW_JUDGE_TAG_START = [\s\S]*?;/) || [''])[0]
+  + '\n' + (renderer.match(/const PW_JUDGE_TAG_RE = [\s\S]*?;/) || [''])[0];
 
 const decls = (renderer.match(/const CONVO_BOX_KEY='[^']+';/) || [''])[0]
   + '\n' + (renderer.match(/let _convoBox=null;/) || [''])[0];
@@ -89,6 +92,8 @@ function contextFor(entries) {
     hasTelemetryOwnedVehicleClaim: () => false,
     normalizeLunaSpeech: t => t,
     speak: t => spoken.push(String(t)), speakReplyChunk: t => spoken.push(String(t)),
+    // 提案state（session-strategy-state.js）はこの再生テストの関心事ではない。
+    applyProposalJudgeTag: () => {},
     pushMsg(){},
     sel: 'LunaJP', selMode: 'race', userName: 'Yuji', messages: [],
     turns: 0, sessionMsgCount: 0, isBusy: false, iracingLive: true,
@@ -133,7 +138,7 @@ let totalNonCloud = 0;
     vm.createContext(ctx);
     let loaded = false;
     try {
-      vm.runInContext(decls + '\n' + fnSrc.join('\n')
+      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + fnSrc.join('\n')
         + '\nthis.callAPI=callAPI; this.addMsg=addMsg; this.ensureConversationBox=ensureConversationBox;', ctx);
       loaded = true;
     } catch (e) {

@@ -33,14 +33,21 @@ def check(label, condition):
         failures.append(label)
 
 
-# ★実際の iRacing SessionInfo YAML の DriverInfo セクション形式
-#   （bridge.py の parse_session_info が期待するフィールド名と一致させる）
+# ★9/11実走ログ（review/local-evidence/20260911/）で確認した DriverInfo
+#   セクション形式。フィールド名'UserID'はコミュニティ資料
+#   https://sajax.github.io/irsdkdocs/yaml/driverinfo.html とも一致する
+#   （iRacing社の公式仕様書ではなく参考情報として扱う）。
+#   2026-09-11 実走Gate 8不合格で判明：このフィールド名は 'CustID' ではなく
+#   'UserID'。旧サンプルは存在しない 'CustID' を使っており、テストは
+#   グリーンのまま本物のフォーマット不一致を検出できていなかった。
 SAMPLE_YAML = """
 WeekendInfo:
   TrackName: spa francorchamps gp
   TrackDisplayName: Spa-Francorchamps
   EventType: Race
   SeriesID: 123
+  SessionID: 168212639
+  SubSessionID: 74477818
 DriverInfo:
   DriverCarIdx: 2
   Drivers:
@@ -52,7 +59,7 @@ DriverInfo:
     CarClassID: 84
     CarClassShortName: GT3
     CarScreenName: BMW M4 GT3
-    CustID: 111111
+    UserID: 111111
     IRating: 2500
     LicLevel: 4
     LicSubLevel: 30
@@ -64,7 +71,7 @@ DriverInfo:
     CarClassID: 84
     CarClassShortName: GT3
     CarScreenName: Ferrari 296 GT3
-    CustID: 222222
+    UserID: 222222
     IRating: 3000
     LicLevel: 4
     LicSubLevel: 40
@@ -76,7 +83,7 @@ DriverInfo:
     CarClassID: 84
     CarClassShortName: GT3
     CarScreenName: Mercedes-AMG GT3 2020
-    CustID: 315555
+    UserID: 315555
     IRating: 2800
     LicLevel: 4
     LicSubLevel: 50
@@ -94,7 +101,7 @@ check('player_car_model == "Mercedes-AMG GT3 2020"', result.get('player_car_mode
 check('track == "spa francorchamps gp"', result.get('track') == 'spa francorchamps gp')
 
 print('\nTest 2: CustID欠損（フィールド無し）でも player_cust_id は None（捏造しない）')
-yaml_no_custid = SAMPLE_YAML.replace('    CustID: 315555\n', '')
+yaml_no_custid = SAMPLE_YAML.replace('    UserID: 315555\n', '')
 result2 = bridge.parse_session_info(yaml_no_custid)
 check('player_cust_id is None（欠損は欠損のまま）', result2.get('player_cust_id') is None)
 
@@ -134,6 +141,15 @@ print('\nTest 7: 別driverのinfoを渡すと別driverのCustIDが届く（取�
 info_other_player = bridge.parse_session_info(yaml_last_is_player)  # DriverCarIdx=0のYAML
 check('別driver(CarIdx=0,CustID=111111)のtelemetry_live cust_idは111111（315555ではない）',
       bridge.build_telemetry_identity_field(info_other_player) == 111111)
+
+print('\nTest 8: SubSessionID/SessionIDがWeekendInfoから抽出される（MD#9残件＝レース固有ID）')
+check('sub_session_id == 74477818', result.get('sub_session_id') == 74477818)
+check('weekend_session_id == 168212639', result.get('weekend_session_id') == 168212639)
+check('resolve_race_instance_id はSubSessionIDを優先する',
+      bridge.resolve_race_instance_id(result) == 'sub:74477818')
+_no_sub = dict(result); _no_sub.pop('sub_session_id', None)
+check('SubSessionID欠落時はSessionIDへフォールバックする',
+      bridge.resolve_race_instance_id(_no_sub) == 'sid:168212639')
 
 print('\n━━ 結果 ━━\n')
 if failures:

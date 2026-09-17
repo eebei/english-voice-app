@@ -204,18 +204,26 @@
     if (!record) return { available: false, reason: 'no_matching_record' };
     const burn = finite(record.avgFuelPerLap);
     if (!(burn > 0)) return { available: false, reason: 'fuel_burn_unavailable' };
-    const sameKnown = (a, b) => !norm(a) || !norm(b) || norm(a) === norm(b);
-    if (!sameKnown(record.sessionType, identity.sessionType)) {
-      return { available: false, reason: 'session_type_mismatch' };
-    }
-    if (!sameKnown(record.raceFormat, identity.raceFormat)) {
-      return { available: false, reason: 'race_format_mismatch' };
-    }
-    if (!sameKnown(record.fuelRule, identity.fuelRule)) {
-      return { available: false, reason: 'fuel_rule_mismatch' };
-    }
-    if (!sameKnown(record.tyreRule, identity.tyreRule)) {
-      return { available: false, reason: 'tyre_rule_mismatch' };
+    // ★2026-09-14 Codex差戻し：以前は「どちらかが不明なら通す」だった。現在側で
+    //   既知の条件が履歴側に無い記録は、条件一致を主張できない——燃費は series・
+    //   session種別・燃料/タイヤ規則で変わるため fail-closed にする（不明は
+    //   「同じ」ではない）。現在側が不明な時だけ、その条件の照合を見送る。
+    const ruleGate = (key, recordValue, currentValue) => {
+      const want = norm(currentValue);
+      if (!want) return null;                       // 現在側が不明：この条件は問わない
+      const got = norm(recordValue);
+      if (!got) return `${key}_unknown_in_record`;  // 現在は既知・履歴は欠損：使わない
+      return got === want ? null : `${key}_mismatch`;
+    };
+    const ruleReason = ruleGate('session_type', record.sessionType, identity.sessionType)
+      || ruleGate('race_format', record.raceFormat, identity.raceFormat)
+      || ruleGate('fuel_rule', record.fuelRule, identity.fuelRule)
+      || ruleGate('tyre_rule', record.tyreRule, identity.tyreRule);
+    if (ruleReason) return { available: false, reason: ruleReason };
+    // seriesId は matchesIdentity が現在側既知の時だけ照合する。燃費根拠としては
+    // 「現在のseriesが分かっているのに履歴に無い」記録も採らない。
+    if (Number.isInteger(identity.seriesId) && !Number.isInteger(record.seriesId)) {
+      return { available: false, reason: 'series_unknown_in_record' };
     }
     const setupMatch = sameSetup(record, identity);
     const priorTrackTemp = finite(record.trackTempC);

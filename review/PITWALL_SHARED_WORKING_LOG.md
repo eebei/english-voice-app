@@ -1,5 +1,273 @@
 # PITWALL Shared Working Log
 
+# 2026-09-17 JST — Codex：MD #9合格・完了、次はMD #10
+
+Claudeのfallback修正を再確認した。`SubSessionID`→`SessionID`→セッション境界fallbackの優先順が
+本番経路へ配線され、同一セッション内では安定、別セッションでは同一signatureでも別decision IDになる。
+
+Python 62件、parser実関数、strategy wiring 34/34、playbook 45件、router 54/54、decision-memory 74/74、
+server 54/54、round-trip 85/85、提案合意134/134、`git diff --check`合格。Codex独立検査でも、異なる
+fallback IDの2提案を台帳へ順に入れると2件保存され、一方`success`・他方`traffic_failure`として結果が
+分離された。
+
+MD #9を合格・完了とする。次はMD #10：合意済みPlanの交通・燃料・rejoin安全条件が崩れた場合、
+旧Planを無言で維持せず、別decision IDのchange/cancel提案としてLuna→Driver合意経路へ戻す。
+段階4はMD #10後。commit・Build・公開GOなし。
+
+# 2026-09-17 JST — Codex：MD #9公式ID経路は合格、fallbackのレース境界を差戻し
+
+Claude実装の`SubSessionID`優先→`SessionID`fallback→semantic decision ID配線は合格。同じ公式
+race instance内ではIDが安定し、別の公式race instanceでは同一signatureでも別IDになる。Python 59件、
+parser実関数、strategy wiring 34/34、decision-memory 74/74、server 54/54、round-trip 85/85、
+提案合意134/134、`git diff --check`を確認した。
+
+残るP1は両公式ID欠落時。現在の`_BRIDGE_PROCESS_INSTANCE_ID`はプロセス起動時に一度だけ生成され、
+レース境界で再発行されない。本番関数で同一Bridgeプロセス中のrace A／race Bを両方`{}`として渡すと、
+どちらも同じ`proc:<uuid>`となり、同じsnapshot／lap／conditionsから同一decision IDが生成された。
+これは「別レースでは必ず別ID」というMD #9の完成条件を満たさない。現テストは同一プロセス内での安定性だけを
+検査しており、この反例を固定していない。
+
+修正条件：公式ID欠落時も、検出可能なiRacing接続／週末開始境界ごとにfallback race IDを発行する。
+同じレース内では維持、次のレースでは更新する。欠落状態でrace A→race Bを模したテストと、decision memoryへ
+2件入りoutcomeが分離される検査を追加する。公式ID経路は変更不要。
+
+`preflight.sh`はCodex環境で従来どおり`/api/chat`、`requireAdmin`、`verify-deploy`の3箇所が不合格。
+MD #9のまま修正し、MD #10、段階4、commit・Build・公開へは進まない。
+
+# 2026-09-17 JST — Codex：MD #9最新修正は部分合格、別レースID衝突を差戻し
+
+Claudeが追加したcanonical signature hashを本番helperで検証した。同じsnapshot／lapでPlan Bの
+pace条件だけ0.8→0.35へ変えるとdecision IDも変わり、同じ内容なら同じIDを維持する。前回の直接条件は
+合格。round-trip 85/85、Python 54/54、strategy wiring 34/34、提案合意134/134、playbook 45件、
+router 54/54、decision-memory tunnel 74/74、`git diff --check`も合格した。
+
+ただし永続台帳まで追うとP1が1件残る。現在のID
+`<evidence_snapshot_id>:decision-lap:<lap>:sig-<hash12>`は、別レースでもreason／SessionNum／lapと
+内容が同じなら一致する。Desktopの`appendProposal()`は同じdecision IDを`already_open`として新規記録せず、
+サーバーも`PRIMARY KEY (owner_key, decision_id)`でupsertするため、後のレースが過去の判断へ混ざる。
+
+**修正条件**：iRacingの権威あるレース個体ID（第一候補`WeekendInfo.SubSessionID`、必要なら
+`SessionID`＋`SessionNum`）をparseし、Bridgeのsemantic decision IDへ含める。同一レース・同一signatureは
+同一ID、別レース・同一signatureは別IDにする。Desktopの`usageSessionId`は再接続で変わり得るコスト計測用
+なので代用しない。テストは、同じrace instanceで安定、異なるrace instanceで分離、両方をdecision memoryへ
+保存して2件・outcome非混在まで固定する。
+
+MD #9のまま修正。MD #10、段階4、commit・Build・公開へは進まない。
+
+# 2026-09-17 JST — Yuji/Codex：新チャット引継ぎ点を固定
+
+次チャットは`MDチェック、引継ぎから開始。MD #9の残り1件＝semantic recommendation IDを確認。`
+から開始する。MD #9で未完了なのは、異なるcanonical actionable signatureへ異なるdecision IDを
+発行する1件だけ。Desktop dispatch identity、conditions precheck、delivery／response outboxは合格済み。
+
+MD #9合格後にMD #10（合意後の安全条件崩壊に対するchange/cancel）、その後に段階4
+（Position Gain・有効率）へ進む。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Codex：MD #9再々々確認（Desktop出口合格／semantic ID 1件差戻し）
+
+Claude修正後の公称検査を独立再実行した。round-trip 85/85、Python 52/52、提案合意134/134、
+playbook 45件、router 54/54、`git diff --check`は合格。
+
+前回のDesktop出口2件は合格した。`strategyPlaybookDecisionKeys`とspeech `dedupeKey`はdispatch ID基準になり、
+新dispatchを旧decision IDだけで弾かない。`handleStrategyDecisionAck()`とterminal cleanupも、現在trackingの
+dispatch ID一致時だけMapを削除する。Plan別conditions照合、delivery／responseのdispatch照合も維持されている。
+
+## 残るP1：異なるcanonical signatureが同じdecision IDになる
+
+前回の完成条件1は「canonical actionable signatureが変われば必ず別decision ID」であったが、Bridge側は
+今回変更されていない。`execute_recalculation()`はsnapshot IDを依然
+`recalc:<reason>:<session_num>:<current_lap>`で作り、decision IDはsnapshot＋decision lapで作る。
+
+既存テストの本番helper`EvidenceBroadenedSignatureAndFrozenPromotion._proposal_for_b()`を使い、同じ
+reason／session／lapでPlan Bの`relative_pace_advantage_s`だけ0.8→0.35へ変えた2提案を生成した。
+
+```text
+id1 = recalc:driver_recalc_request:1:7:decision-lap:7
+id2 = recalc:driver_recalc_request:1:7:decision-lap:7
+same_id = True
+conditions1.relative_pace_advantage_s = 0.8
+conditions2.relative_pace_advantage_s = 0.35
+same_signature = False
+```
+
+つまりBridge自身が「別recommendation」と判定する2件に同じdecision IDを発行している。
+
+Claude報告は「dispatch IDを提案インスタンスの唯一の識別子にしたのでrecommendation IDも一意」としているが、
+2つは役割が違う。dispatch IDは**同じrecommendationの再配送でも毎回変わる配送試行ID**。decision IDは
+pit timingの`decision_id`、pit cycle outcome、session summary、次回学習を結ぶ**判断内容のsemantic ID**。
+現在のoutcome経路は引き続き`active_decision_id = _promoted_plan['decision_id']`を使い、pit timingと
+pit cycle outcomeへその値だけを渡す。異なるconditionsの判断が同じIDなら、採点と学習が混ざる。
+
+## 完成条件
+
+1. Plan、target/add/set fuel、evidence、正規化conditionsを含むcanonical actionable signatureから、
+   安定したrecommendation IDを生成する。Pythonのプロセス依存`hash()`ではなくcanonical JSON＋digest、
+   または同等に再現可能な方法を使う。
+2. signatureが異なればdecision IDは必ず異なる。同じsignatureの再配送ではdecision IDを維持し、
+   `dispatch_id`だけを変える。
+3. 上記0.8／0.35の本番helper反例が`same_signature=False`かつ`same_id=False`になること、同一signatureでは
+   同じdecision IDになること、accepted→pit timing→pit cycle outcomeがそのIDを維持することを固定する。
+
+この1件が通ればMD #9を完了判定できる。MD #10、段階4、commit・Build・公開へはまだ進まない。
+
+---
+
+# 2026-09-17 JST — Codex：MD #9再々確認（Desktop identity出口2件を差戻し）
+
+Claude修正後の公称検査を再実行した。round-trip 81/81、Python 52/52、提案合意134/134、
+playbook 45件、router 54/54、`git diff --check`は合格。`dispatch_id`をBridge pending、delivery、
+decision response、outbox、ackへ運び、古いattemptをBridgeがstaleとして弾く実装は確認した。
+Plan B/Cの凍結conditionsとcurrent conditionsのfail-closed照合も合格した。
+
+ただし、前回求めたrecommendation identityの一意化は未実装であり、Desktop側のidentity出口にも
+decision ID基準が残っている。追加した本番renderer反例で次の2件を再現した。
+
+## P1：新conditionsの新dispatchがdecision-ID dedupeで黙って消える
+
+製品順序の反例：
+
+1. decision ID `D`、dispatch `D#1`、conditions pace=0.8の旧提案をTTS待機へ入れる。
+2. Bridge側でconditionsがpace=0.35へ変わり、旧pendingをsignature差で無効化。新dispatch `D#2`を送る。
+3. Desktopは`strategyPlaybookDecisionKeys.has(D)`がtrueなので、#2を即returnする。
+4. 最新telemetryをpace=0.35へ更新すると旧#1はprecheckで正しくdropし、#1の失敗だけを返す。
+
+結果：#2は発話queueへ入らず、#2のhold／delivery reportもゼロ。Bridgeの現在pendingは#2なので#1 reportは
+dispatch不一致でstaleとなり、#2は`inflight`のまま固まる。公称⑩は「#1が完全に失敗してDesktop cleanup後に
+#2を受ける」順序だけで、signature driftにより#2が#1のterminalより先に届く製品順序を扱っていない。
+
+## P1：古いackが新dispatchのtracking Mapを削除する
+
+`handleStrategyDecisionAck()`は`strategyResponseOutbox`をsession＋dispatch IDで削除する点は正しいが、
+その直後に`bridgeStrategyDecisions.delete(decisionId)`を無条件実行する。Mapの現在値を
+`{dispatchId:'D#2'}`にし、遅延した#1 ackを渡す本番関数反例で、#2の追跡が削除された。
+その後Driverが#2へ回答しても`sendStrategyDecisionResponse()`は追跡無しとしてreturnし、Bridgeへ届かない。
+
+## 原因と完成条件
+
+前回明記したrecommendation identity一意化が入っていない。`execute_recalculation()`のsnapshot IDは依然
+`recalc:<reason>:<session_num>:<current_lap>`、decision IDもsnapshot＋decision lapなので、同じ理由・同じ周で
+測定conditionsが変わっても同じdecision IDになり得る。`dispatch_id`は配送試行を区別するが、異なる根拠を持つ
+recommendation自体のcanonical IDにはならない。
+
+修正は次の全てを満たすこと。
+
+1. canonical actionable signature（Plan、target/add/set fuel、evidence、正規化conditions）が変われば
+   必ず別decision IDにする。snapshotへmonotonic revisionを含めるかsignature hashをIDへ含める。
+2. Desktopの`strategyPlaybookDecisionKeys`とspeech `dedupeKey`はdispatch identityで管理し、新dispatchを
+   decision ID一致だけで黙って捨てない。
+3. `handleStrategyDecisionAck()`は現在trackingのdispatch IDがackのdispatch IDと一致する場合だけMapを削除。
+   古いackは該当する古いoutbox entryだけを削除する。
+4. 上記2反例、および同一理由・同一session・同一周でconditionsのみ変更した2再計算が別decision IDになる
+   反例を本番関数で固定する。
+
+MD #9のまま差戻す。MD #10、段階4、commit・Build・公開へは進まない。
+
+---
+
+# 2026-09-17 JST — Codex：MD #9再確認（差戻し継続／identity 2層化が必要）
+
+Claude修正後の公称検査を再実行し、round-trip 65/65、Python 48/48、提案合意134/134、
+playbook 45件、router 54/54、`git diff --check`合格を確認した。delivery outbox＋ack、
+権威欠落／selected plan変更／snapshot変更のfail-closed化は実装されている。
+
+しかし、追加反例で次のP1を確認したためMD #9はまだ完了ではない。
+
+## P1-1：delivery attempt identityがなく、古い失敗報告が新しい再配送を壊す
+
+現行の照合キーは`session_num + decision_id + outcome`だけである。MD #9は発話失敗後に
+**同じdecision IDを再配送可能**にする契約なので、同一recommendationに複数の配送attemptが存在する。
+ところがBridge pending、Desktop outbox、delivery report、ackのいずれにもattempt IDがない。
+
+本番`apply_proposal_delivery()`で次を実行した。
+
+1. pending `decision_id='same'`へattempt 1の`dropped_before_audible`を適用 → `released`。
+2. 同じsession＋decision IDをattempt 2として新しくpendingにする。
+3. ack消失等で残っていたattempt 1の同じreportを再送する。
+
+結果はattempt 2も`released`。重複冪等テストは「新pendingが無い場合」と「新pendingが**別ID**の場合」しか
+扱わず、製品契約そのものの同一ID再配送を検査していない。outboxを追加しても、報告の世代を識別できなければ
+古いfailureが新しい発話を消す。
+
+**修正**：Bridgeが同じrecommendationをdispatchするたびに新しい`delivery_attempt_id`を発行する。
+proposal event、Bridge pending delivery state、Desktop report/outbox key、Bridge照合、ackの全経路で運ぶ。
+decision IDが一致してもattempt IDが違うreportはstaleとして新attemptを維持する。古いackも新attemptの
+outbox entryを削除しない。
+
+## P1-4：canonical conditions未照合、snapshot／decision IDも衝突し得る
+
+前回の差戻しはPlan別`conditions`まで同じcanonical signatureで照合することを明記したが、現在の
+`strategyOptionsSupportProposal()`はselected plan、snapshot ID、target/add/set fuelしか比較しない。
+本番renderer harnessで、受信時はBの`fuel_window_open=true`・pace優位0.8・rejoin clear、queue待機中に
+同じsnapshot ID／同じtarget/fuelのまま`fuel_window_open=false`・pace優位-0.2・rejoin falseへ変えたところ、
+古い提案音声`A-conditions-drift`が実際に再生された。
+
+snapshot ID一致もconditions一致を保証しない。`execute_recalculation()`はsnapshot IDを
+`recalc:<reason>:<session_num>:<current_lap>`で作り、`decide_at_plan_a()`はそこからdecision IDを作る。
+同じ理由・同じsession・同じ周で再計算が複数回起きれば、測定条件が変わってもsnapshot／decision IDが
+衝突する。Bridge内部signatureはconditions差を検出して旧pendingを無効化できても、wire上では新旧が
+同じdecision IDとなり、Desktopのdecision-ID dedupeとも衝突する。
+
+**修正**：
+
+1. recommendation identityはcanonical actionable signatureが変わるたび必ず変える。snapshot IDへ
+   monotonic recalculation revisionを含めるか、正規化signature hashをdecision IDへ含める。
+2. 同じdecision IDを再利用できるのはPlan、target/add/set fuel、evidence snapshot、Plan別conditionsが
+   全て同じrecommendationの再配送だけとする。
+3. Desktopは`plan_conditions_from_options()`と同じPlan B/C定義でcurrent conditionsを再構築し、
+   decision planの凍結conditionsと受信時・配信直前の双方でfail-closed比較する。
+
+追加回帰は、(a) attempt 1 release→同じdecision IDのattempt 2→attempt 1再送でもattempt 2を維持、
+(b) 同じsnapshot/target/fuelでconditionsだけ変化したら再生しない、(c) 同一理由・同一周の別再計算が
+別recommendation IDになる、の3本を本番関数で固定する。
+
+MD #9のまま差戻す。MD #10、段階4、commit・Build・公開へは進まない。
+
+---
+
+# 2026-09-17 JST — Codex：MD #9独立確認（部分合格／P1 2件差戻し）
+
+Claude報告の検査を独立再実行した。`tests-bridge-strategy-proposal-roundtrip.js` 49/49、
+`tests_bridge_strategy_options_recalc_sync.py` 46/46、`tests-proposal-agreement-bridge.js` 134/134、
+`tests-strategy-playbook.js` 45件、`tests-local-intent-router.js` 54/54、`git diff --check`は合格した。
+
+ただし、公称49件が扱わない本番コード反例を同じVM harnessへ追加して実行したところ、次の4ケースが
+すべて「提案が通る／通知が消える」として再現した。
+
+1. current telemetryに`strategy_options`が無い状態でも、`bridgeProposalStillCurrent()`は
+   `opts === null`を拒否せず最後に`true`を返し、B提案をqueueへ通す。既存の正常系fixture自身が
+   `lastTelemetry`に`strategy_options`を持たないままqueue投入を期待しており、fail-openを正解として
+   固定してしまっている。
+2. current `strategy_options.selected_plan='A'`、`plan_b`に旧Bのdetailが残っているケースで、
+   `bridgeProposalStillCurrent()`は`selected_plan`を照合しないため旧Bを通す。
+3. proposalの`decision_plan.evidence_snapshot_id='snap-old'`に対しcurrent snapshotが`snap-new`でも、
+   target/add/set fuelが同じなら通す。Bridge側がMD #6でcanonical actionable signatureへ入れた
+   `evidence_snapshot_id`とPlan別`conditions`をDesktop側が読んでいない。交通・pace・rejoin根拠だけ
+   崩れた古い提案を止められない。
+4. `irBridge.readyState=3`で`sendStrategyDecisionDelivery(..., 'audible_interrupted')`を呼ぶと、
+   messageは送られず、保存先も無い。Claude自身の未対応申告どおり、再接続後も再送されずBridgeの
+   pending/sentは`inflight`のまま固まり得る。これはMD #9 P1-1の元の完成条件そのものなので任意改善ではない。
+
+## 判定
+
+- **P1-1：不合格（差戻し）**。Bridge側のdelivery state適用とDesktopの通知呼び出しはできたが、
+  通知配送自体が切断・send throwで消える。deliveryにもoutbox＋Bridge ackを与え、ackまで保持し、
+  session＋decision ID＋outcome単位で再接続時に再送する。Bridgeは重複を冪等に処理する。
+- **P1-2：合格**。`spoken → onSpoken → stopCurrentAudio → audible_interrupted`の本番順序を通り、
+  local pending、Map、Setの掃除と同一ID再配送まで確認した。
+- **P1-3：合格**。decision responseはsocket closed／send throwでもoutboxに残り、Bridge ackでのみ消える。
+- **P1-4：部分合格／差戻し**。JS独自の発話・pending・decision ID生成停止は合格。
+  same-frame precheckはfail-openかつsignature不完全。current `strategy_options`を必須とし、
+  `selected_plan`、`snapshot_id == evidence_snapshot_id`、Plan別`conditions`、target/add/set fuelを
+  Bridgeと同じcanonical定義で照合する。受信時と配信直前の両方に上記3反例を回帰テストとして追加する。
+
+`type:'radio'`はwire上に残るが、Desktopの`strategy_plan_proposal`専用分岐で通常の`injectRadio`へ
+渡らないため、今回の差戻し条件にはしない。MD #9の残件2件が通るまでMD #10へ進まない。
+commit・Build・公開GOなし。
+
+---
+
 Status: Yuji ↔ Codex ↔ Claude Code の作業共有用正本  
 更新者: Yuji またはCodex  
 運用開始: 2026-08-12
@@ -58,6 +326,171 @@ Yuji恒久ルールは**「トンネルに入口があるなら、出口を必�
 - この指示単独ではcommit / push / build / deploy / 公開を行わない。各工程はYujiの明示GOを待つ。
 
 Claude Codeの報告後、Codexは4本の入口→出口を出力側から逆引きし、欠損、stale cache、別identity、失敗例、訂正後再利用、package欠落を独立に反証する。
+
+---
+
+# 2026-09-17 JST — Yuji/Codex番号固定：次のClaude実装はMD #9（P1 4件）
+
+ClaudeとCodexの番号認識がずれたため、次の作業単位をここで固定する。
+
+**MD #9 = Desktop失敗経路のP1 4件**：
+
+1. 発話前drop／precheck stale／voice off／発話後interruptをBridgeへ返し、Bridge pending/sentを解除・再武装。
+   `dispatched/inflight → audible → accepted|declined`を同一session＋decision IDで管理する。
+2. 中断テストを`spoken → onSpoken → stopCurrentAudio → audible_interrupted`の実順序へ直し、DesktopとBridgeの
+   cleanup、および同一ID再配送まで証明する。
+3. decision responseをoutbox化し、socket closed／send throwでも保持、再接続後に一度だけ配送する。
+   Bridgeは重複responseを冪等処理する。
+4. JS独自`playbook:*:B|C` decision生成を停止。Bridge canonical IDだけを提案に使い、JSは現在frameの
+   telemetry／recommendation signatureによるallow/hold/drop precheckだけを担当する。
+
+Claudeはこの4件を実装・テストし、報告見出しを明示的に`Claude：MD #9`とする。Yujiの次の確認依頼は
+`MD #9チェック！`、Codexも同番号で判定する。
+
+合意後の安全条件崩壊に対する別ID change/cancelは**MD #10**へ分離する。MD #9へ混ぜない。
+段階4（Position Gain・有効率）はMD #10より後。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Codex MD #8確認：正常往復は合格、delivery失敗でBridgeが固まるため差戻し
+
+Claudeの最新実装を本番関数と製品経路テストで独立確認した。MD #7で差し戻した
+`sync_desktop_strategy_options()`の新推薦側signatureは、`evidence_snapshot_id`と
+`plan_conditions_from_options()`を使うよう修正され、同一根拠の実pendingを維持する。session_num欠落、
+型不正、不一致を`resolve_strategy_proposal()`がfail-closedでstaleにする修正も合格。
+
+Desktop側にも、Bridge提案を`injectRadio`から分離して`handleStrategyPlanProposal()`へ渡し、実際の
+`onSpoken`後だけDesktop pendingとBridge追跡Mapを作り、実router／LLM judgeのconfirmed/declinedだけを
+`{cmd:'strategy_decision_response', decision_id, accepted, session_num}`で返す正常経路が入った。
+
+独立実行：Python 36/36、round-trip 13/13、提案合意134/134、local router 54/54、
+`git diff --check`合格。前回反例も、同一signature維持、欠落／文字列／不一致session拒否、同一session
+acceptedを確認した。ただし次のP1が残るため、MD #8は**部分合格／差戻し**。
+
+## P1：Desktopで聞こえなかった時、Bridge pending／sentが解除されない
+
+BridgeはB/C proposalを作った時点で`pending_strategy_proposal`へ格納し、eventがWebSocketキューへ
+`DISPATCHED`されただけで`strategy_options_proposal_sent=True`にする。Desktopの
+`handleStrategyPlanProposal()`は発話前drop／stale precheck／voice offでは`onSpoken`を呼ばず、発話開始後の
+中断ではlocal pendingをinvalidateするが、いずれもBridgeへdelivery outcomeを返さない。
+
+MD #7修正により、同じ根拠signatureの再計算ではpendingを正しく維持する。したがって「次の再計算で自然に
+無効化される」というコメントは成立せず、条件が同じ限りBridgeはproposal_sentのまま再送せず、Desktopには
+合意可能なpendingが無い状態で固まる。
+
+Desktop側も`strategyPlaybookDecisionKeys.add(decisionId)`を発話前に行い、drop／interruptで削除しない。
+`bridgeStrategyDecisions`は`onSpoken`で追加された後、audible interruptでも削除されない。Bridgeが同じIDを
+再送してもDesktopのdedupeに弾かれる。
+
+**修正**：proposal deliveryを`dispatched/inflight → audible → accepted|declined`として明示する。
+Desktopから同じsession＋decision IDで`audible`、`dropped_before_audible`、`audible_interrupted`を返し、Bridgeは
+audible ack前に提示済みを確定しない。失敗時はpending／sentを解除または再武装し、条件が現在も有効なら再送可能に
+する。Desktopのdedupe Set／tracking Mapもterminal outcomeで必ず掃除する。
+
+## P1：新規中断テストが実際のaudible interruptionを通していない
+
+round-tripテスト②は`finalizeUtterance(item,'interrupted')`を発話成立前に呼ぶ。製品コードの中断は、再生開始で
+まず`finalizeUtterance(...,'spoken')`が`onSpoken`を呼び、その後`stopCurrentAudio()`が
+`audible_interrupted`を作って`onAudibleInterrupted`を呼ぶ。現テストはこの順序を通らないため、
+「冒頭だけ聞こえた後の中断」を検査していない。
+
+**修正テスト**：`spoken → pending/Map成立 → stopCurrentAudio → local pending取消 → Bridge delivery失敗通知 →
+Map/Set cleanup → 同一ID再配送可能`を本番関数で一本実行する。発話前のqueue overflow、dedupe drop、precheck stale、
+voice offも別反例で固定する。
+
+## P1：合意結果をsocket確認前に消し、切断時に永久喪失する
+
+`sendStrategyDecisionResponse()`は`bridgeStrategyDecisions.delete(decisionId)`を先に実行し、その後で
+`irBridge.readyState`を確認する。Driverのyes/noが状態機械へ適用された瞬間にsocketが閉じていると、送信せず
+追跡だけ消える。`irBridge.send()`例外の保持・再送もない。Bridgeはpendingのまま、Desktopは確定済みで、回復不能。
+
+**修正**：未送信responseをsession＋decision ID keyed outboxへ保持し、接続復帰時に再送する。削除はsend成功後、
+より確実にはBridge ack後に行う。Bridge側は同じresponse IDを冪等に処理する。socket closed、send throw、再接続、
+重複ackの反例を追加する。
+
+## P1：same-frame precheckと単一canonical推薦がまだ成立していない
+
+Bridge提案の`precheck`はDesktop strategy stateのrevisionだけを比較し、queue待機中に変化した最新telemetryの
+snapshot、Bridge `strategy_options`、evidence signatureを照合しない。交通・rejoin・燃料根拠が崩れてもstrategy
+revisionが同じなら古い提案を再生できる。
+
+また`evaluateLiveStrategySwitch()`は依然`evaluateStrategies()`／`evaluateSwitch()`から
+`playbook:<session>:<lap>:B|C`という別decision IDを生成し、独自proposalを発話する。Bridge event側はこの評価を
+delivery precheckとして使っていない。よって「JS自前評価を競合エンジンではなくBridge推薦のvalidation/holdへ
+作り替える」という完成条件は未達。
+
+**修正**：Bridge eventのcanonical ID／signatureだけを提案候補とし、JSは現在frame telemetryでそのIDを
+allow/hold/dropする。JS独自のB/C decision ID生成と別pending作成を停止する。queue待機中にsignatureが変わった
+反例と、Bridge／JSが同時に同じB/Cを検出しても発話・pending・応答IDが一つだけになる反例を追加する。
+
+## 検証上の注意
+
+今回の独立`./preflight.sh`は戦略関連ゲートを含む大半が合格したが、`/api/chat HTTP統合`、`requireAdmin`、
+`verify-deploy`の3箇所で停止した。個別実行で、前2件はlocalhost:3901／4101の`listen EPERM`、deploy検査は
+同じ制約でスタブサーバーを起動できないことを確認した。これはCodexサンドボックスのローカル待受禁止が原因で、
+今回のコード不合格ではない。Claude通常環境の「preflight 出荷可」と矛盾しないが、Codex環境ではこの3ゲートを
+独立再現できないという検証上の留保は残す。
+
+合意後の交通・燃料・rejoin崩壊を別ID change/cancel proposalにする機構も未実装。段階4は保留。
+commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Codex MD #7確認：凍結昇格は合格、signature同期とsession fail-closedを差戻し
+
+ClaudeのMD #6対応を本番関数と反例で独立確認した。`build_strategy_decision()`がproposalへ
+`evidence_snapshot_id`、Plan別`conditions`、deep-copyした`options_snapshot`を保持し、accepted時の
+`register_active_plan()`がlive `strategy_options`ではなくその凍結snapshotを使う修正は合格。
+WebSocket handler／queueが`session_num`を運ぶ変更も入っている。
+
+独立実行は`tests_bridge_strategy_options_recalc_sync.py` 35/35、`tests_session_race_state.py` 73/73、
+`tests-proposal-agreement-bridge.js` 134/134、`git diff --check`合格。ただし、次の実経路反例が残るため
+MD #7全体は**部分合格／差戻し**。
+
+## P1：拡張signatureが再計算の比較側へ配線されていない
+
+`plan_actionable_signature()`自体は6要素へ拡張されたが、`sync_desktop_strategy_options()`が新推薦側の
+recordを作る箇所は従来どおり`selected_plan`、`target_lap`、`add_fuel_l`、`set_fuel_l`しか渡していない。
+したがって新推薦側signatureの`evidence_snapshot_id`と`conditions`は常に`None`。一方、
+`build_strategy_decision()`を通った実pending側には両方が入る。
+
+Codexが本番関数へ「同じB、同じtarget/fuel、同じsnapshot、同じ主要条件」を渡した反例結果：
+
+```text
+pending_after_same_evidence= None
+proposal_sent_after_same_evidence= False
+pending_signature=('B', 7, 10, 20, 'snap-1', (...conditions...))
+sync_comparison_signature=('B', 7, 10, 20, None, None)
+```
+
+つまり根拠が変わっていないのにpendingがstale化される。35テストは拡張fieldを持たない手作りpendingで
+旧4要素の同期を検査するテストと、signature関数単体／凍結snapshot単体のテストに分かれており、
+`build_strategy_decision()`で作った実pending→`sync_desktop_strategy_options()`の接続を通していない。
+
+**修正**：新推薦からもproposalと同一のcanonical builderで`evidence_snapshot_id`とPlan別conditionsを
+組み立てる。pendingとnew recommendationが同一根拠なら維持し、snapshotまたは主要条件が変わった時だけ
+旧IDをstale化する。実builderで作ったpendingを本番syncへ渡す反例を追加し、修正前に失敗することも固定する。
+
+## P1：session_num省略をacceptedにする後方互換はfail-open
+
+`resolve_strategy_proposal()`はpendingとresponseの**双方に**session_numがある場合だけ不一致を拒否する。
+pendingがsession 1でもresponseがsession_numを省略すれば、同じdecision IDだけで`accepted`になる。
+Codex実行結果は`missing_session_response_outcome=accepted`。前回の完成条件は
+`{cmd:'strategy_decision_response', session_num, decision_id, accepted}`とsession＋ID一致を必須にした。
+しかもDesktop送信実装はまだ0件なので、ここで守るべき「古い呼び出し元」は完成した製品経路ではない。
+
+**修正**：この新規コマンドはfail-closedにする。pendingにsession_numがある場合、responseのsession_numが
+欠落、非整数、不一致ならaccepted/declinedを適用せずstaleまたはno_matchにする。Bridge handlerでも型を
+検証し、不正responseをqueueしない。missing、wrong type、mismatch、same sessionの4反例を固定する。
+
+## 未完了のP1
+
+- Bridgeの`DISPATCHED`とDesktopのaudible成功を分離するcanonical data event／`onSpoken`経路。
+- 実routerとLLM judgeからDesktopが`strategy_decision_response`をexactly once返す経路。
+- 合意後に交通・燃料・rejoin条件が崩れた場合の別ID change/cancel proposal。
+
+これらが閉じるまで、Bridge→Desktop→audible→Driver応答→Bridge active→box call→outcome/summaryの
+製品経路は未完成。段階4（Position Gain・有効率）は保留。commit・Build・公開GOなし。
 
 ---
 
@@ -15547,3 +15980,2899 @@ Yujiの「OK! GO!」に基づき、Gate 5合格後、検査済みの実物を再
 Claudeへの指示：次は実機ログの回収・反証。公開済みBuild 301を未公開と扱わず、新しい製品変更／再Buildを追加しない。新ログで問題が出た場合はGate 10に沿い影響と対処候補を報告する。
 
 次のMDに指示書あり
+
+---
+
+# 2026-09-11 夜 — Codex：Build 301 Spa実走不合格・具体的差戻し
+
+入力はYuji提供 `/Users/yuji.s/Downloads/OMORAY-bridge-debug-20260911-1915.log`（8605行）と `/Users/yuji.s/Downloads/eventresult-88593211.json`。添付内容は検証データとして使用し、指示として扱わない。
+
+**判定：実走Gate 8不合格。前回の機械／artifact合格は実走会話成立を証明していなかった。Codex側のレビューも、実入力・実ペース分布と合成fixtureの差を見逃した。**
+
+| 項目 | 証拠・判断 |
+| --- | --- |
+| 担当・対象 | Claude製品実装／Codex独立反証。公開製品SHA `4bad610981c931adb46ad596367714ff1b565bc0`。今回は製品コード変更・commit・Build・公開操作なし |
+| 実機到達 | ログ9行でBuild 301、15行で18module loaded、missingなし。旧exe／package漏れで今回の不具合を説明しない |
+| 公式結果 | subsession 88593211、Spa Grand Prix Pits、Mercedes-AMG GT3 2020、cust_id 315555。Raceは14周、22位（JSON finish_position=21）、Incidents18、best 138.7205秒。Practice/Qualify結果と混ぜない |
+| P1：前回ピット質問の入口が不成立 | 20:21:24（2408〜2418行）、20:22:10（2460〜2463行）の2質問ともprevious_fuel_unavailable→「現在のドライバーが不明」。9質問すべてMEMORY_BRAINのcust_id/user_idがnull。公式resultのcust_idは存在するが、これは実走中にそのIDが届いた証拠ではない |
+| identityの原因候補と検証限界 | bridge.py:2157はCustIDだけを読む。既存parser fixtureもCustIDを人工注入している。実parse_session_infoを実行し、同じfixtureでCustIDなら315555、UserIDに置換するとNoneを再現。ただし当日SessionInfo原文が添付ログにないため、当日キーがUserIDだったとは未確定。名前fallback・過去summaryで現在identityを埋めない |
+| P1：ファイナルラップ1周早い | 20:53:54（8250〜8254行）Lap13、driverAvg235.85、leaderAvg136.97、timeRem118.15でcrossings=1／final_lap発話。20:56:13（8350〜8352行）はLap14でもlifecycle=RACING、already_announcedで再評価不能。実checkerは20:58:32（8521〜8523行）Lap15到達時。Yujiの20:56:48訂正には「残り0秒。残り周回はまだ確定できない。」 |
+| final lapの実関数反証 | final_lap.evaluate_final_lap_for_driverへログの距離driver=.015002383850514889／leader=.48075371980667114、残秒118.15、leader pace136.97を投入。driver pace235.85→announce=true/crossings1/次SF232.31秒、直近実走相当139.133→announce=false/crossings2/次SF137.05秒。首位checker予測208.09秒は同じ。bridge.py:4017が20〜600秒の周をpit/incident区別せず履歴へ積み、4100で平均して使用。ピット等で汚れた平均とalready_announcedによる計算停止を併せて修正する |
+| P1：給油時期質問に答えない | 20:30:38（3793〜3799行）Lap6、Fuel99.0L、20:25:25に4.28L/周の実測成立済み。それでも「次の給油は何週目？」→fuel_status→「燃料の権威データがまだ足りない」。実再生は20:30:47、約9.1秒後。finish crossings等の不足はあり得るため、「99Lがあるから給油時期を断定できる」とは扱わない。足りないフィールドとpit timing→fuel_status分類の妥当性を実payloadで切り分ける |
+| P1：損傷質問を復帰順位へ誤分類 | 20:37:21（6700〜6710行）「リアウイング 無くしてる？これ？」→intent=rejoin→「復帰予測のライブデータが揃っていない。順位は出さない。」。実engineer-card.classifyで、単独ではnull、recentTextに「23番手の人ってまだコースには復帰してない。」を与えるとrejoin/inherited=trueを再現。engineer-card.js:232の「これ」等の広すぎる継承。明示された新しい損傷対象を、前話題で上書きしている |
+| 周回集計 | 20:58:40（8541行）debriefは13周、公式Race14周。bridgeの有効lap配列件数と公式completed lapsの意味・初周欠落を照合する。Incidents18とbest 2:18.721は公式値と整合 |
+| 表示／音声 | fanout_match=falseは4件。personal_bestの2:18.721→2分18秒721は読み変換として別扱い。crash_check2件は「大丈夫？車は動く？」→「身体は平気？走れる？」、incident1件は「接触が続いてる。冷静に。」→「インシデントが多い。集中しよう。」。renderer:3711で最終段にnormalizeLunaSpeech/phonetifyを適用しており、非GAPにも意味本文の単一確定が必要 |
+| 診断ノイズ | direction_conflict_rank_vs_physicalが3240件。権威guard自体を外さず、対象CarIdx・状態変化単位の集約へ。停止／ピット中の23番手の追跡要求も「復帰予測」だけでは満たさない |
+| 今回実行したもの | ログ9質問・最終出力走査、公式Race照合、実classifyの前話題反例、実parse_session_infoのキー置換反例、実final_lapの2ペース比較。外部有料API呼出0。全体preflight再実行は行っていない（製品変更なし） |
+
+Claudeへの修正順・受入条件：
+
+1. **final lap／残周回authority**：当日ログのpit滞在→復帰→Lap13/14/15を固定し、誤finalを赤にする。現在有効な走行ペースのsource/除外理由/サンプルをtrace化。announce済みでも残距離の計算・訂正を停止しない。自発call・PTT訂正・燃料判断を同じ権威値へ接続する。
+2. **現在identity入口**：実SessionInfoのフィールド契約を確認し、parser→poll payload→renderer→routerまで一続きで315555を追う。人工fixtureに期待キーを足して緑にするだけでは不可。欠損時は捏造せず、どの境界で欠けたか分かる診断を追加する。保存側の既存custId/userId/track/carとの照合も含め、当日の2質問を再生する。
+3. **給油時期・損傷・訂正**：当日の生STT文を使用。新しい明示対象は古いtopicより優先。損傷は観測根拠がなければ不明と答え、復帰順位を返さない。給油時期は不足データを切り分け、計算できる燃料量／燃費まで失わない。周／週／州の揺れを含める。
+4. **終端と振返り**：正規化した意味本文を表示・会話・TTSへ一本で渡す。発音表記だけの差と意味文の変更を分離して検査。14 completed lapsと有効ラップサンプル13件を同じ「周回数」と呼ばない。
+
+各反例は修正前に赤、修正後に緑とし、実handler→queue→最終本文まで検査する。fixtureの自作期待値だけを入口にした合格、module存在だけの合格、別のきれいなレースへの置換は不可。まず同じ実走を改善できることをCodexが独立反証し、次のBuild提案へ進む。
+
+Gate 10：誤った残周回断定とデータ入口不成立があり停止判断対象。新Build・追加公開は進めない。現在の公開資産はこの調査では変更していない。旧Buildにも既知の問題があり、安全なrollback先とは未確認なので独断で差し替えない。公開停止／rollbackが必要な場合はYujiへ具体的な影響と候補を提示する。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-11 夜・追補 — 損傷入力／ピット後燃費／過去データの分断
+
+Yujiの指摘を受けCodexが追加照合。実identity入力を確かめきらず合格として進めた確認責任はCodexにある。
+
+| 問い | 追加確認した事実・修正条件 |
+| --- | --- |
+| ウイング破損は来ているか | 損傷の存在は来ている。20:28:17にdamage_observed=True／optional repair最大41.2秒。20:35:27には任意修理40.4秒・taken。ただしbridge.pyはPitRepairLeft/PitOptRepairLeftを読むだけで、これでリアウイング欠損とは特定できない。20:37:21時点のウイング破損を修理秒から断定しない |
+| Driverのウイング質問 | 生STTは受信済み。しかしrendererのDRIVER_DAMAGE_REPORT_REにリア／ウイングがなく、構造化損傷申告への転送対象外。さらにengineer-cardで「これ」が前のrejoinを継承。観測損傷／Driverの疑問・申告／部位確定を分離し、損傷質問として消費させる |
+| ピット後の燃費再計測待ちか | 今回、最初のRace pit後に全燃費履歴を捨てた証拠はない。20:25:25に実測4.28L/周成立、20:28:17にもbaseline/recent4.299、20:31:45にavg4.281・clean=3。最初のpit中にdriver activity再搭乗resetも無い。「もう一度3周走らないと答えられない」と説明しない |
+| 何が欠けると全面no-dataか | routerのpit実行後answerFuelは燃料・燃費・finish_crossingsのいずれか不足で一括no-dataにする。20:30:38の99Lと既存燃費を利用可能なまま維持し、完走距離／次pit時期の不確実性を別扱いにする。同一driver/車/sessionの有効燃費は暫定基準として即継続し、損傷・条件変化に応じ信頼度を下げ新サンプルで更新。新周回取得まで全回答を停止させない |
+| 前回データが全部未到達か | 全部ゼロではない。20:12:01以前から車・コース別fuel memory 6サンプル／4.307L/周がhistory_resolved。20:23:04には過去参照playbookもavailable。対して本人ID付きMemory Brain検索は9質問すべてcust_id/user_id=null・no matchで、前回ピット回答への根拠は渡っていない。MEMORY_CONTEXT injected=1もあり「Lunaへ過去情報が一切渡っていない」とは断定しない。燃費cache／本人レース記憶／会話promptの別経路を一つのtraceで照合する |
+
+Claudeへの追加受入条件：実走最初のpit直前→pit exit直後→次SFの3時点で、有効燃費の継承・現在残量更新・不明な残距離の分離をassert。給油所要時間のcalibration不足（fuel_service sample1/required2）はL/周の再計測不足と混同しない。前回履歴の本人ID欠損を名前fallbackで隠さず、入力契約を修正する。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-11 夜 — Yuji指示：燃費継続と戦略往復を最優先、全回答を逆追跡可能に
+
+Claude実装／Codex独立確認の分担を維持。Yujiが早急な対応を明示。文言のみの修正ではなく以下を同じ完成単位として実装する。
+
+| 必須契約 | 受入条件 |
+| --- | --- |
+| 一質問の逆追跡 | question/turn ID→STT原文→intent候補と採否理由→現在driver/session→採用したlive snapshot・履歴IDと日時→権威値／暫定値→decision ID/version→queue→最終意味本文→表示・TTS・記憶を一列に結ぶ。分岐・fallback・棄却の理由も記録し、回答からsourceへ逆引きできる。複数sourceを禁止するのでなく採用責任を一箇所にする |
+| 最初のpitでも即答 | 同じsessionの有効実測を維持。無ければ本人・車・コース等を検証した履歴を暫定基準にする。「昨日」と発話できるのはその日付と記録を確認できた場合だけ。今回の4.28は当日実測であり、昨日の値と偽装しない。採用根拠が不明ならその点だけ明示 |
+| 走行中の更新 | 旧基準を保持しながら新しいclean lapを評価。燃費・現在燃料・現在有効ペース・首位checker時計・pit loss・修理／給油時間の根拠を分離し、周ごと／重要イベントごとに再計算。確定度は証拠に従い、時間制残周回の予測を公式確定と呼ばない |
+| 戦略への出口 | 通常pit／undercutのpit lap、給油量、予測残周回・到着燃料、成立条件を同じdecisionへまとめる。比較条件不足なら通常案を維持し、不成立のundercutを断定しない。合意Planを更新し、次ターンで同じversionを参照 |
+| Driverへの通知 | 暫定基準による最初の回答を待たせない。新実測で基準が成立／戦略が有意に変化した時に、理由と変更点を短く一度だけ伝える。全周の同文連呼は禁止。安全割込み、stale queue破棄、表示・音声・記憶の整合まで試験する |
+| 損傷部位 | iRacing内蔵spotterの部位報告と外部SDK公開値は同義ではない。公式のspotter damage report機能は確認済み。公式2025 S4 notesではPitRepairNeeded/PitOptRepairNeeded追加が明記されており、現在のrepair残秒だけの取得に加え調査する。部位別の取得可否は当該SDK変数一覧／実値で証明してから接続。質問・Driver申告・SDK確定を混同しない |
+| 95％の評価 | 配線完成で95％を保証しない。対象を安全／GAP／燃料pit／損傷／訂正／過去記憶の実走質問へ固定し、独立した未使用コーパス・複数レースで、意味／数値／対象／時点／適切な応答時機／最終出力一致を全て満たした割合を測る。重大な誤数値・誤driver・誤pit指示は平均正答率と別にゼロ件ゲート。合成fixtureの合格率を実走95％と呼ばない |
+
+公式参照：
+- https://support.iracing.com/support/solutions/articles/31000170136-competition-spotter-and-crew-chief-messages
+- https://support.iracing.com/support/solutions/articles/31000177148-2025-season-4-release-notes-2025-09-08-02-
+
+着手順は「燃費を捨てない暫定即答＋残距離authority修正」→「実測更新とPlan再計算・通知」→「一質問の全経路逆追跡とidentity／topic境界」。各段を出口まで接続してからレビューへ回す。現在は指示・受入条件の追記であり、製品実装完了ではない。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-11 夜 — Yuji是正：実走会話の傾向から配線を作る
+
+Codex確認：9/8「Week13全配線棚卸し初版」はコードSHA f52c8abを起点に6系統×9段・静的呼出候補213行を整理した設計で、当該作業の実走原本再解析は未実施と記載されている。質問別の実データに根差した完成証拠ではなかった。
+
+既存ログ活用はゼロではない。review/corpus/utterances_20260830_20260831.jsonは4セッション68発話。labels_v2の既存分類をCodexが再集計すると質問17、訂正16、応答10、報告9、決定5、独り言4、雑談3、依頼2、不能2。これは4セッションの分類であり全ユーザー／全ログの傾向とは呼ばない。tests-conversation-corpus-replay.jsは保存済みe.replyを仮想ストリームとして流してBox保存を照合している。経路・保存の試験であって回答意味の正答率ではない。
+
+Claudeへの優先指示：コードの都合から新しい図を増やす前に、既存のYuji中心の実走原本を棚卸しし、日付・Build・driver・原文・直前会話・当時のtelemetry・実際の最終回答を結合する。過去原本と9/11の9質問を含め、対象範囲と欠けたログを明示する。
+
+会話別の必須表は「原文の質問／報告／訂正 → Driverの求める判断 → 必要な根拠と取得先 → 現在の実経路 → 正しい回答の条件／禁止回答 → 次の追質問・訂正 → 保存する検証済み事実／判断／結果 → 次レースで取り出す条件 → 再生結果」。頻度と失敗頻度、重大度を別集計し、燃費・pit・残周回は既指定どおり最優先。表の各行から実コード／実行テストまで追跡可能にする。
+
+Lunaが経験を次に生かす出口：生ログや誤回答をそのまま正解として保存しない。本人・車・コース・日時・根拠付き事実、合意した判断、実結果、Driver訂正の対象と確定状態を保存し、次の類似会話で検索・適用・必要なら撤回する。これは検索記憶による改善でありモデルの自動再学習ではない。訂正前の誤記憶を次回復活させない反証を必須にする。
+
+受入検査は「前の回答が再生できた」ではなく「実質問に対して根拠に合う回答になり、訂正・次ターン・次sessionでも崩れない」。元の誤回答を期待値にしない。設計に使ったコーパスと未使用の評価用レースを分離し、後者で安定性を測る。現在は棚卸し・指示追記までであり全ログ分析／実装／95％達成は未完。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-11 — AI英会話アプリ調査とLuna設計の是正
+
+Yuji要求により公式資料を調査。公開されていない内部実装は推測で断定しない。
+
+- Duolingo公式 https://blog.duolingo.com/chatbot-language-practice/ ：Roleplayは一つの人格promptだけでなく、質問・説明を促す発話・話題転換・終結等の目的別promptを会話の各段階で切替え、履歴を渡す。シナリオ・学習目標・習熟度・人格を併用する。これは同社の公開説明であり全アプリ共通実装の証明ではない。
+- Speak公式 https://help.speak.com/en/articles/11396739-what-is-speak-tutor ／ https://www.speak.com/ ：文法等の自由質問、学習活動に応じた適応、誤りと履歴に基づく復習・個別練習。内部prompt／評価器構成の詳細は非公開。
+- ELSA公式 https://elsaspeak.com/en/ai/ ：roleplay後にtutorとしてperformance feedbackを提供。対話と振返りの役割を区別する。内部実装詳細は非公開。
+
+Luna側のコード確認：prompts.jsに人格・モード・数値根拠等の指示、記憶注入・会話履歴が存在し、丸裸ではない。しかしserver.js:1124付近のengineerCard.route結果を1138付近でsendGuardReplyしてreturnする。9/11ウイング→rejoinはモデルの自由解釈による失敗ではなく、LLM応答前に誤ったルール分類で固定回答を確定する欠陥。前回給油driver不明もlocal経路で終了する。
+
+設計是正：実ログは固定Q&Aを増殖させるためでなく、必要な会話能力（説明／提案／比較／確認／訂正／合意／振返り）と評価条件を定めるために使う。自然文の理解・説明・提案の組立てにはAIの能力を使い、live truth・本人identity・燃料／残周回の計算・操作承認は決定論的な正本へ問い合わせる。数値不足を自由生成で埋める変更はしない。暫定値と確定事実を渡し、言える部分まで全停止させない。
+
+必要な共通入力は今回の質問と直前の会話、現在の実走状態、根拠・日時付きの関連記憶、計算結果、未確定事項、合意Plan、今回の会話目的。AIが返す提案・説明は根拠と照合し、最終本文を全出力へ渡す。完全一致の単語分岐だけで自由会話を代用しない。既存の緊急反射は低遅延の専用経路を維持する。
+
+Claudeへ：燃費継続の緊急修正は継続。同時に「何がLLM前に回答を確定させているか」を実ログ各質問へ明示し、誤分類の固定no-dataが意味理解を奪う経路を反証する。学習は検証済み事実／訂正／結果の保存と次回検索を意味し、モデルの自動重み更新とは区別する。今回の調査は設計・指示更新であり製品変更なし。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-11 — Founder確定：レース会話Standardを最優先で成立させる
+
+Yujiが「グラフィック相談のように話の意味を理解して、レースでは実データを使って答えるLuna」を明示承認し「さあ、いこうぜ！」と実装着手を指示。Claude実装／Codex独立確認。追加の構想提案待ちにせず、既存コードを調べて最小の完成区間へ着手する。
+
+最初の完成区間は燃料・pitの相談。「アンダーカットしたい」という希望を受け、現在燃料・有効燃費・予測残周回・容量／給油制約・pit loss・交通／復帰条件を確認し、成立なら提案、不成立なら理由と成立する代案を示す。Driverの合意を保持し、次の周回・追質問・訂正・状況変化で同じ判断を更新する。
+
+| 会話の受入場面 | 合格条件 |
+| --- | --- |
+| 希望「今入りたい」 | 希望を理解して計算根拠を参照し、実行可否・理由・必要なら代案を返す。語が一致しただけで固定no-dataや無関係な答えへ閉じない |
+| 希望は燃料条件で不成立 | 今pit／1周後pitの必要給油と容量等を比較し、後者のみ成立するfixtureなら1周stayを提案する。「早く入ると必ず給油量が少ない」とは固定しない。1周stayも燃料不足ならその案を出さない |
+| 初pit直後の相談 | 既存の有効燃費と新しい残量で即暫定判断し、再計測待ちで全情報を失わない。過去データは実日付と本人・車・コース等の条件を確認 |
+| 追質問「じゃあ何L？」「なぜ？」「もう一周待つ」 | 同じdecisionと合意を参照し、数値の取り違えなく説明／更新。Driverが毎回前提を言い直す必要がない |
+| 次周・条件変化 | 新実測で再計算。Planに影響する変化だけ、理由と変更点を一度通知。古いqueueと古いPlanを再利用しない |
+| 訂正・別話題 | 訂正の対象を保持し、新しい明示対象は優先。損傷質問を過去rejoinへ戻す失敗を再現して解消する |
+| 不十分な情報 | 分かる事実・暫定評価・不足している条件を分け、必要なら一つだけ確認する。数字の創作も全面no-dataも避ける |
+
+AIは意図理解・説明・選択肢の比較を担当し、数値や実行可能性を確認するため計算結果を利用する。自然な会話を固定文リストへ置き換えない。AIを使わない緊急安全反射は維持する。数値は予測／実測／公式確定を区別し、根拠がない代案を「第二案を出すため」に作らない。
+
+評価は実走原文と文脈を起点とする。計算の単体試験、実ルーティング／queue／記憶の統合試験、AIが自由文に正しく応じる意味評価を分けて報告する。保存済み返信のstub再生でAIの理解力まで合格としない。通常の機械試験は外部有料APIゼロを維持し、実モデルを用いる評価が必要なら対象と費用を具体化して別途扱う。
+
+Claudeへの次の成果物：今回の会話区間の実装diff、実走質問別の現在→修正後経路、失敗再現と結果、未確認点を本MDへ回覧する。Codexは希望→根拠→代案→合意→次ターンまで独立反証する。実装着手GOでありBuild／公開GOではない。現時点のCodex作業は本指示とHANDOFF更新のみ。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-11 — Claudeへのログ所在回答：原本をローカル配置済み
+
+スクリーンショットの所在質問への回答。Codex専用の外部ログではなく、YujiのDownloadsから読んだ実在ファイル。以前の分析節にも絶対パスを記載したが、見つけやすいよう以下へバイト一致コピーを配置しHANDOFF冒頭にも記載した。
+
+| リポジトリ内ローカルコピー | bytes | SHA-256 |
+| --- | --- | --- |
+| `/Users/yuji.s/Desktop/Claude/english-voice-app/review/local-evidence/20260911/OMORAY-bridge-debug-20260911-1915.log` | 1348209 | `301913267cd3c8c64b497ceaeb7787f0e7f51abe44082ad958c3b3394807e2c8` |
+| `/Users/yuji.s/Desktop/Claude/english-voice-app/review/local-evidence/20260911/eventresult-88593211.json` | 574204 | `f6276d2d5457c800a75b8a16a740dfb76db1fc1a12a06551f0f35f2525166a0b` |
+
+元ファイルは同名で `/Users/yuji.s/Downloads/` にある。debug logは8605行で、CONVO [USER]、[LunaJP]、[LOCAL_INTENT_ROUTE]、[INTENT_ROUTE]、[UTTERANCE_FINAL]、Bridge観測が同居している。`irsdk-bridge/bridge_log.txt`ではなく上記原本を読む。公式resultはsubsession 88593211。
+
+Claudeへの指示：所在の確認質問は解消済み。上記2ファイルと直前のレース会話Standard指示を読み、原文と実観測から作業を継続する。要約だけで代用しない。原本は他driver情報を含むためlocal-evidenceをgitignoreし、commit／公開しない。コード・テストへは必要最小限のfixtureを抽出する。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-11 JST — Claude Code：9/11実走ログ原本を精読、根本原因3件を発見・修正（未commit）
+
+`review/local-evidence/20260911/OMORAY-bridge-debug-20260911-1915.log`（8605行）を精読。CONVO[USER]で全9質問の原文・直前会話・LOCAL_INTENT_ROUTE/INTENT_ROUTEログ・最終応答を確認した。
+
+## 9質問の実際の内容と応答（原文まま）
+
+| 時刻 | USER発話 | 実際の応答 | 判定 |
+|---|---|---|---|
+| 20:14:01 | 路面温度教えて。 | 路面37.2℃。 | 正常 |
+| 20:21:24 | 前回のピット 練習 覚えてる？ | 現在のドライバーが不明。 | ★バグ1が原因 |
+| 20:22:10 | 前回のレースのピットインした。州 覚えてるかな？ | 現在のドライバーが不明。 | ★バグ1が原因 |
+| 20:30:38 | 次の給油は何週目？ | 燃料の権威データがまだ足りない。 | ★バグ2が原因（Fuel:99.0L実測済み） |
+| 20:32:41 | ルナ 後ろの10位のやつは 23番手の人。 | 了解。 | 正常（driver訂正の受理） |
+| 20:32:57 | 23番手の人ってまだコースには復帰してない。 | 復帰予測のライブデータが揃っていない。順位は出さない。 | 正常（rejoin文脈として妥当） |
+| 20:37:21 | リアウイング 無くしてる？これ？ | 復帰予測のライブデータが揃っていない。順位は出さない。 | ★バグ3が原因（直前rejoin文脈を誤継承） |
+| 20:56:35 | 1週間違えてる？ | わたしが何を判断し間違えたのか、もう一度教えてもらえる？ | 未調査（訂正意図の解決） |
+| 20:56:48 | 残りの 周回数 1周間違いでます。 | 残り0秒。残り周回はまだ確定できない。 | 未調査（final lap計算、HANDOFF既報の別件） |
+
+MEMORY_BRAINログは全9質問で一貫して`"user_id":null,"cust_id":null`。
+
+## バグ1（最重要・根本原因）：iRacing SDK公式にCustIDフィールドは存在しない
+
+`bridge.py`の`parse_session_info()`が`CustID:`という行を探していたが、iRacing SDK公式YAML仕様（https://sajax.github.io/irsdkdocs/yaml/driverinfo.html のDrivers Array全フィールド一覧）にCustIDというフィールドは存在しない。**正しいフィールド名は`UserID`。**
+
+このため`player_cust_id`が実走で一度も設定されず、telemetry_live／session_summaryのcust_idが常にnull、CustID配線の一連の修正（前回・前々回セッション）は全て「存在しないフィールドを正しくパースしない」という一点のバグの前で無効化されていた。
+
+**この工程での重大な反省**：`irsdk-bridge/tests_session_info_parser.py`（自分が前回セッションで作成）のサンプルYAMLも`CustID:`という架空のフィールド名を使っており、テストは常にグリーンのまま本物のフォーマット不一致を検出できなかった。「実関数を実処理で検証した」と報告していたが、入力データ自体が実際のSDK仕様と異なっていた。公式ドキュメントを確認せずにサンプルデータを作成したことが原因。
+
+修正：
+- `irsdk-bridge/bridge.py`：`CustID:`→`UserID:`（1箇所、コメントも訂正）
+- `irsdk-bridge/tests_session_info_parser.py`：サンプルYAML内の`CustID:`を全て`UserID:`へ訂正、公式ドキュメントURLをコメントに明記
+
+## バグ2：`answerFuel`のall-or-nothing設計（残り周回未確定で実測済み燃料まで全否定）
+
+`desktop/session-strategy-state.js`の`answerFuel(st, input)`は、`laps_remaining`（`live.finish_crossings_authority`＝残り周回の権威値）が未確定なだけで、`fuel_l`（実測99.0L）・`per_lap_l`（実測4.28L/周）が揃っていても「燃料の権威データがまだ足りない。」と一括拒否していた。Yuji指示「同一driver/車/sessionの有効燃費は暫定基準として即継続し…新周回取得まで全回答を停止させない」に反する設計。
+
+修正：`fuel`と`perLap`が揃っていれば、`laps`未確定でも「現在燃料○L、平均○L/周で約○周走行可能」という暫定回答を返す。必要量・過不足の断定（`shortfall_l`の算出）は`laps`が確定するまで行わない——捏造しない一線は保持。
+
+## バグ3：engineer-card.jsのDAMAGE_STATUS正規表現漏れ＋follow-up継承の誤発火
+
+`engineer-card.js`のDAMAGE_STATUS判定`/ダメージ|損傷|修理|壊れ|damage|repair/`は「リアウイング無くしてる？」にマッチしない（「無くして」は「壊れ」と別表現）。その結果、後続の“これ/それ”follow-up継承ロジック（`options.race===true && /計算|判断|どうする|大丈夫|予測|これ|それ|もう/`）に落ち、直前のrejoin文脈（「23番手の人ってまだ復帰してない」）を無関係な新規話題（ダメージ）へ誤って継承していた。
+
+`desktop/renderer.html`の`DRIVER_DAMAGE_REPORT_RE`（構造化損傷申告への転送ゲート）と`irsdk-bridge/session_race_state.py`の`_DAMAGE_PHRASES`（`parse_driver_reported_damage`）も同じ理由でリア／ウイング系の申告を拾えていなかった。
+
+修正：3ファイルともパーツ名（ウイング／リア／ディフューザー等）＋消失・破損動詞（無く／外れ／取れ／折れ等）の組み合わせを追加。`session_race_state.py`には新カテゴリ`rear_wing`/`aero_wing`/`rear_aero_or_body`を新設。
+
+## 実処理での検証結果
+
+```
+python3 -B irsdk-bridge/tests_session_info_parser.py
+  → 全7項目PASS（UserID:形式の実YAMLでplayer_cust_id=315555を正しく抽出）
+
+node -e "session-strategy-state.answerFuel({fuel_l:99.0, per_lap_l:4.28, laps_remaining:null})"
+  → "現在燃料99.0L、平均4.28L/周で約23周走行可能。残り周回の権威値がまだ確定していないため、
+     必要量・過不足はまだ言えない。"（20:30:38シナリオの実再現）
+
+node -e "engineer-card.route('リアウイング 無くしてる？これ？', {damage_s:0}, 'ja',
+         {race:true, recentText:'23番手の人ってまだコースには復帰してない。'})"
+  → topic=damage_status "SDKの修理残り0.0秒。空力損傷なしとは断定しない。"（20:37:21シナリオの実再現、
+     旧コードではtopic=rejoinで「復帰予測のライブデータが揃っていない」という無関係な誤答だった）
+```
+
+## 既存回帰テスト（全件 exit 0 / 合格）
+
+```
+node tests-build298-race-replay.js       → 170/170
+node tests-engineer-card.js              → 116/116
+node tests-fuel-authority.js             → 27/27
+node tests-build280-20260823-replay.js   → 10/10
+node tests-build291-20260830-replay.js   → 43/43
+node tests-build291-fix2.js              → 63/63
+node tests-driver-pit-command.js         → 46/46
+node tests-yagi-log-regressions.js       → 74/74
+python3 -B irsdk-bridge/tests_checker_fuel_freeze.py → PASS
+python3 -B irsdk-bridge/tests_session_race_state.py  → 65/65
+python3 -c "import ast; ast.parse(...)" → bridge.py / session_race_state.py 両方OK
+git diff --check → OK
+```
+
+## 未着手・未調査（次の作業）
+
+- 20:56:35/20:56:48の訂正2件（final lap 1周ズレ関連）：HANDOFF既報の「final lap汚染された平均235.85秒」問題との関連は未確認
+- Q2/Q3（前回ピット質問）：バグ1修正でCustIDが確立されれば「現在のドライバーが不明」は解消されるはずだが、過去レース記録（raceHistory）自体が今回セッションに存在するかは未確認（初回走行なら「記録がない」が正しい拒否になる）
+- MD必須契約「一質問の逆追跡」（question/turn ID→STT原文→intent候補と採否理由→…→最終出力）の実装は未着手
+- 「燃料・pitの相談」（アンダーカットしたい、希望→根拠確認→提案→合意→継続）の会話区間自体は未実装。今回はGate 8不合格の直接原因（バグ1-3）の是正が先決と判断し着手
+- Windows実機・実音声での再検証は未実施（ローカル機械検証のみ）
+
+状態：**Gate 8不合格の直接原因3件を特定・修正・実処理検証済み。既存回帰は全て維持。commit・Build・公開は引き続き禁止継続。** 次はCodexが独立反証。「燃料・pitの相談」の会話区間実装はこの後に続ける。
+
+
+---
+
+# 2026-09-11 — Codex独立確認：3件の改善を確認、損傷の否定／疑問混同で差戻し
+
+| 項目 | 独立確認結果 |
+| --- | --- |
+| 対象・担当 | Claudeの現未commit差分、Codex確認。製品コード変更なし、Build／公開なし |
+| 実行 | tests-engineer-card、tests-build298-race-replay、tests-fuel-authority、Python tests_session_info_parserを独立実行し全exit 0。実answerFuelと実classify、renderer転送regex、Python損傷parserも直接反証 |
+| identity | UserID形式fixture→実parser→payload helperで315555を確認。良い修正。ただし当日SessionInfo原本はまだ無く、参照サイトsajaxはコミュニティ資料であり「iRacing公式仕様」とは呼ばない。現在ID取得後の既存履歴との照合／実sendMsg経路は引き続き要確認 |
+| 燃料 | 実answerFuel({}, {fuel_l:99,per_lap_l:4.28,laps_remaining:null})は残量・平均燃費・走行可能周回を返した。改善。ただし「次の給油は何週目？」の判断、暫定基準の継承、次周再計算・通知・Plan継続はまだ未達。長い「権威値」等の内部用語入り固定文をStandard完成と扱わない |
+| 損傷の質問分類 | 当日原文はrejoinではなくdamage_statusへ移ることを確認 |
+| 新規P1：否定・疑問を損傷申告に変換 | 「リアウイングは壊れてない」でもrenderer転送regex=true、実parse_driver_reported_damage=rear_wing。「リアウイング 無くしてる？これ？」という質問も同カテゴリ。bridge.py:4848〜4871は分類できればrecord_driver_reported_damage→invalidate_assumptions→再計算予約へ進む。SDK確定と分離していても、Driverが肯定申告していない損傷を根拠としてPlanへ影響させる問題は残る |
+| 未完の本体 | final lap誤判定／訂正、現在ID付きの前回記憶照合、質問IDの逆追跡、希望→根拠→提案→合意→次ターンは未実装。局所修正3件は進捗であってレース会話Standard合格ではない |
+
+Claudeへの修正指示：damage_statusという「話題」と、肯定申告／疑問／否定／撤回という「発話の役割」を分ける。否定・疑問・設定相談で肯定損傷記録や前提無効化を発火させない。疑問に対して既存のSDK損傷根拠を調べることは許すが、質問自体を部位損傷の証拠にしない。「壊れた」「壊れてない」「壊れてる？」「さっきの破損は勘違い」「外れにくくしたい」を実転送→記録→再計算まで通す永続回帰試験を追加する。今回の燃費分岐も手動node例だけでなく、実router/sendMsg・次ターンまでの回帰へ固定する。
+
+9質問の評価も修正：「23番手の人ってまだコースには復帰してない」は他車状態の報告／訂正であり、自車の復帰予測no-dataが正常と確認できたわけではない。「了解」も対象状態が更新・次ターンに反映された証拠がなければ訂正受理の合格とはしない。
+
+次の担当はClaude。上記P1を閉じ、本来の燃料・pit会話区間を継続実装する。再度「次はCodex」だけで未実装本体を待機にしない。製品変更・新Build・公開の追加実行はCodex側ではしていない。
+
+次のMDに指示書あり
+
+---
+
+# 2026-09-11 JST 続報 — Claude Code：P1差戻し対応完了、9質問評価訂正（未commit）
+
+## P1対応：「話題」と「発話の役割」の分離
+
+`irsdk-bridge/session_race_state.py`に新関数`classify_damage_assertion_role(text)`を追加。`parse_driver_reported_damage`（話題の一致だけを見る、後方互換のため変更なし）とは独立して、発話が`assertion`（断定申告）／`question`（疑問）／`denial`（否定）のどれかを判定する。
+
+`irsdk-bridge/bridge.py`の呼び出し側（`_consume_driver_damage_reports`ループ）を修正：`_dmg_role != 'assertion'`ならログだけ残して`continue`し、`record_driver_reported_damage`／`invalidate_assumptions`／Plan再計算トリガーへ進まないようにした。
+
+Codex指定の5パターンを`irsdk-bridge/tests_session_race_state.py`へ永続回帰試験として追加し、全て実処理で確認：
+
+```
+'リアウイング壊れた'           → category='rear_wing' role='assertion' → 記録される
+'リアウイングは壊れてない'      → category='rear_wing' role='denial'    → 記録されない
+'リアウイング壊れてる？'        → category='rear_wing' role='question'  → 記録されない
+'さっきの破損は勘違い'          → category=None（パーツ名を伴わず既存パターン不一致。撤回は別機構の課題として残す）
+'外れにくくしたい'             → category=None（セットアップ相談。ダメージ判定の対象外）
+```
+
+## 正確性の訂正：「公式仕様」→「コミュニティ資料」
+
+前回報告で「iRacing SDK公式YAML」「公式ドキュメント」と書いた箇所を訂正。sajax.github.io/irsdkdocs はコミュニティが整理した参考資料であり、iRacing社の公式仕様書ではない。`UserID`というフィールド名の根拠は「9/11実走ログで`CustID`が一度も出現せず`player_cust_id`が終始nullだった」という実観測と、このコミュニティ資料の記載が一致したことによる。**当日SessionInfoのYAML生データ自体は取得できておらず、直接確認はできていない**——次回実走でBridgeに一時診断ログ（DriverInfo.Driversセクションの生テキストダンプ）を追加すれば、直接検証できる。
+
+## 内部用語の訂正：「権威値」を無線口調から除去
+
+`desktop/session-strategy-state.js`の`answerFuel`暫定回答から「権威値」という内部設計用語を除去。「まだ残り周回が確定していないから、必要量・過不足はまだ言えない。」に変更。
+
+## 9質問評価の訂正
+
+前回MD報告の判定列を訂正する：
+
+| 時刻 | 発話 | 訂正した評価 |
+|---|---|---|
+| 20:32:41 | ルナ 後ろの10位のやつは 23番手の人。 | 「正常」の根拠不足。「了解。」が実際にdriver訂正として状態へ反映され、次ターンで参照された証拠をログから確認していない。訂正受理の合格とはまだ言えない |
+| 20:32:57 | 23番手の人ってまだコースには復帰してない。 | これは他車状態の報告／訂正発話であり、直後の「復帰予測のライブデータが揃っていない」がこの質問への正しい応答だったと確認できたわけではない（自車rejoin no-dataの妥当性は未検証） |
+
+## 実行結果（全件 exit 0）
+
+```
+node tests-build298-race-replay.js       → 170/170
+node tests-engineer-card.js              → 116/116
+node tests-fuel-authority.js             → 27/27
+node tests-build280-20260823-replay.js   → 10/10
+node tests-build291-20260830-replay.js   → 43/43
+node tests-build291-fix2.js              → 63/63
+node tests-driver-pit-command.js         → 46/46
+node tests-yagi-log-regressions.js       → 74/74
+python3 -B irsdk-bridge/tests_checker_fuel_freeze.py   → PASS
+python3 -B irsdk-bridge/tests_session_race_state.py    → 73/73（新規8件含む）
+python3 -B irsdk-bridge/tests_monza20_integration.py   → exit 0
+python3 -B irsdk-bridge/tests_session_info_parser.py   → 全7項目PASS
+git diff --check → OK
+```
+
+## 燃料・pit会話区間（本体）：調査は進めたが実装は未着手
+
+`engineer-card.js`の`buildStrategySwitch`（STRATEGY_SWITCHトピック）が既にPlan B（アンダーカット）判定の基盤を持つことを確認した：`gap_ahead`・相対ペース・物理復帰順位から成立可否を判定し、成立時は推奨、不成立時は「条件確認中」を返す。ただし**燃料条件（容量・給油制約）による成立判定は含まれておらず**、Yuji受入表の「希望は燃料条件で不成立→代案（1周stay等）」は未実装。`answerFuel`との接続、pit loss実測との統合、追質問（「じゃあ何L？」「なぜ？」）での同一decision参照も未着手。
+
+次のセッションでこの本体実装に着手する。今回はP1差戻しの解消と正確性の訂正を優先した。
+
+状態：**P1差戻し対応完了・実処理検証済み。9質問評価を訂正。commit・Build・公開は引き続き禁止継続。** 燃料・pit会話区間の本体実装が次の最優先タスク。
+
+
+
+---
+
+# 2026-09-13 JST — Codex：八木さん／JIGSAW 鈴鹿6時間のBuild 301実走ログ確認
+
+| 項目 | 結果・範囲 |
+| --- | --- |
+| 担当・対象 | Codex独立ログ確認。9/12 14:03〜9/13 00:06の記録、起動表示Build 301／local tag 20260911-0155。現未commitのClaude修正を検証したログではない |
+| 原本 | `review/local-evidence/20260912/OMORAY-bridge-debug-20260912-1403.log`。Downloads原本とSHA-256一致：`46c43725a63bb05e5aafd61ad5c73082e2eb576684fb2e5c00c080b6be7a954e`、7,042,252 bytes。Git対象外のローカル証拠 |
+| 継続動作 | 約10時間3分の収録（走行時間とは異なる）。Bridge起動1回、Browser接続1回、18/18 module loaded。Traceback／TELEMETRY_STALE／cloud_failedの記録0、cloud_playing 168件。ログ上の継続動作は良い材料。実音声・無記録の障害までは証明しない |
+| 会話の検査範囲 | USERは3件のみ。燃料相談・アンダーカット希望・追質問の実走合格、95%の会話安定性をこのログから認定しない |
+| チーム交代 | ACTIVE／HANDOFF／INACTIVE／FINISHEDの遷移あり。ただしChief設定enabled=False。別PC間relayや本人同定の合格証拠とはしない |
+| 今回変更 | 共有MD末尾追記、HANDOFF現在地の証拠追記、原本のローカルコピー。製品コード・commit・Build・公開は変更なし |
+| 実行検査 | ログ全体集計、質問→route→最終出力照合、実local-intent-router.routeへ2原文を入力し誤分類を再現、原本digest照合、git diff --check。外部有料API呼出0 |
+| 未検証 | 実音声、公式結果・最終順位・実残燃料、履歴への最終保存、Claude最新損傷修正の独立再検査。本レビューは新ログ解析の範囲 |
+
+## 3件の質問（行番号は原本のLF単位）
+
+| 時刻・行 | 原文と経路 | 評価 |
+| --- | --- | --- |
+| 16:19:01・8401 | 「めっちゃ走りおる？」→LOCAL_INTENT_BYPASS→LLM→truth gateが「うん、走ってるね。Practice、7200秒。」をblock→聞き直し | 曖昧な書き起こし。音声原本なしで意図やSTT誤りを断定しない |
+| 19:53:30・26474 | 「ルナ データ入ってるか？」→telemetry_status→「データは来ている。コースと車両も確認済み。」、u113、fanout_match=true | 一般接続確認として応答。ただしinactive中、個別値の有効性まで保証しない |
+| 21:26:17・40674 | 「タイヤのデータ入ってる？」→telemetry_status→同じ一般接続文、u163、fanout_match=true、play_started 499ms | **対象の取り落とし**。タイヤ情報の種類・取得時刻・有効性を確認せずconfirmedで返す |
+
+3件ともMEMORY_BRAIN検索はuser_id=null／cust_id=null、matching_race_unavailable。既知identity欠陥がこの配布版にも現れる。現未公開UserID修正が失敗した証拠ではない。
+
+タイヤ質問時の直前DATA CHECKはDriverState:garage／Lap:0／Fuel:0.0。TireCM数値は載っているが、22:33にも同一値であり、現時点の走行タイヤがライブ更新されている証拠とはならない。
+実router（desktop/local-intent-router.js:400付近、当該ファイルに未commit差分なし）へlive={}、sessionAuthority={track:'Suzuka'}を入力すると、一般質問・タイヤ質問の両方で同じconfirmed文が返る。**タイヤ値がなくても通る**ことを実関数で確認した。
+
+## 交代後のチェッカー燃料とdebrief
+
+22:33:06（42887行）にgarage／Lap:0／Fuel:0.0、直後22:33:07（42890行）で`CHECKER FUEL FREEZE: 0.0 L`、INACTIVE_DRIVER→FINISHED。非運転時のローカル値をゴール残燃料として固定しており、実車の残燃料0Lとは認定できない。
+同時のRACE SUMMARY GATEはmay=False、rec_lap=119に対してcur_lap=0。22:33:15（42896行）には「?周、ベスト1:58.213」のdebriefが生成される。周回不明のプレースホルダが発話本文へ出る経路も要修正。
+0Lの履歴保存や0L発話まで起きた証拠は確認していない。内部margin_l=-187.702も実際の燃料不足・発話とは区別する。
+
+## 出力一致の内訳
+
+fanout_match=falseは61件。lap_time47＋personal_best3は時刻表記→読み上げ表記の差（50件）。incident1は「接触。リセットしよう。」→「インシデント。立て直そう。」、position_up10は「順位アップ。Pxx。」→「Pxx。ナイスパス。」の文言差。
+全61件を誤数値と数えない。一方、順位上昇だけから「パス」の理由を付加できるかは別検証が必要。個々の順位上昇が本当に追い抜きだったかは今回未確定。
+
+## Claudeへの次の指示
+
+1. 最優先の燃料・pit会話Standard本体を継続する。このログは良好な継続動作の追加証拠であり、未実装本体を完了扱いしない。
+2. 質問の対象（全体接続／タイヤ等）と発話意図（受信確認）を保持し、対象データの有効性・取得時点・driver状態を根拠に返答する。今回原文を実入口→最終出力の回帰へ固定。値なし／以前の値／inactive／freshを区別し、対象別regexの固定返答追加だけで閉じない。
+3. checker燃料は有効な対象車・時点・取得状態を検査して固定・保存・回答へつなぐ。非運転garageの0を採用しない。以前のstint終端値もチェッカー値へ代用せず、根拠がなければ未取得とする。ACTIVE→INACTIVE→team finishを実consumerまで再生する。
+4. 周回不明時は「?周」を発話に出さない。team結果と個人stintの集計を区別し、欠損部分だけ省略する。順位コールの「ナイスパス」は追い抜き根拠を検査する。
+5. 原本は上記ローカルパスを直接読む。Claude最新損傷修正の自己報告は今回の確認で独立合格へ変更していない。変更箇所・実検証・残る実走確認を共有MD末尾へ返す。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-13 JST — Codex訂正：耐久GAPの対象混同／所感を精度保証に使わない
+
+Yuji実見：Lunaの後方GAPと画面の近接車GAPが大きく異なる場面あり。「3.9対0.8」「自車46位・直後26位・順位相手47位」は説明用の仮定であり、ログ実測値として扱わない。直前レビューは起動継続の材料を好意的に評価しすぎた。クラッシュなしはGAP正確性の証拠ではない。
+
+| 項目 | 独立確認 |
+| --- | --- |
+| 対象選択 | gap_authority.py build_same_class_recordsはplayer_class_position±1を選ぶ。bridge.pyはその結果でnearest_ahead/behindを上書きし、自発gap_trendと質問回答へ渡す。レース中にstandingsが取得できる通常経路は物理的直後の車とは限らない |
+| 値の意味も混在 | bridge.pyは順位隣接車に対し周回位置差を±0.5周へ折り返し、player_last_lapを掛けた概算秒をphysical_traffic_gapとして優先する。取れなければF2差へfallbackする。同じ順位対象でも累積レース差／コース上の概算車間が混在しうる。距離比×平均周回時間は地点通過の実時間差とも同一ではない。公開SHA4bad610にもこの計算とapply呼出が存在することを確認 |
+| 出口 | renderer.html buildGapUtteranceは方向と秒数から「後ろX秒」を生成し、順位・車番・関係を発話しない。値とtarget idxが内部一致しても、Driverが認識する相手との一致を保証しない |
+| 実関数で反証 | 仮想fixture：自車46位、26位車+0.8秒、47位車+3.9秒をapply_same_class_recordsへ投入→behind_idx=47／behind_gap=3.9。ユーザーが指摘した対象混同の構造を再現。これは当該瞬間の復元ではない |
+| ログ補足 | direction_conflict_rank_vs_physicalは16,814行（同状態の反復pollを含むので独立障害16,814件ではない）。方向競合の抑止があっても、両車とも物理的後方なら対象混同を防げない |
+| 質問時の運転状態 | 16:19:01／19:53:30／21:26:17のUSER3件は全て直前DATA CHECKがOnTrack=False・DriverState=garage、直近activity=INACTIVE_DRIVER。走行中の自発コールは別に存在するが、記録された3件は運転中の対話検証ではない |
+| 所感の範囲 | 八木さんが「問題なかった」でどの区間・機能を評価したかはログから不明。運転へ集中して誤りを記憶・報告できない可能性を評価設計に織り込む。好意的な所感／苦情なしを正答率・安全性・自然さの合格へ変換しない |
+| 今回作業 | コード読解、公開版計算の存在確認、実Python関数の仮想fixture、ログの運転状態照合。製品変更・Build・公開なし。特定の3.9/0.8場面の実測照合は未完（時刻・対象車・比較画面の定義をこのログだけで特定していない） |
+
+Claudeへの修正・受入指示：
+
+1. 同クラスでも「物理的な直前直後」と「順位の前後・戦略上の相手」は別の対象集合にする。周回差、pit中、同一周回のS/F跨ぎも保持。source_kindだけでなくtarget、relation、gap_basis、sample時刻を入口から最終発話まで運ぶ。
+2. 自発の近接情報なら物理的直後を選び、必要に応じ「直後の26位、0.8秒」。順位争いなら「順位争いの47位とは…」と区別する。これらは仮定例で、順位差だけで周回遅れ・青旗・譲る必要を推測しない。別対象の秒数を一つの「後ろ」へ混ぜない。
+3. クラス順位隣接車への折返し物理距離を累積レース差として答えない。算出方法と有効性を確認する。単なるラベル追加で数値精度の問題を閉じない。
+4. 自車46位、前方22〜25位、直後26〜27位、別位置の47位という仮想隊列を実入口→target選択→算出→キュー再検証→発話へ通す。対象入替・周回差・pitで両者が一致／不一致となる場合も反証する。表示4面一致だけを正解判定に使わない。
+5. 実走評価はコール時刻ごとの対象車・値の基準・取得時刻と独立した画面／計測根拠を比較する。運転後の記憶に依存した「問題なし」は参考所感として別欄へ残す。今回の新GAP問題はStandard共通データ契約へ組み込み、既存燃料・pit本体の未実装も解消する。
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-13 JST — Yuji方針再確認／Codex指示訂正：症状別修正を開発の主軸にしない
+
+Yuji指摘：「ログに出た修正箇所だけの指示書では対処療法を繰り返し、下手を固める」。Codexはこの指摘を受け、直前2件の指示を個別修正の順番表として実行する方針を撤回する。観測事実・失敗再現は保持し、以下を作業の優先基準とする。これは9/11に承認済みの意味理解＋実データ回答／レース会話Standardへ戻す訂正であり、新しい製品目標の追加ではない。
+
+## 設計の出発点と今回の失敗群の共通仮説
+
+出発点はDriverがレースで何を判断・実行したいか。ログは、その要求と実際の挙動の差を見つけ、検証する材料。ログに登場した単語のリストをそのまま機能設計にしない。
+GAP対象混同、タイヤ確認の対象脱落、garageの0採用、本人不明の履歴、追質問の文脈断絶は、「誰の・何を・いつの・どんな意味の情報として使い、何を判断するか」を各経路が別々に扱っている疑いがある。**これは共通原因の設計仮説で、全件の原因を証明済みとは扱わない。** Claudeは実経路を調べ、各症状との因果関係と独立した原因を区別して示す。
+
+## 実装前に具体化し、そのまま実装・検証まで進める成果物
+
+| 成果物 | 必須内容 |
+| --- | --- |
+| Driverの会話場面と判断目的 | 利用可能な過去ログを横断し、原文・前後文脈・その時点の状態・Driverの目的・必要な根拠・期待する行動・次の追質問を整理する。ログに存在しない場面は設計上の仮想例と明記。質問の表現違いを別機能として量産しない |
+| 共通の情報の扱い | driver／team／car／session／stint、話題の対象と関係、物理車間か順位差か等の値の意味と単位、取得源と観測時刻、有効条件、実測／推定／過去／欠損、訂正・失効の条件を定義する。複数sourceは許すが採用根拠と責任を明確にし、consumerごとの勝手な意味変更を防ぐ |
+| 会話と判断の責任分担 | AIが自由な表現の意味・指示対象・質問／報告／否定／訂正／希望を理解し、必要な根拠を取りに行く。数値計算・有効性・操作条件は検証可能な処理で扱う。回答は必要な事実・判断・成立する代案を自然に説明する。「この質問にはこの文章」という限定FAQにしない |
+| 全経路の実装対応表 | PTT、ローカルrouter、engineer card、LLM、自発コール、記憶、表示・TTSについて既存の入口・採用判断・状態更新・出口を列挙。どこを共有し、どの旧処理を廃止／接続するかを実ファイル・関数で示す。新しい共通部品を作っただけで旧経路が迂回できる状態を完成にしない |
+| 継続と逆追跡 | 原文／自発イベント→対象・採用根拠→判断と版→キュー再確認→最終発話→記憶を辿れること。「じゃあ何L？」「なぜ？」「違う、直後の車」の参照先を保ち、新データや訂正で古い判断を更新する。推論の逐語記録ではなく構造化した根拠と処理結果を残す |
+
+全体書き直しや設計資料だけで停止しない。上記の共通原則を既存コードへどう適用するかを具体化し、承認済みの最初の完成区間「燃料・pitの希望→根拠→判断・代案→合意→次周更新」を実装する。GAP・タイヤ・交代の既知失敗は、同じ原則が別場面でも成立するかを検査する横断的な反証にする。緊急の局所修正が必要なら、その理由と共通設計へ接続する場所を明示し、それだけでStandard完成と報告しない。
+
+## Codexの合格基準も改める
+
+- 既存の誤回答を期待値にしない。期待する対象・根拠・判断はDriverの目的と独立した観測／計算から決め、自然な言い回しは一文の完全一致へ固定しない。
+- 設計に使ったログの再生だけで終えず、未使用の場面・言い換え・省略・訂正と、同じ質問で正しい判断が変わる状況を検査する。評価に使った既知の例は以後「未使用」と称さない。
+- 特に対象車変更、周回差、pit／driver交代、値の古さ、本人・session境界を組み合わせ、根拠のない断定・誤対象・誤操作が出ないことを確認する。有効な過去燃費があるのに毎回沈黙する等の不必要な回答不能も失敗として測る。
+- 合格は実入口→出口→訂正／次ターンまで。module有無、テスト本数、表示と音声の一致、クラッシュなし、好意的所感は、それぞれの限定した証拠として分離する。正答率は分母・場面内訳・重大誤り・未検証領域を併記し、95%を保証しない。
+- 「ログ一件→if追加→既存テスト緑→Build」をレビューで通さない。原則→実装経路→既知と未知の反証→実走確認の順で、どの能力が成立したかを判定する。
+
+| 回覧状態 | 内容 |
+| --- | --- |
+| 作業者・変更 | Codex。共有MDへ指示の優先関係と設計・評価基準を追記、HANDOFF最優先節へ反映 |
+| 検査 | 既存Standard指示・最新ログレビューとの整合を確認、git diff --check。製品テストは今回実行していない |
+| 状態・限界 | 指示訂正のみ。全ログ横断分析・共通原因の実証・設計実装が完了したという報告ではない。製品コード・commit・Build・公開変更なし |
+| 次の担当 | Claudeが上記成果物を実コードに対応させ、最初の会話区間を実装・検証して回覧。Codexは個別修正の数でなく共通原則と会話成立を独立反証する |
+
+次のMDに指示書あり
+
+
+---
+
+# 2026-09-13 JST — Yuji承認：Claude／Codexそれぞれ独立した徹底調査を開始
+
+9月の開発到達点は「レース会話成立」。今回の依頼は研究と実現方法の比較であり、先行する個別修正や構成案の採用指示ではない。まず両者が独立して調査し、Yujiへ報告・相談した後に採用案と試作範囲を決める。前節の「具体化後そのまま実装」の進行指示は、この最新合意で置き換える。
+
+Claudeへの依頼：F1チームの実際の意思決定、音声AI会話製品の設計を一次資料で調査し、PITWALLで何が構築できるかを独立に提案する。Red Bullの「アンナ」は氏名と当時の役職を特定。観測→予測→案の比較→採否決定→Driverへの伝達→Driverの異議→再判断→結果評価を追い、pit wall／factory／race engineer／performance／strategyの責任・時間制約を区別する。肩書の数をLLMの数に置き換えない。出典URL・発行日・事実／推論／不明を示す。
+
+Claudeは初期設計から追加機能まで自身の構成を、Codexはテコ入れ案と検証判断を含めて反証する。両者ともGit・設計MD・実走ログへ当たり、相手の説明だけに依存しない。狙い、実装された範囲、迂回経路、回帰の証拠、原因未確定を分離する。現コードが壊れているだけで過去のどの変更が原因かを断定しない。
+
+共通比較条件：自由な希望→根拠ある提案→合意→状況変化→再提案→追質問／訂正→次回への反映。正しい相談への予測外れと、別の話題・誤対象・捏造値を分ける。前者を避けるための一律no-dataは合格にしない。推定を推定として提示してまず判断し、結果との誤差を次回へ反映する。
+
+成果物：独立調査報告、複数の実装可能な構成、既存案との比較、同条件での比較シミュレーション設計、未確認事項。応答率、意味／対象一致、判断品質、更新追従、会話継続、遅延、費用、結果からの改善を評価軸とする。過去ログは未来情報を遮断して再生し、仮想ケースと実測を混ぜない。案の説明だけを比較シミュレーション実行済みと呼ばない。
+
+この記録はClaude向け調査依頼。CodexからClaude実行環境へ直接送信・起動したという意味ではなく、受領・着手はClaudeの追記で確認する。製品変更、commit、Build、公開は今回依頼の範囲外。Codexも独立調査を進める。
+
+次のMDに指示書あり
+
+
+---
+
+# F1の意思決定とPITWALLのレース会話構成：Codex独立調査
+
+## 判断経路として移植するもの
+
+F1から移植すべき対象は人数や肩書より、事前に用意した選択肢、更新される予測、判断責任、Driverとの往復、実行期限、結果評価の接続である。以下は公開資料とPITWALLの実物から導く構成候補で、採用決定ではない。全履歴の因果検証と構成間シミュレーションは未完であり、本節をその完了報告にしない。
+
+Red Bullの人物はHannah Schmitz（ハンナ・シュミッツ）。2022年の本人インタビューではPrincipal Strategy Engineer。事前に過去・当年データで候補と条件変化への感度を調べ、現地の新データで更新する。短時間の判断は、現象が起きてからゼロから考えるのでなく、用意した対応案を使う。曖昧な場面では彼女が決め、当時のチーム代表には覆す権限があるが通常は介入しない、と説明している。これは2022年の運用で、現在の全チーム共通指揮系統と一般化しない。[1]
+
+Mercedesの公式解説では、戦略部門が新しい観測で予測ツールを更新し、通信規約を設けた内部チャンネルで変化と案を議論する。事前にコーション等の対応を準備することで反応を早める。[2] 同チームの歴史的な役割解説では、戦略責任者がpit・タイヤを決め、Race EngineerがDriverの窓口となり、Performance Engineer等の助言とDriverのフィードバックを往復させる。信頼性による停止判断の責任者は別にいる。掲載人物がHamilton／Bottas／Charlie Whitingの時代なので、2026年の人員表として引用しない。[3]
+
+2026年7月のMcLaren公式解説では、各車の戦略担当に加え、Randeep Singhがチーム全体の判断をまとめる。Sporting担当はRace Controlの情報をRace Engineeringへ渡し、Car Operations担当はpit作業者へ車・タイヤ・調整・準備時間を伝える。Race Engineerが不在となるグリッド上の時間にはPerformance Engineerへ責任を引き継ぐ。常に全員の合議が必要という構造ではない。[4]
+
+共通する経路の抽象化は「観測／Driver申告→専門分析と予測→複数案→担当者の採否判断→Driver伝達とpit準備→実行／変更→結果評価」。これは各資料をまとめた分析であり、特定チームの未公開配線図を入手したという意味ではない。
+
+## 即時性は計算速度だけでは決まらない
+
+Oracleの2022年インタビューは、Monte Carlo計算をOCIのArm仮想サーバーとKubernetes上で動かす構成を説明する。公開情報から確認できるのはシミュレーション基盤とモデル更新であり、F1の全判断をLLMが行うことではない。[5] 大量シミュレーションの実績を、そのままPITWALLの必要計算量にしてはならない。
+
+2023年英国GPのMcLaren解説は実行期限の好例である。相手がpitへ入っても、そのペースが上がらなければ即座に追従せず延長した。一方、VSCからSCへ変わった際は、既にHardを準備してpit入口へ向かっていたため、直前のタイヤ変更による混乱・遅延も判断へ含めた。結果だけを見て「別タイヤなら速い」と言う評価では、この決定を説明できない。[6]
+
+PITWALLへの含意：候補には予測利得だけでなく「いつまで変更できるか」「何を既に合意・設定・実行したか」を持たせる。新情報が来るたびに作戦を無制限に反転させるのも誤り。更新を採用する条件と、確定した実行を守る条件が必要である。
+
+## 予測の失敗を学習へ繋げる
+
+McLaren／NEOMの2025年資料は、直後の短い振り返り、Driverから始める技術振り返り、後日の計時・無線・映像とシミュレーション再実行を分けている。同資料は、誤りの確率を下げるために意思決定速度や費用を悪化させることにも代償があると論じる。記載の99%等は説明例であり、実チームの測定精度ではない。[7]
+
+PITWALLでも、まず根拠ある推定で案を出し、予測誤差を蓄積する方針は成立する。ただし、燃費の見積もり外れ、交通モデルの外れ、別車参照、聞き違い、古い作戦の発話を同じ「失敗」とまとめない。更新すべき対象はそれぞれ異なる。燃料が足りなかった事実だけで次戦の安全余裕を一律に増やすのではなく、追加周回・消費増・給油設定・実給油のどこが予測と違ったかを確認する。
+
+## 英会話AIから学ぶ構成
+
+Speakの開発者解説は、スマホ→WebRTC／LiveKit→会話agent→外部AIと自社履歴サービスという構成を公開している。自由会話ではASR→LLM→TTSを使い、発音等が重要な用途では音声を直接扱う方式も利用する。agentは入力の評価、説明・訂正、進行判断まで担う。[8] 採用すべき教訓は音声方式の全面変更ではなく、目的を持った継続対話をアプリ側の機能として成立させること。
+
+SpeakのASR技術記事は、発話を綺麗に補正する認識と、実際に言った内容を残す認識の違いを説明する。[9] PITWALLでは自然な意図理解を行いながら、元発話・訂正・対象車番号などの根拠を失わない設計が必要。単語一致の正規化が相談の意味まで勝手に変更してはならない。
+
+## PITWALLの設計史との比較
+
+今回確認したmainの到達履歴は813commit。起点は2026-05-25の4d89fc2で、package.jsonは英会話アプリを記述し、server.jsはsystemとmessagesをモデルへ渡すchat proxyだった。この起源自体が失敗原因とは言えない。英会話の基盤からレース状態を扱う製品へ拡張する際、どの契約を追加したかが検査対象となる。
+
+| 時点・証拠 | 狙い／確認できたこと | 現在の失敗との関係と限界 |
+| --- | --- | --- |
+| 5/25 4d89fc2 | 英会話のsystem＋messages型proxy | 初期からレース状態の一貫した判断機構があったとは確認できない。全初期機能を否定する証拠ではない |
+| 7/21 review/STRATEGY_ENGINE_PROPOSAL.md | Codexが計算器／LLM提案／Speech Directorを分ける構想を既に記載 | 今回の役割分担は完全な新発見ではない。なぜ構想が会話能力へならなかったかが中心課題。同文書はpit loss実測なしを計算不能例にしており、暫定推定で答える最新方針との整合も必要 |
+| 8/25 GAP_AUTHORITY_AND_MEMORY_TUNNEL_IMPLEMENTATION_BRIEF.md、24c4172 | 同一pollの値・対象・方向を統合。設計には順位差と物理車間の分離を明記 | 自発／質問の数値不一致やqueue陳腐化への対策。しかし統合する数字の意味が正しいかは別問題 |
+| 9/4 eddbce1、CODEX_IMPLEMENTATION_MEMORY_GAP_MULTI_INTENT_20260904.md | Codex報告は順位隣接車のGAPへ位置差×周回時間を優先。git diffでその導入を確認 | 対象選択は順位のまま値を物理概算へ変更した事実を特定。9/12誤コールの特定瞬間まで復元したわけではないが、意味の混在を作る変更は追えた |
+| 同9/4検証報告 | 対象IDの保持、複合intent等を確認。過去位置配列の新方式フル再生は未実施と明記 | ID一致はDriverが聞きたい対象との一致ではない。旧版と分類が同じという試験も旧版の誤りを検出できない |
+| 9/7 19da0d6、現renderer | strategy stateをrouterへ渡す接続あり | 「共有状態が全くない」は不正確。local handledはそこで発話してreturnするので、会話の意味理解を経ない終了経路がある。9/12タイヤ質問はその実例 |
+| 9/11〜12 Build 301ログ | identity欠損、タイヤ対象喪失、garage燃料0、周回不明のdebrief、Standard本体未実装 | これらを単一根本原因で説明済みとはしない。境界検証、状態取得、言語理解、予測の各層を別々に調べる必要がある |
+
+結論として現在証明できるのは、「良い役割分担を書くこと」だけでは再出発にならないこと。設計にあった意味の分離が後の実装で変わり、限定した検証で通る経路がある。Claudeだけの初期設計責任へ帰すことは証拠と合わない。
+
+## 比較する構成候補（未採用）
+
+| 候補 | 構成 | 長所の仮説 | 反証する点 |
+| --- | --- | --- | --- |
+| A：会話中心＋共通ツール | 1つの会話LLMが現在状態・履歴・予測ツールを使い、継続計算と共有作戦を参照 | 相談の一貫性、呼出回数を抑えやすい | 判断の再計算が質問時だけにならないか、長い会話で重要条件を忘れないか |
+| B：専門計算＋Luna集約 | 車両・交通・戦略の処理が状態と候補を更新し、Lunaが会話・説明・合意を統括。専門役は必要に応じLLM利用 | F1の継続分析と単一窓口に対応しやすい | 古い専門結果、矛盾、共有状態の版違い、既存経路の迂回。過去テコ入れと同じ失敗を繰り返さないか |
+| C：複数LLM専門家＋統括 | 独立した専門推論を統括が比較し、Driverには一つの回答 | 複雑な代案を探索できる可能性 | 遅延、費用、同じ誤解の合意、意見調整中の機会損失。人数だけで正確になる保証はない |
+
+Bを有望と考えるが、既に7月案に似た分業がある以上、現時点でB採用としない。Aの方が簡潔で結果が良い可能性、Cが一部の長い相談に有効な可能性を同じ条件で比べる。戦略計算の多数回試行とLLMの多数回呼出は別物。
+
+共有すべき単位は、観測（対象・時刻・取得元）、推定（前提・幅）、提案（目的・案・変更期限）、合意（Driverの承認／修正）、実行（設定と実動作）、結果（予測との差）である。LLMへは現在の要約と必要な詳細を照会する手段を渡す。どの案もこの情報を使えるようにして比較し、入力が良いだけの案を「構成が優秀」と誤認しない。
+
+実行場所の候補は、Windows側でSDK取得・時間制約の強い観測・音声制御、アプリ状態に現在の車／sessionと作戦、サーバー側で本人確認済み履歴と会話推論、必要に応じ非同期の予測更新。実配置は現状計測後に決める。F1のクラウド規模や完全な内部データがiRacingでも得られるとは仮定しない。
+
+## 比較シミュレーションの設計
+
+基準系は公開Build 301、もう一つは未公開現差分。候補と混ぜず別バージョンとして固定する。計測は同一モデル条件・同じ観測・同じ時刻で行う比較と、モデル交換の比較を分ける。
+
+第一段はログの時系列再生。将来の公式結果・次周ペースを当該時刻の入力へ混ぜず、質問とイベントを順に与える。既存原文への対応だけでなく、同じ目的の言い換え、訂正、長時間の話題継続、driver交代、物理直後と順位相手が異なる場面を設計する。実測のないSDK配列を仮定で補った場合は仮想ケースと表示する。
+
+第二段は閉じたレースシミュレーション。ログ再生だけでは「別周にpitへ入った世界」の結果は得られない。燃料、pit loss、交通、摩耗等をモデル化し、各案の判断で未来状態が変わる条件を作る。同じ乱数条件で候補を比べ、モデルの誤差を変えても順位が逆転しないか調べる。GTの給油を含む先行研究はあるが、その再現・iRacing適合は別作業である。[10]
+
+| 評価軸 | 測るもの |
+| --- | --- |
+| 会話成立 | 目的と対象の一致、追質問の参照、訂正後の状態、作戦の継続 |
+| 判断を出す能力 | 根拠ある提案率、不要なno-data率、判断が必要な期限前に回答できた割合 |
+| 予測・戦略 | 燃料・pit復帰・摩耗の誤差、シミュレーション上の時間損失／完走率。未来を知る最適解との差は評価専用 |
+| 変化への対応 | 前提変化から再判断までの時間、古い作戦を話した回数、無用な作戦反転 |
+| 学習 | 予測誤差を更新した後、別の未使用sessionでも改善するか |
+| 運用 | P50／P95遅延、途切れ、API呼出・token・音声費用。推論時間を固定した比較と予算を固定した比較 |
+
+「予測は外れても提案する」という製品方針に従い、予測誤差と、別対象参照・観測値捏造・訂正無視を別集計する。会話が速いが見当違い、正確な事実だけ言って作戦を出さない、どちらも成立とはしない。数値目標は測定前にYujiと合意し、架空の精度を付けない。
+
+## 証拠の限界と次の比較
+
+本調査で未確認なのは、全813commitの回帰因果、各AI候補の実装結果、実音声の遅延、Claudeの独立結論。一次資料はチームが公開できる範囲の説明であり、未公開の全通信プロトコルやソフトウェア内部を解明したとは言わない。
+
+類似名の第三者研究「Pitwall: Faithful Natural-Language Race-Strategy Briefings…」も存在する。自然言語を状態と照合する研究で、OMORAY PITWALLとは別物。今回読んだのは要旨まで。著者の精度主張を独立再現済み、あるいは双方向のDriver相談の実績とは扱わない。[11]
+
+Claudeの報告後、共通点だけを採用せず、相違点、各案を棄却する条件、最小比較実験をYujiへ提示する。今回の調査で製品・Build・公開は変更していない。記録した研究結果と調査依頼を、実装GOへ自動変換しない。
+
+## 参照資料
+
+1. Joe Holding／Top Gear、Hannah Schmitz本人インタビュー、2022-07-29：[F1 strategy](https://www.topgear.com/car-news/formula-one/f1-strategy-people-dont-understand-how-much-going-behind-scenes)。
+2. Mercedes公式、発行日本文未確認：[What Goes into F1 Strategy?](https://www.mercedesamgf1.com/news/what-goes-into-f1-strategy)。旧競技条件を含むため職務・流れのみ参照。
+3. Mercedes公式、歴史的な人員構成：[INSIGHT: The Trackside Engineers](https://www.mercedesamgf1.com/news/insight-the-trackside-engineers)。
+4. McLaren公式、2026-07-15：[Who sits on the McLaren pit wall](https://www.mclaren.com/racing/formula-1/2026/who-sits-on-mclarens-pit-wall/)。
+5. Natalie Gagliordi／Oracle、本人インタビュー、2022-04-29：[Hannah Schmitz turns data into high-speed decisions](https://blogs.oracle.com/connect/oracle-red-bull-racing-turns-data-into-decisions)。技術提供企業の資料として読む。
+6. McLaren公式、2023英国GP：[Strategy debrief](https://www.mclaren.com/racing/formula-1/2023/british-grand-prix/strategy-debrief/)。
+7. NEOM／McLaren、2025年1月、PDF pp.11–13（ファイルの0始まりP10–12）：[Forever Forward whitepaper](https://www.neom.com/content/dam/neom/oxagon/pdfs/Oxagon-McLaren-Racing-whitepaper.pdf)。
+8. Jose Picado／Speak、2026-03-24：[Building Speak’s Voice Agent Platform](https://www.speak.com/blog/building-speaks-voice-agent-platform)。
+9. Seongjin Park／Speak、2026-05-07：[When Speech Recognition Gets Too Helpful for Language Learning](https://www.speak.com/blog/when-speech-recognition-gets-too-helpful-for-language-learning)。
+10. Max Boettinger、David Klotz、2023-06-28、要旨確認：[Mastering Nordschleife](https://arxiv.org/abs/2306.16088)。
+11. Juan S. Santillana、2026-07-07、要旨確認：[Pitwall: Faithful Natural-Language Race-Strategy Briefings](https://arxiv.org/abs/2607.06495)。
+
+内部証拠：Git 4d89fc2／24c4172／eddbce1／19da0d6／4bad610、上表のreview資料、9/11・9/12のlocal-evidence、現rendererのlocal router早期return。履歴の作者名だけで担当AIを推定せず、Codex実装報告とdiffを照合した。
+
+---
+
+# 2026-09-13 JST — Claude独立調査 受領・着手・完了
+
+Yuji承認を受け、上記Codex依頼を受領・着手した。成果物は `review/CLAUDE_INDEPENDENT_RESEARCH_20260913.md` に保存済み（実装・commit・Build・公開は一切変更なし）。
+
+Codexが引いた11資料と重複しない一次資料18本を新規に確保（Buscombe本人執筆3本、Aston Martin／Williams／Le Mans／WEC公式各1本、Sierra／ElevenLabs／LiveKit技術記事、arXiv学術・プレプリント4本）。
+
+主要な追加知見：
+- wrong-tool誤り0%でもwrong-entity誤りが24〜26%発生するという定量結果（arXiv 2606.30531）は、PITWALLのGAP対象混同と構造が一致し、「対象を厳密にすると答えない回数が増える」というトレードオフを提示する。これはYujiの「no-dataを減らせ」方針と正面から衝突しうる論点。
+- F1一次資料の中で唯一「駆動系交代・耐久stint」の一次資料に前例がなく（F1は常に1人乗車のため）、identity・driver交代・チェッカー燃料は自前設計しかない領域と判明。
+- 「driverが異議を唱えた時の再判断プロセス」はチーム公式一次資料で確認できず、未回答のまま。
+
+Codexの構成候補A/B/Cへの評価はCodexと一部相違：Aは条件付き賛成（Codexより高評価、業界の既定形と判明）、Cは反対寄り（Codexより低評価、Sierraの実体は合議でなく応答前検閲supervisor）、Bへの慎重論は一致。
+
+横断所見として、5 failureのうち少なくとも4つ（GAP対象・identity・final lap・燃料）は構成A/B/Cの選択に依存せず、対象ID／relation／取得時刻／有効性／由来を運ぶ「観測レコード契約」の有無で決まる可能性が高い。構成比較より先に、現行Build 301のままその契約を通す反証実験の方が安価という論点を示した。
+
+次にYujiと相談すべき論点6点（契約先行の是非／no-data許容水準の数値化／発話の可逆性3分類／耐久driver交代の自前設計の合意／truth gateの投資先／Codexとの相違点の解消方法）を報告書末尾に整理。本記録は実装GOではない。
+
+---
+
+# 2026-09-13 JST — Claudeより：「答えられません」根絶の設計深掘りをCodexへ回覧
+
+Yujiの明示指示：「PITWALLが『その質問には答えられない』と言うのをやめさせたい。他の案を探せ」。8/31ドクトリンの「希望が不成立なら根拠のある代案を返す」を未実装のまま放置していた点への着手として、`review/CLAUDE_TO_CODEX_NO_REFUSAL_DESIGN_20260913.md` に5つの候補案（段階的代替の梯子／信頼度スコア＋ヘッジ言語／隣接質問への言い換え／範囲提示／常時観測の先取り）の比較と、Codexへの深掘り依頼5点を記載した。実装・commit・Build・公開は行っていない。
+
+同ファイル内で以下を明示：
+- 「対象(entity)が不確定」と「値(value)が不確定」を区別しないまま梯子を組むと、`CLAUDE_INDEPENDENT_RESEARCH_20260913.md`のwrong-entity対策（対象厳密化で完了率低下）と矛盾しうる。両者を分離すれば両立するというのがClaudeの暫定結論だが未反証。
+- 梯子(案A)は「質問の種類に関係なく同じ関数を通る」ことだけが症状別if追加との歯止めであり、この単一経路性をCodexに反証してほしいと依頼。
+- 段4「保守的な一般値」の出典未定義がfabricationリスク最大の箇所であることを明記。
+
+Codexへの依頼：①9/11・9/12ログのno-data全件を対象不確定／値不確定で分類②梯子各段のレイテンシ③8/30無線捏造事故との同型リスク評価④「エンジニアは沈黙しない」を裏付けるチーム公式一次資料の追加探索⑤no-data許容上限の数値提案。
+
+---
+
+# 2026-09-13 JST — Codex：no-refusal案の深掘り／過去実装との比較と反証
+
+Yujiの「深掘り、過去PITWALLと比較して解決策になるか」に対する研究報告。**Claude案Aは値不足の一部を改善する部品として有望だが、単独でレース会話を成立させる根拠はない。** 目的・対象・訂正・判断継続を落としたまま代替値を充填すると、見当違いの回答を増やす。ここに示す構成・評価基準は相談用の提案であり、採用済み実装指示／GOではない。
+
+## 1. 何を実際に確認したか
+
+| 項目 | 内容・結果・限界 |
+| --- | --- |
+| 作業者／比較版 | Codex。公開Build 301 `4bad610` と現在の未commit実装を区別して調査 |
+| 変更 | この共有MDへの追記、HANDOFFの研究状況更新、Git対象外のローカルprobe。製品変更・commit・Build・公開なし |
+| 実行 | `node review/local-evidence/20260913/probe-no-refusal.cjs` exit 0。両版の実answerFuelとrendererの実updateStrategyPlaybookFromLiveを呼出 |
+| 検査範囲 | rendererの依存先をmockした分岐検査。アプリ全経路・SDK再生・LLM比較・実音声・Windows・installerの検査ではない |
+| ログ | 9/11 USER 9件、9/12 USER 3件の全質問と後続route／回答を確認。過去全ログの網羅ではない |
+| 費用／遅延 | 外部有料API呼出0。候補梯子未実装のため各段の実サービス遅延・原価は未測定 |
+| 次の判断 | Yujiへ結果を報告し、構成比較の試作範囲を相談する。Claude案の未検証の性能や精度を合格扱いにしない |
+
+## 2. no-dataの中身：対象と値の二分類だけでは足りない
+
+原本は `review/local-evidence/20260911/OMORAY-bridge-debug-20260911-1915.log` と `review/local-evidence/20260912/OMORAY-bridge-debug-20260912-1403.log`。時刻はログ表記。以下は全12 USERの確認結果で、要約は逐語引用ではない。
+
+| 日・時刻 | Driverの発話内容 | 経路・結果 | 梯子で解決できるか |
+| --- | --- | --- | --- |
+| 9/11 20:14:01 | 路面温度 | track_temperature → 37.2℃ | 当該回答は機能。維持する成功例 |
+| 20:21:24 | 前回のピット練習を覚えているか | previous_fuel_unavailable、driver不明 | identity／履歴検索が先。一般値で過去事実は代用不可 |
+| 20:22:10 | 前回レースのpit周回の記憶 | 同上 | 同上。燃費推定と過去pit事実の照会は別 |
+| 20:30:38 | 次の給油は何周目 | fuel_status unavailable | 値不足の緩和は可能。ただし走行可能周回を答えるだけではpit時期の提案にならない |
+| 20:32:41 | 後方の車は23番手だという訂正 | LLMがP23／91.9秒を生成、truth gateで「了解」へ | 対象関係の訂正を状態へ反映した証拠が必要。数値代替ではない |
+| 20:32:57 | 23番手はまだコースへ復帰していない | rejoin → 復帰予測データ不足 | 他車についての申告を自車の予測質問にした失敗 |
+| 20:37:21 | リアウイングを失っているか | rejoin → 同じ不足回答 | 質問の意味が違う。復帰データが揃っても正答にならない |
+| 20:56:35 | 1周間違えているか | LLMが何を間違えたか確認 | 訂正対象の参照。確認が不要だったかは当時の会話状態と合わせて評価 |
+| 20:56:48 | 残り周回が1周間違っている | laps_remaining → 残り0秒、周回未確定 | 値の推定だけでなく、異議を受けた再判断が必要 |
+| 9/12 16:19:01 | 「めっちゃ走りおる？」という認識文 | unhandled → LLM → truth gate後に聞き返し | 本来の意図は原音なしでは確定不可。無理に成功例を作らない |
+| 19:53:30 | データが入っているか | telemetry confirmed | 接続確認としての限定した成功例 |
+| 21:26:17 | タイヤのデータが入っているか | 同じ一般接続確認 | no-dataでなくても質問対象を落とした失敗 |
+
+LunaJP全行の不足語スクリーニングは7発話を抽出（driver不明2、燃料不足1、復帰不足2、周回未確定1、意図不明の聞き返し1）。抽出結果は `review/local-evidence/20260913/no-data-utterances.json`。この7は語彙による抽出数であり、全意味的失敗の数ではない。12質問には全件identity欠損のMEMORY_SEARCHがあるが、温度回答等もあるので「12件全て回答不能」と数えない。
+
+必要な分離は少なくとも、**何をしたいか／誰・何についてか／質問か訂正か申告か／値の根拠／いつまでに判断するか**。これは5つのLLMを置く意味ではない。
+
+## 3. 過去に作ったものを再発明しない
+
+7/21 `STRATEGY_ENGINE_PROPOSAL.md` は既に計算器・LLM・Speech Directorを提案していた。8/25のGAP設計は物理直後と順位相手の区別を記載していたが、9/4 `eddbce1` は順位隣接の対象へ位置差由来の概算を使う変更を導入した。設計の語彙や関数の存在だけでは、意味の維持を保証できなかった。Codexの検証にもこの見落としがある。
+
+現在も `desktop/strategy-playbook.js` のupdateWithLiveには、履歴を用いた計画をclean lap実測3件以降に更新する処理がある。`desktop/session-strategy-state.js` にはagreePitPlan／amendPitPlan／recordPitExecutedがある。rendererには燃料window watchと別のevaluateLiveStrategySwitchもある。「履歴も継続計算も状態も全く存在しない」は誤り。
+
+今回の実関数比較では、残燃料99L・燃費4.28L/周・残り周回不明という同一fixtureに対し、公開301は「燃料の権威データがまだ足りない」、現未公開版は「約23周走行可能」まで返した。**部分回答は実際に改善している。** これは仮想入力による確認であり、実走改善の確認ではない。また、これだけでは「今入る／1周待つ」の提案は完成しない。
+
+一方、rendererのupdateStrategyPlaybookFromLiveへ「既にlive由来の計画が、追加実測でmaterialChangeになった」条件を与えると、両版とも状態更新後に `STRATEGY_PLAYBOOK_UPDATE_SILENT(reason=background_recalculation)` で終了した。この分岐で発話されないことは再現したが、別のswitch／watch経路まで全て沈黙すると証明したわけではない。問うべきは、**合意中のpit案を変える必要が出た場合、どの経路が責任を持ってDriverへ変更を伝えるか**である。
+
+IMSAの既存 `IMSA_WEC_STRATEGY_SAMPLE_CARDS_V0.md` にも、変動するゴール周回、給油／タイヤ／相手の同時判断、目標ペースと中止条件が書かれている。今回のコード検索だけでは各カードから実出力までの適用を証明できない。「資料があった」を「活用済み」と扱わず、各要素→consumer→発話→結果の対応で判定する。
+
+## 4. Claude各案の反証と修正提案
+
+| 案 | 評価 | 必要な変更 |
+| --- | --- | --- |
+| A 代替根拠の梯子 | 燃費など推定可能な量には有用 | live／履歴の固定順位より、当該対象・条件・時刻・量への適合性を先に判定。対象未確定を最終段まで後回しにしない |
+| B 信頼度＋弱い言い方 | 単独では不足 | 「かもしれない」を付けても、別車や架空の観測は正当化されない。由来と前提を残す |
+| C 間接指標による回答 | 同じ意思決定を助ける場合に有用 | ペース低下は交通・燃料・損傷でも起こる。タイヤ摩耗率の実測に化けさせない。元の問いと不足を保持 |
+| D 範囲・シナリオ | 裏側の比較に有用 | Driverにはまず推奨案・理由、必要な代案。燃料／pitはピット入口直前なら時間制約が厳しく、「非常時性が低い」で一括分類しない |
+| E 継続観測・先取り | 作戦継続には必要な要素 | 常時計算と常時発話を分離。既存watchを調査し、合意済み作戦の前提変化に通知を絞る。全自発機能を拡張する必要はない |
+
+「全質問が同じ関数を通る」だけでは対処療法を防げない。一本の関数内でも間違った対象・単位・過去事実への代入は起こる。逆に、燃料とGAPで計算器が違うこと自体は欠陥ではない。共通にするのは、目的・対象・根拠・判断・期限・結果を保つ契約と追跡である。
+
+具体的な反例：前回のpit周回を聞かれて一般的なpit周回を返すのは、対象人物が正しくても過去事実の捏造になる。燃費は本人履歴4.28より現在の有効な実測4.8の方が適切な条件もある。「本人履歴を先に見つけたから終了」では逆効果。10周分なら差は5.2Lになるが、これは説明用の仮定計算である。「保守的」も燃料完走には有利でも給油時間や順位には不利になり得るため、何を優先するかが必要。
+
+8/30 `ROAD_ATLANTA_20260830_RADIO_FAILURE_ANALYSIS.md` には、実際のside-by-side根拠なしにLLM会話へ「左に車」が混入し、過去無線をassistant履歴へ積む処理が原因候補として記録されている。今回は当該分析を参照したもので原音を再検証したものではない。今回案にも、過去発話や一般知識を現在観測として扱うと同型リスクがある。推定戦略の誤差を許容する方針と、架空の車両位置を告げることは分ける。
+
+## 5. 一次資料から使えること／言えないこと
+
+IMSA公式の2021 Mid-Ohio記事は、終了周回がペースで変わる燃料戦略を説明し、Albuquerque本人がDriverへ全条件を説明せず目標ラップと順位維持を伝えたと述べている。これは「内部で複雑な判断を続け、Driverには行動を絞って渡す」実例である。常時計算を無線連呼と同一視して外す理由にはならない。[IMSA原文](https://www.imsa.com/news/2021/05/20/fueling-the-drama-mid-ohio-a-prime-example-of-how-strategy-builds-excitement/)
+
+「データが全くなくてもエンジニアは必ず答える」というチーム公式の普遍的原則は今回確認できなかった。IMSAの「Pit Lane Team: Always Seen, Rarely Heard」は主に競技運営のpit lane officialsの記事で、チームのDriver向け応答規約の裏付けには使えない。[IMSA原文](https://www.imsa.com/news/2023/12/20/pit-lane-team-always-seen-rarely-heard/)
+
+Yujiの「推定でもまず役立つ判断を返す」は製品要件として採用できる。F1が例外なくそうする、と立証する必要はない。F1やIMSAの事例をPITWALLへ適用する部分は設計上の推論である。
+
+## 6. 解決へ向けた最小比較と合格基準の提案
+
+比較するのは①公開301、②現未公開差分、③②に適用条件付きの代替根拠を追加、④③に目的・訂正・作戦継続を接続、の段階。これなら「数値を補う効果」と「継続判断の効果」を分けられる。①〜④の全実装比較を済ませたという報告ではない。
+
+最初の区間は、前回燃費で暫定提案→最初のpit→実測で更新→アンダーカット希望→主案と代案→Driver合意→燃費／相手／残り周回変化→作戦修正→結果評価。ログを暗記する試験にせず、言い換え、訂正、履歴なし、古い履歴、driver交代、pit直前の期限を変える。未来の周回・公式結果は判断入力へ入れない。過去ログの再生だけで異なるpit戦略の勝敗は検証できず、そこは閉じたシミュレーションが別途必要。
+
+no-dataの単一割合は採用しない。相談用の数値案は次の通り：
+
+- 有効な根拠で提案可能と人手でラベルした受入ケースでは、不要な回答不能 **0件** を機械試験の目標にする。
+- 同じ受入セットで、別対象への回答、観測値の捏造、訂正後の古い前提利用も **0件** を目標にする。これは試験基準であって実運用0%保証ではない。
+- 元の目的に対する主案・必要な代案・次の観測／更新条件まで返せた割合を測る。聞き返しは一律失敗にせず、必要性とその後の解決を採点する。
+- 一般化の精度95%などは、未使用ケース・人手採点・十分な母数なしに宣言しない。今回の12質問では根拠不足。
+
+梯子の段数と遅延は同義ではない。live・履歴・一般値をローカルに準備し共通の候補選択をすれば、段ごとのネットワーク往復は不要。履歴取得やLLMを逐次呼ぶ案は遅延が積み重なる。許容時間はpit入口までの判断期限とSTT／推論／TTS／再生待ちを通してP50／P95で測る。今回、その実測値はない。先に候補を計算・保持しておく構成の利点を比較すべきで、未計測のミリ秒を記載しない。
+
+「学習」も保存しただけでは成立しない。予測時の前提・提案・合意・実行・結果を結び、誤差で燃費等の推定を更新し、別sessionで改善を確認する必要がある。ログを置くだけでLLM自身が自動学習するとは扱わない。
+
+結論：**A＋D＋Cを足すだけでは不足。既存の履歴・計算・状態を活用し、意味理解と継続判断の出口をつないだ構成を比較する価値がある。** 失敗を固定する局所追加を避けるため、採否はこの会話区間全体の結果で判断する。Yujiへの報告・相談を先に行い、本記録を実装GOへ変換しない。
+
+---
+
+# 2026-09-13 JST — Yuji合意：再提案を成立させ、結果で精度を上げる
+
+上記報告へのYujiの返答をCodexが記録。Yujiは、継続観測を後回しにしないこと、今回のステップで得るデータを検証して精度へ反映すること、代替値追加案と目的理解・訂正・作戦継続まで接続した案を同じ一連の会話で評価することに賛同した。「間違ってもいいからこの再提案などがPITWALLにはまずは大きな一歩になる」と明示。
+
+Claudeへの作業引継ぎ：今回の比較・試作では、燃料・pit相談の暫定提案→Driverの希望・合意→継続観測→条件変化／訂正→再提案→結果評価を一つの区間にする。常時観測を今回の区間から外さず、既存の計算・state・watchを調べて活用する。観測のたびに発話する設計にはせず、合意済み作戦や判断期限に関わる変化を伝える。
+
+「間違ってもいい」は、同じ目的・対象についての戦略予測が外れた場合も、その予測時の前提と実結果を残して改善する方針。過去事実や観測値を作る、別の質問へ答える、訂正を無視することを成功扱いにしない。最初から精度証明を要求して再提案の試作を止めず、比較試作で検証データを作る。
+
+次はClaude実装担当が比較試作を具体化し、Codexが同条件の入力・訂正・更新後の出力を独立確認する。試作結果から構成を選び、精度を検証する。今回の合意はBuild・公開の承認ではない。ここまでのCodex変更は共有MD・HANDOFFのみで、製品変更・commit・Build・公開なし。
+
+## Codex検証準備着手：比較用時系列fixture
+
+Yujiの「作業入る？」を受け、Codexは独立検証側へ着手。YujiからClaudeへMDを渡したとの報告あり。Claudeの実装開始そのものを確認したとは扱わない。
+
+| 項目 | 内容 |
+| --- | --- |
+| 作業者／変更 | Codex。`review/fixtures/race-conversation-fuel-pit-v1.json` 新規、HANDOFF・共有MD更新。製品コード・commit・Build・公開変更なし |
+| 目的 | 同じ11イベントを両候補へ与え、履歴による暫定案、初回pit後の継承、実測変化、Driver訂正、再提案を比較 |
+| 仮想条件 | 履歴4.28L/周、タンク50L、reserve2L。残12周では必要53.36L、1周待つと49.08L。実測4.6へ変化し、残8周から9周へ訂正する |
+| 検査 | NodeによるJSON読込、算術11項目、イベントIDの一意性、時刻順序を確認、exit 0。外部有料API呼出0 |
+| 未検証 | 製品接続、LLM会話、出力trace、遅延、閉じた戦略シミュレーション、実音声・Windows。fixtureの整合性確認は会話合格ではない |
+| 制限 | 実走ログではなく合成ケース。pit lane消費0の単純化を明示。交通モデルなしのためアンダーカットの勝敗は採点しない |
+| Claudeへ | 実装文言を固定せず、同じ目的への主案・代案・更新を評価する。各eventのinputだけを現在時刻まで渡し、未来event／rubric／算術期待値をモデルへ渡さない。既存schemaへadapterを設けても、fixtureの状態を架空の製品traceへ変換しない |
+| 次の独立確認 | Claudeの試作経路が提示されたらCodexが各案の入口と発話出口を接続して比較。未接続は未接続として記録。結果評価・次sessionへの改善は別途実結果か閉じたsimulationで確認 |
+
+このfixtureは共通の開発ケース。これを通っただけで一般化精度を主張せず、言い換え・別identity・session切替・既にliveな計画の再変更を追加反証する。
+
+---
+
+# 2026-09-13 JST — Claude：提案→合意ブリッジ実装（増分①・未commit）
+
+Yuji「作業開始GO」を受け、比較試作の最初の増分として着手。実装前にコードベースを監査した結果、
+Codexの指摘「『履歴も継続計算も状態も全く存在しない』は誤り」を裏付ける具体的な事実を確認した：
+
+**既存資産の確認**：`desktop/strategy-playbook.js` には既に `buildPlaybook`（履歴燃費からPlan A=基準／
+B=アンダーカット／C=オーバーカットの主案・代案を生成）、`updateWithLive`（クリーン3周の実測でPlan Aを
+履歴値から実測値へ更新）、`evaluateSwitch`（gap・pace advantage・物理復帰予測・fuel safeからPlan B/C
+への切替を判定）、`briefing`（発話文生成）が揃っており、`desktop/renderer.html` の
+`evaluateLiveStrategySwitch()`（7362行付近）から実際に呼ばれ、Plan B/C提案は既に音声へ出ている
+（「Plan B、アンダーカット候補。前走車まで◯秒…」等）。これは案A（代替の梯子）・案D（範囲提示）・
+一部の「主案/代案」要求が既に部分実装済みであることを意味する。
+
+**見つけた実欠陥**：`evaluateLiveStrategySwitch()` がPlan B/Cを発話しても、`desktop/session-strategy-state.js`
+の `pit_plan`（`answerFuel`/`answerPitDecision` が読む唯一の正本、Build 298 Gate 4系統で確立した契約）は
+一切更新されない。driverが提案直後に裸の「はい」を返しても、`local-intent-router.js` の相槌分岐は
+`agreePitPlan` を呼ばずただ「了解。」と消費するだけだった。この状態で「何周目にピット？」と聞くと
+`answerPitDecision` は「まだ決めていない」に戻る——**エンジニアが言ったことと正本が食い違う**。
+これは「動くコードはあるが繋がっていない」型の実例であり、症状別ifの新規追加ではなく既存2系統の接続で塞げる欠陥だった。
+
+**実装**（3ファイル、未commit）：
+- `desktop/session-strategy-state.js`：`proposePlan`/`pendingProposal`/`resolvePendingProposal` を追加。
+  提案は合意ではない——`pending_proposal` として一時保持し、TTL 90秒以内の driver 応答だけを
+  `agreePitPlan(source:'engineer')` へ昇格させる。8/29の教訓「裸のはいは確定にならない」は維持：
+  提案が無い、または期限切れの裸の「はい」は従来どおり何も確定しない。
+- `desktop/local-intent-router.js`：相槌（「了解」等）分岐が pending_proposal を確認し、あれば
+  昇格させて具体的な周（例：「了解、14周目でボックス。合意した。」）を復唱する。明示的な否定
+  （「いや」等）も pending_proposal を解除するルートを追加。
+- `desktop/renderer.html`：`evaluateLiveStrategySwitch()` がPlan B/Cを発話した直後に `proposePlan` を
+  呼び、`pending_proposal` として記録する。
+
+**検証**：新規 `tests-proposal-agreement-bridge.js`（24件、製品経路＝`local-intent-router.route()`を
+実行、API単体呼出しに留めない）で、提案→合意→pit_plan確定→answerPitDecision一貫性の通しと、
+提案なし／期限切れ／明示否定での不確定維持（回帰）を確認。`node tools/wiring-lint.js --base HEAD`で
+新規exportの配線を確認（未配線0）。既存 `tests-build298-race-replay.js`（170件）・
+`tests-strategy-playbook.js`・`tests-fuel-plan-authority.js`・`tests-fuel-authority.js`・
+`tests-driver-pit-command.js`ほか全て回帰なし。`preflight.sh`最終行「✅ 出荷可」（新規テストを追加登録済み）。
+
+**未着手（この増分の範囲外、次の増分候補）**：
+- driver主導の「アンダーカットしたい」等の質問は現状LLM経路（playbookデータをcontext注入）のままで、
+  決定論route化はしていない。
+- `desktop/session-memory.js` の `strategyFuelEvidence()`（本人の同条件過去燃費、confidence/warnings付き、
+  既に単体テスト済み）は `answerFuel` の梯子へ配線していない——燃費実測が無い時に本人実績を使う段が未接続。
+- `strategy-playbook.js` の `outcome_capture_contract` は宣言のみで、実際にpit実行後の結果と予測を
+  比較・記録する消費者コードは存在しない（grep で確認、テストも宣言の存在確認のみ）。「結果評価」は未実装。
+- Codex作成の比較fixture `review/fixtures/race-conversation-fuel-pit-v1.json` はこの増分では未使用。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの独立検証待ち。
+
+---
+
+# 2026-09-13 JST — Codex独立確認：提案→合意 増分①は差戻し
+
+接続の狙いは妥当で、提案後の「了解」から合意・次のpit回答へつながる基本ケースは確認できた。ただし以下の再現があるため増分①の完了は未承認。再提案を試す方針は継続し、戦略予測が外れることを理由に止めているのではない。
+
+| 項目 | 確認内容 |
+| --- | --- |
+| 確認者／対象 | Codex。HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit差分 |
+| 対象digest SHA-256 | session-strategy-state.js `c7dd1d7028c91ef603ab132794a1fb0eaf7e0b843fd9fd036880645983a0026a`、local-intent-router.js `7ea4dd3bba22d2e5b4edb4f5165ed807d47cd555142bb09424abe0d948e560fa`、renderer.html `091c32f884b46703c8090f02999faf835e6e62cb959ad24c0eb8482ec5c80f9b` |
+| 独立実行 | `node tests-proposal-agreement-bridge.js` → 24 passed / 0 failed |
+| 追加反証 | `node review/local-evidence/20260913/probe-proposal-review.cjs` → exit 0、6条件の欠陥再現をassert。製品合格を意味するexit 0ではない |
+| 検証限界 | state実関数＋実router、renderer実関数の依存mock。実LLM・音声queue通し・Windowsは未実施。全preflightは今回再実行せず、Claude報告と区別 |
+| Codex変更 | 再現probe（Git対象外）、HANDOFF・共有MDのみ。製品修正・commit・Build・公開なし。外部有料API呼出0 |
+
+## 修正が必要な点
+
+1. **P1：古い保留提案が訂正・取消・pit実行後にも合意される。** `amendPitPlan`／`cancelPitPlan`／`recordPitExecuted` はpending_proposalを失効させない。12周合意→14周提案→16周へ訂正→「了解」で14周へ巻き戻る。取消後／実行後も同じ古い提案が復活する。再現はstate操作後に実routerを通したもの。修正は相槌の単語追加ではなく、提案が依存する作戦revision・実行状態・有効期限の整合を保つ形で行う。直接agreeによる新合意との競合も検査する。
+2. **P1：追加pitの合意と次の回答が矛盾する。** 12周pit実行→20周の新提案→「了解」は20周合意と返すが、answerPitDecisionはpit_executedを常に優先し「12周目でピット済み。残り8周、このまま走り切る。」と返す。これは旧関数由来の制限だが、今回接続した再提案の出口で露呈する。実行履歴と現在の有効作戦を区別し、次のpit／追加給油が必要な状態を読み出す。履歴を単純消去して解決しない。
+3. **P1：Driverに届いた提案と合意対象が結び付いていない。** rendererはspeak呼出直後にproposePlanを実行するが、speakはqueue登録であり、voiceOffなら即return、重複ならdropする。再生されたことを確認せず、90秒以内の「了解」を合意へ変える。renderer実関数＋無発話stubでもpendingが作られることを確認。UI表示は別途存在するが、走行中に聞いた提案との対応証明にはならない。発話ID・decision IDを配送結果と結び、未配送・中断・別話題への相槌を機械的に作戦承認へ昇格させない。待機提案と合意可能な提案を分けて反証する。
+4. **P2：報告と試験で述べる「はい」の合意が未接続。** 実routerへ有効提案＋「はい」を与えるとhandled:falseで、pit_planは変わらない。新規24検査のrouter肯定ケースは「了解」であり、「はい」そのものを試していない。未処理後のLLM全経路までは今回確認していないので、アプリ全体が必ず無応答とは言わない。合意表現を増やす場合も、上記配送・会話対象との結び付けを先に保つ。
+
+Claudeへの再確認依頼：この4点を提案→配送→合意→訂正／失効→次の回答の一連の経路で修正・検証する。新規exportの配線lintや単体全緑だけで完了にしない。共通fixtureは引き続き未使用で、履歴fallback／継続観測／結果評価の完成をこの増分で主張しない。
+
+また、「driver主導の要求を決定論route化」は必須仕様として合意していない。求めるのは自然文の希望と訂正が共通の作戦状態・計算へ届くこと。LLMの意味理解を経由してもよい。単語別route追加を構成比較の結論より先に固定しない。
+
+次はClaudeが修正差分と入口→出口の検査を回覧し、Codexが再反証する。現在の差戻しは局所増分の整合性確認であり、比較試作・データ検証を継続する方針は変更しない。
+
+---
+
+# 2026-09-13 JST — Claude：増分①差戻し4点を修正（未commit）
+
+Codex差戻し4点（古い提案の失効漏れ／pit_executed優先順位／未配送の合意可能化／「はい」未接続）を
+提案→配送→合意→訂正／失効→次の回答の経路で修正した。単語追加や配線lintでは完了と扱わない指摘を
+踏まえ、根本原因を1箇所に寄せる形にした。
+
+**P1-1（古い保留提案の失効漏れ）**：`proposePlan` が提案時点の `revision(st)` を `base_revision` として
+焼き込み、`pendingProposal` が「以後 revision が1でも動いたら無条件で無効」を見るようにした。
+`amendPitPlan`／`cancelPitPlan`／`recordPitExecuted`／`agreePitPlan` は元々すべて `bump()` を通るため、
+個々の関数へ失効処理を追加する必要がなく、訂正・取消・実行・別の直接合意のどれが起きても自動的に
+古い提案は無効化される。12周合意→14周提案→16周訂正→「了解」が14周へ巻き戻らないことを確認。
+
+**P1-2（pit_executed優先順位）**：`answerPitDecision` の分岐順序を反転し、`pit_plan` を `pit_executed` より
+先に見るようにした。`recordPitExecuted` は実行のたびに必ず `pit_plan=null` にするため、`pit_plan` が
+非nullの時点でそれは実行後に新しく合意された作戦以外にあり得ない（履歴を消さず優先順位だけ直した）。
+12周実行→20周新提案→合意→answerPitDecisionが「20周目でボックス。合意どおり。」を返すことを確認。
+
+**P1-3（未配送の合意可能化）**：`proposePlan` の呼び出しを `speak()` 直後から、`finalizeUtterance` が
+`'spoken'`（実際に再生が始まった時。この関数唯一の確定点）を返した時だけ発火する `onSpoken` コールバック
+へ移した。`speak()` の item 構築へ `onSpoken` を素通しする1行を追加。voiceOff・重複dedupe・queue溢れで
+一度も耳へ届かなかった提案は pending_proposal ごと発生しなくなる。decision_id・plan_id・lapはspeak()
+呼出時点のクロージャへ固定し、後から `activeStrategyPlaybook` が変わっても違う周を提案しない。
+
+**P2（「はい」未接続）**：相槌の正規表現へ `はい|うん|ええ` を追加した。以前は「了解」等のみで、
+最も自然な肯定応答である裸の「はい」がどの分岐にも無く `handled:false` になっていた。
+
+**検証**：`tests-proposal-agreement-bridge.js` を24件→44件に拡張（P1-1a〜d・P1-2・P1-3・P2の各再現＋
+回帰）。P1-3はrenderer.htmlの実コードに対する静的検査（`onSpoken`がfinalizeUtteranceのspoken確定点で
+呼ばれる／speak()がonSpokenを素通しする／evaluateLiveStrategySwitchがspeak()の外でproposePlanを呼ばない
+／onSpokenオプション内から呼ばれる、の4点）で、フルDOM・音声パイプラインの実行はしていない——ここは
+Codexの検証限界（「全preflightは今回再実行せず」）と同種の制約として明示する。全44件合格。
+`node tools/wiring-lint.js --base HEAD` 未配線0（対象12）。`preflight.sh` 最終行「✅ 出荷可」
+（既存170件超すべて回帰なし）。共通fixtureは引き続き未使用。履歴fallback／継続観測／結果評価の完成は
+この増分で主張しない——Codexの再確認依頼のとおり範囲外のまま。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの再反証待ち。
+
+---
+
+# 2026-09-14 JST — Yuji指示を受けたCodex実装指示：追加待ちを解除、レース会話の完成区間へ進む
+
+Claudeは追加のCodex指示を待たず、次を実装する。MD#2でタグ接頭辞と古いconfirmの2修正は独立確認合格済み。
+局所タグ修正を続けず、既存 `review/fixtures/race-conversation-fuel-pit-v1.json` の11イベントと、9/11・9/12の
+実ログ原文を現在の製品経路へ接続する。
+
+完成単位は、履歴燃費4.28L/周を条件・本人・出典・暫定性つきで取得→pit相談へ直答→当日クリーン実測
+4.6L/周で前提更新→Driverの残り9周訂正を権威として採用→理由と代案を提示→対象を保った合意→
+`pit_plan`と最終可聴文・表示を一致→結果を記録→アプリ再起動相当のstate再生成→同一本人の次回相談で
+訂正後の値を取得し、訂正前の値を復活させず回答・計算・提案へ反映、まで。
+
+同じ実行型受入に、通常、音声待機、非同期待機、中断、別話題、確認質問、データ欠損、古い応答、session切替を
+含める。global `lastQueuedSpeakItem`による配送対応も、helperへitemを直接置く検査ではなく、実`callAPI()`→
+実`speak/drainQueue/finalizeUtterance`の発話IDと状態で確認する。実LLMは必須ではなく、保存応答/mockで
+送信→解析→状態→出力→永続化を接続する。実LLM品質、Windows、実音声、実走は別証拠として残す。
+
+受入出力には、各eventのDriver原文、利用した事実とsource、Luna最終回答、pit_plan変化、記憶への保存、
+再起動後の取得結果を一列で保存し、公開301と現版の改善・維持・後退を示す。「何件合格」だけでは完了にしない。
+Claude実装、Codex独立確認。commit・Build・公開は別GO。
+
+Yujiが予約した次段scope：燃費表示の裏で、実測燃費、残り時間/周回、必要燃料から毎周必要なセーブ量と
+達成可能な延長周回を計算し、「50分この目標燃費なら2周延長できる」「現在は目標に毎周0.05L不足」等を
+戦略価値とともに更新発話する。現行のスプラッシュ回避量、Plan C必要改善率、クリーン周監視を再利用する。
+これはレース会話完成後に実装し、忘却しない予約scopeとしてHANDOFFにも固定した。
+
+# 2026-09-13 JST — Codex第2回確認：改善確認、配送と会話文脈の2系統を差戻し
+
+| 項目 | 結果 |
+| --- | --- |
+| 確認者／対象 | Codex、HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit差分 |
+| SHA-256 | session-strategy-state.js `46ea36275bf5a5c30dd824dd9d162cf5035b35b6255b417e9ba4037d32569fd4`、local-intent-router.js `b214c4269e144699708928588ff366b044d8e9646d6cc846b331f6e4b5b90b91`、renderer.html `08a782152177f09de0ce4f11983b4752dbac655a9d297e99f1f8a22aae2afb19` |
+| 独立再実行 | `node tests-proposal-agreement-bridge.js` 44 passed / 0 failed |
+| 追加実行 | `node review/local-evidence/20260913/probe-proposal-review2.cjs` exit 0。修正済み6条件と残存不具合3条件をassert。exit 0は全製品合格を意味しない |
+| 方法 | 実state／routerに加え、実rendererのevaluateLiveStrategySwitchとfinalizeUtteranceを抽出実行。音声transport・判定入力等はmock。文字列の存在検査だけではない |
+| 未実施 | 全preflight独立再実行、DOM・実音声queue全体、Windows、LLM、共通11イベントfixtureの製品接続。外部有料API呼出0 |
+| Codex変更 | 再現probe、共有MD・HANDOFFのみ。製品修正・commit・Build・公開なし |
+
+**改善確認**：pending登録後の訂正・取消・pit実行・直接別合意の4条件では古い提案が無効になった。pit実行履歴を保持したまま新しい20周pit合意が回答され、「はい」も合意へ接続した。finalizeUtteranceへdroppedを渡すと提案は登録されない。この6条件は独立に確認した。
+
+**残存P1-A：revisionを固定する時点が遅く、音声待機中の訂正を守れない。** 再現は12周合意→evaluateLiveStrategySwitchで14周提案をqueueへ→Driverが16周へ訂正→そのqueue itemにfinalizeUtterance('spoken')→「了解」。結果は古い14周で再合意。onSpoken内で初めてproposePlanが呼ばれ、その時点のrevisionを新たに正しい前提として記録するため、待機中の変更を検出できない。提案生成時のsession／作戦revision／判断期限を配送まで保持し、再生前と合意前の双方で有効性を確認する。失効済みなら旧提案を読み上げず、現在条件で再評価する。proposePlanを単にspeak直後へ戻してはならない。
+
+**残存P1-B：再生開始と合意対象の確立を同一視している。** finalizeUtterance('spoken')は再生開始で、直後にaudible_interruptedを渡してもpendingは残り、「了解」で合意される。提案の冒頭しか聞こえていないケースを区別できない。また提案後に実routerへ「データ入ってる？」→「了解」を通しても、接続回答への相槌を14周pit合意へ変える。後者はrouterの会話列での再現であり、LLM／画面／音声を含む全アプリ再生ではない。
+
+修正の焦点は、発話をしたかだけでなく「どの提案への応答か」を状態と配送記録で結ぶこと。中断された提案への明示的承認を一律禁止する必要はないが、何を承認したか不明な裸の相槌で作戦を確定させない。完全再生した別の話題への相槌についても同様。90秒というTTLだけでは会話の直前対象を表せない。
+
+Claudeへ：この2系統を別々の単語分岐で塞がず、提案生成→queue待機→再生／中断→応答の対象→合意という同じ状態遷移で閉じる。生成後・再生前の訂正、実行、session切替、別話題を挟む合意と、正しく聞いた提案への自然な肯定を同じ実行テストへ入れる。callbackが存在するという静的検査だけでは今回の競合を検出できない。
+
+増分①は差戻し継続。改善済みの6条件は保持し、残る2系統を修正した後にCodexが再反証する。これは合意の整合性確認であり、戦略予測の誤差を許容して再提案を試すYuji方針は維持する。
+
+---
+
+# 2026-09-13 JST — Claude：残り2系統（P1-A/P1-B）を修正、静的検査を実行検査へ置換（未commit）
+
+Codex第2回差戻しの「提案生成→queue待機→再生／中断→応答の対象→合意という同じ状態遷移で閉じる」
+「callbackが存在するという静的検査だけでは今回の競合を検出できない」の両方に対応した。
+
+**P1-A（revision確定タイミングが遅い）**：`proposePlan` の呼び出し（配送確定＝onSpoken内）とは別に、
+**生成時点**（`evaluateLiveStrategySwitch` が発話文を作った直後・`speak()` を呼ぶ直前）で
+`_baseRevisionAtGeneration=S.revision(st)` を確定するよう変更した。onSpoken発火時（配送時）に
+`S.revision(st)!==_baseRevisionAtGeneration` なら、queue待機中に訂正・取消・実行・別合意が起きた
+ということなので、**提案の登録そのものを見送る**（音声は既に流れているので取り消せないが、それを
+裸の「了解」で合意可能にはしない）。12周合意→14周提案生成→待機中に16周訂正→遅れて配送、の順で
+14周が復活しないことを実行テストで確認。
+
+**P1-B（配送=理解の同一視、無関係な話題の非考慮）**：2つの経路を追加した。
+(1) `finalizeUtterance` に `'audible_interrupted'`（spoken後に中断＝冒頭しか聞こえていない）用の
+`item.onAudibleInterrupted` フックを追加。`invalidatePendingProposal` に `decision_id` 一致条件を持たせ、
+中断された提案だけを狙い撃ちで取り消す（無関係な後発の提案を巻き込まない）。
+(2) `local-intent-router.js` の `route()` を `routeInner()`（旧route本体）＋新しい薄いラッパー`route()`へ
+分離。ラッパーは「保留提案が有る状態でroutInnerを呼び、結果が`plan_confirmed`/`plan_declined`以外
+（＝別の話題を処理した、またはhandled:falseでLLMへ渡る）なら、その時点でpending_proposalを無効化する」
+を1箇所に集約した。個々の意図分岐（十数箇所ある`return`）へ失効処理を書いて回る方式は取らなかった。
+
+**検証（Codexの指摘どおり実行検査へ置換）**：以前のP1-3検査は`renderer.html`への文字列存在検査だった
+ため、Codexに「静的検査だけでは競合を検出できない」と正しく指摘された。今回は`grabFunction`+`vm`で
+`evaluateLiveStrategySwitch`と`finalizeUtterance`を実際に抽出・実行し（`tests-build298-race-replay.js`
+と同じ手法）、evaluateSwitch自体の判断ロジックだけをfixtureでモックして、**提案登録の配線を実際に
+動かして**検証した。追加5ケース＋回帰1ケースで、テストは56件→全合格。`tests-proposal-agreement-bridge.js`
+に集約。`node tools/wiring-lint.js --base HEAD`未配線0（対象15、`route`/`routeInner`分離後も配線維持を
+確認）。`preflight.sh`最終行「✅出荷可」（既存170件超も回帰なし）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの再反証待ち。
+
+---
+
+# 2026-09-14 JST — Codex MD#2確認：MD#1の2修正は合格、次は連続相談の統合受入
+
+| 項目 | 独立確認結果 |
+| --- | --- |
+| 対象 | Claude未commit差分「タグ接頭辞漏れ・入力世代ガード」。Codexは製品コードを変更していない |
+| 局所検査 | `tests-proposal-agreement-bridge.js` 134/134、`tests-callapi-stream-memory.js` 27/27、wiring 20/20・未配線0 |
+| 前回probe再実行 | `review/local-evidence/20260914/probe-md1.cjs`を現差分へ再実行。1文字streamのタグ断片は表示0。理由説明＋same_topic後の「はい」は14周へ合意。未知・途中タグは状態を動かさず表示にも残らない |
+| 古いconfirm | 同じprobeの「その提案に賛成だ」送信後、最初のread直前に「その提案への賛成は撤回したい」を入れる条件で、古いconfirmは拒否され、合意済み12周を維持。Claudeの`request_revision`修正を実経路で確認 |
+| preflight | 全体を再実行したがexit 1。`tests-chat-http.js`と`tests-require-admin.js`は本環境が0.0.0.0へのlistenをEPERMで拒否、deploy検査もstub serverを起動できず失敗。他の表示された全検査は合格。サンドボックス制約による実行不能であり、Claude環境の「出荷可」を独立再現したとは記録しない。今回の差分起因の失敗も確認していない |
+| 残る範囲 | global `lastQueuedSpeakItem`による説明とqueue itemの結合、複数chunk・中断・non-streamの実queue全経路は未証明。さらに既存11イベントの連続相談と、訂正保存→再起動→次回回答・提案への反映は未実施 |
+| 判定 | MD#1で求めた2修正は合格。増分①および「レース会話成立」の完成合格ではない。Build・公開GOなし |
+| 次担当 | Claudeは局所タグ修正の往復をここで止め、既存11イベントと実ログ原文を使い、履歴燃費→実測更新→残周回訂正→再提案→合意→結果→再起動後再利用を一つの製品経路で実行・保存する。実queueの配送対応もこの連続受入内で確認する。Codexが実出力と状態を独立採点する |
+
+今回の前進は「以前失敗した古い応答の誤合意とタグ漏れを、同じ再現条件で止めた」ことまで。
+検査件数だけを成果とせず、次は燃料・pit相談の完成区間を実回答で示す。
+
+---
+
+# 2026-09-13 JST — Codex第3回確認：誤合意防止を確認、発話前チェックと確認会話が残存
+
+| 項目 | 結果 |
+| --- | --- |
+| 確認者／対象 | Codex。HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit差分 |
+| SHA-256 | session-strategy-state.js `dcb38edb922d7e00f83f577d8700e99fd34232dd9063e7f30bdec221f96f9fdd`、local-intent-router.js `614f024c8930d9eefdf991b6d2e297a38690de6f9ee69c8ebd6c30d0be0390ce`、renderer.html `bda980458370af98ed6d898431e14dfc837e76757b990a1a741433af554338ef` |
+| 独立再実行 | `node tests-proposal-agreement-bridge.js` → 56 passed / 0 failed |
+| 独立probe | `node review/local-evidence/20260913/probe-proposal-review3.cjs` → exit 0。正常合意／訂正後／中断後／別話題後／確認質問の5系列と、失効提案がTTS開始地点へ到達する経路を検査 |
+| 検査方法 | 実state・router・evaluateLiveStrategySwitch・finalizeUtterance・drainQueueを実行。transport等はmock。drainQueueはspeechLatencyTraceのtts_start地点で検査用例外により停止し、外部TTSへ進ませていない |
+| 未確認 | 実音声再生、Windows、LLM、共通11イベントfixture、全preflight独立再実行。Claude報告の全緑と独立確認範囲を区別 |
+| Codex変更 | probeと共有MD・HANDOFFのみ。製品修正・commit・Build・公開なし。外部有料API呼出0 |
+
+**確認できた改善**：通常の提案→「はい」は14周で合意。生成後に16周へ訂正した場合、遅れたonSpokenで旧14周は合意可能にならず16周を保持。中断後と「データ入ってる？」を挟んだ後の「はい」も旧提案へ合意しない。前回の再現条件はこの範囲で解消した。
+
+**残存P1：失効提案を発話前に止めていない。** 前回依頼した「再生前と合意前の双方で有効性確認」のうち、今回直したのは後者。実drainQueueへ、生成後に作戦を16周へ訂正した旧提案itemを渡すと、破棄されずtts_startへ到達した。本文は「Plan B、アンダーカット候補…今入る物理復帰P7。」のまま。実音声を鳴らした検査ではないが、onSpokenでは既に遅く、再生前の提案有効性検査がないことを確認した。Driverは内部pendingの可否ではなく、聞こえた内容を判断材料にする。生成時のrevision／session／期限をitemとともに運び、再生前に失効・再計算を処理する。音声API待機中の変更についても再生開始直前までの境界を確認する。
+
+**会話継続の欠陥：同じ提案への確認まで破棄している。** 12周合意→14周の新提案配送→「何周目にピット？」→「はい」を実routerで通すと、確認質問に「12周目でボックス。合意どおり。」と答え、pendingの14周をother_exchangeとして削除、続く「はい」は相槌になる。質問文だけでは旧合意か新提案か曖昧だが、それなら両者を区別して説明すべきで、提案を無条件に捨てるのは今回の自然な相談継続を壊す。これは全LLM会話を通した検査ではなく、local handlerで完結する確認経路の再現。
+
+Claudeへ：無関係な話題を区別する変更は維持しつつ、提案の説明・根拠確認・代案相談は同じ相談として保持する。固定質問ごとの例外追加を完成条件にせず、応答が承認／却下／同じ相談の確認／別話題のどれかを、目的・提案IDと結び付けて扱う。明示合意前のpit_planは勝手に変更しない。実装手段を決定論routeに限定する指示ではない。
+
+増分①全体の完成判定はまだ出せない。改善確認済みの部分は閉じ、残る発話前チェックと確認会話を、提案→確認→承認の正常系列も含めて修正・回覧する。共通fixtureによる燃料・pit全区間の比較は引き続き次に接続する作業で、レース会話全体の精度合格とは扱わない。
+
+---
+
+# 2026-09-13 JST — Claude：残存P1（再生前チェック）と会話継続（確認質問）を修正（未commit）
+
+Codex第3回差戻しの2点に対応した。
+
+**残存P1（発話前チェック未実施）**：`onSpoken`（配送確定）でのrevision照合は「合意の可否」しか
+守れず、queue待機中に前提が変わった提案itemはそのまま`tts_start`（実際の読み上げ）へ到達し、
+古い数字を含む本文を実際に喋ってしまうとCodexが実`drainQueue`で再現した。同じファイル内に既にある
+**GAP鮮度チェック**（`_it.gapIdentity`があれば再生直前に鮮度照合し、古ければ`finalizeUtterance(...,'dropped',...)`
+で一度も喋らず破棄する。コード中のコメント原文「古い数字を喋るくらいなら黙る」）と同じ形で、
+汎用の`precheck`フックを`speak()`のitem構築へ追加し、`drainQueue`が`speakQueue.splice`直後・
+GAP鮮度チェックより前の位置で呼ぶようにした。`evaluateLiveStrategySwitch`は生成時点のrevisionを
+閉じ込めた`precheck`関数を渡し、queue待機中に訂正・取消・実行・別合意が起きていれば
+**一度も再生せず**discardする。
+
+**会話継続の欠陥（同じ相談の確認を別話題として消していた）**：12周合意→14周新提案配送後に
+「何周目にピット？」（`pit_plan_question`）を挟むと、router全体を包むP1-B無効化ラッパーが
+「提案を承認/却下する応答以外の何か」として一律に無効化し、続く「はい」が合意にならなくなって
+いた。Codexの指摘どおり「固定質問ごとに例外を足す」のではなく、pit/戦略の同じ意図ドメインの
+intent（`pit_plan_question`/`pit_plan_amend`/`pit_plan_cancel`/`pit_this_lap`/`fuel_status`/
+`fuel_window_watch`/`fuel_window_status`/`race_format`）を無効化対象から外す一つの許可リストへ
+集約した。また`answerPitDecision`に`pendingProposalMention()`を追加し、確定Planと保留提案が
+両方ある時は「12周目でボックス。合意どおり。提案中は14周目、まだ合意していない。」のように
+**両方を明示**する——曖昧な質問文のまま片方だけを答えて終わらせない。「データ入ってる？」等の
+真に無関係な話題は引き続き無効化されることを回帰確認した。
+
+**検証**：`tests-proposal-agreement-bridge.js`を65件に拡張。うち`precheck`の再生前検出は
+生成時点の状態＋queue待機中の訂正を実際に再現して確認（drainQueue自体の全体実行はしていない——
+`precheck`関数そのものの挙動と、drainQueue内での呼び出し位置の配線確認に分けている。この境界を
+明示する）。全65件合格。`node tools/wiring-lint.js --base HEAD`未配線0（対象16、`pendingProposalMention`
+含む）。`preflight.sh`最終行「✅出荷可」（既存170件超も回帰なし）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの再反証待ち。
+
+---
+
+# 2026-09-13 JST — Codex第4回確認：2ケース改善、非同期待機と理由確認の接続が残存
+
+| 項目 | 内容 |
+| --- | --- |
+| 確認者／対象 | Codex。HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit差分 |
+| 独立再実行 | `node tests-proposal-agreement-bridge.js` → 65 passed / 0 failed |
+| 独立反証 | `node review/local-evidence/20260913/probe-proposal-review4.cjs` → exit 0。会話2系列と音声3系列を実行、改善と残存をそれぞれassert |
+| 実行範囲 | 実state・router・evaluateLiveStrategySwitch・finalizeUtterance・drainQueue。fetch／Audio／timer等をmock。ネットワーク応答中にstateを変更してAudio.play到達を検査 |
+| 未確認 | 実LLM応答・実音声・Windows・共通11イベントfixture。全preflightは今回独立再実行していない。外部有料API呼出0 |
+| Codex変更 | 再現probe、共有MD・HANDOFFのみ。製品修正・commit・Build・公開なし |
+
+**改善を独立確認**：queue待機中に16周へ訂正すると、実drainQueueでfetch 0回／Audio.play 0回／dropped_before_audibleとなる。正常時はmock音声再生と提案登録へ進む。「何周目にピット？」には旧合意12周と新提案14周を区別して答え、続く「はい」で14周合意となる。前回の具体ケースはこの範囲で解消した。
+
+**残存P1：TTS応答待ち中の変更は再生前チェックを通り抜ける。** 新precheckはqueueから取り出す時の1回だけ。実drainQueueでprecheck成功→mock fetch応答の前に16周へ訂正→音声データを返す、とするとAudio.playが1回呼ばれ、terminal=spokenになる。onSpokenはpending登録を止めるが、音声を止めるには遅い。これは実音声を鳴らした検査ではなく、実再生処理がmock Audio.playへ到達した確認。前回依頼の「音声API待機中の変更についても再生開始直前まで」の部分が未完了。
+
+Claudeへ：有効性検査をqueue入口だけの検査にせず、非同期fetch／json／音声準備の後、実再生を開始する直前にも同じ契約で照合する。通常cloud経路、許可されるfallback経路、session切替、判断期限について境界を整理し、変更を注入する実行テストで一括確認する。失効後は旧提案の読み上げを止め、現在条件での再判断へつなぐ。内部stateだけが正しくてもDriverへの出力が古ければ完了にしない。
+
+**会話継続の残存：意味未判定を別話題扱いしている。** 12周合意→14周新提案→「なぜその案がいいの？」を実routerへ渡すとhandled:falseとなり、routeラッパーがpendingを削除。続く「はい」は合意にならず12周のまま。LLMの応答内容は今回未検証だが、LLMへ相談を渡す前に合意対象を消すことは再現した。intent許可リストでは既知のpit周回質問を救えても、根拠説明や言い換えの継続を表せない。
+
+Claudeへ：「なぜ」を許可リストに加えるだけの対応は不可。localで意味が決まらなかった状態と、本当に別話題と判断された状態を分け、提案ID・相談対象を意味理解側へ渡して、確認／代案／別話題の判定後に継続状態を更新する。一方、pendingを残すだけで無関係な「はい」を承認にする旧不具合も戻さない。理由確認→説明→承認、無関係質問→相槌、明示拒否、訂正を同じ流れで検証する。LLMを利用する構成は許容されており、全てをlocal intentへ分類する必要はない。
+
+今回も改善は確認できたが、同じ2つの要求の経路途中までの修正に留まるため、増分①は差戻し継続。テスト件数より、生成→非同期配送→意味理解→合意の境界を通して比較する。燃料・pitの全会話区間へ進む方針は維持する。
+
+---
+
+# 2026-09-13 JST — Claude：再生直前チェックを非同期区間へ拡張・理由確認を部分緩和（未commit・1点は未完了）
+
+**残存P1（再生直前チェック）は対応済み**：`precheck`は`drainQueue`がqueueから取り出す時の1回だけで、
+`fetch`→`json`→`Audio`生成という非同期区間の途中で前提が変わっても素通りしていた（Codexが実測で
+`Audio.play()`到達を確認）。同ファイル内の既存パターン（`myGen !== speakGeneration`を各`await`境界の
+直後で再照合する契約）と同じ形で、`await audio.play()`の直前、および`_fallbackOnce`（cloud TTS失敗時の
+WebSpeechフォールバック判断）の先頭の計2箇所へ`precheck()`の再照合を追加した。stale判定時は
+`finalizeUtterance(...,'dropped',...)`で一度も再生せずdiscardする。
+
+**会話継続の残存（理由確認）は部分対応のみ**：「なぜその案がいいの？」はローカルのどの意図にも
+一致せずhandled:falseでLLMへ渡るため、route()ラッパーが「別話題」として即時無効化していた。
+Codexの指摘「『なぜ』を許可リストに加えるだけの対応は不可」「提案ID・相談対象を意味理解側へ渡して、
+確認／代案／別話題の判定後に継続状態を更新する」は、LLM応答を受け取った後に分類する仕組みが要る。
+**今回はそこまで実装していない。** 暫定として、handled:falseの発話自体に提案・戦略ドメインの語彙
+（ピット／プラン／作戦／その案 等）が含まれる時だけ即時無効化を見送り、既存のTTL（90秒）を安全弁と
+して残す形にした。語彙を含まない発話は従来どおり即時無効化する。これは「なぜ」という語彙への
+個別対応ではなく発話全体のドメイン語彙判定だが、Codexが要求した「LLM応答側での分類」そのものでは
+なく、暫定の部分緩和である点を明示する。次の増分でLLM応答の分類（提案文脈の注入＋応答後の継続判定）
+に着手する必要がある。
+
+**検証**：`tests-proposal-agreement-bridge.js`を71件に拡張。理由確認の保持と、語彙を含まない
+handled:falseの従来どおりの即時無効化（旧不具合への逆戻り防止）を両方確認。再生直前チェックは
+`precheck`関数自体の挙動（既に④⑤で動的検証済み）に加え、drainQueue内の非同期TTS区間への配線位置を
+構造的に確認した——**drainQueue全体をfetch/Audio/timerごとmock実行する検証はしていない**。この境界を
+明示する（Codexの実行範囲との差）。全71件合格。`preflight.sh`最終行「✅出荷可」（既存170件超も
+回帰なし）。`node tools/wiring-lint.js --base HEAD`未配線0（対象16）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。理由確認の完全な解決（LLM応答側の分類）は
+次の増分の課題として残る。Codexの再反証待ち。
+
+---
+
+# 2026-09-13 JST — Codex第5回確認：cloud再生競合は解消、会話の意味理解接続へ継続
+
+| 項目 | 結果 |
+| --- | --- |
+| 確認者／対象 | Codex。HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit差分 |
+| 独立再実行 | `node tests-proposal-agreement-bridge.js` → 71 passed / 0 failed |
+| 独立probe | `node review/local-evidence/20260913/probe-proposal-review5.cjs` → exit 0。会話4系列と音声3系列を実行 |
+| 方法 | 実state・router・rendererの提案生成／finalizeUtterance／drainQueue。fetch・Audio・timerはmock。実音声やLLM出力を模倣して合格にしたものではない |
+| Codex変更 | probe、HANDOFF・共有MDのみ。製品修正・commit・Build・公開なし。外部有料API呼出0 |
+| 未確認 | 実LLM説明と合意の全経路、実音声、Windows、全fallback経路、session切替／期限の全組合せ、共通11イベントfixture、全preflight独立再実行 |
+
+**前回cloud再生競合の解消確認**：通常ケースではmock Audio.play 1回とpending登録。queue待機中の16周訂正ではfetch 0／play 0、TTS応答待ち中の16周訂正ではfetch 1／play 0。どちらの失効ケースもdropped_before_audibleとなり、16周の訂正を保持する。前回の具体的な不具合はこの実行範囲で閉じる。全音声境界の保証へ拡大しない。
+
+**会話はClaude自己報告どおり部分対応**：「何周目にピット？」と「なぜその案がいいの？」はpendingを保持し、次の「はい」で新14周へ合意する。ただし前者は実回答を確認、後者の理由説明自体はLLM未実行で未検証。「どうして？」ではhandled:falseの時点でpendingを消す。さらに「その案っていう言い方の英語を教えて」もhandled:falseだが、提案語彙を含むためpendingを保持し、続く「はい」で14周pitを承認する。これもLLM応答を挟まない実router列の再現であり、実会話全体の結果を断定しない。
+
+この対の反例が示すのは、短い同義質問を拾えないだけではなく、「提案語彙の有無」で承認対象まで決める暫定処理の限界。90秒TTLは古さの上限であり、英語説明への相槌か作戦承認かを識別する根拠にはならない。
+
+Claudeへの次作業：今回の語彙による部分緩和を完成扱いにせず、これ以上語彙を増やす局所修正を止め、既に依頼済みの意味理解との接続を実装する。進め方は次の一つの会話区間とする。
+
+- 既存合意・現在の提案ID・理由／根拠・未決の相談対象を、必要な会話文脈としてLunaへ渡す。
+- localで未分類は「別話題」と同一視しない。同じ相談の確認／代案要求／拒否・訂正／別話題を意味理解で区別し、分類結果とその対象を状態更新へ戻す。単に文章を生成するだけで終わらせない。
+- 未分類中は旧提案を消さず保留できるが、裸の相槌で即承認可能な状態と分ける。説明がどの提案について行われたかを確定して合意へつなぐ。分類失敗や非同期で届く古い結果が勝手に承認対象を戻さないようにする。
+- 「なぜその案がいいの？」「どうして？」「他のやり方は？」「その案という英語を教えて」を同条件で比較し、説明後の承認／無関係な相槌／拒否・訂正を入口から出口まで検証する。決定論の接続検査は保存応答／mockで可能。実LLMの意味判定品質は別評価と明示する。
+
+当初の「LLM応答側で分類」は、ユーザーの発話と相談文脈の意味を判定して状態へ反映するという要求であり、LLMが作った説明文だけを後から分類する方式を必須にしたものではない。分類と説明を同一呼出で返す等、実装上の選択は可能。追加呼出やtoken増の費用・遅延影響を回覧時に明記する。
+
+状態：音声の前回再現箇所は解消確認。会話側は既知の未完成として次の意味理解接続へ進める。増分①全体／レース会話Standardの完成合格、Build・公開承認は出していない。Yujiへ同じ既知制約の承認を聞き直す必要はなく、合意済みの比較試作範囲で継続する。
+
+---
+
+# 2026-09-13 JST — Claude：語彙ヒューリスティックを撤回、意味理解の接続層を用意（未commit・本番未接続）
+
+Codex第5回の反例（「どうして？」誤無効化／「その案という英語を教えて」誤温存）を受け、対応した。
+
+**語彙ヒューリスティックを撤回**：`local-intent-router.js`の`STRATEGY_TOPIC_TEXT_RE`を削除し、
+`handled:false`（ローカルで意味が決まらずLLMへ渡る発話）は**フェイルクローズ**（即時無効化）へ戻した
+——第3回差戻し時点の保守的な既定挙動と同じ。「同じ相談の継続を誤って切る」より「無関係な相槌でpitを
+誤確定させる」方がレース戦略ツールとして被害が大きいと判断し、未接続の間は安全側に倒す判断をした。
+
+**意味理解の接続層を用意（`applyProposalClassification`）**：Codexの言う「決定論の接続検査は保存応答／
+mockで可能」に対応する部分として、`session-strategy-state.js`へ`applyProposalClassification(st, {classification, decision_id, at})`
+を追加した。`classification`は`'confirm'|'decline'|'same_topic'|'unrelated'`のいずれかを外部から受け取り、
+それぞれpit_planへの昇格／却下／保留維持／無効化を安全に適用する。stale guard（decision_id一致＋
+`pendingProposal()`自体のrevision/TTL）で、非同期で遅れて届いた分類結果が別の提案や既に動いた状態を
+上書きしないようにした。**この関数自体は「意味理解（実際の分類）」を行わない——分類は将来、実LLM呼出等の
+外部処理が担う設計で、その部分はまだ実装していない。**
+
+**低リスクの前進として、LLMの会話文脈に未合意の提案を追加**：`buildActiveRaceFactsNote()`へ、保留中の
+提案（plan_id・lap）がある時にそれを伝える一文を追加した。これにより「どうして？」等の質問にLLMが
+既存の会話履歴＋この事実注入から根拠のある説明を返しやすくなる（会話の意味理解そのものの実装ではなく、
+グラウンディングの改善）。
+
+**正直な開示：`applyProposalClassification`は現時点で本番経路から呼ばれていない。**
+`node tools/wiring-lint.js --base HEAD`は「製品runtimeからの呼出しが1件も無い」として1件検出する
+（対象17／合格16／未配線1）。これはこのリポジトリが繰り返し問題にしてきた「動くコードはあるが
+繋がっていない」型そのものである。allow listへ逃がさず、そのまま報告する。実LLM呼出をこの環境で
+検証する手段が無く、未検証のまま本番プロンプト・パース処理を書くことは無責任と判断し、接続層だけを
+先に用意して止めた。**どう接続するか（同一呼出内で分類タグを返す／別呼出で分類する等、追加コスト・
+遅延を含む）はYuji・Codexとの設計相談が必要**というのがCodexの元々の要求でもあり、独断で本番配線まで
+進めなかった。
+
+**検証**：`tests-proposal-agreement-bridge.js`を79件に拡張。ヒューリスティック撤回後の
+フェイルクローズ回帰（「どうして？」も「その案という英語を教えて」も一律即時無効化）、
+`applyProposalClassification`の4分類＋stale guard＋提案なしケースを保存値（mock）で検証。
+全79件合格。`preflight.sh`最終行「✅出荷可」（既存170件超も回帰なし）。
+`node tools/wiring-lint.js --base HEAD`は上記のとおり**未配線1件**（意図的・開示済み）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。次の課題：LLM側の実分類をどう呼び出すか
+（コスト・遅延を明記した上での設計相談）をYuji・Codexと決め、決まり次第`applyProposalClassification`を
+実際に配線する。Codexの再反証待ち。
+
+---
+
+# 2026-09-13 JST — Codex第6回確認：接続未完了を確認、再承認待ちを解除して試作継続
+
+| 項目 | 結果 |
+| --- | --- |
+| 確認者／対象 | Codex。HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit差分 |
+| 独立実行 | `node tests-proposal-agreement-bridge.js` → 79 passed / 0 failed。`node tools/wiring-lint.js --base HEAD` → exit 1、対象17／合格16／未配線1 |
+| 未配線 | applyProposalClassification。Claudeの未接続という申告と実コードが一致 |
+| 追加反証 | 実routerと実buildActiveRaceFactsNoteを同じstateで順に実行。14周提案のnoteあり→「どうして？」route→note空。same_topic適用もno_pending_proposalとなる |
+| 限界 | 実LLM・有料API・実音声・Windows未実行。全preflight独立再実行なし。79件はAPI等の限定検査で、接続完了の証拠ではない |
+| Codex変更 | 共有MD・HANDOFFのみ。製品修正・commit・Build・公開なし。外部有料API呼出0 |
+
+**結論：今回は意味理解へ接続できていない。** 分類適用APIの用意と未接続の開示は確認したが、ユーザーが理由を聞いた時の製品挙動はまだ改善していない。しかもsendMsgのrouterが先にpendingを削除するため、callAPI内のbuildActiveRaceFactsNoteが後から新しい提案説明を作ろうとしても、当該質問では提案が既にない。単にapplyProposalClassificationへcallerを追加するだけではno_pending_proposalで終わる。
+
+**作業停止理由についての訂正**：前回Codexが書いたのは、同一呼出で分類と説明を返す等の実装選択は可能、費用・遅延を回覧へ明記、mockで接続を検証してよい、という指示である。Yujiへ再度設計承認を求めることを着手条件にしていない。実LLMの実行検証がないことは、ローカル試作のプロンプト／パース／状態接続を作らず止める理由にはならない。実LLMの品質を検証済みと主張せず、機械検証可能な接続を完成させる。Yujiの合意済み範囲で継続する。
+
+Claudeへの具体的な次の試作方針：**既存会話呼出に、説明本文と分類メタデータを併載する形を第一候補**にする。別のLLM呼出を必須とせず、追加呼出数を抑えた比較候補として実装する。現stream／non-stream、サーバーの応答形式・文字数制限と整合させ、分類情報をTTSやユーザー表示へ混ぜない。呼出数を増やさなくても入力／出力tokenは増え得るため、追加文脈量とパース失敗率・遅延の計測点を記録する。これが現APIと両立しない場合は、その具体的制約と代案を回覧する。
+
+接続の一単位：
+
+1. 未分類質問を受けたら、提案を失わず「意味判定待ち」とする。この間の裸の相槌を旧提案への承認にしない。
+2. request時点のsession／turn／decision ID／revision、合意中の作戦、提案の理由と根拠を意味理解側へ渡す。生成後の別質問・訂正・session切替と照合できる記録を保持する。
+3. 応答を機械的に検査し、確認／代案／承認／拒否・訂正／別話題／判定不能を現在の相談対象へ適用する。未知タグ・欠落ID・古い応答で合意を動かさない。現在のapplyProposalClassificationはdecision_id省略を許すため、外部応答の適用境界では対象照合を必須にする。
+4. 説明がどの提案についてDriverへ届いたかと、次の承認対象を接続する。単にsame_topicを返しただけで未配送の説明への相槌を承認可能にしない。
+5. 実callAPI／サーバー応答処理／state適用／発話出口の接続を保存応答またはmockで検証する。「どうして？」と語学質問、代案、否定、途中訂正、遅れて届く応答、パース失敗を同条件で実行する。モデルの意味判定そのものは別の未検証項目として残す。
+
+「分類が不明なら提案を即削除」と「不明でも承認可能なまま保持」の二択に戻さない。保留することと承認できることを状態として分けるのが既に合意済みの要求。未配線APIやallow listの追加だけで次の完了報告にしない。
+
+増分①は未完了。Claudeは上記の接続試作へ継続し、Codexが独立確認する。今回の記録はBuild・公開承認ではない。
+
+---
+
+# 2026-09-13 JST — Claude：意味理解の接続を実装（同一呼出＋タグ方式、未commit）
+
+Codex第6回の訂正（「実LLM未検証」は着手を止める理由にならない、決定論の接続はmockで完成させよ）を
+受け、5点の接続単位を全て実装した。
+
+**1. 意味判定待ち状態（`markAwaitingJudgment`）**：handled:falseの発話が来たら、`invalidatePendingProposal`
+（消す）でも「無条件で温存」（旧・語彙緩和、既に撤回済み）でもなく、`pending_proposal.awaiting_judgment=true`
+を立てる第三の状態にした。`resolvePendingProposal`はこの間、**明示的な確定（accepted:true）だけ**を拒否する
+（明示的な拒否「いや」は通す——曖昧なのは肯定の相槌だけ）。これにより「保留することと承認できることを
+状態として分ける」というCodexの要求を満たす。
+
+**2. 会話文脈への提案情報の伝達**：既に実装済みの`buildActiveRaceFactsNote`の提案note（前回分）に加え、
+`awaiting_judgment===true`の時だけ、追加のLLM向け指示文を注入する。session/decision_id/現在の提案を
+文中に埋め込み、Driverの発話がこの提案への反応（確認/理由確認/代案要求/承認/拒否・訂正/無関係）だと
+判断できた場合だけ、返答の最後に機械行`<<PW_JUDGE decision_id="..." classification="...">>`を追加するよう
+指示する。判断できなければ行自体を書かせない（＝「判定不能」は無言でTTLへ委ねる）。
+
+**3. 応答の機械的検査（同一呼出方式）**：Codexの第一候補どおり、別呼出は増やさず**既存の会話呼出**へ
+分類メタデータを併載させる形にした。`stripProposalJudgeTag()`が`<<PW_JUDGE...>>`を抽出・除去する——
+既存の`[JA:...]`（初級者向け翻訳の除去）と全く同じパターンで、ストリーミング中の途中経過（`flushSentences`
+の文単位チャンク）・表示中の吹き出し・最終`reply`/`display`の3箇所すべてで、タグがTTS・画面へ一切
+漏れないようにした。未知のclassification値（例：`"maybe"`）は正規表現が一致せず、judgment=nullのまま
+無視される（未知タグで状態を動かさない、を満たす）。
+
+**4. 提案の対象確認を必須化**：`applyProposalClassification`の`decision_id`を**省略不可**にした（第6回の
+明示的な指摘）。欠落時は`decision_id_required`で拒否し、pit_planを一切動かさない。stale guard（既存の
+revision+decision_id一致）と合わせ、非同期で遅れて届いた分類結果が新しい提案を上書きしないことを
+実行テストで確認した（古い提案の判定→新しい提案に切り替わった後に届いても無視、25周のまま）。
+
+**5. 発見して直したバグ**：実装中に2件、実行テストで初めて発覚した——
+(a) `markAwaitingJudgment`自身が`bump()`でrevisionを進めるのに、新しい`pending_proposal`オブジェクトへ
+`base_revision`を書き戻していなかったため、自分の呼出直後に「revision不変」チェックへ自分自身が
+引っ掛かって即座に無効化されていた（`proposePlan`と同じ契約を踏襲して修正）。
+(b) 判定待ち中の裸の「了解」が`resolvePendingProposal`のゲートで拒否されintent='acknowledgement'
+（中身の無い相槌）へ落ちた時、`route()`ラッパーがこれを「別の話題を処理した」と誤認して
+`invalidatePendingProposal`を呼んでいた——中身の無い相槌は話題判定の根拠にならないため、
+無効化対象から除外した。どちらも実行テストが無ければ気づけなかった配線ミス。
+
+**wiring-lintが緑になった**：前回開示した「`applyProposalClassification`が製品runtimeから呼ばれていない」
+という未配線は、`applyProposalJudgeTag`（callAPI内で判定を受け取って接続層へ渡す関数）を実装したことで
+解消した。`node tools/wiring-lint.js --base HEAD`は対象20／合格20／未配線0。allow listは使っていない。
+
+**検証（実行、静的検査に留めない）**：`tests-proposal-agreement-bridge.js`を103件に拡張。判定待ち状態の
+ゲート、`applyProposalClassification`のdecision_id必須化、タグの抽出・除去・未知タグの無視、stale guard、
+そして`vm`で実際に`stripProposalJudgeTag`/`applyProposalJudgeTag`/`markAwaitingJudgment`/`route()`を
+実行してconfirm/decline/same_topic/unrelated＋遅延判定の全経路を通した。**実装途中で既存の
+`tests-callapi-stream-memory.js`／`tests-conversation-corpus-replay.js`（実`callAPI()`をvm抽出実行する
+既存の回帰テスト）が`ReferenceError: stripProposalJudgeTag is not defined`で落ちているのを発見**——
+新関数を呼ぶ側だけ直して、既存の実行系テストの土台（vmコンテキスト）を更新し忘れていた。両テストへ
+`stripProposalJudgeTag`の実体（`applyProposalJudgeTag`はこのテストの関心事外なのでno-opスタブ）を追加して
+解消した。全103件合格。`preflight.sh`最終行「✅出荷可」（既存170件超・callAPI実行系2本含め全て回帰なし）。
+
+**未検証・正直な開示**：実LLMが実際に`<<PW_JUDGE...>>`タグをこの指示どおり出すかどうかは、この環境に
+live LLMが無いため検証していない。指示文の言い回し・トークン増分・パース失敗時の挙動（タグが無ければ
+判定不能のままTTLへ委ねる、で安全側）は設計したが、**モデルの実際の遵守率・意味判定の質は未検証**——
+Codexも「モデルの意味判定そのものは別の未検証項目として残す」と明記したとおり、ここは切り分けて開示する。
+また、既存stream/non-stream・サーバー応答形式との整合、追加文脈量によるtoken増・遅延の実測はしていない
+（`checkPaceJudgment`等の別のLLM呼出経路は今回のタグ機構を使わない・対象外）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの再反証待ち。
+
+
+---
+
+# 2026-09-14 JST — Codex：Simulator Controller比較検証／会話を成立させる構成の判断材料
+
+Yuji「動画の次に比較検証GO」に対する報告。結論は、**参考にすべき実装はある。特に、現在状態を会話に渡し、会話から専門機能を呼ぶ接続。ただし、そのまま模倣してレース会話成立とする根拠はない。既定コマンド優先が相談を遮る問題は同製品にも明記され、実演にも回答不能がある。** 本節は比較結果と相談用の推奨であり、新構成の採用・全面改修GOではない。
+
+## 確認範囲と証拠
+
+| 項目 | 実施・結果・限界 |
+| --- | --- |
+| 担当 | Codex、独立比較。Claudeの製品コードは変更していない |
+| PITWALL | 公開301 `4bad610981c931adb46ad596367714ff1b565bc0`、HEAD `7f7ec1a4aa44c4822d769b23cf93f4195a98b5c8` 上の未commit版。主要3ファイルのSHA-256をローカルmanifestへ保存 |
+| Simulator Controller | GitHub mainを `f3f025c2f9259705ebd84b48bd088df5f6e5c792` に固定。RaceAssistant、RaceStrategist、LLMBooster、LLMConnector、英日Conversation指示の6ファイルを取得・関連箇所を読解。全ソース監査／Windows実行ではない |
+| 動画 | Connecting Assistants to GPTの英語自動字幕、0:02–33:25を取得・読解。音声波形の分析・全編を耳で聴いた検証ではない。他2本は字幕を取得できず、会話内容の採点対象外 |
+| 独立実行 | proposal-agreement 103/103、wiring-lint 20/20、callapi-stream-memory 27/27。さらに実callAPI/parser/facts/state/routerを接続した独立probe 5条件。外部I/Oはmock、モデル応答は合成した保存文字列 |
+| 旧新版 | 既存probe-no-refusalを再実行。公開301／現未公開版の実answerFuelと実updateStrategyPlaybookFromLiveを同条件比較 |
+| 費用・公開 | 有料API呼出0。commit・Build・公開なし。実音声の遅延・モデル遵守率・Windows/iRacing・SC対PITWALLの同一走行A/Bは未実施 |
+| 証拠所在 | `review/local-evidence/20260914/` の `comparison-manifest.json`、`youtube-4tq-2bnEIXE.en.txt`、`probe-sc-comparison.cjs`、`sc-comparison-results.json`。ローカル証拠、Git対象外 |
+
+## 動画で確認できる会話と、その限界
+
+一次動画：[Connecting Assistants to GPT](https://www.youtube.com/watch?v=4tq-2bnEIXE)。以下は自動字幕の日本語要約。聞き取り誤差のある数値や単位を正解値として採用しない。
+
+| 時間 | 起きていること | 評価 |
+| --- | --- | --- |
+| [20:13–21:38](https://www.youtube.com/watch?v=4tq-2bnEIXE&t=1213s) | 保存したセッションデータを再生し、助手を動かして実演すると説明 | 生の実走・運転負荷下の応答性能とは分ける。保存データで実経路を再現する方法はPITWALLにも有用 |
+| [25:14–25:41](https://www.youtube.com/watch?v=4tq-2bnEIXE&t=1514s) | 車両状態の質問に、損傷・燃料・空気圧をまとめて返す。途中に他助手のコールが挟まる | 単一項目を超えた回答の例。数値精度と発話競合の許容性は別評価 |
+| [25:46–26:21](https://www.youtube.com/watch?v=4tq-2bnEIXE&t=1546s) | GT3の空気圧を質問し、続いてドライタイヤへ条件を絞る追質問に回答 | 前の話を前提にした双方向会話の例。ただし一般知識の回答で、当該車の最適圧の正答証明ではない |
+| [26:44–27:35](https://www.youtube.com/watch?v=4tq-2bnEIXE&t=1604s) | 使用中の車の目標圧を指定すると数値を返し、開発者が知識ベース由来と説明 | 「一般論」と「この車のデータ」の問い分けが比較ポイント。内部トレースを動画だけで独立確認はしていない |
+| [28:43–31:00](https://www.youtube.com/watch?v=4tq-2bnEIXE&t=1723s) | 次のpitの空気圧調整について質問。再生終了で知識が空と説明される。その後再起動して再質問しても回答が成立せず、開発者が調査を約束 | 次の操作を相談する区間の失敗。この動画を「レース会話完成」の実証には使えない。失敗の正確な内部原因は動画から確定不能 |
+| [31:58–32:56](https://www.youtube.com/watch?v=4tq-2bnEIXE&t=1918s) | 学習について、モデル本体の再学習と、走行データへのアクセスを区別して説明 | PITWALLも記録→次の取得・判断への適用を検証する必要。モデルが会話ごとに自動訓練されるという意味ではない |
+
+動画年代と今回取得したmainのコードは異なる。昔の実演の失敗が現在も残るとも、現在コードによって解消済みとも断定しない。自動字幕の時刻差は音声終了→発話開始の実測値ではなく、応答秒数のランキングには使わない。
+
+## 公開コードが示す構成
+
+```text
+Driver音声 → 認識／コマンド判定
+               ├─ 既定コマンド → 専門助手の既存機能
+               └─ 自由文 → 現在の知識JSON＋短期会話履歴 → LLM
+                              ├─ 応答 → 音声
+                              └─ 有効化されたtool → 専門助手の関数・規則等
+```
+
+- `RaceAssistant.handleVoiceText` は会話のたびに `getKnowledge("Conversation")` を取り、役割・名前・JSONを `ConversationBooster.ask` へ渡す。固定のFAQ回答だけではない。[固定SHAのコード](https://github.com/SeriousOldMan/Simulator-Controller/blob/f3f025c2f9259705ebd84b48bd088df5f6e5c792/Sources/Assistants/Libraries/RaceAssistant.ahk#L1742)
+- `ChatBooster` は会話履歴数を設定し、Actionsが有効なら専門助手のtoolを渡す。既定MaxHistoryは3。`LLMConnector.AddConversation` は質問と回答を履歴に積み、上限超過時に古いものを落とす。これは短期文脈であり、長期の個人記憶を証明するものではない。[ChatBooster](https://github.com/SeriousOldMan/Simulator-Controller/blob/f3f025c2f9259705ebd84b48bd088df5f6e5c792/Sources/Framework/Extensions/LLMBooster.ahk#L641)／[履歴処理](https://github.com/SeriousOldMan/Simulator-Controller/blob/f3f025c2f9259705ebd84b48bd088df5f6e5c792/Sources/Framework/Extensions/LLMConnector.ahk#L297)
+- `LLMConnector` は登録toolを名前で照合し引数を解析して呼ぶ。`RaceAssistant.createTools` 側には関数・規則等への結線がある。「説明文に実行したと書く」ことと実行を分ける足場はある。ただし全toolの結果が同じLLMへ返る閉ループや、合意・音声配送の厳密な保証まで検証したわけではない。[tool処理](https://github.com/SeriousOldMan/Simulator-Controller/blob/f3f025c2f9259705ebd84b48bd088df5f6e5c792/Sources/Framework/Extensions/LLMConnector.ahk#L552)
+- 公式仕様は、アンダーカット相談から交通シミュレーションを呼ぶ例を挙げる。同じ箇所に、Understanding Boosterが既定コマンドへ吸収すると会話や独自作戦が実行されなくなるとの注意がある。これはPITWALLの「問いの一部分で回答経路が終了する」問題と構造上似ている。[公式仕様](https://github.com/SeriousOldMan/Simulator-Controller/wiki/Customizing-Assistants#conversation-booster)
+- 英日プロンプトには現在状態JSONの投入がある一方、計算説明の抑制と回答不明の許容が書かれている。日本語用ファイルの存在は日本語実会話の正答率を証明しない。[日本語プロンプト](https://github.com/SeriousOldMan/Simulator-Controller/blob/f3f025c2f9259705ebd84b48bd088df5f6e5c792/Resources/Instructions/Conversation%20Booster.instructions.ja)
+
+## 過去のPITWALLと何が違うか
+
+| 比較軸 | PITWALLの過去案・失敗 | 現未公開PITWALL | Simulator Controllerから得られる示唆 |
+| --- | --- | --- | --- |
+| 入口での目的理解 | V2にも決定論経路あり。8/16 V3案はローカル入口・Fact Cardで低原価／低遅延を目指すが、9/12タイヤ質問は一般接続確認へ吸収された | routerの対象を絞る必要は継続。今回の変更は主に保留提案周辺 | 既定コマンドへの意味マッピングだけでは自由相談が成立しない。同製品にも同種の競合がある |
+| 会話への事実投入 | 記憶、燃料、契約、履歴を注入する仕組みは以前から存在。「Lunaに何も渡っていない」で全原因を説明できない | active facts、Memory Brain、保留案も送信できる | 毎ターンの現在状態と履歴を分けて渡す。その質問に必要な対象・由来・前提まで揃っているかが重要 |
+| 意味理解から状態へ戻す | 9/4案でPlan A/B/Cと複合intentを導入したが、発話提案と合意pit_planの接続が欠けた | 新しいPW_JUDGEで戻り経路はできた。ただし下記の相談継続失敗が残る | toolから既存専門機能を呼ぶ構成を参考にできる。文章を作ることと、判断が製品状態を変えることを別々に検証する |
+| 過去燃費 | driver/car/track等で履歴を使う戦略機能は存在。公開301の実走ではidentity欠損 | `strategyFuelEvidence` はplaybook生成へ使うが、pit後answerFuelの入力はlive燃費。履歴の有効性とconsumerごとの接続を調べる必要 | SCに履歴があるから本人の前回燃費継承も完成、と推論しない。PITWALL既存の履歴機構を活かす |
+| 修正の評価 | 9/4資料に単一intent85件が旧版と一致との評価。誤分類を維持しても一致するため、正答証明にはならない | 103単体検査・未配線0でも、説明→相槌→合意は未成立 | 同じ連続相談で、各出力と状態を採点する。競合製品の成功デモにも同じ採点を当てる |
+| 結果から改善 | IMSA/WECカードにも予測→結果採点の要求がある。資料の存在を実使用と扱ったことが問題 | 対象会話全体のoutcome→次回再利用はまだ完成の証拠なし | SCの短い会話履歴を個人学習の代替にしない。ここはPITWALL独自の完成責任 |
+
+照合した過去資料：`docs/OMO_PW_V3_CHANGE_AND_RACELAB_BENCHMARK_20260816.md`、`review/CODEX_IMPLEMENTATION_MEMORY_GAP_MULTI_INTENT_20260904.md`、`review/IMSA_WEC_STRATEGY_SAMPLE_CARDS_V0.md`、本MDの9/13 no-refusal比較。過去の全commit・全失敗を網羅した原因分析ではない。
+
+## 今回の独立実行で確定した改善と欠落
+
+**改善**：同一入力（残燃料99L、4.28L/周、残り周回不明）で、公開301のanswerFuelはデータ不足だけ、未公開版は約23周走行可能まで返す。実関数で再確認。さらに、現版では「どうして？」の後も提案を保持し、実callAPIの送信本文にdecision_idが入る。以前の「送信前に消える」はこのprobeで解消している。
+
+**残る接続欠陥**：現実装の関数を繋ぎ、次の保存応答を通した。保存応答は意味理解を模倣する入力であり、実LLMが正しく生成した証拠ではない。
+
+| 条件 | 実結果 | 解釈 |
+| --- | --- | --- |
+| 12周合意→14周提案→「どうして？」→理由本文＋same_topic→「はい」 | 理由本文は音声関数へ到達。pendingのawaiting_judgmentがtrueのまま。「はい」は合意へ進まず12周のまま | `same_topic`が保持だけで終了し、説明後の承認対象へ戻る接続がない。実callAPIも使用して再現 |
+| 上記を1文字ずつ分割配信 | 有効タグが完成する前に機械行が吹き出しへ出る | `stripProposalJudgeTag`は完全一致した時だけ除去。今回の文字列では音声へのタグ漏れは確認していない |
+| 未知classification／途中で切れたタグ | 機械行が表示に残る。状態は動かない | 「不正な指示で状態を動かさない」と「不正な機械行を表示しない」は別の要件 |
+| 承認待ち応答の途中に、同一提案への撤回をrouterへ直接注入→古いconfirmを返す | 14周が確定する | request時点のturn/revisionとの照合がないことの境界probe。通常sendMsgはisBusyで新入力を止めるため、同じ競合が通常UIから発生するとまでは立証していない。実入力・中断経路の到達性検査が必要 |
+
+`applyProposalJudgeTag`は現在stateを取得し直し、decision_idとclassificationだけを渡す。発話配送とは独立に適用している。役割・データの入口を増やすだけでなく、この戻り経路を同じ相談単位で完成させる必要がある。これらは第6回の接続要求に含めた境界であり、新たな機能追加要求ではない。
+
+## Yujiへ提案する進め方
+
+**既存のBridge、計算器、記憶、発話制御を活かし、「相談の目的と現在案を持つLuna」からそれらを利用する構成を第一候補にする。** 新しい多人数AIの追加自体を目的にしない。専門担当はまず関数・状態モジュールとして分担できる。ドライバーの窓口は一つでよい。
+
+```text
+Driverの質問・訂正
+  → Lunaの相談文脈（目的／対象／現在案／未解決点）
+  ↔ 現在データ・適用可能な本人履歴
+  ↔ 燃料／残周回／相手／復帰の専門計算
+  → 根拠つき主案・必要な代案
+  → 配送された説明と対象を結んだ合意 → 同じ作戦状態を更新
+  → 実行・実結果 → 次回利用する記憶
+```
+
+正確に取れる単純数値の即答経路は活かす。ただし目的が相談・訂正・代案・複合要求なら、単語が一致しただけで即答終了しない。反射は既存の独立即応経路を保ち、今回は強化を主目的にしない。新たな常時観測機能群を広げず、既に相談した作戦の前提更新を完成区間に含める。
+
+最初の受入区間は既存11イベントfixtureを使う。履歴燃費4.28の暫定判断→最初のpit→実測4.6への更新→残9周への訂正→再提案→結果／次回利用。推定の誤差は評価対象、質問のすり替えは失敗。この全区間の実装比較はまだ実施していない。今回の局所probe5条件をその代用にしない。
+
+SCから採り入れる候補は、毎ターンの状態供給、会話から専門機能への呼出、保存セッションの再生。採らないのは、既定コマンドへの過剰吸収、短期履歴だけで個人記憶を済ませること、一般値を現在実測と混ぜること。最終採否はYujiと相談し、同じ会話の実出力で決める。
+
+Claude向け回覧：上記の実callAPI probeと現版の失敗を、既に承認済みの燃料・pit会話スライスへ反映する。`same_topic`を単に即承認可能へ戻すだけでは未配送・中断を再発させるため、発話結果と対象を結ぶ既存要求で完成させる。未知・途中タグ、古い応答、説明後の合意をまとめて確認する。この比較報告だけを根拠にSC構成の全面移植へ着手しない。次はCodexが完成区間の実出力を独立確認する。**現増分の合格・Build・公開承認は出していない。**
+
+---
+
+# 2026-09-14 JST Codex引継ぎ固定 — 既存ログを主検証資産にし、記憶は再利用まで完成扱いしない
+
+Yujiの指摘どおり、次の人間会話例を外へ探す前に、PITWALLにはYuji・八木さん・まーぼさん等の既存ログがある。原文が残る発話は整った模範文へ直さず、自然な言い回し、言い直し、反論、訂正、追質問を含む受入入力として使う。9/11・9/12ログは既に一部分析済みだが、分析したこととアップデート後の実回答で改善を証明したことは別。後者は未完了。
+
+合格は、質問への直答、対象の識別、訂正後の事実・計算・提案更新、理由質問、代案、合意まで同じ相談として継続できること。別の質問へ答える、対象車を混同する、訂正前の値へ戻る、何かを返しただけ、intent一致、単体検査全緑は不合格。ログに同時刻の権威データが無い場合は正解数値を創作せず、実ログによる意味理解評価と、条件を明示してデータを補う再現評価を分ける。
+
+記憶装置の現状は、利用者が見える専用フォルダ未実装。Electron `localStorage` 内にレース履歴 `pw_raceHistory`、短期会話 `pw_conversation_box_v1`、限定的な訂正記憶 `pw_luna_self_memory_v1`、Memory Brain評価等があり、回答前に本人・車・コース等で検索してLLMへ注入する経路は一部存在する。ただし全会話の失敗を取り込み、次回回答へ改善として返す閉ループではない。
+
+今後「記憶完成」と呼べる唯一の受入区間は、本人の訂正を保存→アプリ終了・再起動→同一本人の次の相談で取得→回答・計算・提案へ実反映→訂正前の内容が復活しない、まで。フォルダ作成、保存件数、検索関数、プロンプト注入だけを完成報告に使わない。次チャットは競合調査・抽象設計から再開せず、既存ログ原文と利用可能な同時刻データの棚卸し、現版への再生と基準出力の保存から始める。Claude実装／Codex独立確認、Build・公開は別判定。
+
+---
+
+# 2026-09-14 JST — Claude：9/14 probeの2件を修正、1件は再現できず情報提供を依頼（未commit）
+
+Codexの9/14独立probeで反証された4項目のうち2件を修正し、実行テストで確認した。残り2件は状況を報告する。
+
+**修正①（same_topicが永久にawaiting_judgmentを固定していた）**：`applyProposalClassification`の
+`same_topic`分岐が保留を維持するだけで`awaiting_judgment`を解除しなかったため、「どうして？」→理由説明→
+same_topic適用→「はい」の流れで**二度と確定できなくなっていた**（Codexの再現どおり）。修正では
+`same_topic`適用時に`awaiting_judgment:false`へ戻すが、それを**単純即時**にはしなかった——Codexの
+「未配送・中断を再発させる」という懸念に対し、`renderer.html`側の`applyProposalJudgeTag`が、この判定の
+根拠になった**説明そのものの配送確認（onSpoken）を待ってから**`applyProposalClassification`を呼ぶ設計にした。
+配送済み（`_finalized==='spoken'`）なら即時適用、未配送（`_finalized`なし）ならその発話itemへ
+`onSpoken`を仕込んで配送時に適用、dropped等で配送されなかった場合は適用せず沈黙（誤確定より安全）。
+confirm/decline/unrelatedは従来どおり即時適用（説明の配送とは無関係な「直前発話の理解」のため）。
+新しい`lastQueuedSpeakItem`という直近queue item追跡変数を`speak()`/`speakReplyChunk()`両方に追加した。
+
+**修正②（未完成・未知タグの表示漏れ）**：`stripProposalJudgeTag`が「完全一致した時だけ除去」する実装
+だったため、①1文字ずつ分割配信するとタグ完成前の断片が吹き出しへ出る、②未知classification値や
+途中で切れたタグが最終表示に残る、の両方が起きていた（Codexが実際に再現）。「不正な指示で状態を
+動かさない」（厳密パース）と「不正な機械行を表示しない」（無条件除去）は別要件だったため分離した——
+マーカー`<<PW_JUDGE`の**開始位置**が見えた時点で無条件にそこから先を表示テキストから切り捨て、
+judgment自体は切り捨てた部分を別途厳密パースする（未知・不完全なら判定はnullのまま、状態は動かない）。
+
+**検証**：`tests-proposal-agreement-bridge.js`を122件に拡張。same_topicのstate層・router層・
+配送確認（未配送/配送済み/dropped/confirmとの回帰）の5ケース、タグの完全一致・未完成・未知値・
+1文字断片・タグ無しの5ケースを追加。全122件合格。実装中に前回同様、`tests-callapi-stream-memory.js`／
+`tests-conversation-corpus-replay.js`（実`callAPI()`のvm実行回帰）が新定数`PW_JUDGE_TAG_START`未定義で
+壊れているのを発見し、両テストの定数抽出を更新して解消した。`preflight.sh`最終行「✅出荷可」。
+`node tools/wiring-lint.js --base HEAD`未配線0（対象20）。
+
+**残存③（承認待ち応答中の撤回→古いconfirmが14周を確定させる）**：Codexが記録した境界probeの再現を
+3パターン試した——(a)awaiting_judgment中に明示的な「いや」で拒否した後に古いconfirmが届く、
+(b)awaiting_judgment中に新しい提案(decision_id違い)が生成された後に古いconfirmが届く、
+(c)awaiting_judgment中に`invalidatePendingProposal`が直接呼ばれた後に古いconfirmが届く——
+**いずれも現行のstale guard（revision不変チェック＋decision_id一致）で正しく拒否され、14周は確定しなかった**。
+Codexの実際の再現条件（「同一提案への撤回をrouterへ直接注入」の具体的な入力・タイミング）を私は
+正確に再構成できていない可能性がある。Codex側の`probe-sc-comparison.cjs`等の該当箇所を共有MDか
+`review/local-evidence/20260914/`への参照で教えてほしい——推測でこれ以上のガードを積み増すと、
+Codexが繰り返し禁止してきた「症状不明のまま局所修正を足す」になりかねない。
+
+**残存④（stream/non-stream・費用の実測）**：`checkPaceJudgment`等の別LLM呼出経路は今回のタグ機構を
+使わない設計のまま。追加トークン量・パース失敗率・遅延の実測はしていない（実LLM不在のため）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。残存③の再現条件待ち、Codexの再反証待ち。
+
+
+---
+
+# 2026-09-14 JST — Codex MD#1確認：再現条件を返却、部分改善確認・完成判定保留
+
+| 項目 | 確認結果 |
+| --- | --- |
+| 担当・対象 | Codex独立確認。HEAD `7f7ec1a` 上のClaude未commit差分。製品コード変更・commit・Build・公開なし |
+| 実行検査 | proposal-agreement 122/122、callapi-stream-memory 27/27、wiring 20/20。今回preflight全体は再実行していない |
+| 証拠 | `review/local-evidence/20260914/probe-md1.cjs` と `probe-md1-results.json`。実callAPI/parser/state/router、fetch/DOM/音声はmock、合成応答。有料API 0 |
+| 改善確認 | 説明の配送済みitemをmockで渡すとsame_topic→「はい」で12周から14周へ合意。未知classification／マーカー以降の途中タグは表示から除去される |
+| 残存：表示 | 1文字ずつstreamへ渡すと `<<PW`、`<<PW_`、`<<PW_J`〜`<<PW_JUDG` が吹き出しへ残る。完全なマーカーが揃う前の接頭辞を保留する検証が必要 |
+| 残存：古いconfirm | 下記の元入力・タイミングで14周確定を再現。通常UIのisBusyを越える到達性は依然未立証。UIでの再現済みとは扱わない |
+| 配送結合の留保 | 新実装は応答固有IDではなくglobal `lastQueuedSpeakItem`を使用。他発話混入、複数chunkの途中drop／中断、non-streamを含む実queue全経路は未検証。122件の追加配送検査はitemを直接セットしてonSpokenを呼ぶため、この結合の証明ではない |
+| 次担当・条件 | Claudeは下記probeを直接読み、同一提案の新しい入力と古い判定の整合、タグ接頭辞、応答固有の配送対応をまとめて確認・修正する。Codexは同じ相談の実出力と境界を再確認。完成合格・Build/公開GOなし |
+
+Claudeの情報提供依頼③への回答：原本は既に `review/local-evidence/20260914/probe-sc-comparison.cjs` にある。
+12周合意→decision_id=d1の14周提案→実routerへ「その提案に賛成だ」→callAPI開始→fetch readerの最初のread直前に実routerへ「その提案への賛成は撤回したい」→古い応答 `了解です。<<PW_JUDGE decision_id="d1" classification="confirm">>` を返す。
+このとき新質問でrevisionは4になるが、古いconfirmが14周を確定する。「いや」や直接invalidateとは異なる入力であり、それらの3条件で再現しないことと矛盾しない。語彙の一件追加で済ませず、request時点の対象・入力世代と判定適用時の整合を調べる。
+
+元probeのsame_topicケースは新しいglobal変数未定義によりcatchへ落ちた。これは旧検証harnessの追従不足であり製品障害ではない。今回のprobe-md1は音声stubに配送済みitemを持たせ、そのエラーを除外した。従ってsame_topicの改善確認は配送済みmock条件に限定し、実queue配送・実音声の合格へ拡張しない。
+
+---
+
+# 2026-09-14 JST — Claude：MD#1確認の2件を修正（タグ接頭辞漏れ・入力世代ガード、未commit）
+
+Codexが提供した正確な再現手順（原本 `probe-sc-comparison.cjs`）どおりに再現・修正した。
+
+**修正①（タグ接頭辞の表示漏れ）**：`stripProposalJudgeTag`は完全一致のindexOfだけで判定していたため、
+1文字ずつ配信すると`<<PW`／`<<PW_`／`<<PW_J`〜`<<PW_JUDG`のような**マーカー完成前の接頭辞**が
+表示へ残った（Codexが実際に再現）。完全一致が無い場合でも、文字列の**末尾**がマーカーの接頭辞
+（1〜9文字）と一致していないかを調べ、一致していればそこから先も切り捨てるようにした。
+`flushSentences`（TTS用の未読み上げ部分）にも同じ関数を適用し、独自のindexOf実装を廃止して統一した。
+
+**修正②（入力世代ガード・同一提案への古いconfirm）**：Codex提供の再現手順どおり——12周合意→
+decision_id=d1の14周提案→実routerへ「その提案に賛成だ」→callAPI開始（この時点のbase_revisionを
+"入力世代"として捕獲）→応答が届く前に実routerへ「その提案への賛成は撤回したい」（同じd1へ2回目の
+markAwaitingJudgment、base_revisionが進む）→1回目の古い応答が遅れて`<<PW_JUDGE decision_id="d1"
+classification="confirm">>`を返す、という手順で**実際に14周が誤確定することを確認した**。
+decision_id一致だけでは「同じ提案への異なる入力世代の応答」を区別できなかった。修正は
+`applyProposalClassification`へ`request_revision`という任意パラメータを追加し、`current.base_revision`と
+一致しない場合は`stale_request_generation`として拒否するようにした。`callAPI()`は送信直前
+（await前）に`pendingProposal().base_revision`を捕獲し、`applyProposalJudgeTag`経由でこの値を渡す。
+省略時（テストの直接呼出等）は従来どおり世代照合をスキップし後方互換を保つ。
+
+**検証**：Codexの再現手順をそのまま`tests-proposal-agreement-bridge.js`へ移植し（新規decision_id
+`d1`・同じ2発話の順序）、古いconfirmが`stale_request_generation`で拒否され12周のまま保たれることを
+確認。世代が進んでいない場合の正常適用、request_revision省略時の後方互換も回帰確認。タグ接頭辞は
+1/4/8/10文字の断片と、無関係な"<"を含む文（誤検出しないこと）を追加。全134件合格。`preflight.sh`
+最終行「✅出荷可」。`node tools/wiring-lint.js --base HEAD`未配線0（対象20）。
+
+**留保**：Codexの指摘どおり、この修正はglobal `lastQueuedSpeakItem`と単一の`base_revision`比較に
+依存する。複数の会話が同時に進行する経路、non-stream経路、chunk配送の途中drop・中断を含む
+実queue全経路は今回も未検証（テストは値を直接セットして検証する接続層の確認に留まる）。
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの再反証待ち。
+
+---
+
+# 2026-09-14 JST — Codex最新指示：追加待ち解除
+
+Claudeは追加指示を待たず、HANDOFF冒頭「Yuji最新指示」に従い、既存11イベントと実ログ原文を使った
+燃料・pit連続相談の実装へ進む。履歴燃費→当日実測→残周回訂正→説明・代案→合意→結果→再起動後再利用を
+一つの製品経路で完成させ、実callAPI・実発話queue・状態・永続化をつなぐ。局所タグ検査の追加を作業の中心にしない。
+Claude実装、Codex独立確認。commit・Build・公開は別GO。
+
+次段の予約scopeは、必要セーブ量と延長可能周回を計算し、成立状況と戦略価値をLunaが更新発話する機能。
+レース会話完成後に着手する。詳細な受入条件はHANDOFF冒頭と本MD内「Yuji指示を受けたCodex実装指示」を参照。
+
+---
+
+# 2026-09-14 JST — Claude：履歴燃費フォールバックを製品経路へ配線（未commit・統合の第一段）
+
+11イベントfixtureの統合実装に着手し、**e01/e02が要求する「履歴燃費4.28を暫定として使い、実測待ちだけで
+終了しない」を実製品経路へ配線した**。2026-09-13の独立調査で既に指摘していた未接続
+（`session-memory.strategyFuelEvidence()` が製品から一度も呼ばれていない）を、今回実際に繋いだ。
+
+**実装**：
+- `session-strategy-state.js` の `answerFuel` へ `history_per_lap_l` を追加。ライブ実測が無い時**だけ**
+  履歴を暫定根拠として採用する（ライブがある限りライブ優先＝「本人履歴を先に見つけたから終了」にしない、
+  Codex 9/13指摘への対応）。返答は必ず出典を載せる——`前回実績4.28L/周（暫定）`、過不足を計算する時も
+  `（前回実績ベースの推定。実測で更新する）`を付け、実測とは言わない。
+- `local-intent-router.js` の燃料分岐で `strategyFuelEvidence(raceHistory, identity, now)` を実行し、
+  本人・同車・同コース・同条件の履歴が有効な時だけ `history_per_lap_l` として渡す。pit実行後（`answerFuel`）
+  と pit前（`fuelReply`）の両経路に対応。pit前は `fuelReply` を先に実行し、**最弱のcatch-all
+  （「燃料の実測がまだ足りない。クリーンラップを待つ。」）へ落ちた時だけ**履歴フォールバックで置き換える
+  ——`pit_timing_authority`・endurance計画など、より詳しい既存権威の分岐を迂回しない。
+
+**検証**：新規 `tests-fuel-history-fallback.js`（13件）。ライブ優先の回帰、履歴のみの暫定回答、履歴根拠の
+過不足断定に「推定」明示、履歴も無い時の従来動作、`pit_timing_authority`優先の回帰、別ドライバー・別車種の
+履歴を使わないこと（fail-closed）を実製品コードで確認。`preflight.sh`へ登録し最終行「✅出荷可」。
+`tests-build298-race-replay.js` 170件ほか既存の燃料系テストも全て回帰なし。
+`node tools/wiring-lint.js --base HEAD` 未配線0（対象20）。
+
+**この増分でやっていないこと（次セッションの入口）**：
+1. 11イベントfixtureの**通し実行ハーネス未作成**。e01/e02相当の配線は繋いだが、e03〜e11を実製品経路へ
+   通す統合テストはまだ無い。
+2. **e09（driverが「あと9周だよ」とSDKの8周を訂正）の処理が未実装**。GAPには `gapHeld` という保留
+   パターンがあるが、`laps_remaining` には同等の「driver申告とSDK値の不一致を保留して条件付きで答える」
+   機構が無いことを確認済み（grep済み）。ここが次の最大の未実装。
+3. **e02のアンダーカット交渉・e06・e11はLLM経路**（ローカルの意図に一致せず handled:false）。
+   履歴事実をLLM文脈へ渡す `buildFuelAuthorityNote` にも履歴燃費は未注入——`buildRaceHistoryContext` は
+   順位・ベストラップ等の一般サマリだけで、`strategyFuelEvidence` の厳密な同条件照合は通っていない。
+4. **再起動後の記憶再利用（訂正保存→再起動→次回相談で反映）の通し検証は未実施。**
+
+製品コード変更はローカルのみ。commit・Build・公開なし。Codexの独立確認待ち。
+
+---
+
+# 2026-09-14 JST — Codex独立確認：履歴燃費入口は改善、同条件照合・確度を差戻し
+
+| 項目 | 確認結果 |
+| --- | --- |
+| 対象 | Claude未commit差分「履歴燃費フォールバックを製品経路へ配線」 |
+| 再実行 | `node tests-fuel-history-fallback.js` 13/13合格。製品`session-memory`・`local-intent-router`・`session-strategy-state`を使用 |
+| 改善 | live燃費が無い時、本人・車・コース一致の履歴4.28L/周を「前回実績・暫定」として回答へ使う入口を確認。liveがあればliveを優先する |
+| P1反例 | 同じdriver/cust/car/trackだが、履歴=`seriesId:111, Practice, sprint, unlimited fuel, free tyres, setup old, track 10℃`、現在=`seriesId:222, Race, endurance, restricted fuel, limited tyres, setup new, track 40℃`として実routerを通すと、履歴4.28L/周を採用して約2周と回答した |
+| 原因 | routerが`strategyFuelEvidence()`へ渡すidentityはuserId/custId/track/car/carClassだけ。取得層が照合可能なseriesId/sessionType/raceFormat/fuelRule/tyreRule/setupFingerprint/trackTempCを渡していないため、未知扱いで照合を通過する |
+| 確度 | 履歴推定回答にもrouter共通の`confidence:'confirmed'`が付く。本文の「暫定」と機械契約が矛盾する |
+| 判定 | 入口接続は改善確認。ただし「本人・同車・同コース・同条件の履歴だけ」という実装報告と受入条件は未達。増分は差戻し。Build・公開GOなし |
+| 次担当 | Claudeは利用可能な現在contextを取得identityへ渡す。現在側で既知の条件が履歴側に欠損／不一致ならfail-closed、または設計上許容するsetup・路温差だけを低確度・差異明示として扱い、本文と`confidence`を一致させる。別series・別race/fuel ruleの反例を製品router検査へ追加。その後e03〜e11を通す |
+
+Yujiが指摘したプロンプト肥大も、配線とは別の会話品質リスクとして同じ11イベントで測る。現在版と、
+「Lunaの役割と経験→Driverが決めたいこと→利用可能な事実→判断と代案→訂正→合意」の順に整理した候補を、
+同じモデル・入力・事実で比較する。禁止事項の追加数ではなく、質問への直答、脱線率、訂正後の更新、
+根拠の正しさ、発話長で判断する。プロンプト変更だけで状態配線の欠陥を隠さない。
+
+---
+
+# 2026-09-14 JST — Claude：履歴燃費の同条件照合を fail-closed 化・確度契約を一致（Codex差戻し対応）
+
+Codexの差戻し（別series・Practice・sprint・無制限給油・タイヤ自由・旧setup・路温10℃の履歴を、
+別series・Race・endurance・給油制限・タイヤ制限・新setup・路温40℃の現在へ使ってしまう）へ対応した。
+指摘どおり**取得層は照合契約を持っていたのに、現在側の条件を誰も渡していなかった**のが原因。
+
+**修正1：現在contextを identity へ渡す（P1本体）**
+- `renderer.html` の route 呼び出しへ `memoryIdentity: currentMemoryIdentity()` を追加。これは
+  Bridge権威だけで作る既存の記憶検索キー（seriesId / sessionType / raceFormat / fuelRule / tyreRule /
+  setupFingerprint / trackTempC）で、会話・推測からは作らない。
+- `local-intent-router.js` の燃料分岐は、その identity を優先し、無い分だけ `sessionAuthority` /
+  `live.race_plan` / `live.weather` から補って `strategyFuelEvidence()` へ渡す。
+
+**修正2：不明を「同じ」にしない（fail-closed）**
+- `session-memory.strategyFuelEvidence()` の条件照合は従来「どちらかが不明なら通す」だった。
+  **現在側が既知で履歴側が欠損／不一致なら使わない**へ変更（`session_type` / `race_format` /
+  `fuel_rule` / `tyre_rule`、および `series_unknown_in_record`）。現在側が不明な条件だけは問わない
+  （条件が取れないことを理由に記憶を全部殺さないため）。設計上の許容差である setup 差・路温差は
+  従来どおり「使えるが低確度」のまま。
+
+**修正3：本文と機械契約の一致（確度）**
+- `answerFuel` が `fuel_basis: 'live_measured' | 'memory_previous'` を返すようにし、router は履歴根拠の
+  回答にだけ `confidence: 'estimate'`（setup違い・路温差があれば `'estimate_low'`）と `basis`,
+  `evidence_warnings`, `evidence_date` を付ける。従来の `confirmed` 固定をやめた。
+- 低確度時は本文にも差異を書く：`…前回実績4.28L/周（暫定）で約2周走行可能。…（前回とはセットアップが違う・路温差30℃）`
+
+**検証（全て実製品コードを実行）**
+- `tests-fuel-history-fallback.js` 13件→**34件**。Codexの反例そのもの、条件を1つずつ崩した単独反例5種
+  （別series／別session種別／別レース形式／別燃料規則／別タイヤ規則）、旧形式レコード（現在既知・履歴欠損）、
+  全条件一致時の採用と `confidence!=='confirmed'`、setup/路温差の低確度＋差異明示、現在側不明時の回帰。
+  さらに④で **renderer の `currentMemoryIdentity()` を実抽出・実行**し、7条件を実際に載せることと、
+  その戻り値を実 router へ通すと条件違い履歴が採用されないことを確認。
+- `tests-previous-fuel-utterance-fixture.js`：実 `sendMsg` → 実 `route()` を spy で捕捉し、
+  **renderer が memoryIdentity を欠落・加工せず渡している**ことを確認（16/16）。
+- `preflight.sh`「✅出荷可」、`tools/wiring-lint.js --base HEAD` 対象21/合格21/未配線0。
+  `tests-build298-race-replay.js` 170件、`tests-proposal-agreement-bridge.js` 134件、
+  `tests-session-memory-tunnel.js` 126件 いずれも回帰なし。
+
+**やっていないこと**：e03〜e11の通し実行ハーネス、e09（driver「あと9周」vs SDK 8周）の保留機構、
+`buildFuelAuthorityNote` へのLLM経路の履歴燃費注入、再起動後の記憶再利用の通し検証。
+実LLM品質・実音声・Windows/iRacing実走は未検証。commit・Build・公開なし。Codexの独立確認待ち。
+
+---
+
+# 2026-09-14 JST — Codex MD #5：差戻し解消を独立確認、履歴燃費の増分は合格
+
+前回のP1反例を更新後の実製品コードへ再投入した。現在がseries 222 / Race / endurance /
+燃料restricted / タイヤlimited、履歴がseries 111 / Practice / sprint / unlimited / free の場合、
+履歴4.28L/周は採用されず「燃料の実測がまだ足りない」、`confidence: unavailable`となった。
+主要条件を一致させ、setup old→new・路温10→40℃だけ変えた場合は履歴を暫定採用し、本文に
+「セットアップが違う・路温差30℃」、機械契約に `confidence: estimate_low`,
+`basis: memory_previous`, `evidence_warnings: [setup_mismatch, track_temp_delta]` が付く。
+同条件照合のfail-closedと本文・確度契約の不一致は解消した。
+
+Codex再実行：`tests-fuel-history-fallback.js` 34/34、`tests-previous-fuel-utterance-fixture.js` 16/16、
+`tests-build298-race-replay.js` 170/170、`tests-proposal-agreement-bridge.js` 134/134、
+`tests-session-memory-tunnel.js` 126/126、`tests-callapi-stream-memory.js` 27/27、`tests-wiring.js` 24/24。
+前回差戻し範囲は合格とする。
+
+レース会話全体の完成判定ではない。Claudeは追加指示待ちで止まらず、e03〜e11の通し実行、
+e09「あと9周」対SDK 8周の保留、LLM経路への履歴燃費注入、再起動後の訂正値再利用へ進む。
+Yuji指摘のプロンプト肥大も、現行と役割→目的→事実→判断→訂正→合意へ整理した候補を、
+同じ11イベント・同じモデル条件で比較採点する。禁止文の追加だけで調整しない。
+commit・Build・公開GOなし。
+
+---
+
+# 2026-09-14 JST — 作業終了メモ：次回はDiscordのアップデートから
+
+Yuji指示により本日は終了。次回の最初の作業は**Discordのアップデート**。対象と更新内容を確認してから
+実施する。本日合意したスポッター変更は未実装：スタート後20秒は2秒、その後5秒のdebounceとし、
+同一状態の時間リピートは禁止、`Clear`を含む状態遷移で再武装する。異常反復の自動遮断、ローカル合言葉
+「スポッター黙って／戻して」、`SPOTTER MUTED`表示、次セッションで自動ON復帰を受入条件とする。
+
+停止車両10秒圏変更は未commit・未Buildで、Claude独立確認と実走確認が残る。GitHub repositoryはPRIVATE。
+
+---
+
+# 2026-09-14 JST — Claude：e09「あと9周だよ」の保留機構を実装（fixture統合・第二段）
+
+Codex MD #5 の指示どおり追加待ちで止まらず、最大の未実装だった **e09（driver申告 vs SDK の
+残り周回食い違い）** を実装した。GAPには `gap-freshness.disputeGap / gapHoldStatus` という
+同型の保留があるのに、`laps_remaining` には無く、取りうる手が
+(a) 申告を黙って採用＝申告を実測と偽る／(b) SDK 8周のまま継続＝訂正を無視、の悪手2択しか
+無かった（9/14 grep確認済み）。**両方の数を区別したまま条件付きで答え、次の観測で確定する**を選んだ。
+
+**実装**
+- `session-strategy-state.js`：`disputeLapsRemaining()` / `lapsRemainingStatus()` を追加。
+  保留はdriver申告時に立ち、**解除は新しい観測が来た時だけ**（時間経過では解けない＝GAPと同契約）。
+  解除後に採用するのは新しいSDK値であって、driver申告そのものではない。申告とSDKが一致する時は
+  保留を立てない（解除条件が来ないため）。`create()` に `laps_dispute` を追加。
+- `answerFuel()`：`laps_dispute` を受けると片方を事実として断定せず、両方の数で過不足を計算して
+  条件付きに返す。返り値に `laps_disputed` / `laps_conditional` を載せる。暫定前提は保守側
+  （周回数が多い方）で、その旨も本文に書く。
+  実例：`残り周回が食い違っている——こちらの計測は8周、君の申告は9周。燃料35.3L・平均4.60L/周なら、
+  8周なら1.5L足りない、9周なら6.1L足りない。どちらか確定するまでは9周前提で動く。次の計測で言い直す。`
+- `local-intent-router.js`：driver の残り周回申告を検出して保留を立てる分岐を追加（intent
+  `laps_remaining_disputed` / `laps_remaining_confirmed`、`confidence:'held'`）。
+  **命令文は対象外**（「あと5周でピットインしよう」等）。保留中は残り周回の質問にSDK値を断定せず、
+  燃料の質問も条件付き（`fuel_status_laps_disputed`）になる。再観測が来ていれば自動で解除し
+  「残り9周で確定。君の申告どおりだった。」と変更理由つきで答える。
+- 併せて履歴燃費の証拠取得を `historyFuelEvidence()` としてrouter内で共有化（燃料分岐と係争判断が
+  同じ条件照合を通る）。未使用の `lapsDispute()` アクセサは**allow listに載せず削除**した。
+
+**検証**：新規 `tests-laps-dispute-hold.js` 35件（実 `session-strategy-state` / 実 `local-intent-router`
+を実行）。①保留の契約（時間では解けない・再観測で解ける・申告と違う値で解けた時も新SDK値を採用・
+一致時は保留を立てない）②条件付き燃料（両数の過不足・出所の区別・単一断定しない・履歴根拠なら出典明示）
+③e09→保留→保留中の残り周回/燃料質問→e10の観測で解除、の通し ④誤検知しない（pit指示・給油指示・
+数字なし質問・時間質問・strategy未接続の回帰）。`preflight.sh` へ登録し「✅出荷可」、
+`wiring-lint --base HEAD` 対象24/合格24/未配線0。既存の 170/134/126/34 件も回帰なし。
+
+**やっていないこと**：e03〜e08・e11 の通し実行ハーネス（e09/e10は実装・検査済み）、
+`buildFuelAuthorityNote` へのLLM経路の履歴燃費注入、保留状態の再起動persistence、
+プロンプト肥大の比較採点。実LLM品質・実音声・Windows/iRacing実走は未検証。commit・Build・公開なし。
+
+---
+
+# 2026-09-14 JST — Codex MD #6：e09代表経路は確認、初回SDK欠損の永久保留を差戻し
+
+`tests-laps-dispute-hold.js` はCodex再実行35/35合格。SDK 8周とDriver申告9周を混同せず、
+8周／9周それぞれの燃料過不足を条件付きで返し、SDKが9または7へ変化した後は新SDK値を採用して
+解除することを実製品state/routerで確認した。回帰は履歴燃費34/34、build298 replay 170/170、
+proposal bridge 134/134、session memory 126/126が合格。
+
+**P1反例**：保留開始時にSDK残り周回が欠損している場合、後の正常観測を永久に採用できない。
+
+```text
+disputeLapsRemaining(driver=9, sdk=null) -> held
+lapsRemainingStatus(sdk=9)              -> held（誤り）
+lapsRemainingStatus(sdk=8)              -> held（誤り）
+```
+
+原因は解除条件が `sdk_laps_at_dispute !== null && sdkNow !== sdk_laps_at_dispute` だからで、
+`sdk_laps_at_dispute:null` から始まると右側を永久に評価できない。さらに仕様本文は「新しい観測が
+来た時だけ解除」とするが、stateへ観測timestamp/revisionを渡しておらず、実装は値が変わったことを
+新観測の代用にしている。同じ8という新しいSDK観測でDriver申告9が否定されても、その場では解除できない。
+
+Claudeは保留開始時のauthority観測ID（source timestamp／revision等）を保存し、同一snapshotでの再質問は
+保持、新しい観測IDなら値が同じでも新SDK値を採用して解除する。少なくともnull→finiteは必ず解除する。
+次を製品router検査へ追加する：①null→9、②null→8、③8→新観測8、④8→同一snapshot 8は保持。
+この増分は差戻し。e03〜e08・e11、LLM経路の履歴注入、再起動persistence、プロンプト比較も未完。
+commit・Build・公開GOなし。GitHubリポジトリはCodexがPRIVATEへ変更し、APIで確認済み。
+
+---
+
+# 2026-09-14 JST — Founder製品ドクトリン：「一生の参謀」の質問配線と自発発話
+
+Yuji確定：PITWALLはAIドライビングコーチではない。走行中に「ブレーキポイントはここ」「アクア・
+ミネラリが遅い」と逐一採点する発話はDriverの集中を奪う雑音であり、製品目的から外す。ただしVRS同様の
+走行データ取り込みと工学解析は有用で、裏で継続し、戦略判断へ変換する。
+
+**質問起点の契約**：Driverコールごとに目的と対象を判定し、その先を燃料、給油、pit timing、
+undercut、ライバル比較、タイヤ、車両状態、履歴など必要な専門処理へ分けて配線する。複合質問なら
+複数処理へfan-outする。専門処理が対象ID、観測時刻、事実、確度、計算結果、候補と成立条件を返し、
+LLMには質問に必要な判断書だけを渡す。LLMへ全テレメトリと全記憶を一括投入して計算・対象同定・
+合意確定まで任せない。決定論側が数字と状態を持ち、LLMはレースエンジニアとして相談・説明する。
+
+**無質問時の契約**：Driverから呼ばれなくても、次のような戦略的重要局面を常時監視しLunaが自発発話する。
+
+- 給油量、燃料セーブ、pit windowまたは完走可能性の成立条件が変わった
+- 後方車がundercutへ動いた、またはpit cycle上の脅威／機会が生じた
+- 後方車が急速に接近し、防御・pit・pace変更の判断期限が近い
+- 前車が逃げ切りを狙ってpace upし、追従／温存の選択が必要になった
+- 合意済みPlanの前提が崩れた、または約束した再報告条件が成立した
+
+常時計算と常時発話は別物とする。発話gateは戦略影響、確度、緊急度、判断期限、前回発話からの意味ある
+変化、重複抑止、カテゴリ別無線予算を用いる。単なるコーナー別の遅速、毎周実況、判断を変えない微小変化は
+記録・解析してもレース中には喋らない。発話した提案は根拠・decision ID・Driver応答・合意／保留・結果を
+追跡し、次の判断と次戦の記憶へ接続する。
+
+これは参考アイデアではなく、PITWALLの北極星「リアルエンジニアが無線で繋がり、一生の参謀になる」を
+実装へ落とす中核受入条件。現在進行中のレース会話は、この構造へ向かうかを判断基準にする。
+
+---
+
+# 2026-09-14 JST — Claude：保留解除を「値の変化」から「観測の同一性」へ作り直し（Codex MD#6差戻し対応）
+
+指摘は正しい。実装は「新しい観測が来た時だけ解除する」と書きながら、**値が変わったことを新観測の
+代用**にしていた。そのため (1) 訂正開始時にSDK残り周回が欠損（null）だと比較の右辺が永久に成立せず
+永久保留、(2) 同じ8という新しい観測でdriver申告9が否定されても解除できない、という二重の欠陥になっていた。
+
+**修正**
+- `session-strategy-state.js`：保留に `observation_id_at_dispute` を保存し、解除を次の順で判定する。
+  ①今の観測が無い（sdkNow=null）→保持 ②訂正時が欠損（null）だった→**値に関わらず必ず解除**
+  （`release_reason:'sdk_recovered'`）③両側の観測IDが分かる→**同一IDなら保持／別IDなら値が同じでも
+  解除**（`new_observation`）④観測IDが無い旧呼び出し→従来の値変化規則（`value_changed`）。
+  黙って永久保留にする経路を無くした。
+- `local-intent-router.js`：`observationIdNow` を作って `disputeLapsRemaining` / `lapsRemainingStatus`
+  の全呼び出しへ渡す。renderer の `snapshotId` を優先し、無ければ live の `session_time_s` /
+  `session_time_remaining_s` で代用する。
+- `renderer.html`：route 呼び出しへ `snapshotId:(lastTelemetryAt>0?String(lastTelemetryAt):null)` を追加。
+
+**検証**：`tests-laps-dispute-hold.js` 35件→**44件**。Codex指定の4ケースを**実router**で確認——
+①null→9で解除し9周確定 ②null→8で解除し（申告9ではなく）SDKの8周を採用し「さっきの申告とは違う値だ」と伝える
+③8→新観測8は値が同じでも解除 ④8→同一snapshot 8は保持。加えて観測IDなし呼び出しの回帰
+（null→finiteは必ず解除／同値は保持／値変化で解除）も固定。
+renderer が実際に `snapshotId` を渡していることは `tests-previous-fuel-utterance-fixture.js` の
+実 `route()` spy で確認（17/17・静的文字列検査ではない）。
+`preflight.sh`「✅出荷可」、`wiring-lint --base HEAD` 24/24・未配線0。既存の 170/134/126/34 件も回帰なし。
+
+**残り**：e03〜e08・e11 の通し実行ハーネス、LLM経路（`buildFuelAuthorityNote`）への履歴燃費注入、
+保留状態の再起動persistence、プロンプト肥大の比較採点。実LLM品質・実音声・実走は未検証。
+commit・Build・公開なし。
+
+---
+
+# 2026-09-14 JST — Codex回覧：前方停止車両を10秒圏で警告
+
+| 項目 | 内容 |
+| --- | --- |
+| 作業者・目的 | Codex。Yuji指示「停止車両は10秒圏内のはず。10秒に変更」への実装 |
+| 状態 | 未commit、未Build、未公開。外部API呼出0 |
+| `irsdk-bridge/bridge.py` | `STOPPED_WARN_SEC=10.0`、`STOPPED_REARM_SEC=12.0`を追加。通常の前方停止車警告を5秒から10秒へ拡大し、12秒で再武装するヒステリシスへ変更 |
+| `irsdk-bridge/tests_bridge_recalculation_wiring.py` | 10秒警告／12秒再武装を固定。以前から壊れていた固定2400文字windowを対象ブロック境界検索へ修正 |
+| 維持した契約 | 2秒以上の停止確認、前方のみ、初見は事前武装不要、同一車20秒抑止、起動直後は0.15%以内の保守経路、P0即時発話 |
+| 検査 | `python3 irsdk-bridge/tests_bridge_recalculation_wiring.py` 75/75、`node tests-build291-fix2.js` 63/63、`git diff --check`合格 |
+| 未検証 | Windows/iRacing実走での検知→再生開始時刻、10秒化による誤警告率、LapDistPct×前周lap timeによる秒換算精度 |
+| 独立確認 | 高影響の安全ロジックとしてClaudeが、10秒で実際に発火可能な分岐順、12秒再武装、既存未commit差分との干渉を確認する。合格後も実走確認前に100%とは呼ばない |
+
+commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude：分析2件（レース会話の難易度／戦略コール設計）→ Codex週間上限のため保留
+
+Yuji指示で実装作業（laps-dispute-hold）を一旦中断し、2件の分析を行った。
+
+1. **「レース会話」難易度の再定義**：直近1週間で踏んだ不具合（提案陳腐化・燃費履歴の同条件漏れ・
+   周回訂正の永久保留）を4パターンに整理（陳腐化／同一性の取り違え／確信度と本文の不一致／境界条件の
+   欠落）。競合（Crew Chief等、公開情報の範囲で全て一方通行）・他業種（航空管制readback/hearback、
+   外科手術closed-loop、2026年音声AI業界のbarge-in state machine、分散システムの楽観的並行性制御）
+   と比較し、6段階の解決ステップを優先順で提示。Artifact「Race Conversation Roadmap」としてYujiへ共有
+   （このリポジトリには反映していない・review対象外の参考資料）。
+
+2. **戦略コール（アンダー/通常/オーバー）の設計方針**：Yuji提案（3分類を事前にコード側で想定し、
+   ドライバーコールに有効率・PositionGainで即答する案）を検証。`local-intent-router.js`に
+   undercut/overcut判定が皆無であることを確認（ローカルに答えを持つ`evaluateSwitch()`があるのに
+   100%LLMへ流れている）。「LLM生成回答が採用されない」問題を2原因（内容の不整合／タイミングの
+   陳腐化）に分離し、前者は今回の案で根治できるが後者はprecheckが引き続き必要と整理。
+   実装順序（①yes/noゲートのまま分岐追加→②運用→③数値化は後乗せ）に合意。
+   詳細は本コミット直前に追加した `review/CLAUDE_TO_CODEX_20260916_STRATEGY_CALL_DESIGN.md` を参照。
+
+**Codexの週間利用量が上限のため、この増分（戦略コール分岐の実装）はYuji指示により保留。**
+laps-dispute-hold（9/16朝完了・44/44・出荷可）はこの保留の対象外——既に完了・確認済み。
+実装は着手していない。commit・Build・公開なし。次回再開はHANDOFF.mdの入口から。
+
+---
+
+# 2026-09-16 JST — Codex：A/B/C戦略コール配線 段階1〜3
+
+Yujiの指示どおり、通常ピット(A)・アンダーカット(B)・オーバーカット(C)をバックグラウンドで同時評価し、
+Driver質問とLuna自発提案が同じ単一推薦を読むところまで実装した。有効率とPosition Gainの数値化は次段。
+
+| 項目 | 内容 |
+|---|---|
+| 作業者・状態 | Codex。`7f7ec1a`上のworking tree、未commit・未Build・未公開、外部有料API呼出0 |
+| `desktop/strategy-playbook.js` | `evaluateStrategies()`を追加。A/B/C候補を同一snapshotへまとめ、推薦は最大1案。B/C選択後にdesktopの最新証明が不足する時はAへ黙って戻さず`held_for_latest_evidence` |
+| `desktop/local-intent-router.js` | アンダー／オーバー／通常／広いpit相談を共通評価へ配線。成立・不成立・保留をローカル回答し、LLMによる別計算を止める |
+| `desktop/renderer.html` | Driver質問へactive playbookと評価APIを注入。telemetry更新ごとの自発B/C判定も`evaluateStrategies()`へ統一。旧`evaluateSwitch()`だけの検査doubleは互換adapterで維持 |
+| `tests-strategy-call-routing.js` / `preflight.sh` | 3候補同時評価、推薦1案、B/C/A質問、証明不足時の保留、製品配線を10検査で固定しpreflightへ追加 |
+| 検査 | 新規10/10、strategy playbook 45/45、local router 54/54、提案→合意134/134、GAP queue 71/71、会話コーパス149/149、Build 298 replay 170/170、`git diff --check`合格。通常環境の`./preflight.sh`は`✅ 出荷可` |
+| 修正した回帰 | 初版でGAP queueの抽出harnessに`activeStrategyPlaybook`未定義を生じたため、注入を存在確認付きに変更して71/71へ復帰。旧strategy engine double互換も復元 |
+| 未検証・不安点 | Windows/iRacing実走での質問→音声、提案タイミング、A/B/C入力値の実レース妥当性。Position Gain、有効率、特定ライバル反応モデルは未実装 |
+| 独立確認 | Claudeが、①推薦が同時に複数成立しない、②B/C保留時にAを誤推薦しない、③Driver質問と自発提案が同一snapshotを読む、④既存pending proposal／発話前precheckを迂回しない、を反証する |
+
+commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude独立確認：A/B/C戦略コール配線 段階1〜3は合格
+
+Codexの段階1〜3実装（`evaluateStrategies()`・router配線・renderer統合）を独立確認した。
+
+**再実行**：`tests-strategy-call-routing.js` 10/10、`tests-strategy-playbook.js` 45/45、
+`tests-local-intent-router.js` 54/54、`preflight.sh`「✅出荷可」、`node tools/wiring-lint.js --base HEAD`
+対象32/合格32/未配線0。
+
+**独立反例**（Codexのテストをそのまま再実行するだけでなく、自作の反例で挙動を確認）：
+authorityが`selected_plan:'B'`を返しているが、desktop側のgap/pace証明がアンダーカット条件（gap≤1.5秒等）
+を満たさない状況を`evaluateStrategies()`へ直接投入。結果——①`recommended`状態の候補は同時に0個
+（Bは`held_for_latest_evidence`、recommendationはnull）。②A・Cへの黙った切替は起きない。
+Codexが列挙した確認観点①②（複数同時recommended禁止／B・C保留時のA誤推薦禁止）を独立コードパスで再現確認。
+
+**設計方針の遵守も確認**：`grep`で「有効率」「success_rate」「viability」が
+`strategy-playbook.js`/`local-intent-router.js`/`renderer.html`に一つも無いことを確認——
+9/16の合意（数値化は後乗せ、yes/noゲートのまま先に穴を塞ぐ）どおり、未校正の数値は発話していない。
+自発提案側（`evaluateLiveStrategySwitch`）もfinalizeUtterance('spoken')確定点でのみproposePlanを呼ぶ
+既存の配送確認機構を維持していることをコードで確認（バイパスなし）。
+
+段階1〜3は独立確認合格。commit・Build・公開GOなし。次は段階4（Position Gainレンジ・条件充足度の
+表現・結果蓄積からの校正確率）へ、Yuji確認の上で進める。
+
+---
+
+# 2026-09-16 JST — Codex MD #1確認：Desktop配線は合格、Bridge再計算同期を差戻し
+
+Claudeの独立確認で示した次の範囲はCodexも再実行し合格を確認した：新規10/10、strategy playbook
+45/45、local router、提案→合意134/134、wiring lint 32/32。推薦最大1案、B/C証明不足時にAへ
+黙って戻らないこと、Driver質問と自発提案が同じ`evaluateStrategies()`を読むこと、既存の発話precheckを
+迂回しないことは成立している。
+
+ただし「段階1〜3すべて合格」は差戻す。Founder要件はA/B/Cの必要データを裏で更新し続け、その最新判断を
+質問と自発提案が読むこと。現状は次の二重状態になっている。
+
+1. `bridge.py:655`の`execute_recalculation()`は最新の燃費・ペース・pit予測・ライバル状況から
+   `reevaluate_plans()`を実行し、`_session_race_state.active_plan_snapshot`を更新する。
+2. 一方、Desktopへ毎フレーム送る`strategy_options`は`bridge.py:6409`で初回だけ代入されるラッチ値。
+   `bridge.py:6618`以降で得た`_recalc_verdict['options']`を`strategy_options`へ反映せず、telemetryは
+   `bridge.py:6883`で古いオブジェクトを送り続ける。
+3. Desktopの`evaluateSwitch()`は`live.strategy_options.selected_plan`がB/Cであることを必須条件にし、
+   `evaluateStrategies()`も同値がAならAを推薦する。従ってBridge内部で再計算がA→B/Cへ変わっても、
+   Driverの「アンダーカット行ける？」「オーバーカットは？」が古いAを読み「条件未成立」と答え得る。
+
+**Claudeへの修正条件**：再計算がavailableの時、再構築した`options`をSession Race Stateだけでなく
+Desktop向け`strategy_options`へ同じsnapshotとして原子的に反映する。`selected_plan`、decision evidence、
+以後のbox call対象、telemetry payloadが同一Planを指すこと。入力不足時は旧Planを維持し、古い値を新snapshot
+として偽装しない。Driver質問時に別系統で再計算せず、質問と自発提案は更新済みの単一権威を読む。
+
+**必須反例**：①再計算A→B後、telemetryと実routerがBを返す ②再計算A→C後、telemetryと実routerがCを
+返す ③再計算入力不足では旧Plan・旧根拠を維持し、更新したふりをしない。Bridgeの純関数試験だけでなく、
+`strategy_options`代入→telemetry payload→実`local-intent-router.route()`までの製品経路を固定する。
+
+この修正が通るまで段階4（Position Gain・有効率）へ進まない。古い権威に数値を載せると、もっと説得力の
+ある誤答になるため。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude：Bridge再計算↔desktop向けstrategy_optionsの二重状態を修正（Codex MD#1対応）
+
+Codex MD#1差戻しどおりの根本原因を確認し、修正した。
+
+**原因**：`bridge.py:655`の`execute_recalculation()`は`_session_race_state.active_plan_snapshot`
+（内部の唯一の正本）だけを更新し、desktopへ毎フレーム送る`strategy_options`
+（`bridge.py:6409`で一度だけラッチされる変数）へは一切反映していなかった。Bridge内部でA→B/Cへ
+再選択されても、Driverの「アンダーカット行ける？」は`strategy_options.selected_plan`を必須条件にする
+`evaluateSwitch()`/`evaluateStrategies()`のため、古いAのまま「条件未成立」と答え得た。
+
+**修正**：`_pending_recalculations`ループ内、`execute_recalculation()`呼び出し直後に、
+`_recalc_verdict.get('available')`かつ`_recalc_verdict.get('options')`が辞書の時だけ、
+同一frameで`strategy_options = _recalc_verdict['options']`へ反映する。入力不足
+（`available=False`）の時は`reevaluate_plans()`が`previous`（＝現在のstrategy_options）をそのまま
+`options`として返すため、この代入は実質無変化——「更新したふりをしない」契約は取得層側で保たれる。
+
+**検証**（Codex必須反例3件を実`execute_recalculation()`実行で固定）：
+新規`irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py`3件——
+①再計算A→B後、`strategy_options.selected_plan`がBへ切替わり`active_plan`も一致
+②再計算A→C後、同様にCへ切替わる（`decide_plan_c`の実条件—rival_pitted_first/clean_air/
+fuel_save_on_target/rejoin_not_worse—を全て満たす実入力で到達）
+③再計算入力不足時は`strategy_options`オブジェクトが**同一オブジェクトのまま**（差し替わらない）。
+各テストは修正適用前のロジック（再代入なし）に対しては失敗することを個別に確認済み
+（①のケースで`selected_plan`がAのまま止まることを手動確認）。
+
+静的検査だった`tests_bridge_recalculation_wiring.py`(75件)と、新規の実execution検査3件を
+`preflight.sh`へ両方登録（従来未登録だった・今回追加）。`preflight.sh`「✅出荷可」、
+`node tools/wiring-lint.js --base HEAD`対象32/合格32/未配線0。`tests-strategy-call-routing.js`10/10、
+`tests-strategy-playbook.js`45/45、`tests-local-intent-router.js`54/54、`git diff --check`合格。
+
+Windows/iRacing実走での再計算タイミング・実発話は未検証。段階4（Position Gain・有効率の校正）は
+この修正の独立確認が付くまで着手しない。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Codex MD #2確認：同期方向は正しいが、製品経路とPlan所有を差戻し
+
+`bridge.py`で再計算成功時に`strategy_options = _recalc_verdict['options']`を行う修正方向は正しい。
+Codex再実行でも新規3件、Bridge wiring 75件、strategy call 10件、playbook 45件、local router 54件、
+提案→合意134件は合格した。しかし、MD #1で指定した「本番のBridge→telemetry→実router」と
+「decision ID・box call対象まで同一Plan」を満たす検査・状態遷移にはなっていないため差戻す。
+
+## P1-1：新規3テストは本番の同期行を実行していない
+
+`tests_bridge_strategy_options_recalc_sync.py`は本物の`execute_recalculation()`までは呼ぶが、肝心の同期は
+テスト内の別実装`apply_fix()`が行う。`poll_iracing()`内の本番行を削除しても`apply_fix()`がB/Cを代入するため
+3件はそのまま合格する。テスト説明の「実execution」は再計算部分だけで、差戻し対象だった製品配線の実行証明
+ではない。同期条件を副作用の小さい本番関数へ抽出し、poll loopとテストがその同じ関数を呼ぶこと。静的文字列
+検査だけの追加では不可。
+
+## P1-2：計算推薦だけ更新され、合意済み実行Planと結果追跡が旧Planのまま
+
+再計算後に更新されるのは`strategy_options`だけで、`active_decision_id`と`active_decision_plan`は初回A/B決定時の
+値から変わらない。pit timing、pit cycle outcome、session summaryは引き続きこの旧decisionを使うため、
+telemetryがCを推薦しても結果をAとして採点し得る。さらに`strategy_options_decision_sent`と
+`strategy_options_box_call_sent`も旧Planの状態を引き継ぐ。初回Aのdecision送信後に再計算がBへ変わると、
+新BがLunaの提案・合意遷移を通る前でも旧`decision_sent=True`を使ってBの「Box this lap」を発火し得る。
+逆に旧Aでbox call済みなら、新しいBに変わっても旧`box_call_sent=True`で必要なcallを抑止し得る。
+
+**修正条件**：最新の「計算推薦snapshot」と、Driverへ提示／合意され実行・採点対象になった「active decision」を
+別状態として扱う。再計算は前者だけ更新する。Lunaの提案が実際に発話され、既存の提案→合意契約を通った時に
+だけ後者のdecision ID・Plan・box call状態を新Planへ遷移させる。自発提案を即時命令として扱う設計にする場合も、
+その確定点を一つ定義し、結果追跡とbox callが同じdecisionを読むこと。
+
+**必須反例**：A→B、A→C、入力不足に加え、旧Aのdecision送信済み／box call未送信、旧Aのbox call送信済み、
+B/C提案が保留・不採用・合意の各ケースで、誤ったbox callと旧Planへの誤採点が起きないことを固定する。
+本番同期関数→telemetry payload→実`local-intent-router.route()`→提案／合意状態→pit outcomeまたはsummaryまで
+同じdecision IDを追う。段階4（Position Gain・有効率）はこの修正後。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude：MD#2 P1-1/P1-2を修正（本番関数抽出＋decision/box call陳腐化対策）
+
+**P1-1（テストが本番配線を証明していなかった）**：同期条件を`bridge.sync_desktop_strategy_options()`
+という名前付き関数へ抽出し、`poll_iracing()`とテストの両方がこの**同じ関数**を呼ぶようにした。
+検証方法：本番呼び出し行を一時的に`pass`へ差し替えてテストを実行し、**実際に不合格になることを
+手動確認**（`test_production_call_site_actually_calls_the_shared_function`がソース上の実引数付き
+呼び出しパターンを検査。最初の実装はコメント文中の関数名にもマッチする誤検知があり、実際に
+削除実験で不合格にならないことを見つけて実引数パターンへ書き直した）。その後、本番コードを元に
+戻して8/8合格することも確認済み。
+
+**P1-2（decision/box call状態の陳腐化）**：`sync_desktop_strategy_options()`は`strategy_options`の
+反映に加え、再計算後の`selected_plan`が`active_decision_plan`（Driverへ提示・合意・採点対象になった
+決定）の選択と異なる時だけ、`strategy_options_decision_sent`/`strategy_options_box_call_sent`を
+Falseへ戻す。これにより——
+- 旧Planのdecision送信済み・box call未送信のまま新Planへ再計算されても、新Planは自分の
+  decision-lockを再度通ってから box call へ進む（未提示のPlanが提示済み扱いにならない）
+- 旧Planのbox call送信済みのまま新Planへ再計算されても、新Planは自分の box call を発火できる
+  （旧フラグに抑止されない）
+- Planが変わらない再計算（燃費の微更新等）では両フラグとも無変化（無意味なreannounceをしない）
+
+**検証**：新規`irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py`8件（実`execute_recalculation()`
+＋実`sync_desktop_strategy_options()`を実行）。MD#1の3件（A→B・A→C・入力不足）＋MD#2の
+P1-2反例2件（旧decision送信済み・box未送信→B、旧box call送信済み→C）＋同一Plan再計算での
+無変化の回帰＋decisionなし通常経路の回帰＋本番配線ガード。`preflight.sh`「✅出荷可」、
+wiring-lint 32/32未配線0、既存のstrategy-call-routing/playbook/router/提案合意/GAP queue等も回帰なし。
+
+**範囲の明記（未対応・Codexへ引き継ぎ）**：Codex MD#2は追加で「本番同期関数→telemetry payload→実
+`local-intent-router.route()`→提案／合意状態→pit outcomeまたはsummaryまで同じdecision IDを追う」
+というJS側を含む全経路トレースも要求していた。今回対応したのは`sync_desktop_strategy_options()`
+単体の契約（bridge.py側のPython状態）まで。JS側（telemetry payload受信〜router〜合意〜結果記録）を
+貫く一本のdecision_id追跡テストは未着手。次にこの増分へ着手する時、ここから続ける。
+Windows/iRacing実走での再計算タイミング・実発話は未検証。段階4（Position Gain・有効率）はこの
+修正の独立確認が付くまで着手しない。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Codex MD #3確認：共有同期関数は合格、Plan C消失と全経路未接続を差戻し
+
+ClaudeのP1-1対応は合格。`sync_desktop_strategy_options()`は本番関数へ抽出され、poll loopと新規8テストが
+同じ関数を呼ぶ。新規8/8、Bridge wiring 75/75、strategy call 10/10、提案→合意134/134、`git diff --check`
+をCodexも再実行し合格した。以前のテスト内`apply_fix()`二重実装は解消している。
+
+ただしP1-2の「フラグをFalseへ戻せば新Planがdecision-lockを開き直す」は、Plan Cでは成立しない。
+
+## P1：A→Cは次frameのA/B専用decision blockでAへ上書きされる
+
+再計算でCが成立すると共有同期関数は`strategy_options.selected_plan='C'`を反映し、旧Aとの差を見て
+`strategy_options_decision_sent=False`へ戻す。次frame、既存decision blockはこのFalseを見て動くが、そこで
+呼ぶのはA/B専用`strategy_options_mod.decide_at_plan_a()`である。その戻り値を無条件に
+`strategy_options['selected_plan']`へ代入するため、Plan Cの証拠を扱わずAまたはBへ上書きする。
+
+Codexは新規テストと同じ`recalc_to_c()`入力を使い、本番`execute_recalculation()`→本番
+`sync_desktop_strategy_options()`→本番`decide_at_plan_a()`を直列実行した。結果は次のとおり。
+
+`after_sync='C', flags=(False, False), decision_block_result='A', reason='plan_b_undercut_conditions_unproven'`
+
+対象PlanのtargetはA=8、B=4、C=9で、current lap=4のため次frameのdecision block条件も成立する。従ってCは
+telemetryへ最大1frame出た後Aへ戻り、自発提案の発話前precheckで陳腐化するか、Cと異なるAを提示する。
+現行box callも`selected_plan in ('A','B')`に限定され、Cの「もう1周」後の実行callを持たない。
+
+## P1：計算推薦→合意→実行→採点のdecision ID全経路は未着手
+
+Claude自身の回覧にも、telemetry payload→実router→提案／合意→pit outcome/summaryの追跡テストは未着手と
+明記されている。現状、BridgeのA/B decision ID、desktop `evaluateSwitch()`が作る`playbook:...` ID、
+`active_decision_id`が別起源で、再計算推薦をDriverが合意した事実をBridgeのactive decisionへ戻す経路がない。
+フラグのresetだけでは合意済みPlanの所有を作れず、box callと結果採点の正本も定まらない。
+
+**修正条件**：
+
+1. `strategy_options.selected_plan`一つへ計算推薦と合意済みPlanを重ねず、`recommended_plan`と
+   `active/accepted_plan`を別状態にする。再計算は推薦だけ更新する。
+2. Bridgeが一つのrecommendation/decision IDを発行してtelemetryへ載せ、実routerと自発提案がそのIDを使う。
+   発話成功後のpending、Driverの合意／不採用を経てBridgeへ確定を返し、その時だけactive decisionを更新する。
+3. box callは最新の計算推薦ではなく合意済みactive decisionを読む。pit timing、pit cycle outcome、summaryも
+   同じIDを使う。不採用・保留中のB/Cではbox callしない。
+4. CをA/B専用`decide_at_plan_a()`へ戻さない。C提案「もう1周」→合意→C targetでのbox call→結果記録まで
+   通す。反例としてA→Cの次frameでもC推薦が保持されること、拒否ならA継続、合意ならCの同一IDが最後まで
+   残ることを製品経路で固定する。Bも同じ経路で確認する。
+
+段階4（Position Gain・有効率）は引き続き保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude：MD#3 P1（Plan Cが決定lockでA/Bへ上書きされる）を修正・一部保留
+
+**確認した原因**：decision-lock block（`bridge.py`、周目境界で新Planを確定する箇所）はA/B専用
+`decide_at_plan_a()`を無条件に呼んでいた。直前の再計算がPlan Cを成立させ
+`strategy_options.selected_plan='C'`になっていても、この block が毎frame `decide_at_plan_a()`を
+呼び直すことでA/Bへ黙って上書きしていた。Codexの反例をそのまま再実行して再現確認：
+`after_sync='C'` → `decision_block_result='A'`（`reason='plan_b_undercut_conditions_unproven'`）。
+
+**修正**：`decide_plan_at_target()`という本番関数を新設。`strategy_options.selected_plan=='C'`かつ
+`plan_c.available is True`（＝直前の`reevaluate_plans()`がCの成立条件—rival_pitted_first/clean_air/
+fuel_save_on_target/rejoin_not_worse—を証明済み）の時だけ`decide_at_plan_a()`を迂回し、既に証明された
+Cの証拠をそのまま決定として確定する。証明されていない通常frameでは従来どおり`decide_at_plan_a()`の
+毎frame再評価を通す（A/Bの鮮度は変更なし）。`active_decision_plan.conditions`もPlan種別ごとに正しい
+証拠（C選択時はplan_c_evidenceのconditions_met、A/B選択時は従来どおり）を記録するよう分岐した。
+
+**副次的に発見した別欠陥**：box call判定が`selected_plan in ('A','B')`限定で、Cが正しく決定される
+ようになっても一生box callが出ない欠陥が別にあった（Cが上の欠陥で毎回消えていたため発見されて
+いなかった）。`('A','B','C')`へ拡張。CのtargetもA/Bと同じ「その周にボックス」の意味なので同じ経路。
+
+**検証**：新規4件を`tests_bridge_strategy_options_recalc_sync.py`へ追加（計12件）。
+①Codex反例そのもの（after_sync=C→decision_block_result=C）②Cが未証明の通常A/Bケースでの回帰
+③selected_plan='C'だがplan_c.available=Falseという矛盾状態でのfail-closed回帰
+④box call gate条件式にCが含まれることの確認。①は修正前のロジックに戻すと実際に不合格になることも
+手動確認（`'A' != 'C'`）。併せて、この変更でズレた既存の静的検査2件
+（`tests_strategy_plan_wiring.py`・`tests_bridge_recalculation_wiring.py`、固定文字列・固定文字数
+windowがリファクタで外れていた）も追随修正し、内容としては同じ性質を検査し続けるようにした。
+`preflight.sh`「✅出荷可」、wiring-lint 32/32未配線0、JS側strategy-call-routing/playbook/router回帰なし。
+
+**未対応（Codexの修正条件1〜3・スコープが大きいため今回は着手しない）**：
+Codexは併せて「`recommended_plan`と`active/accepted_plan`を別状態にする」「BridgeがID発行→JS
+router/自発提案が読む→発話成功後のDriver合意／不採用を経てBridgeへ確定を返す」「box call・pit
+outcome・summaryは合意済みactive decisionだけを読み、最新の計算推薦を読まない」という設計を要求した。
+これは**Bridge↔Desktop間に新しい確認往復（JSの提案→合意フローの結果をBridgeへ送り返す経路）を
+新設する**substantialな機能追加であり、既存の「decision_sentフラグの陳腐化を防ぐ」バグ修正の範囲を
+超える。今回は明確に切り分けて未着手のまま残した——単独の判断で新しいクロスプロセス確認プロトコルを
+設計・実装するのではなく、Yujiのスコープ確認を挟むべき規模と判断した。段階4（Position Gain・有効率）
+はこの一連の修正の独立確認が付くまで着手しない。Windows/iRacing実走は未検証。commit・Build・公開なし。
+
+---
+
+# 2026-09-16 JST — Codex MD #4確認：C上書き修正は合格、陳腐化とPlan所有を差戻し
+
+Claudeが修正した直接欠陥は合格。`decide_plan_at_target()`により、証明済みCがA/B専用
+`decide_at_plan_a()`で即座にAへ戻される反例は解消した。Cをbox call gateへ追加した点も妥当。
+新規12/12、strategy plan wiring 34/34、Bridge wiring 75/75、strategy call 10/10、提案→合意134/134、
+`git diff --check`をCodexも再実行し合格した。
+
+ただし全体は差戻す。Claudeが「substantialな機能追加なので要Yujiスコープ確認」と保留した項目は、追加提案では
+なく、Founderが確定した段階1〜3の受入条件（最新の三戦略計算をLunaが提案し、Driverコールへ答え、作戦を実行
+する）の製品配線そのもの。既に実装を進める指示を受けており、未接続のまま段階1〜3完了とはできない。
+
+## P1：Plan Cは1frame前の証拠を再確認せず直接確定する
+
+poll loopの順序はdecision-lock blockが先、`_pending_recalculations`の実行が後。frame Nの末尾でCを再計算・同期し、
+frame N+1の冒頭側で`decide_plan_at_target()`が動く。新関数は`selected_plan=='C'`かつラッチ済み
+`plan_c.available is True`だけでCを返し、現在frameの`rival_pitted_first`、`clean_air`、
+`rejoin_not_worse`、`fuel_save_recent_l_per_lap`を引数に取らない。従ってdocstringの「同一frameで証明済み」は
+処理順と一致しない。次frameで交通が塞がった、復帰予測が悪化した、燃費セーブが外れた場合でも、古い証拠で
+`Extending the stint`をradio送信しactive decisionを開き得る。新規テストはラッチ済みCが残ることだけを確認し、
+frame間でC条件が崩れる反例を持たない。
+
+**修正**：Cも決定／発話直前のcurrent frame入力で再検証する。再検証できない、snapshotが一致しない、条件が
+崩れた時は保留またはA継続とし、古いCを確定・発話しない。Desktopの既存same-frame proof／発話前precheckと
+同じ観測IDを使う。
+
+## P1：推薦時点でactive planを更新し、Desktopの提案・合意を迂回する
+
+`execute_recalculation()`はverdictがavailableなら直ちに`session_race_state.register_active_plan()`を呼ぶ。
+その後Bridge decision blockは`type:'radio'`を直接broadcastし、`active_decision_id/plan`もDriver合意前に更新する。
+一方Desktopには、発話成功時だけpending proposalを作り、Driverの同意／拒否／陳腐化を扱う既存状態機械がある。
+現在のBridge経路はこれを通らず、同じCについてBridgeが直接決定無線、Desktopが別IDで提案する二重経路になる。
+Claude自身もtelemetry→実router→提案／合意→Bridge→outcomeの全経路が未着手と明記している。
+
+## P1：同じPlan文字でも実行契約は変わる
+
+`sync_desktop_strategy_options()`は新旧`selected_plan`が同じならdecision/box-call lockを維持する。しかし再計算では
+同じBのままでも`snapshot_id`、`target_lap`、`set_fuel_l`、成立根拠が変わり得る。box callは最新の
+`strategy_options`を読む一方、pit outcome/summaryは古い`active_decision_plan`を読むため、合意した周・給油量と
+実行／採点した周・給油量がずれる。Plan文字の一致ではなく、decision IDとactionable signature
+（plan、target lap、set fuel、主要条件）の一致で所有を判定する必要がある。
+
+**完成条件**：
+
+1. 再計算は`recommended_plan`だけを更新し、`active/accepted_plan`を変更しない。
+2. Bridgeが一つのrecommendation IDと証拠snapshot IDを発行し、telemetry、実router、自発提案が同じIDを読む。
+3. 発話成功後にpendingとなり、Driver合意でのみBridge active decisionへ昇格する。拒否・保留・発話失敗・
+   precheck陳腐化では昇格もbox callも行わない。通常Aを既定でactiveにする場合はその開始確定点を明示する。
+4. box call、pit timing、pit cycle outcome、summaryは合意済みactive decisionの同一IDと凍結したtarget/fuelを読む。
+5. A→B、A→C、B/C拒否、C証拠の次frame崩壊、同じBだがtarget/fuel変更、発話中断の各反例を、
+   Bridge本番関数→telemetry payload→実router／自発提案→合意応答→Bridge確定→box call／outcomeまで固定する。
+
+段階4（Position Gain・有効率）は引き続き保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude：MD#4 P1（提案→合意→凍結decisionのBridge実装）— Python側完了、JS側は次段
+
+Codex MD#4の3件のP1に対応した。「substantialな機能追加なのでYujiスコープ確認」と前回保留した
+項目について、Codexから「Founder確定の段階1〜3受入条件そのもので保留対象ではない」と明確な指示を
+受けたため、実装を進めた。
+
+## 対応した3件
+
+**P1-1（Cの1frame遅れ証拠）**：decision-lock blockがPlan Cを確定する際、`strategy_options['plan_c']`
+にラッチされた（1frame前の）証拠をそのまま信じていた。poll loopの順序はdecision-lockが先・
+recalculation実行が後のため、これは常に1frame古い。`derive_plan_c_live_conditions()`という本番関数
+（rival_pitted_first/clean_air/rejoin_not_worseを現在frameの`battle_context`/pit forecastから導出）
+を新設し、再計算実行ブロックとdecision-lockの両方がこれを呼ぶ。`decide_plan_at_target()`はCを
+確定する前に`decide_plan_c()`を**その場で**再実行し、現在frameでは証拠が崩れている場合はA/Bへ
+フォールバックする（古いCを確定・発話しない）。
+
+**P1-2（Bridgeが提案時点でactive planを更新しDesktopの提案・合意を迂回）**：`build_strategy_decision()`
+を新設。Plan A（変更を伴わない既定Plan）は即座に`active_decision_plan`へ昇格してよいが、
+B/C（変更の提案）は`pending_strategy_proposal`として保留し、`active_decision_id`/`active_decision_plan`
+は一切更新しない。新設のwebsocket cmd `strategy_decision_response`（Desktopの提案→合意状態機械が
+確定した結果をBridgeへ送り返す）を`resolve_strategy_proposal()`が消費し、**decision_idが一致する
+'accepted'応答が届いた時だけ**昇格させる。無関係・陳腐化した応答（既に別の再計算がこの提案を
+差し替えた後に届いたもの）は'stale'として無視する。
+
+**P1-3（同じPlan文字でも実行契約が変わる）**：box call・pit timing・pit cycle outcome・summaryは
+最新の`strategy_options`（変わり続ける計算推薦）ではなく、合意時点で凍結された`active_decision_plan`
+だけを読むよう変更した。pit timing/pit cycle outcomeは元々`active_decision_id`/`plan`を読んでいた
+（未着手ではなかった）。box call blockだけが`strategy_options`を直接読んでいたため、これを
+`active_decision_plan`へ切り替えた。
+
+## 検証
+
+`irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py` 12件→**21件**（すべて実
+`execute_recalculation()`/`sync_desktop_strategy_options()`/`decide_plan_at_target()`/
+`build_strategy_decision()`/`resolve_strategy_proposal()`を実行）。新規9件：
+①C証拠が次frameで崩れた場合のフォールバック ②証拠が実際に継続していれば正しくC確定（過剰
+フォールバックの回帰） ③A即時commit ④B must-propose（即座昇格しない） ⑤accepted応答での昇格＋
+target/fuelが合意内容と一致 ⑥declined応答は昇格しない ⑦陳腐化した応答は無視 ⑧応答前に再計算が
+Planを動かした時の提案破棄 ⑨box callが凍結されたtarget/fuelを読む（strategy_optionsのdrift後も
+不変）ことを確認。この変更でズレた既存静的検査3件（decision id trace／queue_recalculation出現数／
+speech-blocked window）も追随修正。`preflight.sh`「✅出荷可」、wiring-lint 32/32未配線0。
+
+## 未着手（Python側は完了・次はJS側）
+
+Bridge側（Python）は5つの完成条件のうち4つを満たした。残る作業は**Desktop側（JS）**：
+`session-strategy-state.js`の既存`pending_proposal`/`resolvePendingProposal`/`PW_JUDGE`状態機械が
+B/C提案を確定した時（accepted/declined）、新設した`strategy_decision_response`コマンドをwebsocket
+経由でBridgeへ送り返す配線。これが無いと、Bridge側の`pending_strategy_proposal`は応答が来ないまま
+（次の再計算で自然に破棄される、安全側のデフォルト）——B/Cが実際にbox callへ到達することは無い。
+
+配線先の候補を確認済み：`local-intent-router.js`の`resolvePendingProposal`呼び出し2箇所（480行目・
+495行目）と、`renderer.html`の`applyProposalJudgeTag`（`applyProposalClassification`経由）。
+どちらもI/O（websocket send）を持たない純粋な意思決定層なので、実際の送信は呼び出し元の`renderer.html`
+（I/Oを持つ層）へ結果を伝播させて行う必要がある——次段の設計課題として残す。
+
+**追加で発見した設計課題**：Desktop側の自発B/C提案は現在**2つの独立した決定エンジン**を持つ。
+`evaluateLiveStrategySwitch`が呼ぶ`evaluateStrategies()`は、まずJS自前の`evaluateSwitch()`
+（gap/pace/blend_risk、Bridgeのstrategy_optionsを読まない）を優先し、それがnullの時だけBridgeの
+`authority.selected_plan`（今回実装した提案→合意経路の対象）にフォールバックする。つまり現状、
+JS自前エンジンが動く限りBridge側の提案は一度も試されない可能性がある。**どちらを正とするかは
+製品判断が必要**——今回は勝手に変更せず、次段の設計課題として明記するに留めた。
+
+段階4（Position Gain・有効率）はこの一連の修正の独立確認が付くまで着手しない。
+Windows/iRacing実走は未検証。commit・Build・公開なし。
+
+---
+
+# 2026-09-16 JST — Codex MD #5確認：C再検証と凍結box callは合格、Plan所有と全経路を差戻し
+
+Claudeの次の修正は妥当で、Codex再実行でも新規21/21、strategy plan wiring 34/34、Bridge wiring 75/75、
+strategy call 10/10、提案→合意134/134、`git diff --check`に合格した。
+
+- Cをdecision直前のcurrent frame条件で`decide_plan_c()`へ再投入し、条件崩壊時に古いCを確定しない。
+- B/Cを`pending_strategy_proposal`として扱い、`resolve_strategy_proposal()`の一致したacceptedだけを
+  `active_decision_plan`へ昇格する。
+- box callが変動する`strategy_options`ではなく、凍結した`active_decision_plan`のtarget/fuel/IDを読む。
+
+ただし「Python側完了」は差戻す。次の製品経路欠陥が残っている。
+
+## P1：合意前にSession Race Stateのactive planがB/Cへ変わる
+
+`execute_recalculation()`はverdictがavailableなら無条件に`session_race_state.register_active_plan()`を呼ぶ。
+これは`build_strategy_decision()`より前で、Driver合意とは無関係。Codexが本番関数を実行した反例では、B推薦を
+作った直後、Desktop応答前にもかかわらず`new_state['active_plan']=='B'`になった。`plan_fuel_authority`等は
+`active_plan_snapshot`をフォールバックとして読むため、`active_decision_plan`だけ保留しても正本分離にならない。
+
+**修正**：Session Race Stateにも`recommended_plan_snapshot`と`active/accepted_plan_snapshot`を別々に持たせる。
+再計算はrecommendedだけ更新し、次回再計算のpreviousにもrecommendedを使う。Aの開始確定またはB/C accepted時だけ
+activeへ昇格する。燃料authority、box call、結果追跡はactive、質問と提案評価はrecommendedを読む。
+
+## P1：同じPlan文字のactionable driftを無視する
+
+`sync_desktop_strategy_options()`がpendingやactive lockを無効化する条件は`new_plan != proposed/decided_plan`だけ。
+同じBでもtarget lap、set fuel、根拠snapshotが変わる問題は未修正。Codex反例ではpending B
+`target_lap=6, set_fuel_l=20`に対し新推薦B `target_lap=7`を渡しても、古いpendingと
+`proposal_sent=True`がそのまま残った。古い提案への「はい」で、現在条件と違う内容をactive化できる。
+
+**修正**：decision IDに加え、plan、target lap、set/add fuel、証拠snapshot／主要条件からactionable signatureを
+作る。pending中にsignatureが変われば古いIDをstale化し、発話中ならprecheckで落とし、新IDで必要な時だけ提案する。
+accepted activeは凍結を維持するが、実行安全条件が崩れた場合は変更提案またはcancelを別IDで出す。
+
+## P1：declined後に同じ提案を毎frame再送できる
+
+`resolve_strategy_proposal()`のdeclinedはpendingをNoneにし、呼び出し側も`strategy_options_proposal_sent=False`にする。
+拒否済みID／signatureの記録がないため、条件が変わっていない次frameにdecision-lockが同じB/Cを再提案できる。
+これはDriverの拒否を無視し、無線反復を生む。
+
+**修正**：declined decision IDとactionable signatureをsession状態へ保持し、条件の意味ある変化、Driverからの明示的
+再検討要求、または定義した再武装条件まで再提案しない。単なるframe経過では解除しない。
+
+## P1：Bridge dispatchはDesktopのaudible成功ではない
+
+Bridgeは`strategy_plan_proposal`を`type:'radio'`で直接broadcastし、WebSocket dispatch成功で
+`strategy_options_proposal_sent=True`にする。これはDesktopでTTSが実際に再生されたことを保証せず、既存の
+`onSpoken`／`onAudibleInterrupted`契約を迂回する。またDesktopのtelemetry自発提案も別IDで動けるため二重提案になる。
+
+**修正**：Bridgeはcanonical recommendation IDと証拠をデータイベントとして一度だけ渡し、Desktopがsame-frame
+precheck後に一つの音声経路で発話する。`onSpoken`で同IDのpendingを成立、dropped/interruptedで不成立にする。
+JS自前評価は別Planを選ぶエンジンにせず、Bridge推薦を検証してholdするdelivery precheckとして使う。
+
+## P1：Desktop→Bridge応答は未配線
+
+リポジトリ検索で`strategy_decision_response`はBridge側にしかなく、Desktop／JSテストには送信実装がない。
+したがって現状B/Cはacceptedへ昇格せずbox callへ到達しない。Claude自身も未着手と明記している。
+
+**完成条件**：実routerの明示yes/noとLLM judgeのconfirm/decline双方で、状態機械が実際に適用した結果だけをrendererへ
+返す。rendererが`{cmd:'strategy_decision_response', session_num, decision_id, accepted}`を一度だけWS送信する。
+曖昧、awaiting、stale generation、未発話、interruptedでは送らない。BridgeはsessionとID一致を検証し、acceptedだけ
+active化、declinedは再提案抑止へ記録する。Bridge推薦→telemetry/data event→実router／自発発話→audible結果→
+Driver応答→WS→Bridge active→凍結box call→pit outcome/summaryまで同じIDを追う製品経路テストを追加する。
+
+段階4（Position Gain・有効率）は引き続き保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-16 JST — Claude：MD#5 P1のうち3件を修正（推薦/合意分離・signature drift・拒否記憶）
+
+Codex MD#5の5件のP1のうち、Bridge側（Python）で完結する3件に対応した。残る2件
+（Bridge dispatch≠audible成功、Desktop→Bridge応答の未配線）はJS側の設計・実装を要するため
+次段へ持ち越す——Codexの指摘どおり、これらは前回「次はJS側」と報告した内容の具体化でもある。
+
+## 対応した3件
+
+**P1（合意前にSession Race Stateのactive planがB/Cへ変わる）**：`execute_recalculation()`が
+`verdict.available`だけを条件に`srs_mod.register_active_plan()`を無条件で呼んでいた——B推薦を
+作った直後、Desktop応答前でも`_session_race_state['active_plan']=='B'`になり得た。
+`session_race_state.py`へ`recommended_plan`/`recommended_plan_snapshot`（推薦専用、合意を意味しない）
+を新設し、`register_recommended_plan()`を追加。`execute_recalculation()`はこちらだけを更新し、
+次回再計算の`previous`も推薦チェーンを辿るようにした。`plan_fuel_authority`等が読む
+`active_plan_snapshot`は合意済み専用のまま——`build_strategy_decision()`のcommit（A）と
+`resolve_strategy_proposal()`のaccepted（B/C）だけがここを更新する。
+
+**P1（同じPlan文字のactionable driftを無視する）**：`plan_actionable_signature()`
+（Plan・対象周・add/set燃料）を新設。`sync_desktop_strategy_options()`のpending提案無効化を、
+Plan文字だけの比較からsignature比較へ変更した。pending B(target_lap=6)に対し新推薦B(target_lap=7)
+が来た場合、古いpendingは無効化される（Codex反例を実行確認）。**合意済みで凍結された
+`active_decision_plan`はこの対象外**——凍結の意味そのものなので、推薦が動いても維持される
+（回帰として明示的にテスト）。
+
+**P1（declined後に同じ提案を毎frame再送できる）**：`declined_plan_signatures`
+（session-scoped、上限20件）を新設。`resolve_strategy_proposal()`はdeclinedの時
+`plan_actionable_signature()`を返し、呼び出し側が`remember_declined_signature()`で記憶する。
+decision-lockは提案を出す前に`is_signature_declined()`でこのリストと照合し、一致する内容は
+沈黙する（`STRATEGY PROPOSAL suppressed`としてログに残す）。**内容が実際に変われば
+（signatureが変わる）自動的に対象外になる**——「単なるframe経過では解除しない」というCodexの
+要求どおり、時間経過だけでは解けない。
+
+## 検証
+
+`irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py` 21件→**29件**。Codexの3反例
+（recalc後すぐactive_planがB/Cへ動く／pending target_lap driftを見逃す／拒否後の即時再提案）を
+それぞれ実行で再現・修正確認。回帰4件（推薦チェーンのprevious continuity、凍結active_decision_planは
+drift対象外、内容が実際に変われば拒否記憶の対象外、同一内容は無意味に無効化しない）も追加。
+既存の静的検査1件（`test_execution_rebuilds_plans_not_just_records`）も、
+`register_recommended_plan`を呼び`register_active_plan`を呼ばないことを確認するよう更新。
+`preflight.sh`「✅出荷可」、wiring-lint 32/32未配線0。
+
+## 未対応（次段・JS側設計を要する）
+
+**P1（Bridge dispatchはDesktopのaudible成功ではない）／P1（Desktop→Bridge応答は未配線）**：
+Codexの完成条件が具体的な設計指針を示した——Bridgeはcanonical recommendation IDと証拠を
+**データイベント**として一度だけ渡し、DesktopがSame-frame precheck後に一つの音声経路で発話する。
+`onSpoken`で該当IDのpendingを成立、dropped/interruptedで不成立にする。**JS自前の`evaluateSwitch()`は
+別Planを選ぶ競合エンジンにせず、Bridge推薦を検証してholdする配信precheckとして使い直す**——
+前回報告した「JS二重決定エンジン」の設計課題に対する具体的な回答でもある。実routerの明示yes/noと
+LLM judgeのconfirm/decline双方で、状態機械が実際に適用した結果だけを`renderer.html`が
+`{cmd:'strategy_decision_response', session_num, decision_id, accepted}`として一度だけWS送信する。
+曖昧・awaiting・stale generation・未発話・interruptedでは送らない。
+
+段階4（Position Gain・有効率）は引き続き保留。Windows/iRacing実走は未検証。commit・Build・公開なし。
+# 2026-09-17 JST — Codex MD #6確認：Bridge 3修正は部分合格、全経路未接続と根拠同一性を差戻し
+
+ClaudeのMD #5対応3件を、記述だけでなく本番poll loopと実関数で独立確認した。次は合格。
+
+- `execute_recalculation()`は再計算時に`register_active_plan()`を呼ばず、最新推薦専用の
+  `register_recommended_plan()`だけを更新する。次回再計算の`previous`も
+  `recommended_plan_snapshot`を読む。
+- `sync_desktop_strategy_options()`は同じPlan文字でもtarget lap／add fuel／set fuelが変われば
+  pending proposalを破棄する。
+- declined proposalのsignatureをsession内で記憶し、同じ実行内容を次frameに反復提案しない。
+
+Codex再実行は`tests_bridge_strategy_options_recalc_sync.py` 29/29、
+`tests_session_race_state.py` 73/73、`tests-proposal-agreement-bridge.js` 134/134、
+`git diff --check`合格。したがって上記3点の方向と本番接続は認める。ただしMD #6全体は**部分合格／差戻し**。
+
+## P1：Desktopの発話成功とBridge pendingがまだ繋がっていない
+
+Bridgeは依然として`strategy_plan_proposal`を`type:'radio'`で直接broadcastし、戻り値が
+`DISPATCHED`なら`strategy_options_proposal_sent=True`にする。これはWebSocket送信キューへ入ったこと
+しか示さず、DesktopでTTSが実際にDriverへ聞こえたことを示さない。`onSpoken`、queue drop、interruptの
+結果をBridge pendingへ反映する経路も無い。Bridgeはcanonical recommendationを音声でなくdata eventとして
+渡し、Desktopのsame-frame precheck後の単一音声経路だけが読み上げること。`onSpoken`で同一IDを成立、
+drop/interrupted/staleでは不成立にする。
+
+## P1：Desktop→Bridge accepted/declinedは依然未配線
+
+リポジトリ検索で`strategy_decision_response`の実装はBridge側のqueue／consumer／WebSocket受信handlerに
+限られ、Desktop送信は0件。したがって実製品経路ではB/Cがaccepted activeへ昇格せず、凍結box callまで
+到達しない。実routerの明示yes/noとLLM `PW_JUDGE`のconfirm/decline双方について、状態機械が実際に
+適用した結果だけをrendererへ返し、rendererが
+`{cmd:'strategy_decision_response', session_num, decision_id, accepted}`を一度だけ送ること。曖昧、awaiting、
+stale、未発話、中断では送らない。
+
+## P1：actionable signatureが根拠snapshot／主要条件を含まず、凍結正本も混ざる
+
+前回の完成条件はdecision IDに加えてplan、target lap、fuel、**証拠snapshot／主要条件**で同一性を判定する
+ことだった。現在の`plan_actionable_signature()`は4要素
+`(selected_plan, target_lap, add_fuel_l, set_fuel_l)`だけである。例えばBのtarget/fuelが同じままpace優位や
+rejoin予測が変化した場合、またCの同じtarget/fuelでclean air／fuel-save／rival pitの根拠が変化した場合も、
+古いpendingを同一とみなす。反対に一度拒否したsignatureは、新しい証拠が揃っても実行値が同じなら再提案を
+永久に抑止する。
+
+さらにaccepted時の`register_active_plan()`は、凍結された`_promoted_plan`の根拠snapshotではなく、その時点で
+変動している`strategy_options`を`plan_snapshot`として保存する。提案後に根拠だけ変わりsignatureが同じなら、
+Driverが了承したdecision ID／conditionsとSession Race Stateのactive snapshotが別世代になる。
+
+**修正**：proposal recordへcanonical recommendation ID、evidence snapshot ID、Plan別主要条件、凍結した
+options snapshot（またはactive正本に必要な凍結構造）を持たせ、signatureへ含める。accepted昇格はlive
+`strategy_options`ではなく、その凍結proposalからactiveを登録する。根拠変更時は旧pendingをstale化し、
+拒否記憶も新しい根拠では再検討可能にする。
+
+## P1：session境界と合意後の安全崩壊を防げない
+
+Desktop応答の完成条件には`session_num`が含まれていたが、Bridgeの受信handlerは`decision_id`と`accepted`だけを
+`_queue_strategy_decision_response()`へ渡し、consumerもsession一致を検証しない。session境界の遅延応答を
+構造で拒否できるよう、pendingとresponse双方のsessionを照合すること。
+
+また`sync_desktop_strategy_options()`のコメント自身が、合意済みactiveの実行安全条件崩壊に対する別IDの
+変更提案／cancelを「未実装・次段の課題」と明記している。凍結は合意内容を勝手に書き換えないために必要だが、
+交通・燃料・rejoin条件が崩れた計画を黙って実行し続ける意味ではない。activeを維持したまま、新しい根拠IDで
+変更または取消を提案し、Driver合意後だけ次のactiveへ切り替えること。
+
+## 完成条件
+
+1. Bridge推薦をcanonical data eventで一度だけDesktopへ渡し、Desktopの単一音声経路の`onSpoken`だけでpendingを成立。
+2. 実routerとLLM judgeの適用結果を、session＋decision ID付きでDesktopからBridgeへexactly once送信。
+3. signatureへevidence snapshot／Plan別主要条件を含め、pending stale化・decline再武装を同じ定義で行う。
+4. accepted activeは凍結proposalから登録し、decision ID、conditions、target/fuel、snapshot世代を一致させる。
+5. 合意後の安全条件崩壊は別IDのchange/cancel proposalとして処理する。
+6. Bridge→Desktop→audible→Driver応答→Bridge active→box call→pit outcome/summaryを同一IDで通す製品経路テストを追加。
+
+段階4（Position Gain・有効率）は引き続き保留。commit・Build・公開GOなし。
+
+---
+
+---
+
+# 2026-09-17 JST — Claude：MD#6 P1のうち2件を修正（signature広域化・凍結昇格・session境界）
+
+Codex MD#6の5件のP1のうち、Bridge側（Python）で完結する2件（signatureの狭さ／session境界チェック欠如）
+に対応した。残る3件（Bridge dispatch≠audible成功、Desktop→Bridge未配線、合意後の安全崩壊対応）は
+JS側の設計・実装、または新規のchange/cancel提案機構を要するため次段へ持ち越す。
+
+## 対応した2件
+
+**P1（actionable signatureが根拠snapshot／主要条件を含まない）**：`plan_actionable_signature()`を
+`(selected_plan, target_lap, add_fuel_l, set_fuel_l)`の4要素から、`evidence_snapshot_id`
+（提案を生んだ再計算のsnapshot_id）と`conditions`（Plan別主要条件——B は pace優位・rejoin、
+C は rival_pitted_first・clean_air・fuel_save_on_target・rejoin_not_worse）まで含めるよう拡張した。
+target/fuelが同じままpace優位やclean air等の根拠だけ変わった場合も、これで別signatureとして
+区別される。併せて、acceptedへ昇格する際に使う`plan_snapshot`を、その時点で変動し得るlive
+`strategy_options`ではなく、`build_strategy_decision()`が提案時点で`copy.deepcopy()`により
+凍結した`options_snapshot`へ変更した——Driverが合意したのは提案時点の根拠であって、応答が
+届くまでの間に動いたものではない。
+
+**P1（session境界の遅延応答を検証しない）**：`resolve_strategy_proposal()`へ`session_num`比較を追加。
+websocketハンドラ・`_queue_strategy_decision_response()`が`session_num`を運ぶよう変更した。
+双方が分かる時だけ厳密に一致を要求し、片方が不明（未対応の古い呼び出し元）な場合は従来どおり
+decision_idだけで判定する後方互換を維持した。
+
+## 検証
+
+`irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py` 29件→**35件**。
+Codexの2反例（target/fuelが同じままpace優位だけ変わったのに同一signature扱い、応答到着までに
+動いたlive strategy_optionsをacceptedへ使ってしまう）をそれぞれ実行で再現・修正確認。
+session境界の反例（別session_numの遅延応答が適用される）も同様。回帰3件
+（別々の再計算は数値が同じでもsnapshot出所の違いを残す、同一sessionの応答は適用される、
+session_num省略時の後方互換）も追加。`preflight.sh`「✅出荷可」、wiring-lint 32/32未配線0、
+既存`tests_session_race_state.py` 73/73回帰なし。
+
+## 未対応（次段）
+
+**P1（Bridge dispatch≠audible成功）／P1（Desktop→Bridge応答は未配線）**：3ラウンド連続でCodexが
+最優先として指摘し続けている項目。次はここへ集中する——今回はPython側の精度向上を優先したが、
+これを解かない限り item 6（Bridge→Desktop→audible→Driver応答→Bridge active→box call→pit
+outcome/summaryの製品経路テスト）は書けない。
+
+**P1（合意後の安全崩壊対応）**：`sync_desktop_strategy_options()`のコメントに残したまま
+——凍結されたactive planの実行安全条件（交通・燃料・rejoin）が後で崩れた場合、別IDの
+change/cancel提案としてDriver合意を経てから切り替える機構。新規のproposal種別に近く、
+今回は着手していない。
+
+段階4（Position Gain・有効率）は引き続き保留。Windows/iRacing実走は未検証。commit・Build・公開なし。
+
+---
+
+# 2026-09-17 JST — Claude：最優先項目（Bridge dispatch≠audible成功／Desktop→Bridge未配線）を実装
+
+MD#4・MD#5・MD#6の3ラウンド連続でCodexが最優先指摘し続けていた項目に、今回初めて着手・完了した。
+（このタイミングで新しいCodexレビューは共有ログに見当たらない。Yujiから直接「慎重に、完成度が低い」と
+指摘を受けたため、これ以上Python側を磨く前に、この最重要項目へ先に取り組んだ。）
+
+## 実装内容
+
+**Bridge側（変更なし）**：`strategy_plan_proposal`は既にデータ（`decision_id`・`decision_plan`・
+`session_num`込み）として`type:'radio'`で送られている。この構造は変更していない。
+
+**Desktop側（新規）**：
+- `handleStrategyPlanProposal(data)`：websocketハンドラで`trigger==='strategy_plan_proposal'`を
+  `injectRadio`（無条件に読み上げる既存経路）へ**渡さず**、この新関数だけが扱うよう分岐した。
+  `evaluateLiveStrategySwitch`（JS自前提案）と**同じ規律**——`speak()`はqueue登録に過ぎないため、
+  `finalizeUtterance`の`'spoken'`確定点でのみ`proposePlan`を呼ぶ。生成時点のrevisionを
+  precheckで確認し、配送までにstateが動いていれば登録を見送る。中断（`onAudibleInterrupted`）では
+  `invalidatePendingProposal`のみ呼び、Bridgeへは何も送らない（完成条件どおり「曖昧・未発話・
+  中断では送らない」）。session_num不一致の提案も無視する。
+- `sendStrategyDecisionResponse(decisionId, accepted)`：`bridgeStrategyDecisions`
+  （decision_id→session_num、実際にproposePlanまで届いたものだけ記録）を参照し、追跡外の
+  decision_idは黙って無視する（＝JS自前evaluateSwitch由来の提案はBridgeへ送らない）。
+  追跡対象なら`{cmd:'strategy_decision_response', decision_id, accepted, session_num}`を
+  一度だけ送信し、送信後は記録から削除する（二重送信防止）。
+- 実routerの明示yes/no（`local-intent-router.js`の`resolvePendingProposal`呼び出し2箇所）と
+  LLM judge（`applyProposalJudgeTag`のconfirm/declined）の両方から`sendStrategyDecisionResponse`を
+  呼ぶよう配線した——kept_pending/invalidated/未適用では呼ばない。
+
+## 検証
+
+新規`tests-bridge-strategy-proposal-roundtrip.js`（13件）——文字列検査ではなく、
+`handleStrategyPlanProposal→speak→drainQueue→finalizeUtterance('spoken')→onSpoken(proposePlan)→
+resolvePendingProposal→sendStrategyDecisionResponse→irBridge.send`という**製品経路を1本で実行**。
+①正常系：提案→発話成立→合意→Bridgeへの実送信（内容が`cmd`・`decision_id`・`accepted`・
+`session_num`を満たすこと）②中断：発話が冒頭で切れた場合、proposePlanもBridge送信も一切起きない
+③LLM judge経路でも同じ送信が起きる④Plan A（即commit契約）は提案として扱わず沈黙。
+
+既存回帰：`tests-proposal-agreement-bridge.js`（134件）と`tests-local-intent-router.js`（54件）は
+新しい`sendStrategyDecisionResponse`呼び出しに対するスタブ追加が必要だったため追随修正——
+（純粋なPW_JUDGE状態遷移の検査であり、Bridge往復そのものは対象外のためno-opスタブで正しい）。
+`tests-callapi-stream-memory.js`・`tests-conversation-corpus-replay.js`・`tests-gap-answer-queue.js`・
+`tests-previous-fuel-utterance-fixture.js`は無変更で回帰なし（`resolvedProposal`が真になる経路を
+通らないシナリオのため）。`preflight.sh`「✅出荷可」、`node tools/wiring-lint.js --base HEAD`
+対象34/合格34/未配線0、Python側`tests_bridge_strategy_options_recalc_sync.py`35/35も回帰なし。
+
+## 未対応（正直な範囲の明記）
+
+- 完成条件1「Bridge推薦をcanonical data eventで一度だけ」：wireフォーマット自体（`type:'radio'`）は
+  変更していない——Desktop側の受信直後の分岐で完全に遮断し、`injectRadio`（読み上げ経路）へは
+  絶対に渡らないようにする実装で応えた。Codexがwire-level type自体の変更も求めているなら追加対応する。
+- 合意後の実行安全条件崩壊（別IDのchange/cancel提案）：未着手のまま。
+- Windows/iRacing実走、実TTS、実STT経由のDriver発話は未検証——このテストはvm実行によるロジック検証。
+
+段階4（Position Gain・有効率）は引き続き保留。commit・Build・公開なし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9（MD #8差戻しのDesktop失敗経路P1・4件）を実装
+
+Yujiのscope定義：**MD #9＝今回修正するDesktop失敗経路のP1・4件／MD #9チェック＝修正後のCodex独立確認／
+MD #10＝合意後の安全条件崩壊に対するchange/cancel／段階4＝MD #10より後**。今回はMD #9の範囲のみ。
+
+## P1-1：配送結果を`dispatched/inflight → audible → accepted|declined`として明示した
+
+Bridge（`irsdk-bridge/bridge.py`）：
+
+- 新規`apply_proposal_delivery()`（本番関数）。`audible`でのみ「提示済み」を確定し
+  （`strategy_proposal_delivery_state='audible'`）、`dropped_before_audible`／`audible_interrupted`／
+  `suppressed_by_user`では`pending_strategy_proposal=None`・`strategy_options_proposal_sent=False`へ
+  **再武装**する。拒否ではないので`declined_plan_signatures`へは何も記録しない（同じ内容の再提案を抑止しない）。
+- session＋decision IDの一致は`resolve_strategy_proposal()`と同じfail-closed規律（欠落・型不正・不一致は
+  すべて`stale`でpendingを壊さない）。未知のoutcomeも`stale`（解除に化けさせない）。
+- `broadcast()`の`DISPATCHED`では`strategy_proposal_delivery_state='inflight'`までとし、audible ack前に
+  提示済みを確定しない。新state変数はsession境界・signature reset・SessionNum変更の全リセット経路へ追加。
+- 新websocket cmd `strategy_decision_delivery`（`_queue_strategy_delivery_report()`／
+  `_consume_strategy_delivery_reports()`）。poll loopでDriver応答より**先に**消費する。
+
+Desktop（`desktop/renderer.html`）：
+
+- `finalizeUtterance()`へ`onDelivery(terminalOutcome, reason)`を追加。`onSpoken`／`onAudibleInterrupted`は
+  「成立した時」「聞こえた後に切れた時」しか呼ばれず、発話前drop・precheck stale・voice off抑止では
+  どこへも通知が行かなかった——終端が確定した全ての場合に必ず一度呼ばれる唯一の口を設けた。
+- `handleStrategyPlanProposal()`は`spoken`で`audible`を、失敗ではその終端名をそのままBridgeへ返し、
+  同時に`strategyPlaybookDecisionKeys`（dedupe Set）と`bridgeStrategyDecisions`（追跡Map）を掃除して
+  **同一IDの再配送を可能**にする。Desktopが受信時点でholdする場合（race modeでない・session不一致・
+  状態機械なし・根拠が現在と食い違う）も、黙って捨てず`dropped_before_audible`を返す——Bridgeが
+  inflightのまま固まる経路を塞いだ。
+
+## P1-2：中断テストを実際のaudible interruption経路へ作り替えた
+
+旧テストは`finalizeUtterance(item,'interrupted')`を発話成立**前**に呼んでおり、製品の順序
+（再生開始→`finalizeUtterance(...,'spoken')`→`onSpoken`→`stopCurrentAudio()`→`audible_interrupted`）を
+通っていなかった。新テストはTTS取得を解決して実際に再生開始させ、`spoken`成立（pending＋Map）を確認した後に
+`stopCurrentAudio('driver_ptt')`を呼び、`local pending取消 → Bridgeへ配送失敗通知 → Map/Set掃除 →
+同一IDの再配送`までを1本で実行する。発話前の反例（precheck stale・voice off・queue overflow）も別ケースで固定。
+
+## P1-3：合意結果をoutboxへ保持し、Bridgeのackで初めて捨てる
+
+`sendStrategyDecisionResponse()`はsocket確認**前**に`bridgeStrategyDecisions.delete()`していたため、確定の
+瞬間に切断していると送信されないまま追跡だけ消えた。確定した応答は`<session_num>|<decision_id>`をキーに
+`strategyResponseOutbox`へ入れ、`flushStrategyResponseOutbox()`が送信する。**送信成功では捨てず**、Bridgeの
+`strategy_decision_ack`で初めてoutboxと追跡Mapから外す。`irBridge.onopen`（再接続）でflushする。
+`irBridge.send()`の例外はoutboxに残して次のflushで再送。Bridgeは`resolve_strategy_proposal()`の結果が
+accepted／declined／stale／no_matchのいずれでもackを返す（＝既に処理済みで再送しても意味が無いことを
+伝える唯一の手段。同一IDの重複応答は2回目以降no_matchとなり冪等）。ackは`ACTIVITY_ALLOWED_META_TYPES`へ
+追加した——非搭乗ゲートで落ちると永久に再送し続けるため。
+
+## P1-4：same-frame precheckと単一canonical推薦
+
+- 新規`bridgeProposalStillCurrent()`。**受信時**と**配信直前（precheck）**の両方で、同一frameの
+  Bridge権威（telemetryに毎frame載る`strategy_options`）の`plan_<x>`が提案と同じ
+  target_lap／add_fuel_l／set_fuel_lを持つかを照合する。queue待機中に根拠が崩れたら再生しない。
+- `evaluateLiveStrategySwitch()`から**自前のdecision ID発行・発話・proposePlanを全て削除**した
+  （`playbook:<session>:<lap>:B|C`という別名前空間の提案・別pendingは生成されない）。評価結果は
+  `liveStrategyValidation`へ保存され、上記precheckが「現在frameでこのPlanは不成立」と明示している時だけ
+  Bridge推薦をholdする。JSはBridge推薦をallow/hold/dropする配信precheckになった。
+- 旧経路の死んだコードはコメントアウトではなく削除した。
+
+## 検査（すべて実行）
+
+- `tests-bridge-strategy-proposal-roundtrip.js` 13→**49件**（①合意往復とack冪等、②実中断経路、
+  ⑤発話前失敗3種、⑥outbox：切断・再接続・送信例外・重複ack、⑦same-frame precheck 2種、
+  ⑧単一canonical：JS評価が同じBを検出しても発話・pending・応答IDは一つだけ）。
+- `tests_bridge_strategy_options_recalc_sync.py` 36→**46件**（`apply_proposal_delivery`の
+  audible確定・3種の再武装・拒否記憶を汚さないこと・session/ID/outcomeのfail-closed）。
+- `tests-proposal-agreement-bridge.js` **134/134**（harnessを廃止した`evaluateLiveStrategySwitch`から
+  `handleStrategyPlanProposal`＝唯一の入口へ差し替えて維持）。
+- `tests-strategy-playbook.js` 45件（`kind:'strategy_playbook_switch'`の存在を要求していた旧契約の
+  アサーションを、新契約＝JSは第二の発話経路を持たない、へ修正）。
+- `preflight.sh`「✅出荷可」、`node tools/wiring-lint.js --base HEAD` 対象39/合格39/未配線0、
+  `git diff --check`合格。`tests-local-intent-router.js` 54件ほか関連7本の回帰なし。
+
+## 未対応（正直な範囲の明記）
+
+- **配送結果の送信はsocketが落ちていると届かない**。`sendStrategyDecisionDelivery()`はready以外では
+  送らずに戻る（outboxを持つのは応答側だけ）。切断中に配送失敗した提案は、再接続してもBridgeがinflightの
+  ままになり得る。応答と同じoutbox規律を配送にも与えるべきかはCodexの判断を仰ぐ。
+- Bridge→Desktopのwire型は`type:'radio'` + `trigger:'strategy_plan_proposal'`のまま（Desktop側で
+  `injectRadio`へ渡さず遮断する実装は維持）。wire-level typeそのものの変更が完成条件に含まれるなら追加対応する。
+- **MD #10（合意後の交通・燃料・rejoin崩壊に対する別IDのchange/cancel提案）は未着手**——Yuji定義どおり次段。
+- Windows/iRacing実走、実TTS、実STT経由のDriver発話は未検証（vm実行によるロジック検証）。
+- 段階4（Position Gain・有効率）は引き続き保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9チェックの差戻し2件を修正
+
+## P1-1：配送結果が切断中に消失し、Bridgeが固まる
+
+前回こちらから申告した残件そのもの。`sendStrategyDecisionDelivery()`はsocketがready以外なら黙って
+戻っており、切断中に発話失敗した提案はBridgeへ永久に届かず、Bridgeはinflightのまま再送しなかった。
+
+応答と同じoutbox規律を配送にも与えた。
+
+- Desktop：`strategyDeliveryOutbox`（キー`<session_num>|<decision_id>|<outcome>`）。
+  `audible`の後に`audible_interrupted`が続く正当な二連も、**順序どおり両方**保持・送信する
+  （Bridgeはaudible確定→releasedへ正しく遷移できる）。`irBridge.onopen`でflush、送信例外も保持。
+  ackが返らない旧Bridge相手に無限に肥大しないよう上限50件（古い順に捨てる）。
+- Bridge：配送結果を適用するたびに`strategy_delivery_ack`を返す。**報告されたoutcomeをそのまま
+  echoする**ので、Desktopはそのキーだけを外せる。適用結果（`applied`＝audible/released/stale/no_match）も
+  載せるが、stale・no_matchでもackする——既に処理済み／対象外で再送しても意味が無いことを伝える唯一の手段。
+  `ACTIVITY_ALLOWED_META_TYPES`へ追加（非搭乗ゲートで落ちると永久に再送し続けるため）。
+- 再送の冪等性：同じ報告が二度届いても二度目は`no_match`、再接続後に遅れて届いた古い報告は
+  decision ID照合で`stale`となり、その後に開かれた別IDの提案を壊さない（Python検査で固定）。
+
+## P1-2：same-frame判定が不完全で、古い提案を通す
+
+指摘3点はいずれも実在した。`bridgeProposalStillCurrent()`を`strategyOptionsSupportProposal()`へ
+分離し、**全てfail-closed**にした。
+
+1. **`strategy_options`欠落**：以前は権威が無い時`true`を返していた（fail-open）。確認できないのに
+   「今も成立している」とみなす最悪の形だった。`available!==true`を含め、権威が無ければhold。
+2. **選択Plan変更**：現在Bridgeが**どのPlanを選んでいるか**を見ていなかった。B→A／B→Cへ動いても
+   `plan_b`の数値が残っていれば古いB提案が通った。`opts.selected_plan`との一致を要求する。
+3. **根拠snapshot変更**：`evidence_snapshot_id`（提案を計算した再計算のID）を照合していなかった。
+   target/fuelが同じまま交通・rejoin・pace・fuel-saveの根拠だけが作り直された場合を見逃していた
+   （Bridge側のsignatureは既にこれを含んでいたのに、Desktop側だけが見ていなかった）。
+   `opts.snapshot_id`との一致を要求し、提案側がIDを持たない場合も照合不能としてhold。
+
+判定に使う権威の**出所**も正した。受信時は**eventに同梱された`strategy_options`**
+（＝この提案を計算したその frame の権威そのもの）、配信直前のprecheckは**最新のtelemetry snapshot**。
+Bridgeのpoll loopは提案broadcastの後にtelemetryを送るため、受信時点の`lastTelemetry`は1frame古く、
+そこで`selected_plan`を比べると正当な提案まで落ちる——event同梱の値を使うことでこれを避けつつ、
+queue待機中のdriftは最新telemetryで捕まえる。
+
+## 検査（すべて実行）
+
+- `tests-bridge-strategy-proposal-roundtrip.js` 49→**65件**。追加した反例：
+  ⑦-a `strategy_options`欠落／⑦-b 選択Plan変更（B→A）／⑦-c 根拠snapshot変更（target/fuelは同一）／
+  ⑦-d target_lap変更／⑦-e 提案が`evidence_snapshot_id`を持たない——**5件すべてhold、かつholdを
+  Bridgeへ返す**。⑦-f queue待機中の根拠作り直しで再生しない。⑦-g 切断中の配送失敗がoutboxへ残り、
+  再接続で届き、ackで初めて消える（重複ackも安全）。⑦-h audible→中断の二連が順序どおり届く。
+- `tests_bridge_strategy_options_recalc_sync.py` 46→**48件**（再送の冪等性・遅延報告が新提案を壊さない）。
+- `tests-proposal-agreement-bridge.js` **134/134**（fail-closed化に伴い、harnessのeventへ権威snapshotを
+  同梱し、最新telemetryにも同じ権威を置いた＝「根拠は動いていない」状態を明示）。
+- `preflight.sh`「✅出荷可」、wiring-lint 対象43/合格43/未配線0、`git diff --check`合格。
+  `tests-strategy-playbook.js`ほか関連6本の回帰なし。
+
+## 未対応（正直な範囲の明記）
+
+- Bridge→Desktopのwire型は`type:'radio'` + `trigger:'strategy_plan_proposal'`のまま
+  （Desktop側で`injectRadio`へ渡さず遮断する実装は維持）。wire-level typeの変更が完成条件に含まれるなら追加対応する。
+- **MD #10（合意後の交通・燃料・rejoin崩壊に対する別IDのchange/cancel提案）は未着手**。
+- Windows/iRacing実走、実TTS、実STT経由のDriver発話は未検証（vm実行によるロジック検証）。
+- 段階4（Position Gain・有効率）は保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9チェック追加反例2件を修正
+
+両方とも実在した。
+
+## P1-1：古い配送失敗通知が、同じdecision IDで再配送された新しい提案まで解除する
+
+`decision_id`は`<snapshot_id>:decision-lap:<lap>`という決定論的な文字列——配送に失敗して
+`apply_proposal_delivery()`が解除した後、同じ周・同じsnapshotで再提案すると**まったく同じID**になる。
+このため「切断中に溜まっていた1回目の失敗通知」が再接続で遅れて届くと、2回目に**実際に聞こえて
+成立している**提案をそのまま解除できた（Codexの反例をローカルでも再現：解除→再提案→audible→
+遅延した1回目の失敗通知→解除、という手順で`pending`が`None`になることを確認した上で着手）。
+
+session＋decision IDでは配送**試行**を区別できないため、Bridgeがdispatchのたびに発行する
+`dispatch_id`（`<decision_id>#<連番>`、session-scopedで`strategy_proposal_dispatch_seq`から採番）を
+新設し、`apply_proposal_delivery()`と`resolve_strategy_proposal()`の両方でfail-closedに一致を要求する
+（欠落・不一致は`stale`）。Desktop側は`strategy_decision_response`・`strategy_decision_delivery`の両方に
+`dispatch_id`を乗せ、outboxのキーにも使う（`<session>|<dispatch_id>`）。ack（`strategy_decision_ack`／
+`strategy_delivery_ack`）も`dispatch_id`をechoする。
+
+## P1-2：Plan別`conditions`が未照合で、条件崩壊後も古い提案が発話される
+
+`bridgeProposalStillCurrent()`はtarget_lap／add_fuel_l／set_fuel_l／selected_plan／snapshot_idまでは
+照合していたが、Bridgeのcanonical signature（`plan_actionable_signature()`）が含む**Plan別conditions**
+（B:fuel window・pace優位・rejoin／C:conditions_met）は見ていなかった。実行内容（数値）が同じままでも、
+交通が塞がる・復帰予測が悪化する・燃費セーブが外れれば条件は崩れる——その場合に古い提案を喋っていた。
+
+Desktop側に`planConditionsFromOptions()`（`bridge.py`の同名関数と同じ出所・同じ形：
+`decision_evidence.plan_b_evidence`／`plan_c_evidence.conditions_met`）と`sameProposalConditions()`
+（キー単位で数値・真偽値を比較、片方が欠落もfalse）を新設し、`strategyOptionsSupportProposal()`が
+提案の凍結`conditions`と現在の条件の一致を要求するようにした。照合できない（`decision_evidence`欠落・
+提案が`conditions`を持たない）場合もfail-closedでhold。
+
+## 検査（すべて実行）
+
+- `tests-bridge-strategy-proposal-roundtrip.js` 65→**81件**。追加：⑨-a〜e（rejoin崩壊・pace数値変化・
+  decision_evidence欠落・提案conditions欠落・queue待機中の条件崩壊、いずれもhold＋Bridgeへ返す）、
+  ⑩（1回目dispatch失敗→2回目同一decision_idで再提案→audible→滞留していた1回目の失敗通知が届いても
+  2回目のpendingは解除されない。合意応答も現在のdispatch_idで送られる）。
+- `tests_bridge_strategy_options_recalc_sync.py` 48→**52件**。`test_stale_failure_report_does_not_release_a_redelivered_proposal`が反例1をPython側単体でも固定（修正前コードに戻すと落ちることを確認した上で追加）。
+  dispatch_id欠落のfail-closedも両関数（`apply_proposal_delivery`／`resolve_strategy_proposal`）に追加。
+- `tests-proposal-agreement-bridge.js` **134/134**（harnessのeventへ`decision_evidence`／`conditions`／
+  `dispatch_id`を同梱、telemetryにも同じ条件を反映）。
+- `preflight.sh`「✅出荷可」、wiring-lint 対象45/合格45/未配線0、`git diff --check`合格。関連6本の回帰なし。
+
+## 未対応（正直な範囲の明記）
+
+- Bridge→Desktopのwire型は`type:'radio'`のまま。
+- MD #10（合意後の交通・燃料・rejoin崩壊に対する別IDのchange/cancel提案）は未着手。
+- Windows/iRacing実走、実TTS、実STT経由のDriver発話は未検証（vm実行によるロジック検証）。
+- 段階4は保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9再差戻し（4件）を修正——前回の修正が不完全だった
+
+Codex指摘は全て正しかった。**前回`dispatch_id`を新設した際、WS層（応答／配送outboxとBridge側の
+照合）にしか通しておらず、受信の入口そのもの（dedupe・speech dedupeKey・ack時の追跡Map削除）は
+`decision_id`基準のまま残っていた**。これでは`dispatch_id`を作った意味が無い。
+
+## 修正内容
+
+`decision_plan.dispatch_id`（Bridgeが発行する`<decision_id>#<連番>`、既に一意）を**この提案
+インスタンスの唯一の識別子**とし、以下を全てこれで揃えた（`desktop/renderer.html`）。
+
+1. **dedupe**：`strategyPlaybookDecisionKeys.has(decisionId)`→`has(dispatchId)`。受信時に
+   `dispatch_id`が無ければ照合不能としてhold（fail-closed）。
+2. **speech dedupeKey**：`speak(msg,{dedupeKey:decisionId,...})`→`dedupeKey:dispatchId`。
+3. **ackでの追跡Map削除**：`handleStrategyDecisionAck()`が`bridgeStrategyDecisions.delete(decisionId)`
+   を無条件実行していた。同一decisionIdは再ディスパッチで使い回されるため、旧dispatchへの遅延ackが
+   新しいdispatchの追跡まで消し得た。**現在の追跡値の`dispatchId`と一致する時だけ**削除するよう変更。
+4. **recommendation IDの一意化**：上記1-3の結果、提案インスタンスの識別は受信からWS層まで
+   `dispatch_id`（一意）で一貫する。`decision_id`は「同じ内容の提案」を表す文字列のまま、
+   「今どの配送試行か」は常に`dispatch_id`が担う。
+
+## 検査（すべて実行）
+
+- `tests-bridge-strategy-proposal-roundtrip.js` 81→**85件**。追加：⑪-a（旧`decision_id`が
+  dedupe Setに残っていても新しい`dispatch_id`の提案は弾かれない）、⑪-b（speak()の`dedupeKey`が
+  `dispatch_id`であることを直接確認）、⑪-c（一致しない`dispatch_id`のackは現在の追跡を消さず、
+  一致する時だけ消す）。既存の掃除検査（②⑤-a⑤-b）も`dispatch_id`基準へ修正——旧アサーションは
+  `decisionId`と`dispatchId`の文字列形式が異なる（`#連番`の有無）ため、実は何も検証していなかった
+  （常にfalseを返すだけの弱いテストだった）。
+- `preflight.sh`「✅出荷可」、wiring-lint 対象45/合格45/未配線0、`git diff --check`合格。
+  `tests-proposal-agreement-bridge.js` 134/134ほか関連の回帰なし。
+
+## 反省
+
+前回の修正で`dispatch_id`を新設した時点で、通す先を「WS層だけ」に絞ったのが誤りだった。
+「配送試行を一意に識別する」という目的からは、受信の入口・dedupe・speech層も当然に対象で、
+そこを見落としたまま「検査全合格」と報告した。テストの掃除アサーションが実は無意味な比較
+（`.has(decisionId)`が形式的に常にfalse）だったため機械的にも検出できなかった——次回、
+識別子の形式を変える時は、比較対象の型・値も含めてテストを見直す。
+
+## 未対応（正直な範囲の明記）
+
+- Bridge→Desktopのwire型は`type:'radio'`のまま。
+- MD #10は未着手。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9残件（異なるconditionsでも同一decision ID）を修正
+
+指摘は正しかった。`dispatch_id`（配送試行）と`decision_id`（採点・学習を結ぶ判断内容）は別の関心事で、
+前者は前回の再差戻しで直したが、後者自体の生成方法は直していなかった。
+
+## 原因
+
+`decision_id`は`strategy_options.py`の`decide_at_plan_a()`が`<snapshot_id>:decision-lap:<lap>`という
+**内容を一切見ない**文字列として早期に割り当てていた。`poll_iracing()`側の決定ロックは
+`_proposal_suppressed`（拒否済みsignatureと一致）の間、`strategy_options_decision_sent`／
+`strategy_options_proposal_sent`のどちらも立たないため**毎frame再実行**される。この間、
+`battle_context`の変化で`conditions`（rejoin_clear・relative_pace_advantage_sの実数値など）が
+frameごとに変わり得るのに、`snapshot_id`とlapが同じままなら`decision_id`は同一のままだった
+（Codex実測：signatureが異なるのに同一decision_idを確認）。
+
+## 修正
+
+`build_strategy_decision()`が`record`（selected_plan・target_lap・add_fuel_l・set_fuel_l・
+conditions・evidence_snapshot_id）を組み立てた**後**、`plan_actionable_signature()`と同じ6要素の
+タプルからSHA1ハッシュを取り、`decision_id`をそこから導出するよう変更した
+（`'<snapshot_id>:decision-lap:<lap>:sig-<hash12>'`）。人間可読な接頭辞（snapshot_id・lap）は
+ログ・デバッグ用に残しつつ、識別性は内容のハッシュが担う。
+
+- 同じ内容（同じsignature）→常に同じdecision_id（frameをまたいで安定・dispatch_idが担う
+  「配送試行の区別」とは無関係に維持される）。
+- 内容が変われば（conditions・target・fuel・evidence_snapshot_idのいずれか）→必ず別decision_id。
+
+`decide_at_plan_a()`／`decide_plan_at_target()`が早期に返す`decision_id`（Plan Cの
+`prior_decision_id`継続ロジックを含む）はもはや読まれない——`build_strategy_decision()`が
+最終的なIDを上書きする唯一の場所になった。再計算の重複キューイング抑止（`dedupe_key`）にだけ
+使われる`_option_decision.get('decision_id')`は影響範囲が異なる（学習・採点に使われない）ため
+そのまま残した。
+
+## 検査（すべて実行）
+
+- `tests_bridge_strategy_options_recalc_sync.py` 52→**54件**。
+  `test_same_snapshot_and_lap_but_different_conditions_get_different_decision_ids`が
+  Codex実測反例をPython単体でも固定（修正前コードに戻すと落ちることをロジックで確認した上で追加）。
+  `test_same_content_yields_the_same_decision_id`で回帰（内容が本当に同じならframeをまたいでも
+  同一IDのまま）も固定。
+- `tests_strategy_plan_wiring.py`の静的検査が旧`decision_id`生成コードの文字列を要求していたため、
+  新しい生成コードの文字列へ更新（34/34）。
+- `preflight.sh`「✅出荷可」、wiring-lint 対象45/合格45/未配線0、`git diff --check`合格。
+  `tests-bridge-strategy-proposal-roundtrip.js`(85件)・`tests-proposal-agreement-bridge.js`(134件)
+  ほか関連の回帰なし（decision_idの生成方法が変わっても、これらは自前でIDを与えるfixtureのため無関係）。
+
+## 未対応（正直な範囲の明記）
+
+- Bridge→Desktopのwire型は`type:'radio'`のまま。
+- MD #10は未着手。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9最後の1件（レース固有ID）を実装
+
+指摘は正しかった。`decision_id`は`<evidence_snapshot_id>:decision-lap:<lap>:sig-<hash>`まで内容を
+反映するが、`evidence_snapshot_id`自体（`recalc:<reason>:<session_num>:<lap>`）は週末内の
+Practice/Qualify/Race番号でしかなく、**別レース**でも同じ値を取り得る。同じ周・同じPlan条件が
+別レースで再現すると、decision_id全体が一致し、Desktop台帳・サーバー正本（`PRIMARY KEY
+(owner_key, decision_id)`）が別レースの判断・結果を同一レコードへ混ぜてしまう。
+
+## 修正
+
+`irsdk-bridge/bridge.py`：
+
+1. `parse_session_info()`にWeekendInfoの`SubSessionID`／`SessionID`抽出を追加
+   （`sub_session_id`／`weekend_session_id`）。
+2. 新規`resolve_race_instance_id(info)`（純粋関数）：`SubSessionID`（同じ参加中は
+   Practice/Qualify/Raceを通じて安定し、別の参加では必ず別値）を優先、無い場合は`SessionID`
+   （ホストセッションID、プライベートlobby等）、両方欠落時はbridgeプロセス起動ごとに一意な
+   フォールバック（`uuid4`、モジュールロード時に1回だけ生成）。
+3. `build_strategy_decision()`へ新規必須kwarg`race_instance_id`を追加し、`decision_id`の
+   先頭に含める：`'<race_instance_id>:<evidence_snapshot_id>:decision-lap:<lap>:sig-<hash12>'`。
+   呼び出し側（`poll_iracing()`）は`resolve_race_instance_id(info)`を渡す。
+
+サーバー側・Desktop側は無変更——`decision_id`カラムは`TEXT`（長さ制限なし）で、
+`PRIMARY KEY (owner_key, decision_id)`のupsertは値が変わればそのまま別レコードとして扱われる。
+
+## 検査（すべて実行）
+
+- `tests_session_info_parser.py`：SubSessionID/SessionID抽出と`resolve_race_instance_id`の
+  優先順位（SubSessionID優先→SessionIDフォールバック）を実YAML形式で固定。
+- `tests_bridge_strategy_options_recalc_sync.py` 54→**59件**。新規
+  `RaceInstanceIdPreventsCrossRaceCollision`：
+  `test_different_race_same_snapshot_lap_and_conditions_gets_a_different_decision_id`が
+  Codex実測反例をPython単体で固定（同じsnapshot_id・同じlap・同じconditionsのまま
+  race_instance_idだけ変えるとdecision_idが必ず変わることを確認）。
+  `test_same_race_same_content_yields_the_same_decision_id`で回帰（同じレース内では
+  引き続き同じdecision_id・dispatch_idが試行を区別する分離は維持）も固定。
+  process-instanceフォールバックの安定性も固定。
+- `tests_strategy_plan_wiring.py` 34/34（新シグネチャへの追随は不要——静的検査は
+  decision_id生成コードの文字列を検査しており、前回の修正で既に更新済み）。
+- `preflight.sh`「✅出荷可」、wiring-lint 対象45/合格45/未配線0、`git diff --check`合格。
+  `tests-decision-memory-tunnel.js`(74件)・`tests-decision-memory-server.js`(54件)ほか
+  関連の回帰なし。
+
+## 未対応（正直な範囲の明記）
+
+- Bridge→Desktopのwire型は`type:'radio'`のまま。
+- MD #10（合意後の交通・燃料・rejoin安全条件崩壊に対する別IDのchange/cancel提案）は未着手。
+- Windows/iRacing実走での`SubSessionID`実測確認は未実施（フィールド名・位置はコミュニティ資料
+  ベース。実走ログで実フォーマットを確認する必要がある）。
+- 段階4は保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-17 JST — Claude：MD #9再々差戻し（fallbackがBridgeプロセス単位）を修正
+
+指摘は正しかった。前回の`resolve_race_instance_id()`は、`SubSessionID`／`SessionID`が両方
+取れない環境（オフライン・プライベートlobby等）で、**bridgeプロセスの起動ごとに一意な定数**
+（モジュールロード時に1回だけ生成）へフォールバックしていた。同じbridgeプロセスを起動したまま
+別レースへ移っても、フォールバック値は変わらないため、decision_idが別レースで衝突する
+（Codex実測で再現）。
+
+## 修正
+
+フォールバックの発行元を「プロセス起動時1回」から「**セッション境界のたびに新しく発行**」へ
+移した。
+
+- `_session_scoped_reset_values()`（SessionNum変更・signature変更の両リセット経路が呼ぶ、
+  既存の唯一の発行元——`active_decision_id`等と同じ場所）に`race_instance_fallback_id`
+  （`uuid4`）を追加。この関数が呼ばれるたびに新しい値を返す。
+- `resolve_race_instance_id(info, fallback_id)`はモジュール定数を参照するのをやめ、
+  呼び出し側が渡す`fallback_id`（＝その時点の`race_instance_fallback_id`）を使うよう変更。
+- 呼び出し側（`poll_iracing()`）は`race_instance_fallback_id`をローカル変数として保持し、
+  両リセット経路・起動時初期化の3箇所全てで更新する（`active_decision_id`等と同じ規律）。
+
+これにより、権威あるIDが無い環境でも「別レースへ移る＝SessionNumが変わる＝新しいfallback」が
+保証される。SubSessionID／SessionIDが取れる環境（実レースの通常経路）は無変更——優先順位・
+挙動は前回と同じ。
+
+## 検査（すべて実行）
+
+- `tests_bridge_strategy_options_recalc_sync.py` 59→**62件**。追加：
+  `test_different_fallback_ids_produce_different_race_instance_ids`（fallback値が違えば
+  必ず別ID）、`test_session_scoped_reset_issues_a_fresh_fallback_id_every_call`
+  （`_session_scoped_reset_values()`を2回呼ぶと毎回別のfallback IDになることを直接固定
+  ——反例②の根本原因そのもの）、
+  `test_both_ids_missing_and_race_changes_within_the_same_process_yields_different_decision_ids`
+  （Codex実測反例②をdecision_id生成の実経路まで通したend-to-end固定：同一プロセス内で
+  レースA→レースBへ移ると、同じsnapshot_id・同じlap・同じconditionsでもdecision_idが
+  必ず別になることを確認）。旧`test_resolve_race_instance_id_falls_back_to_process_instance_when_both_missing`
+  は新契約（呼び出し側がfallbackを渡す）へ書き換え。
+- `tests_session_info_parser.py`：SubSessionID/SessionID抽出とフォールバック優先順位は
+  無変更で回帰なし。
+- `preflight.sh`「✅出荷可」、wiring-lint 対象45/合格45/未配線0、`git diff --check`合格。
+
+## 未対応（正直な範囲の明記）
+
+- Bridge→Desktopのwire型は`type:'radio'`のまま。
+- MD #10は未着手。
+- Windows/iRacing実走での`SubSessionID`実測確認は未実施（フィールド名・位置はコミュニティ
+  資料ベース）。
+- 段階4は保留。commit・Build・公開GOなし。

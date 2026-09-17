@@ -22,10 +22,22 @@ def _finite(value):
 def init_state():
     """A brand-new, empty Session Race State."""
     return {
-        'active_plan': None,               # 'A' | 'B' | 'C' | None
+        'active_plan': None,               # 'A' | 'B' | 'C' | None — Driver合意済み（または
+                                            #   合意を要さないA）だけがここに入る。
         'active_plan_snapshot': None,       # {available, selected_plan, plans:{...}}
         'plan_snapshot_id': None,
         'plan_revision': 0,
+        # ★2026-09-16 Codex MD#5差戻し（P1）：再計算は「最新の計算推薦」を作るだけで、
+        #   Driver合意（またはA確定）を経ていない。以前は`execute_recalculation()`が
+        #   verdict.available だけを条件に`register_active_plan()`を無条件で呼んでおり、
+        #   B推薦を作った直後・Desktop応答前でも`active_plan=='B'`になっていた。
+        #   `plan_fuel_authority`等はactive_plan_snapshotをフォールバックとして読むため、
+        #   未合意の推薦を「実行中の計画」として扱い得た。推薦専用の状態を分離する——
+        #   再計算はここだけ更新し、`active_plan`/`active_plan_snapshot`は
+        #   合意（またはA確定）の時だけ`register_active_plan()`で更新する。
+        'recommended_plan': None,           # 'A' | 'B' | 'C' | None — 最新の計算推薦
+        'recommended_plan_snapshot': None,  # {available, selected_plan, plans:{...}}
+        'recommended_snapshot_id': None,
         'baseline_fuel_l_per_lap': None,
         'recent_fuel_l_per_lap': None,
         'baseline_pace_s': None,
@@ -63,6 +75,26 @@ def register_active_plan(state, *, plan_id, plan_snapshot, snapshot_id, revision
         'active_plan_snapshot': plan_snapshot,
         'plan_snapshot_id': snapshot_id,
         'plan_revision': next_revision,
+    }
+
+
+def register_recommended_plan(state, *, plan_id, plan_snapshot, snapshot_id):
+    """Record the LATEST calculated recommendation — never Driver-confirmed.
+
+    ★2026-09-16 Codex MD#5差戻し（P1）：`register_active_plan()`と混同しないこと。
+    燃料authority・box call・結果追跡は`active_plan`/`active_plan_snapshot`
+    （合意済み）だけを読む。質問応答（Driverの「アンダー行ける？」等）と自発提案の
+    評価材料は、この`recommended_plan`/`recommended_plan_snapshot`（変わり続ける）を
+    読む——`strategy_options`はこの関数の呼び出し元がそのまま代入するので、
+    ここは`active_plan`/`active_plan_snapshot`を一切書き換えないことだけを保証する。
+    """
+    if not isinstance(state, dict):
+        return state
+    return {
+        **state,
+        'recommended_plan': plan_id,
+        'recommended_plan_snapshot': plan_snapshot,
+        'recommended_snapshot_id': snapshot_id,
     }
 
 
@@ -285,6 +317,13 @@ _DAMAGE_PHRASES = (
     (r'アライメント|alignment', 'steering_alignment'),
     (r'ハンドル.{0,6}(?:取られ|流れ|曲が)|steering.{0,10}(?:pull|off)', 'steering_alignment'),
     (r'フロント.{0,10}(?:壊れ|破損|傷ん)|front.{0,10}damag', 'front_aero_or_body'),
+    # ★2026-09-11 実走Gate 8不合格で判明：「リアウイング無くしてる？」が
+    #   一致せず、rendererのDRIVER_DAMAGE_REPORT_REでも転送対象外だった。
+    #   リアウイング／その他のリア・エアロパーツを追加する。
+    (r'(?:リア|リヤ)\s*(?:ウイング|ウィング)|rear\s*wing', 'rear_wing'),
+    (r'ディフューザー|diffuser', 'rear_aero_or_body'),
+    (r'(?:リア|リヤ).{0,10}(?:壊れ|破損|傷ん|無く|なく|外れ|取れ|折れ)|rear.{0,10}damag', 'rear_aero_or_body'),
+    (r'(?:ウイング|ウィング).{0,10}(?:無く|なく|外れ|取れ|折れ|missing|gone|broken|lost|off)|wing.{0,10}(?:missing|gone|broken|lost|off)', 'aero_wing'),
 )
 
 import re as _re
@@ -296,6 +335,13 @@ def parse_driver_reported_damage(text):
     return None if it does not match a known damage phrase.  Pure function —
     no state, no SDK confirmation.  Category is NEVER treated as an SDK part
     confirmation (`source` stays 'driver_report' downstream).
+
+    ★2026-09-11 Codex差戻し：この関数は「話題」（どのパーツの話か）だけを
+    判定する。「発話の役割」（断定申告／疑問／否定）は判定しない。呼び出し側
+    （bridge.py）は record_driver_reported_damage へ渡す前に、必ず
+    classify_damage_assertion_role() と組み合わせ、role=='assertion' の
+    時だけ記録・Plan再計算をトリガーすること。この関数の戻り値だけで
+    「損傷が実在する」とは扱わない。
     """
     t = str(text or '')
     if not t:
@@ -304,6 +350,44 @@ def parse_driver_reported_damage(text):
         if pattern.search(t):
             return category
     return None
+
+
+# ★2026-09-11 Codex差戻し（P1）：「リアウイング無くしてる？」（疑問）と
+#   「リアウイングは壊れてない」（否定）が、parse_driver_reported_damage の
+#   カテゴリ一致だけで肯定の損傷申告として record_driver_reported_damage→
+#   invalidate_assumptions（Plan前提の無効化）まで進んでいた。「話題」の
+#   検出と「断定申告」を区別する。
+_DENIAL_RE = _re.compile(
+    r'(?:壊れ|損傷|ダメージ|damage|折れ|外れ|取れ|欠け|潰れ|曲が).{0,8}'
+    r'(?:て?ない|してない|していない|じゃない|ではない)'
+    r'|(?:無く|なく).{0,8}(?:ない|なってない)'
+    r'|大丈夫(?:そう|みたい)?(?:だ|です)?[。.!！]*$'
+    r'|no\s+damage|(?:not|isn\'?t|doesn\'?t look)\s+(?:damaged|broken)',
+    _re.IGNORECASE)
+_QUESTION_RE = _re.compile(r'[?？]|かな[?？]?\s*$|でしょうか\s*$|かしら\s*$', _re.IGNORECASE)
+
+
+def classify_damage_assertion_role(text):
+    """Classify the *role* of a driver utterance about damage, independent of
+    which part it names.  Returns one of:
+      'assertion' — driver states damage as fact ("壊れた" / "折れてる")
+      'question'  — driver is asking, not asserting ("壊れてる？")
+      'denial'    — driver denies damage ("壊れてない" / "大丈夫")
+      None        — text is empty
+
+    A question takes priority over a denial when both patterns could match
+    (e.g. "壊れてない？" is still a question, not a confirmed non-damage
+    report). Only 'assertion' should ever reach
+    record_driver_reported_damage() / invalidate_assumptions().
+    """
+    t = str(text or '')
+    if not t:
+        return None
+    if _QUESTION_RE.search(t):
+        return 'question'
+    if _DENIAL_RE.search(t):
+        return 'denial'
+    return 'assertion'
 
 
 def record_driver_reported_damage(state, *, category, raw_text, lap, session_time_s):

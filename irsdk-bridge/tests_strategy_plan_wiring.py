@@ -13,8 +13,14 @@ checks = {
     "initial options use one snapshot": "strategy_options_mod.build_initial_plans(" in SOURCE,
     "initial options have proactive radio": "'trigger': 'initial_strategy_plans'" in SOURCE,
     "Plan A target has an automatic decision event": "'trigger': 'strategy_plan_decision'" in SOURCE,
+    # ★2026-09-16 Codex MD#3差戻し：この呼び出しは`decide_plan_at_target()`
+    #   （本番関数。Plan Cが証明済みの時はdecide_at_plan_aを迂回する）へ移った。
+    #   守りたい性質は変わらない——decide_at_plan_aがthis-lap/next-lapの物理復帰を
+    #   比較していること、poll loopがdecide_plan_at_targetへ同じforecastを渡すこと。
     "Plan A/B compares this-lap and next-lap physical rejoin":
-        "strategy_options_mod.decide_at_plan_a(" in SOURCE
+        "options_mod.decide_at_plan_a(" in SOURCE
+        and "pit_next_lap_forecast=pit_next_lap_forecast" in SOURCE
+        and "decide_plan_at_target(" in SOURCE
         and "pit_next_lap_forecast=_pit_next_forecast" in SOURCE,
     "conditional pit-cycle is excluded by comparator unit":
         "pit_cycle_position_used" in Path(__file__).with_name("strategy_options.py").read_text(encoding="utf-8"),
@@ -24,9 +30,19 @@ checks = {
     #   守りたいのは「決定が id で追える」ことで、その id を保持する変数名ではない。
     #   さらに、broadcast した id と後段（pit exit / blend / session終了）へ
     #   引き継ぐ id が **同一である** ことまで見る＝以前より強い検査。
+    # ★2026-09-16 Codex MD#4差戻し：decision_idの生成は`build_strategy_decision()`
+    #   （本番関数、record['decision_id']=option_decision.get('decision_id')）へ移り、
+    #   poll loopは`active_decision_id = _decision_plan['decision_id']`で受け取る。
+    # ★2026-09-17 Codex MD#9残件差戻し：以前は`option_decision.get('decision_id')`
+    #   （snapshot_id＋lapのみ・内容を見ない）をそのまま採用しており、同じsnapshot・
+    #   同じlapのままconditionsだけ変わっても同一IDになっていた。今は
+    #   `plan_actionable_signature()`と同じ6要素からdecision_idを導出する
+    #   （`record['decision_id'] = ... % (..., _sig_hash)`）——内容が変われば必ず
+    #   別IDになる。
     "Plan A/B decision is traced by decision id":
-        "active_decision_id = _option_decision.get('decision_id')" in SOURCE
-        and "'decision_id': active_decision_id" in SOURCE,
+        "record['decision_id'] = " in SOURCE
+        and "plan_actionable_signature(dict(record, selected_plan=selected))" in SOURCE
+        and "active_decision_id = _decision_plan['decision_id']" in SOURCE,
     "decision id is carried to the outcome stages":
         SOURCE.count("'decision_id': active_decision_id") >= 2
         and SOURCE.count("'active_decision_id': active_decision_id") >= 2,

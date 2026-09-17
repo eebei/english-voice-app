@@ -1227,6 +1227,31 @@ function finalizeUtterance(item, outcome, finalText, reason){
   // dropped を残さず、利用者操作・開始済み割込みと区別できる状態へ正規化する。
   const terminalOutcome = outcome==='dropped' ? 'dropped_before_audible' : outcome;
   item._finalized = terminalOutcome;
+  // ★2026-09-13 Codex差戻し（P1）：speak()へ積んだ直後に「発話した」扱いで
+  //   下流処理（提案の記録等）を走らせると、voiceOff・重複dedupe・queue溢れで
+  //   実際には一度も耳へ届かなかった場合まで「言った」ことになる。ここ＝
+  //   実際に再生が始まった('spoken')時だけ発火する、この関数唯一の確定点で
+  //   コールバックする。'audible_interrupted'（聞こえた後に中断）では
+  //   既にonSpokenが済んでいるため再発火しない（↑の早期returnで弾かれる）。
+  if(terminalOutcome==='spoken' && typeof item.onSpoken==='function'){
+    try{ item.onSpoken(); }catch(e){}
+  }
+  // ★2026-09-13 Codex差戻し第2回（P1-B）：'spoken' は再生開始であって
+  //   「最後まで聞いた」ではない。冒頭だけ聞こえて中断された場合、その提案は
+  //   正しく聞いたことにしない——onSpokenで登録した提案があれば取り消す。
+  if(terminalOutcome==='audible_interrupted' && typeof item.onAudibleInterrupted==='function'){
+    try{ item.onAudibleInterrupted(); }catch(e){}
+  }
+  // ★2026-09-17 Codex MD#8差戻し（P1）：onSpoken／onAudibleInterruptedは
+  //   「成立した時」「聞こえた後に切れた時」しか呼ばれない。発話前drop・
+  //   precheck stale・voice off抑止では**どこへも通知が行かない**ため、
+  //   Bridge側は提案をdispatch済みのまま保持し、Desktopには合意可能な
+  //   pendingが無い、という両者が固まる状態になり得た。ここは終端が確定した
+  //   全ての場合に必ず一度だけ呼ぶ唯一の口——呼び出し側が配送結果を
+  //   Bridgeへ返し、失敗ならBridgeが再武装できるようにする。
+  if(typeof item.onDelivery==='function'){
+    try{ item.onDelivery(terminalOutcome, reason||''); }catch(e){}
+  }
   const el = item.displayEl || null;
   const _uid = item.utteranceId || (el && el._uid) || null;
   if(terminalOutcome === 'dropped_before_audible'){
@@ -1498,6 +1523,27 @@ let strategyPlaybookLiveUpdateKey = '';
 let strategyLivePromotionAnnounced = false;
 let strategyPlaybookRefreshKey = '';
 let strategyPlaybookDecisionKeys = new Set();
+// ★2026-09-17 Codex MD#4〜#6差戻し：Bridge発の戦略提案（decision_id）で、実際に
+//   proposePlan まで登録した（＝Driverへ届いた）ものだけを記憶する。session_num も
+//   一緒に持ち、応答をBridgeへ送り返す時に添える。Bridgeで生成されたのではない
+//   （＝JS自前evaluateSwitch由来の）decision_idはここに乗らないため、Bridgeへの
+//   応答送信対象から自動的に除外される。
+let bridgeStrategyDecisions = new Map();
+// ★2026-09-17 Codex MD#8差戻し（P1）：Driverのyes/noが状態機械へ適用された瞬間に
+//   socketが閉じていると、以前は送信されないまま追跡だけ消え、Bridgeはpendingの
+//   まま・Desktopは確定済みという回復不能状態になった。確定した応答は必ずここへ
+//   `<session_num>|<decision_id>`をキーとして保持し、Bridgeのackが返るまで
+//   接続復帰のたびに再送する。
+let strategyResponseOutbox = new Map();
+// ★2026-09-17 Codex MD#9差戻し（P1-1）：配送結果も切断中に消えてはならない。
+//   以前の`sendStrategyDecisionDelivery()`はsocketがreadyでなければ黙って戻っており、
+//   切断中に発話失敗した提案はBridgeへ永久に届かず、Bridgeはinflightのまま固まった。
+//   応答と同じoutbox規律を配送にも与える。キーは`<session>|<decision_id>|<outcome>`——
+//   audibleの後にaudible_interruptedが続く正当な二連も、順序どおり両方運ぶ。
+let strategyDeliveryOutbox = new Map();
+// ★2026-09-17 Codex MD#8差戻し（P1）：JS側の現在frame評価。自前の提案を作るためでは
+//   なく、Bridge推薦を配信直前にallow/hold/dropするための検証結果として保持する。
+let liveStrategyValidation = null;
 let enduranceForecastAnnouncedKey = '';
 let enduranceFuelWindowAnnouncedKey = '';
 let fuelWindowWatch = {armed:false,sessionKey:'',announced:false};
@@ -1545,6 +1591,12 @@ function resetSessionScopedReviewState(nextSessionNum=null){
   if(typeof resetTeamStint==='function') resetTeamStint();
   strategyPlaybookRefreshKey='';
   strategyPlaybookDecisionKeys=new Set();
+  bridgeStrategyDecisions=new Map();
+  // 前セッションの未送信応答は次セッションへ持ち越さない（Bridge側も
+  // session_num不一致をfail-closedでstaleにするため、送っても適用されない）。
+  strategyResponseOutbox=new Map();
+  strategyDeliveryOutbox=new Map();
+  liveStrategyValidation=null;
   enduranceForecastAnnouncedKey='';
   enduranceFuelWindowAnnouncedKey='';
   fuelWindowWatch={armed:false,sessionKey:String(nextSessionNum??lastSessionNum??''),announced:false};
@@ -1609,7 +1661,9 @@ function updateNamedRivalFromUser(text){
 //   分類そのもの（front_aero_or_body 等）は bridge 側 session_race_state.
 //   parse_driver_reported_damage() が単一の真実源として行う。ここは
 //   「転送する価値があるか」のゲートに過ぎない（過検出しても bridge 側で弾かれる）。
-const DRIVER_DAMAGE_REPORT_RE = /バンパー|ステアリング\s*コラム|アライメント|ハンドル.{0,6}(?:取られ|流れ|曲が)|フロント.{0,10}(?:壊れ|破損|傷ん)|bumper|steering\s*column|alignment|steering.{0,10}(?:pull|off)|front.{0,10}damag/i;
+// ★2026-09-11 実走Gate 8不合格で判明：「リアウイング無くしてる？」のような
+//   リア／ウイング等の申告が転送対象外だった。パーツ名＋消失/破損動詞を追加。
+const DRIVER_DAMAGE_REPORT_RE = /バンパー|ステアリング\s*コラム|アライメント|ハンドル.{0,6}(?:取られ|流れ|曲が)|フロント.{0,10}(?:壊れ|破損|傷ん)|(?:ウイング|ウィング|リア|ノーズ|ディフューザー|ミラー|ボンネット|ドア|サイド).{0,10}(?:無く|なく|外れ|取れ|折れ|吹っ飛|飛ん|欠け|消え|潰れ|曲が|壊れ|破損)|bumper|steering\s*column|alignment|steering.{0,10}(?:pull|off)|front.{0,10}damag|(?:wing|rear|nose|splitter|diffuser|mirror|hood|door|fender).{0,10}(?:missing|gone|broken|lost|off|bent|crushed|damag)/i;
 function forwardDriverDamageReport(text){
   const t=String(text||'').trim();
   if(!t || !DRIVER_DAMAGE_REPORT_RE.test(t)) return;
@@ -2664,22 +2718,43 @@ async function sendMsg(inputSource){
       sessionAuthority:(typeof lastSessionAuthority!=='undefined'?lastSessionAuthority:null),
       raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[]),
       currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null),
+      // ★2026-09-14 Codex差戻しP1：履歴燃費の同条件照合には series・session種別・
+      //   レース形式・燃料/タイヤ規則・setup・路温が要る。Bridge権威だけで作る
+      //   既存の記憶検索キーをそのまま渡す（会話・推測からは作らない）。
+      memoryIdentity:(typeof currentMemoryIdentity==='function'?currentMemoryIdentity():null),
       sessionMemory:(typeof window!=='undefined'&&window.PitwallSessionMemory?window.PitwallSessionMemory:null),
       // ★G3：GAP は数秒で意味が変わる。接続判定(12秒)のままだと、
       //   queue では破棄される古さの値を質問回答で喋ってしまう。
       snapshotAgeMs:(lastTelemetryAt>0?Date.now()-lastTelemetryAt:null),
+      // ★2026-09-14 Codex MD#6 P1：driver訂正の保留は「同じsnapshotでの再質問は保持、
+      //   新しい観測なら値が同じでも解除」。その判定にtelemetry受信の識別子が要る。
+      snapshotId:(lastTelemetryAt>0?String(lastTelemetryAt):null),
       // ★F2：訂正で保留中の方向は、古い値を今の事実として言い直さない。
       gapHeld:(typeof currentGapHeld==='function'?currentGapHeld():null),
       // ★2026-09-06：合意Plan・pit実績の唯一の正本。質問ごとに別前提で
       //   答えていた実走（18:43「ステイアウト」／18:44「Plan A継続」）を塞ぐ。
       strategy:(_strategyState
-        ? { state:_strategyState, api:window.PitwallSessionStrategyState } : null)
+        ? { state:_strategyState, api:window.PitwallSessionStrategyState } : null),
+      // Driver questions and proactive radio consume one A/B/C comparison.
+      // This prevents the LLM and the background monitor from choosing plans
+      // independently from different snapshots.
+      strategyEvaluation:(typeof activeStrategyPlaybook!=='undefined'
+        &&activeStrategyPlaybook&&window.PitwallStrategyPlaybook
+        ? {playbook:activeStrategyPlaybook,api:window.PitwallStrategyPlaybook}:null)
     }) : null;
   if(localIntent && localIntent.handled){
     const reply=localIntent.reply;
     if(localIntent.source!=='local_authority'){
       diagnosticLog('LOCAL_INTENT_REJECTED','unexpected_source='+String(localIntent.source||'missing'));
       return;
+    }
+    // ★2026-09-17 Codex MD#6/#7差戻し：状態機械が明示yes/noで実際に適用した結果
+    //   （route()が`resolvedProposal`として返す）をBridgeへ送り返す。Luna自身の
+    //   復唱の発話成否とは独立——ここは「Driverの意思がstateへ適用された」時点で
+    //   送る（sendStrategyDecisionResponseはBridge発でないdecision_idを自動で無視）。
+    if(localIntent.resolvedProposal && localIntent.resolvedProposal.decisionId){
+      sendStrategyDecisionResponse(localIntent.resolvedProposal.decisionId,
+        localIntent.resolvedProposal.accepted===true);
     }
     const localPriority=localIntent.confidence==='confirmed'
       ? SPEAK_PRIO.P2_PROCEDURE : SPEAK_PRIO.P3_INFO;
@@ -3017,6 +3092,18 @@ async function callAPI(inputSource, memoryStatus=''){
   usageCount(inputSource==='ptt'?'ptt':'typed');
   isBusy=true;
   document.getElementById('busy-ind').classList.add('show');
+  // ★2026-09-14 Codex MD#1確認・実再現：この応答が意味判定タグを持ち帰って
+  //   来た時、それを適用してよいのは「送信時点と同じ入力世代」の時だけ。
+  //   12周合意→d1(14周)提案→「賛成だ」（この呼出開始）→応答が届く前に
+  //   「賛成は撤回したい」（同じd1へ2回目のmarkAwaitingJudgment＝base_revision進行）
+  //   →1回目の古い応答が遅れてconfirmを返すと、decision_id一致だけでは
+  //   14周を確定してしまう（Codex実再現）。送信**直前**（awaitより前）の
+  //   base_revisionを捕まえ、適用時に今と同じかを照合する。
+  const _judgeS=globalThis.PitwallSessionStrategyState;
+  const _judgeSt=(typeof ensureStrategyState==='function')?ensureStrategyState():null;
+  const _judgePendingAtRequest=(_judgeS&&_judgeSt&&typeof _judgeS.pendingProposal==='function')
+    ? _judgeS.pendingProposal(_judgeSt,{at:Date.now()}) : null;
+  const _judgeRequestRevision=_judgePendingAtRequest ? _judgePendingAtRequest.base_revision : null;
   const telemetry = iracingLive?'live':(bridgeConnected?'bridge':'off');
   const profile = hydrateLegacyStrategyObjective()||loadProfile()||{};
   const _isJP_pre = (sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP');
@@ -3114,6 +3201,12 @@ async function callAPI(inputSource, memoryStatus=''){
       // [JA:...]（初級者向け翻訳）は喋らない。C2では通常出ないが保険。
       const jaIdx = pending.indexOf('[JA:');
       if(jaIdx >= 0) pending = pending.slice(0, jaIdx);
+      // ★2026-09-13：<<PW_JUDGE ...>> は意味判定用の機械行。[JA:と同じ形で、
+      //   ストリーミング中に完成前でも絶対に読み上げ・表示へ混ぜない。
+      // ★2026-09-14 Codex MD#1確認：完全一致のindexOfだけでは、1文字配信時に
+      //   マーカーの接頭辞（`<<PW`等）が読み上げへ混入する。stripProposalJudgeTag
+      //   の接頭辞検出込みの切り捨てをここでも使う（judgment抽出は使わない）。
+      pending = stripProposalJudgeTag(pending).text;
       while(true){
         const m = pending.search(SENT_RE);
         if(m < 0) break;
@@ -3144,7 +3237,7 @@ async function callAPI(inputSource, memoryStatus=''){
         diagnosticLog('TELEMETRY_TRUTH_GATE','blocked LLM vehicle-state claim: '
           + full.replace(/\s+/g,' ').trim());
       } else if(!truthBlocked && bubble) {
-        bubble.textContent = full.replace(/\[JA:[\s\S]*\]$/,'').trim();
+        bubble.textContent = stripProposalJudgeTag(full.replace(/\[JA:[\s\S]*\]$/,'')).text.trim();
       }
       // ★2026-08-30 修正2：安全コールの発生源は決定論経路ひとつだけ。
       //   LLM が「左に車」「イエロー」等を書いたら、その文だけを落とす
@@ -3160,11 +3253,19 @@ async function callAPI(inputSource, memoryStatus=''){
     }
     clearTimeout(fetchTimer);
     flushSentences(true);
-    const reply = full.trim();
+    // ★2026-09-13 Codex第6回差戻し：応答が完成した時点で1回だけ<<PW_JUDGE ...>>を
+    //   抽出・除去する。TTS・表示は既にflushSentences/bubble側でstripProposalJudgeTag
+    //   済みだが、`full`自体にはまだタグが残っているため、reply/displayの算出も
+    //   ここで剥がした後の文字列から行う（タグが最終テキストへ漏れないようにする）。
+    const _judged = stripProposalJudgeTag(full);
+    const reply = _judged.text.trim();
     if(!reply) throw new Error('empty');
     const display = truthBlocked
       ? truthFallback
       : normalizeLunaSpeech(reply.replace(/\[JA:[\s\S]*\]$/,'').trim());
+    // タグが取れていれば、実際にDriverへ届いた本文とは独立に接続層へ適用する
+    // （通信も新しい生成も行わない——抽出済み文字列の機械的な適用のみ）。
+    if(!truthBlocked) applyProposalJudgeTag(_judged.judgment, _judgeRequestRevision);
     diagnosticLog('INTENT_ROUTE',`intent=${responseIntent||'conversation'} authority=${responseAuthority}`);
     // A generic no-data reply has no concrete completion condition.  Arming
     // it caused the same canned sentence to fire again at the next S/F even
@@ -3363,6 +3464,9 @@ function costApiCall(provider, detail){
 }
 let isSpeaking = false;       // AI発話中はマイクを止める（自分の声を拾わない）
 let speakQueue = [];          // 発話待ち行列（{text,prio,kind,ts,dedupeKey}）
+// ★9/14：直近にqueueへ積んだ発話item。same_topic判定の配送確認先を
+//   追跡するために speak()/speakReplyChunk() の両方が更新する。
+let lastQueuedSpeakItem = null;
 let currentSpeakPrio = 9;     // 再生中の優先度（割り込み判定用・9=何も鳴っていない）
 let speakWindowOk = true;     // bridgeの舵角<約7度 かつ Brake<12%
 let speakGateActive = false;  // オントラック走行中だけtrue
@@ -3445,7 +3549,7 @@ function speechLatencyTrace(state, item, extra={}){
 }
 
 function speak(text, opts){
-  if(!voiceOn || !text) return;
+  if(!voiceOn || !text){ lastQueuedSpeakItem = null; return; }
   // 後方互換：speak(text, true) は「会話の返事」＝P2扱い（旧仕様の"全部止める"はやめる）
   let o = (opts === true) ? {prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply'}
         : (opts && typeof opts === 'object') ? opts
@@ -3467,8 +3571,25 @@ function speak(text, opts){
                 //   元に答えたかをqueue itemに保持する（gapIdentitiesと同じ「出口まで
                 //   識別子を持ち歩く」契約）。
                 raceRecordId:o.raceRecordId||null,
+                // ★2026-09-13：実際に耳へ届いた時だけ動かしたい下流処理（提案の記録等）の
+                //   ためのフック。finalizeUtterance の 'spoken' 確定点でのみ呼ばれる。
+                onSpoken:(typeof o.onSpoken==='function')?o.onSpoken:null,
+                // ★2026-09-13：'spoken' 後に中断された（=冒頭しか聞こえていない）時の
+                //   取消しフック。finalizeUtterance の 'audible_interrupted' でのみ呼ばれる。
+                onAudibleInterrupted:(typeof o.onAudibleInterrupted==='function')?o.onAudibleInterrupted:null,
+                // ★2026-09-17 Codex MD#8差戻し（P1）：終端が確定した全ての場合
+                //   （spoken／dropped_before_audible／audible_interrupted／
+                //   suppressed_by_user）に呼ばれる配送結果フック。
+                onDelivery:(typeof o.onDelivery==='function')?o.onDelivery:null,
+                // ★2026-09-13：drainQueue が実際に読み上げる直前に呼ぶ生存確認。
+                //   falseを返したら**一度も喋らず**discardする（GAP鮮度チェックと同じ形）。
+                precheck:(typeof o.precheck==='function')?o.precheck:null,
                 costId:(typeof costReplyId==='function'?costReplyId(kind):null),
                 immediate:(prio<=SPEAK_PRIO.P1_HAZARD || IMMEDIATE_PIT_KINDS.has(kind))};
+  // ★9/14：same_topic判定の配送確認先を追跡する唯一の場所。callAPI() は
+  //   このreplyの最後の文を積んだ直後に同期的に読む（間にawaitが無いので
+  //   他のspeak()呼出に割り込まれない）。
+  lastQueuedSpeakItem = item;
   typeof costRecord==='function'&&costRecord('queued', {id:item.costId, kind:kind});
   if(typeof speechLatencyTrace==='function') speechLatencyTrace('queued',item);
 
@@ -3523,11 +3644,12 @@ function speak(text, opts){
 }
 // ストリーミング返答の2文目以降＝一つの返答の続きなので絶対に捨てない（MAX_RADIO_QUEUE対象外）。
 function speakReplyChunk(text){
-  if(!voiceOn || !text) return;
+  if(!voiceOn || !text){ lastQueuedSpeakItem = null; return; }
   // 返答の続きは捨てない。会話と同じP2で、到着順を保つため末尾へ。
   const chunkId=(typeof costReplyId==='function')?costReplyId('reply_chunk'):null;
   if(typeof costRecord==='function') costRecord('queued', {id:chunkId, kind:'reply_chunk'});
   const item={text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null, immediate:false, queuedAt:Date.now(), costId:chunkId};
+  lastQueuedSpeakItem = item;
   speakQueue.push(item);
   if(typeof speechLatencyTrace==='function') speechLatencyTrace('queued',item);
   drainQueue();
@@ -3590,6 +3712,22 @@ async function drainQueue(){
 
   const myGen = speakGeneration;   // ★この発話の世代。以降のawait後・callbackで必ず照合する
   const _it = speakQueue.splice(nextIndex,1)[0];
+  // ★2026-09-13 Codex第3回差戻し：onSpoken（配送確定）での revision 照合だけでは
+  //   「再生前」に間に合わない——queue待機中に前提が変わった提案itemが、そのまま
+  //   tts_start（実際の読み上げ）まで到達し、古い数字（アンダーカット候補の
+  //   gap／pace／復帰予測）を実際に喋ってしまうことをCodexが実drainQueueで再現した。
+  //   下のGAP鮮度チェックと同じ形（**再生前に古い数字を喋るくらいなら黙る**）で、
+  //   汎用の `precheck` フックを次周の項目にも使える形で用意する。
+  if(_it && typeof _it === 'object' && typeof _it.precheck === 'function' && !_it.precheck()){
+    diagnosticLog('SPEAK_PRECHECK','fate=discard reason=stale_precondition kind='+(_it.kind||'?')
+      +' age_ms='+(_it.queuedAt?Date.now()-_it.queuedAt:'?'));
+    typeof costRecord==='function'&&costRecord('discarded',{id:_it.costId, kind:_it.kind, reason:'stale_precondition'});
+    if(typeof speechLatencyTrace==='function') speechLatencyTrace('discarded',_it,{reason:'stale_precondition'});
+    finalizeUtterance(_it,'dropped',null,'stale_precondition');
+    draining=false; isSpeaking=false;
+    setTimeout(drainQueue,0);
+    return;
+  }
   // ★G2（2026-08-25）再生開始の直前に GAP の鮮度を照合する。
   //   8/23 実走では queue 14,742ms 後に古い「前5.5秒」を再生した。対象車が
   //   入れ替わっていれば破棄し、同じ車で値だけ動いていれば最新値へ作り直す。
@@ -3743,6 +3881,16 @@ async function drainQueue(){
   let _fellBack = false;
   const _fallbackOnce = (where, detail)=>{
     if(_fellBack || _completed || myGen !== speakGeneration) return;   // 既に完了通知済みならフォールバック不要
+    // ★2026-09-13 Codex第4回差戻し：cloud TTSの失敗判定自体がfetch/json待ちの後に
+    //   来るため、フォールバック（WebSpeechでも喋る）へ進む前にも再照合する。
+    if(_it && typeof _it.precheck==='function' && !_it.precheck()){
+      _fellBack = true;
+      diagnosticLog('SPEAK_PRECHECK','fate=discard reason=stale_precondition_pre_play kind='+(_it.kind||'?')+' via=fallback');
+      finalizeUtterance(_it,'dropped',null,'stale_precondition_pre_play');
+      ttsAudio = null;
+      _completeOnce();
+      return;
+    }
     _fellBack = true;
     const emergencyFallback = currentSpeakPrio<=SPEAK_PRIO.P1_HAZARD ||
       !!(_it && IMMEDIATE_PIT_KINDS.has(_it.kind));
@@ -3837,6 +3985,19 @@ async function drainQueue(){
       const err = audio.error ? ('code='+audio.error.code+' msg='+(audio.error.message||'')) : 'no-audio.error';
       _fallbackOnce('audio_element_onerror', err);
     };
+    // ★2026-09-13 Codex第4回差戻し：precheckはqueueから取り出す時（drainQueue内）の
+    //   1回だけで、この fetch／json 待ちの非同期区間で前提が変わっても再生を
+    //   止められなかった（Codexが実測でAudio.play()到達を確認）。myGen照合と
+    //   同じ形で、実際に play() する直前でも再照合する。
+    if(_it && typeof _it.precheck==='function' && !_it.precheck()){
+      diagnosticLog('SPEAK_PRECHECK','fate=discard reason=stale_precondition_pre_play kind='+(_it.kind||'?'));
+      typeof costRecord==='function'&&costRecord('discarded',
+        {id:(_it&&_it.costId)||null, kind:(_it&&_it.kind)||'radio', reason:'stale_precondition'});
+      finalizeUtterance(_it,'dropped',null,'stale_precondition_pre_play');
+      ttsAudio = null;
+      _completeOnce();
+      return;
+    }
     try{
       typeof costRecord==='function'&&costRecord('played', {id:(_it&&_it.costId)||null, kind:(_it&&_it.kind)||'radio'});
       await audio.play();
@@ -4048,6 +4209,10 @@ function connectBridge(){
       // （iRacing接続前でもPTTは使われうるため、iracing_connectedを待たない）。
       try{ irBridge.send(JSON.stringify({cmd:'usage_session', session_id:usageSessionId})); }catch(e){}
       try{ sendChiefEngineerSettings(); }catch(e){}
+      // ★2026-09-17 Codex MD#8差戻し（P1）：切断中に確定したDriverの合意／拒否を
+      //   接続復帰でここから再送する（Bridgeのackが返るまでoutboxに残る）。
+      try{ flushStrategyResponseOutbox(); }catch(e){}
+      try{ flushStrategyDeliveryOutbox(); }catch(e){}
     };
     irBridge.onmessage=(e)=>{
       let data; try{data=JSON.parse(e.data);}catch{return;}
@@ -4117,7 +4282,17 @@ function connectBridge(){
       //   selMode!=='race' で早期 return するため、その中に置くと「無線は出なかったが
       //   判断はした」ケースの記録ごと落ちる。台帳は Bridge の事実だけで決まる。
       if(data.type==='radio'&&data.trigger==='strategy_plan_decision') recordDecisionStage('proposal',data);
-      if(data.type==='radio') injectRadio(data);
+      // ★2026-09-17 Codex MD#4〜#6差戻し：`strategy_plan_proposal`は「決定済み」の
+      //   無線ではなくデータイベント——injectRadio（無条件に読み上げる経路）へは
+      //   絶対に渡さない。Desktop側の提案→合意状態機械を通す
+      //   `handleStrategyPlanProposal`だけがこれを扱う。
+      if(data.type==='radio'&&data.trigger==='strategy_plan_proposal'){
+        handleStrategyPlanProposal(data);
+      } else if(data.type==='radio') injectRadio(data);
+      // ★2026-09-17 Codex MD#8差戻し（P1）：Bridgeが応答を処理したというack。
+      //   これを受けるまでoutboxは保持され、接続復帰のたびに再送される。
+      if(data.type==='strategy_decision_ack'){ handleStrategyDecisionAck(data); return; }
+      if(data.type==='strategy_delivery_ack'){ handleStrategyDeliveryAck(data); return; }
       if(data.type==='speak_gate'){
         speakWindowOk = data.window_ok !== false;
         speakGateActive = data.active === true;
@@ -4984,7 +5159,109 @@ function buildActiveRaceFactsNote(isJP){
       ? `【合意済み戦略プレイブック】Plan A=ベースライン（pit ${Array.isArray(a.pit_laps)&&a.pit_laps.length?a.pit_laps.join('・'):'なし'}周）。Plan B=アンダーカット（最初${b.first_pit_lap||'不明'}周）。Plan C=オーバーカット（最初${c.first_pit_lap||'不明'}周、必要燃費改善${Number(c.required_fuel_saving_pct||0).toFixed(1)}%）。現在選択=${playbook.selected_plan||'A'}。当日実測と前車ペース、物理復帰予測でのみ切り替えよ。`
       : `[AGREED STRATEGY PLAYBOOK] Plan A is the baseline. Plan B is the undercut. Plan C is the overcut. Current selection: ${playbook.selected_plan||'A'}. Switch only from live fuel, rival pace, and physical rejoin evidence.`);
   }
+  // ★2026-09-13 Codex第5回差戻し「既存合意・現在の提案ID・理由／根拠・未決の相談対象を、
+  //   必要な会話文脈としてLunaへ渡す」の第一段。まだ合意・却下の判定はここでは行わない
+  //   （それはapplyProposalClassification()の役目・未接続）——ここは根拠のある説明を
+  //   Lunaが答えられるよう、実際に提案した内容をそのまま渡すだけ。
+  const S_forNote=globalThis.PitwallSessionStrategyState;
+  const st_forNote=(typeof ensureStrategyState==='function')?ensureStrategyState():null;
+  const pendingForNote=(S_forNote&&st_forNote&&typeof S_forNote.pendingProposal==='function')
+    ? S_forNote.pendingProposal(st_forNote,{at:Date.now()}) : null;
+  if(pendingForNote){
+    notes.push(isJP
+      ? `【未合意の提案】Plan ${pendingForNote.plan_id}、${pendingForNote.lap}周目でのピットを提案済みだが、Driverはまだ合意も拒否もしていない。根拠・代案の質問にはこの提案を踏まえて答え、Driverが明確に合意・拒否したことを会話の中で示せ。`
+      : `[UNCONFIRMED PROPOSAL] Plan ${pendingForNote.plan_id} proposed pitting on lap ${pendingForNote.lap}; the driver has not agreed or declined yet. Answer rationale/alternative questions with this proposal in mind, and make it clear in the conversation once the driver explicitly agrees or declines.`);
+    // ★2026-09-13 Codex第6回差戻し「既存会話呼出に、説明本文と分類メタデータを
+    //   併載する形を第一候補にする」への対応。別呼出は増やさず、この会話ターンの
+    //   応答本文の末尾に機械行を1行だけ追加させ、callAPI() 側で剥がして
+    //   pw_applyProposalJudgeTag() へ渡す。判断できない時は行自体を書かせない
+    //   （＝「判定不能」は無言で90秒TTLへ委ねる）。この指示は
+    //   markAwaitingJudgment() 済み（この会話ターンでLLMへ渡すと決めた）時だけ出す。
+    if(pendingForNote.awaiting_judgment===true){
+      const did=pendingForNote.decision_id||'';
+      notes.push(isJP
+        ? `Driverの直前の発話が、上の提案（decision_id=${did}）への反応（確認・理由確認・代案要求・承認・拒否や訂正・無関係な話題のいずれか）だと判断できたら、通常の返答をすべて書き終えた後、改行して次の形式の1行だけを追加せよ（読み上げられない機械用の行。他の文とは絶対に混ぜない）：<<PW_JUDGE decision_id="${did}" classification="confirm">>　のように、classificationはconfirm／decline／same_topic／unrelatedのうち該当する一つ。判断できない、または反応の対象がこの提案か分からない時は、この行を一切書くな。`
+        : `If you can tell the driver's last message is a reaction to the proposal above (decision_id=${did}) — a confirmation, rationale question, alternative request, approval, decline/correction, or unrelated topic — after writing your normal reply in full, add exactly one line on its own (a machine-only line, never mix it with your spoken reply): <<PW_JUDGE decision_id="${did}" classification="confirm">> using whichever of confirm/decline/same_topic/unrelated applies. If you cannot tell, or cannot tell whether it concerns this proposal, omit the line entirely.`);
+    }
+  }
   return notes.length?'\n'+notes.join('\n'):'';
+}
+// ★2026-09-13 Codex第6回差戻し→9/14 Codex独立probeで2件反証：
+//   (1) 完全一致した時だけ除去する実装だったため、①1文字ずつ分割配信すると
+//      タグが完成する前の断片が吹き出しへ出る、②未知classification値や途中で
+//      切れたタグが最終表示に残る、の両方が発生した。「不正な指示で状態を
+//      動かさない」（厳密パース）と「不正な機械行を表示しない」（無条件除去）は
+//      別要件——後者はタグの妥当性を問わず、マーカーの**開始位置**が見えた時点で
+//      無条件にそこから先を切り捨てる（[JA:...]と同じ「開始位置で切る」方式）。
+//      前者は切り捨てた断片を別途厳密パースし、正規表現に一致しなければ
+//      judgment=nullのまま（未知タグ・途中タグで状態を動かさない）。
+const PW_JUDGE_TAG_START = '<<PW_JUDGE';
+const PW_JUDGE_TAG_RE = /<<PW_JUDGE\s+decision_id="([^"]*)"\s+classification="(confirm|decline|same_topic|unrelated)"\s*>>/;
+// ★2026-09-14 Codex MD#1確認：1文字ずつ配信すると `<<PW`／`<<PW_`／`<<PW_J` 等、
+//   マーカーが完成する前の**接頭辞の断片**が表示へ残った。完全一致のindexOfだけでは
+//   ストリーミングの境界をまたぐ場合を検出できない。文字列の**末尾**がマーカーの
+//   接頭辞と一致していないかも調べ、一致していればそこから先も切り捨てる。
+function stripProposalJudgeTag(text){
+  const s=String(text||'');
+  const idx=s.indexOf(PW_JUDGE_TAG_START);
+  if(idx>=0){
+    const cleanText=s.slice(0,idx).replace(/\s+$/,'');
+    const m=s.slice(idx).match(PW_JUDGE_TAG_RE);
+    return {text:cleanText, judgment:m ? {decision_id:m[1], classification:m[2]} : null};
+  }
+  const maxCheck=Math.min(PW_JUDGE_TAG_START.length-1, s.length);
+  for(let k=maxCheck; k>=1; k--){
+    if(s.slice(s.length-k)===PW_JUDGE_TAG_START.slice(0,k)){
+      return {text:s.slice(0,s.length-k).replace(/\s+$/,''), judgment:null};
+    }
+  }
+  return {text:s, judgment:null};
+}
+// ★9/14 Codex独立probe：same_topicを「保留のまま」で終わらせていたため、
+//   説明後の「はい」がawaiting_judgmentゲートに永久に引っかかり続け、二度と
+//   確定できなかった。かといって同時に単純即確定へ戻すと、旧P1-3と同じ
+//   「まだ聞いていない説明を根拠に承認可能にする」を再発させる（Codex指摘）。
+//   session-strategy-state.js側でsame_topicはawaiting_judgmentを解除するよう
+//   変更したが、その解除自体を**この説明が実際に配送された後**まで遅らせる。
+//   confirm/decline/unrelatedは即時適用でよい——それらは「直前のDriver発話を
+//   どう理解したか」の判定であり、これから話す説明の配送とは無関係。
+//   （lastQueuedSpeakItem 本体は speak() 付近で宣言・更新する）
+// ★2026-09-14：requestRevision は callAPI() が送信直前に捕まえた
+//   pending_proposal.base_revision。この判定が「今も同じ入力世代への応答か」を
+//   session-strategy-state.js側（applyProposalClassification）が照合する。
+function applyProposalJudgeTag(judgment, requestRevision){
+  if(!judgment) return;
+  const S=globalThis.PitwallSessionStrategyState;
+  const st=(typeof ensureStrategyState==='function')?ensureStrategyState():null;
+  if(!S||!st||typeof S.applyProposalClassification!=='function') return;
+  const doApply=()=>{
+    const applied=S.applyProposalClassification(st,
+      {classification:judgment.classification, decision_id:judgment.decision_id, at:Date.now(),
+       request_revision:(requestRevision===undefined?null:requestRevision)});
+    diagnosticLog('STRATEGY_STATE','proposal_judgment applied='+applied.applied
+      +' outcome='+(applied.outcome||applied.reason||'?')
+      +' classification='+judgment.classification+' decision_id='+judgment.decision_id);
+    // ★2026-09-17 Codex MD#6/#7差戻し：LLM judge（PW_JUDGE）経由でも、状態機械が
+    //   実際に適用した結果（confirmed/declined）だけをBridgeへ送り返す。
+    //   kept_pending/invalidated/適用失敗では送らない——完成条件の
+    //   「曖昧・awaiting・staleでは送らない」をそのまま守る。
+    if(applied.applied && applied.outcome==='confirmed'){
+      sendStrategyDecisionResponse(judgment.decision_id, true);
+    } else if(applied.applied && applied.outcome==='declined'){
+      sendStrategyDecisionResponse(judgment.decision_id, false);
+    }
+  };
+  if(judgment.classification!=='same_topic'){ doApply(); return; }
+  const target=lastQueuedSpeakItem;
+  if(target && target._finalized==='spoken'){ doApply(); return; }
+  if(target && !target._finalized){
+    const prevOnSpoken=target.onSpoken;
+    target.onSpoken=()=>{ if(typeof prevOnSpoken==='function'){ try{prevOnSpoken();}catch(e){} } doApply(); };
+    return;
+  }
+  // 配送先が追跡できない（キューが空・既に dropped/suppressed 等で確定済み）。
+  // 沈黙して判定待ちのまま残す方が、未配送の説明を根拠にした誤確定より安全。
+  diagnosticLog('STRATEGY_STATE','proposal_judgment_deferred_no_target classification=same_topic decision_id='+judgment.decision_id);
 }
 // ── ペースチェック（AI文脈判断・2026/7/5設計）──
 // bridgeが「2周連続でセッションベストより1秒以上遅い」という生データを送ってくる。
@@ -7357,28 +7634,390 @@ function updateStrategyPlaybookFromLive(live){
     clean_laps:updated.evidence.live_fuel_samples,avg_fuel_l_per_lap:updated.evidence.live_fuel_l_per_lap,
     selected_plan:updated.selected_plan}));
 }
+// ★2026-09-17 Codex MD#4〜#6差戻し（Bridge dispatch≠audible成功／Desktop→Bridge未配線）：
+//   BridgeはPlan B/Cを`strategy_plan_proposal`という**データ**として一度渡すだけで、
+//   自分では「決定済み」として発話しない（`bridge.py`の`build_strategy_decision()`が
+//   Aは即commit・B/Cは'propose'として保留する契約とここで揃える）。実際に発話し、
+//   配送確認を取り、Driver合意を得るのはDesktop側の既存の提案→合意状態機械
+//   （`session-strategy-state.js`の`proposePlan`/`pending_proposal`/`PW_JUDGE`）——
+//   `evaluateLiveStrategySwitch`がJS自前`evaluateSwitch()`の提案に対して既にやっている
+//   のと**同じ型**をBridge発の提案にも適用する。
+//
+//   Bridgeが送ってくる`decision_id`は`<snapshot_id>:decision-lap:<lap>`という形式で、
+//   JS自前の`playbook:<session>:<lap>:<plan>`とは別の名前空間——衝突しない。
+//   `bridgeStrategyDecisions`（decision_id→session_num）へ実際にproposePlanした
+//   ものだけを記録し、後でDriverが合意／拒否した時にBridgeへ送り返す対象を
+//   ここで区別する（JS自前提案はBridgeが知らないIDなので送り返さない）。
+//
+//   ★2026-09-17 Codex MD#8差戻し（P1）：以前はsocketの状態を確認する**前**に
+//   `bridgeStrategyDecisions.delete()`していた。Driverのyes/noが状態機械へ適用された
+//   瞬間にsocketが閉じていると、送信されないまま追跡だけ消え、Bridgeはpendingのまま・
+//   Desktopは確定済みという回復不能状態になった（`irBridge.send()`の例外も同じ）。
+//   確定した応答はまずoutboxへ入れ、送信成功ではなく**Bridgeのack**で初めて捨てる。
+// ★2026-09-17 Codex MD#9チェック差戻し（P1-1）：decision_idは
+//   `<snapshot_id>:decision-lap:<lap>`という決定論的な文字列で、配送に失敗して解除された後に
+//   同じ周・同じsnapshotで再提案されると**まったく同じID**になる。前の試行に対する通知や応答が
+//   遅れて届くと、今まさに聞こえている提案を壊し得る——Bridgeがdispatchごとに発行する
+//   `dispatch_id`で試行を区別し、outboxのキーにもこれを使う。
+function strategyResponseKey(sessionNum, dispatchId){
+  return String(sessionNum)+'|'+String(dispatchId);
+}
+function flushStrategyResponseOutbox(){
+  if(!strategyResponseOutbox.size) return;
+  if(!irBridge || irBridge.readyState!==1) return;
+  for(const [key,entry] of strategyResponseOutbox){
+    try{
+      irBridge.send(JSON.stringify({cmd:'strategy_decision_response',
+        decision_id:entry.decisionId, accepted:entry.accepted===true,
+        session_num:entry.sessionNum, dispatch_id:entry.dispatchId}));
+      entry.sentAt=Date.now(); entry.attempts=(entry.attempts||0)+1;
+      diagnosticLog('STRATEGY_DECISION_RESPONSE',
+        'sent decision_id='+entry.decisionId+' accepted='+entry.accepted
+        +' session_num='+entry.sessionNum+' attempt='+entry.attempts);
+    }catch(e){
+      // 送信例外：outboxに残したまま次の接続復帰で再送する。
+      diagnosticLog('STRATEGY_DECISION_RESPONSE',
+        'send_threw decision_id='+entry.decisionId+' key='+key+' err='+String(e&&e.message||e));
+      return;
+    }
+  }
+}
+function sendStrategyDecisionResponse(decisionId, accepted){
+  if(!decisionId || !bridgeStrategyDecisions.has(decisionId)) return;
+  const tracked=bridgeStrategyDecisions.get(decisionId);
+  const sessionNum=tracked.sessionNum, dispatchId=tracked.dispatchId;
+  const key=strategyResponseKey(sessionNum,dispatchId);
+  // 同じ決定を二重に積まない（ack待ちの間に再度確定経路が走っても一度だけ）。
+  if(strategyResponseOutbox.has(key)) return;
+  strategyResponseOutbox.set(key,{decisionId:decisionId,sessionNum:sessionNum,
+    dispatchId:dispatchId,accepted:accepted===true,attempts:0,sentAt:0});
+  if(!irBridge || irBridge.readyState!==1){
+    diagnosticLog('STRATEGY_DECISION_RESPONSE',
+      'queued_offline decision_id='+decisionId+' accepted='+accepted+' key='+key);
+    return;
+  }
+  flushStrategyResponseOutbox();
+}
+// Bridgeが応答を処理したというack。ここで初めてoutboxと追跡Mapから外す
+// （accepted/declinedだけでなくstale/no_matchもackされる——Bridgeが既に処理済み＝
+// 再送しても意味が無いことを伝える唯一の手段）。重複ackは単に無視される。
+function handleStrategyDecisionAck(data){
+  const decisionId=data&&data.decision_id;
+  if(!decisionId) return;
+  const key=strategyResponseKey(data.session_num,data.dispatch_id);
+  const had=strategyResponseOutbox.delete(key);
+  // ★2026-09-17 Codex MD#9再差戻し（P1-1続き）：以前はdecisionId一致だけで
+  //   無条件に`bridgeStrategyDecisions`から削除していた。decisionIdは再ディスパッチで
+  //   同一になるため、旧dispatchへの遅延ackが、その後の再ディスパッチで新しく
+  //   追跡されたエントリ（新しいdispatch_id）まで消し得た。**現在の追跡値の
+  //   dispatch_idと一致する時だけ**削除する——一致しなければ無関係な古いackとして
+  //   無視し、今追跡中の提案は残す。
+  const tracked=bridgeStrategyDecisions.get(decisionId);
+  const matches=tracked && tracked.dispatchId===data.dispatch_id;
+  if(matches) bridgeStrategyDecisions.delete(decisionId);
+  diagnosticLog('STRATEGY_DECISION_RESPONSE',
+    'ack decision_id='+decisionId+' outcome='+String(data.outcome)
+    +' known='+had+' tracked_removed='+String(!!matches));
+}
+// ★2026-09-17 Codex MD#8差戻し（P1）：配送結果をBridgeへ返す唯一の口。
+//   'audible' を受けるまでBridgeは提示済みを確定せず、失敗ではpending/sentを
+//   解除して（条件が現在も有効なら）再提案できるようにする。
+function strategyDeliveryKey(sessionNum, dispatchId, outcome){
+  return strategyResponseKey(sessionNum,dispatchId)+'|'+String(outcome);
+}
+function flushStrategyDeliveryOutbox(){
+  if(!strategyDeliveryOutbox.size) return;
+  if(!irBridge || irBridge.readyState!==1) return;
+  for(const [key,entry] of strategyDeliveryOutbox){
+    try{
+      irBridge.send(JSON.stringify({cmd:'strategy_decision_delivery',
+        decision_id:entry.decisionId, session_num:entry.sessionNum,
+        dispatch_id:entry.dispatchId, outcome:entry.outcome}));
+      entry.attempts=(entry.attempts||0)+1;
+      diagnosticLog('STRATEGY_DELIVERY',
+        'sent decision_id='+entry.decisionId+' outcome='+entry.outcome
+        +' session_num='+entry.sessionNum+' attempt='+entry.attempts);
+    }catch(e){
+      // 送信例外：outboxに残したまま次の接続復帰で再送する。
+      diagnosticLog('STRATEGY_DELIVERY',
+        'send_threw decision_id='+entry.decisionId+' key='+key);
+      return;
+    }
+  }
+}
+function sendStrategyDecisionDelivery(decisionId, sessionNum, outcome, dispatchId){
+  if(!decisionId || !outcome || !dispatchId) return;
+  const key=strategyDeliveryKey(sessionNum,dispatchId,outcome);
+  if(strategyDeliveryOutbox.has(key)) return;      // ack待ちの同一結果を二重に積まない
+  if(strategyDeliveryOutbox.size>=50) {            // 旧Bridge等でackが返らない時の上限
+    const oldest=strategyDeliveryOutbox.keys().next().value;
+    strategyDeliveryOutbox.delete(oldest);
+  }
+  strategyDeliveryOutbox.set(key,{decisionId:decisionId,sessionNum:sessionNum,
+    dispatchId:dispatchId,outcome:outcome,attempts:0});
+  if(!irBridge || irBridge.readyState!==1){
+    diagnosticLog('STRATEGY_DELIVERY',
+      'queued_offline decision_id='+decisionId+' outcome='+outcome+' key='+key);
+    return;
+  }
+  flushStrategyDeliveryOutbox();
+}
+// Bridgeが配送結果を適用したというack。報告したoutcomeをそのまま返してくるので、
+// そのキーだけをoutboxから外す（重複ackは単に無視される）。
+function handleStrategyDeliveryAck(data){
+  const decisionId=data&&data.decision_id;
+  if(!decisionId) return;
+  const key=strategyDeliveryKey(data.session_num,data.dispatch_id,data.outcome);
+  const had=strategyDeliveryOutbox.delete(key);
+  diagnosticLog('STRATEGY_DELIVERY',
+    'ack decision_id='+decisionId+' outcome='+String(data.outcome)
+    +' applied='+String(data.applied)+' known='+had);
+}
+function handleStrategyPlanProposal(data){
+  const decisionId=data.decision_id;
+  const selectedPlan=data.selected_plan;
+  const plan=data.decision_plan||{};
+  // ★2026-09-17 Codex MD#8差戻し（P1）：Desktopが扱わないと決めた提案も、黙って
+  //   捨てるとBridgeはinflightのまま再送せず固まる。**扱えなかったこと自体**を
+  //   同じsession＋decision IDで返す。Bridgeはpending/sentを解除して再武装する。
+  //   session_numは提案自身のものを使う（Bridgeのfail-closed照合と揃える）。
+  const _reportSession=Number.isFinite(Number(plan.session_num))
+    ? Number(plan.session_num) : lastSessionNum;
+  // ★2026-09-17 Codex MD#9チェック差戻し（P1-1）：この配送**試行**のID。
+  //   同一decision_idが再提案され得るため、通知・応答はすべてこれを添えて返す。
+  const _dispatchId=data.dispatch_id||plan.dispatch_id||null;
+  const _holdAndReport=(why)=>{
+    diagnosticLog('BRIDGE_STRATEGY_PROPOSAL','held decision_id='+decisionId+' reason='+why);
+    sendStrategyDecisionDelivery(decisionId,_reportSession,'dropped_before_audible',_dispatchId);
+  };
+  // AはBridge側で即commitされる契約（build_strategy_decision）なので、ここへは
+  // 本来B/Cしか届かない。念のためA・不正な形は無視する（発話しない＝沈黙が安全）。
+  if(!decisionId || (selectedPlan!=='B' && selectedPlan!=='C')) return;
+  // ★2026-09-17 Codex MD#9再差戻し（P1-1続き）：以前はdedupe・speech dedupeKey・
+  //   追跡Mapの削除まで`decisionId`のままだった——dispatch_idはWS層（応答／配送
+  //   outboxとBridge側の照合）にしか通っておらず、**受信の入口そのもの**は今も
+  //   decisionId基準のままだった。decisionIdは再ディスパッチで同一になるため、
+  //   ここが直っていなければdispatch_idを通した意味が無い。`dispatch_id`
+  //   （既に`<decision_id>#<連番>`で一意）を**この提案インスタンスの唯一の識別子**
+  //   とし、dedupe・speech・追跡の全てをこれで揃える。欠落は照合不能としてhold。
+  if(!_dispatchId){ _holdAndReport('dispatch_id_missing'); return; }
+  if(selMode!=='race'){ _holdAndReport('not_race_mode'); return; }
+  if(strategyPlaybookDecisionKeys.has(_dispatchId)) return;   // 二重提案を防ぐ
+  // ★セッション境界：この提案が生まれたセッションと現在のセッションが一致する時だけ扱う。
+  const planSession=plan.session_num;
+  if(planSession!==undefined && planSession!==null && String(planSession)!==String(lastSessionNum)){
+    diagnosticLog('BRIDGE_STRATEGY_PROPOSAL',
+      'ignored_session_mismatch decision_id='+decisionId+' plan_session='+planSession+' current='+lastSessionNum);
+    _holdAndReport('session_mismatch');
+    return;
+  }
+  const _S=globalThis.PitwallSessionStrategyState;
+  const _st=(typeof ensureStrategyState==='function')?ensureStrategyState():null;
+  if(!_S||!_st||typeof _S.proposePlan!=='function'){ _holdAndReport('state_machine_unavailable'); return; }
+  // ★2026-09-17 Codex MD#8差戻し（P1）：same-frame precheck。受信した時点で既に
+  //   Bridge権威（同一frameのtelemetry `strategy_options`）と内容が食い違っている
+  //   提案は、queueへ積む前にここで落とす。配信直前にも同じ判定を行う（precheck）。
+  if(!bridgeProposalStillCurrent(plan,
+      (data.strategy_options&&typeof data.strategy_options==='object')?data.strategy_options:null)){
+    _holdAndReport('not_current_at_receive');
+    return;
+  }
+  strategyPlaybookDecisionKeys.add(_dispatchId);
+
+  const isJP=isJapaneseEngineer();
+  const targetLap=Number(plan.target_lap);
+  const setFuel=Number(plan.set_fuel_l);
+  const fuelTxt=Number.isFinite(setFuel)?String(Math.trunc(setFuel)):'—';
+  let msg;
+  if(selectedPlan==='B'){
+    msg=isJP
+      ? `アンダーカット候補。次周ピット、給油設定${fuelTxt}リットル。`
+      : `Undercut candidate. Pit next lap, set ${fuelTxt} liters.`;
+  } else {
+    const lapTxt=Number.isFinite(targetLap)?String(targetLap)+(isJP?'周目':''):(isJP?'先の周':'a later lap');
+    msg=isJP
+      ? `延長候補。${lapTxt}にピット、給油設定${fuelTxt}リットル。`
+      : `Extension candidate. Pit at lap ${lapTxt}, set ${fuelTxt} liters.`;
+  }
+  addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
+
+  // ★既存の evaluateLiveStrategySwitch と同じ規律：speak() はqueue登録に過ぎない。
+  //   'spoken'（実際に再生が始まった時）確定点でのみ proposePlan を呼び、
+  //   その時点のrevisionが生成時点と一致することも確認する（配送までの間の
+  //   訂正・別提案で前提が変わっていたら登録を見送る）。
+  const _baseRevisionAtGeneration=(typeof _S.revision==='function')?_S.revision(_st):null;
+  // ★2026-09-17 Codex MD#8差戻し（P1）：precheckはDesktop strategy stateのrevisionしか
+  //   見ておらず、queue待機中に動いたBridge側の根拠（交通・rejoin・燃料）を照合して
+  //   いなかった——revisionが同じなら崩れた提案をそのまま再生できた。同一frameの
+  //   telemetry（Bridgeが毎frame載せる`strategy_options`）と、JS側の現在frame評価の
+  //   両方で、この提案IDがまだ成立しているかを配信直前に確認する。
+  const _precheckFresh=()=>{
+    if(_baseRevisionAtGeneration!==null && _S.revision(_st)!==_baseRevisionAtGeneration) return false;
+    return bridgeProposalStillCurrent(plan);
+  };
+  const _sessionNumAtGeneration=lastSessionNum;
+  speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'bridge_strategy_proposal',dedupeKey:_dispatchId,
+    precheck:_precheckFresh,
+    onSpoken:()=>{
+      if(_baseRevisionAtGeneration!==null && _S.revision(_st)!==_baseRevisionAtGeneration){
+        diagnosticLog('BRIDGE_STRATEGY_PROPOSAL','stale_at_delivery decision_id='+decisionId);
+        return;
+      }
+      _S.proposePlan(_st,{plan_id:selectedPlan,lap:targetLap,at:Date.now(),
+        decision_id:decisionId,basis:data.reason||''});
+      // ここで初めてBridgeへ応答を送り返す対象として登録する——Driverへ実際に
+      // 届く前（queue溢れ・dedupe・voiceOff等で未配送）は登録しない。
+      bridgeStrategyDecisions.set(decisionId,
+        {sessionNum:_sessionNumAtGeneration,dispatchId:_dispatchId});
+      diagnosticLog('BRIDGE_STRATEGY_PROPOSAL',
+        'proposed decision_id='+decisionId+' plan='+selectedPlan+' lap='+String(targetLap));
+    },
+    onAudibleInterrupted:()=>{
+      if(typeof _S.invalidatePendingProposal==='function'){
+        _S.invalidatePendingProposal(_st,{at:Date.now(),decision_id:decisionId,reason:'audible_interrupted'});
+      }
+      diagnosticLog('BRIDGE_STRATEGY_PROPOSAL','interrupted decision_id='+decisionId);
+    },
+    // ★2026-09-17 Codex MD#8差戻し（P1）：終端が確定した全ての場合にBridgeへ結果を返す。
+    //   以前は中断・未発話でBridgeへ何も送らず、「次の再計算のsignature driftで自然に
+    //   無効化される」というコメントに頼っていた。MD#7でsignature同期を直した結果、
+    //   根拠が同じなら再計算はpendingを**正しく維持する**ようになったため、この前提は
+    //   崩れた——Bridgeはproposal_sentのまま再送せず、Desktopには合意可能なpendingが
+    //   無い状態で両者が固まる。失敗時はBridgeへ通知して再武装させ、Desktop側の
+    //   dedupe Set／追跡Mapも掃除して同じIDを再配送できる状態へ戻す。
+    onDelivery:(outcome)=>{
+      if(outcome==='spoken'){
+        sendStrategyDecisionDelivery(decisionId,_sessionNumAtGeneration,'audible',_dispatchId);
+        return;
+      }
+      strategyPlaybookDecisionKeys.delete(_dispatchId);
+      // ★この試行(_dispatchId)自身が失敗した時だけ追跡を消す。既に次の試行が
+      //   追跡を上書きしていたら、それは消してはならない（issue3と同じ規律）。
+      const _trackedNow=bridgeStrategyDecisions.get(decisionId);
+      if(_trackedNow && _trackedNow.dispatchId===_dispatchId) bridgeStrategyDecisions.delete(decisionId);
+      sendStrategyDecisionDelivery(decisionId,_sessionNumAtGeneration,outcome,_dispatchId);
+      diagnosticLog('BRIDGE_STRATEGY_PROPOSAL',
+        'delivery_failed decision_id='+decisionId+' outcome='+outcome+' rearmed=true');
+    }});
+}
+// ★2026-09-17 Codex MD#8差戻し（P1）：Bridge提案が「今も」成立しているかを、
+//   同一frameのBridge権威（telemetryに毎frame載る`strategy_options`）と、JS側の
+//   現在frame評価（`evaluateLiveStrategySwitch`が保存する`liveStrategyValidation`）で
+//   確認する。JSはここで**Bridge推薦をallow/hold/dropするだけ**であり、自前の提案は
+//   作らない（＝単一canonical推薦）。
+// ★2026-09-17 Codex MD#9差戻し（P1-2）：以前の判定には3つの穴があり、古い提案を通していた。
+//   ①`strategy_options`が無い時にtrueを返していた（fail-open）——権威が確認できないのに
+//     「今も成立している」とみなすのは、この製品で最も避けるべき形。
+//   ②現在Bridgeが**どのPlanを選んでいるか**を見ていなかった。BridgeがB→A／B→Cへ動いても、
+//     plan_bの数値さえ残っていれば古いB提案が通った。
+//   ③**根拠snapshot**（`evidence_snapshot_id`＝この提案を計算した再計算のID）を照合して
+//     いなかった。target/fuelが同じまま交通・rejoin・pace・fuel-saveの根拠だけが作り直された
+//     場合を見逃す（Bridge側のsignatureは既にこれを含んでいるのに、Desktop側が見ていなかった）。
+//   いずれもfail-closedにする——確認できない・食い違う時は喋らない。
+function strategyOptionsSupportProposal(opts, decisionPlan){
+  if(!opts || typeof opts!=='object' || opts.available!==true) return false;
+  const planId=decisionPlan&&decisionPlan.selected_plan;
+  if(!planId) return false;
+  // ②現在の選択Planそのものが動いていたら、この提案は既に権威ではない。
+  if(String(opts.selected_plan||'')!==String(planId)) return false;
+  // ③根拠snapshotが作り直されていたら、実行内容が同じでも「同じ提案」ではない。
+  const evidenceId=decisionPlan.evidence_snapshot_id;
+  if(evidenceId===undefined||evidenceId===null) return false;
+  if(String(opts.snapshot_id||'')!==String(evidenceId)) return false;
+  const detail=opts['plan_'+String(planId).toLowerCase()];
+  if(!detail||typeof detail!=='object') return false;
+  const same=(a,b)=>((a===undefined||a===null)?(b===undefined||b===null):Number(a)===Number(b));
+  if(!same(decisionPlan.target_lap,detail.target_lap)
+    ||!same(decisionPlan.add_fuel_l,detail.add_fuel_l)
+    ||!same(decisionPlan.set_fuel_l,detail.set_fuel_l)) return false;
+  // ★2026-09-17 Codex MD#9チェック差戻し（P1-2）：Bridgeのcanonical signatureは
+  //   Plan別`conditions`（B:fuel window・pace優位・rejoin／C:conditions_met）まで含むのに、
+  //   Desktop側はそれを照合していなかった。target/fuel/snapshotが同じままでも、
+  //   交通が塞がる・復帰予測が悪化する・燃費セーブが外れると条件は崩れる——その時に
+  //   古い提案を喋らないよう、`build_strategy_decision()`と同じ出所（decision-lock時点の
+  //   live再検証＝`decision_evidence`）から条件を組み直して一致を要求する。
+  return sameProposalConditions(decisionPlan.conditions,
+    planConditionsFromOptions(opts, planId));
+}
+// `bridge.py`の`build_strategy_decision()`がPlan別conditionsを作るのと同じ出所・同じ形。
+// Bが`decision_evidence.plan_b_evidence`、Cが`decision_evidence.plan_c_evidence.conditions_met`。
+function planConditionsFromOptions(opts, planId){
+  const ev=(opts&&opts.decision_evidence&&typeof opts.decision_evidence==='object')
+    ? opts.decision_evidence : null;
+  if(!ev) return null;
+  if(planId==='C'){
+    const c=ev.plan_c_evidence;
+    return (c&&typeof c==='object'&&c.conditions_met&&typeof c.conditions_met==='object')
+      ? c.conditions_met : null;
+  }
+  const b=ev.plan_b_evidence;
+  if(!b||typeof b!=='object') return null;
+  const met=(b.conditions_met&&typeof b.conditions_met==='object')?b.conditions_met:{};
+  return {fuel_window_open:(opts.plan_b||{}).fuel_window_open,
+    relative_pace_advantage_s:b.relative_pace_advantage_s,
+    rejoin_not_worse:met.rejoin_clear};
+}
+// 提案が凍結した条件と、現在の条件が同じか。照合できない時はfalse（fail-closed）。
+function sameProposalConditions(frozen, current){
+  if(frozen===undefined||frozen===null) return false;
+  if(current===undefined||current===null) return false;
+  if(typeof frozen!=='object'||typeof current!=='object') return false;
+  const keys=new Set([...Object.keys(frozen),...Object.keys(current)]);
+  for(const k of keys){
+    const a=frozen[k], b=current[k];
+    if((a===undefined||a===null)!==(b===undefined||b===null)) return false;
+    if(a===undefined||a===null) continue;
+    if(typeof a==='number'||typeof b==='number'){ if(Number(a)!==Number(b)) return false; }
+    else if(a!==b) return false;
+  }
+  return true;
+}
+// `eventOptions`（提案eventに同梱された`strategy_options`）は、この提案を計算した
+// **その frame** の権威そのもの＝受信時の同一frame判定にはこれを使う。配信直前
+// （precheck）には最新のtelemetry snapshotを使い、queue待機中に権威が動いていたら喋らない。
+function bridgeProposalStillCurrent(decisionPlan, eventOptions){
+  const opts=eventOptions
+    || (lastTelemetry&&lastTelemetry.strategy_options&&typeof lastTelemetry.strategy_options==='object'
+      ? lastTelemetry.strategy_options : null);
+  if(!strategyOptionsSupportProposal(opts,decisionPlan)) return false;
+  // JS側の現在frame評価が「このPlanは今は成立していない」と明示している時だけhold。
+  // 評価そのものが無い／別セッション／古い場合は、Bridge権威の判定を覆さない。
+  const planId=decisionPlan.selected_plan;
+  const v=liveStrategyValidation;
+  if(v && v.sessionKey===String(lastSessionNum??'') && (Date.now()-v.at)<=15000){
+    const candidate=v.candidates&&v.candidates[planId];
+    if(candidate && candidate.available===false) return false;
+  }
+  return true;
+}
+// ★2026-09-17 Codex MD#8差戻し（P1）：この関数は**競合する第二の決定エンジン**だった。
+//   `playbook:<session>:<lap>:B|C`という自前のdecision IDを発行し、Bridgeが知らない
+//   提案を独自に発話して別のpendingを作っていた。Bridgeが同じB/Cを検出すれば、
+//   発話・pending・応答IDが二つできる。完成条件は「Bridge eventのcanonical ID／
+//   signatureだけを提案候補とし、JSは現在frame telemetryでそのIDをallow/hold/drop
+//   する」——よってここでは**評価だけ**を行い、その結果を配信precheck
+//   （`bridgeProposalStillCurrent`）が読む検証結果として保存する。
+//   自前のdecision ID発行・発話・proposePlanは全て停止した。
 function evaluateLiveStrategySwitch(live){
   const engine=window.PitwallStrategyPlaybook;
   if(!engine||!activeStrategyPlaybook?.available) return;
-  const decision=engine.evaluateSwitch(activeStrategyPlaybook,live||{});
-  if(!decision||strategyPlaybookDecisionKeys.has(decision.decision_id)) return;
-  strategyPlaybookDecisionKeys.add(decision.decision_id);
-  activeStrategyPlaybook={...activeStrategyPlaybook,selected_plan:decision.selected_plan,
-    last_live_decision:decision};
-  activeRaceFacts={...activeRaceFacts,sessionKey:String(lastSessionNum??''),
-    strategyPlaybook:activeStrategyPlaybook};
-  if(live) live.strategy_playbook=activeStrategyPlaybook;
-  const e=decision.evidence||{}, isJP=isJapaneseEngineer();
-  let msg;
-  if(decision.selected_plan==='B') msg=isJP
-    ? `Plan B、アンダーカット候補。前走車まで${Number(e.gap_ahead_s).toFixed(1)}秒、こちらが${Number(e.player_pace_advantage_s).toFixed(1)}秒速い。今入る物理復帰P${e.physical_rejoin_position}。`
-    : `Plan B, undercut candidate. The gap is ${Number(e.gap_ahead_s).toFixed(1)} seconds and we are ${Number(e.player_pace_advantage_s).toFixed(1)} seconds faster. Physical rejoin P${e.physical_rejoin_position}.`;
-  else msg=isJP
-    ? `Plan C、オーバーカット候補。前とのペース差は${Math.abs(Number(e.player_pace_advantage_s)).toFixed(1)}秒。燃料は次周まで成立、今P${e.pit_now_position}予測に対して次周P${e.pit_next_lap_position}予測。`
-    : `Plan C, overcut candidate. Pace difference is ${Math.abs(Number(e.player_pace_advantage_s)).toFixed(1)} seconds. Fuel supports one more lap; rejoin forecast changes from P${e.pit_now_position} now to P${e.pit_next_lap_position} next lap.`;
-  addMsg('ai',msg); pushMsg({role:'assistant',content:msg});
-  speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'strategy_playbook_switch',dedupeKey:decision.decision_id});
-  diagnosticLog('STRATEGY_PLAYBOOK_DECISION',JSON.stringify(decision));
+  const evaluation=(typeof engine.evaluateStrategies==='function')
+    ?engine.evaluateStrategies(activeStrategyPlaybook,live||{})
+    : (typeof engine.evaluateSwitch==='function'
+      ? {available:true,reason:'legacy_switch_adapter',candidates:{},
+         recommendation:engine.evaluateSwitch(activeStrategyPlaybook,live||{})}
+      : null);
+  if(!evaluation) return;
+  liveStrategyValidation={
+    sessionKey:String(lastSessionNum??''),
+    at:Date.now(),
+    lap:evaluation.lap??null,
+    snapshotId:evaluation.snapshot_id||null,
+    available:evaluation.available===true,
+    reason:evaluation.reason||'',
+    candidates:evaluation.candidates||{},
+  };
+  diagnosticLog('STRATEGY_EVALUATION',JSON.stringify(evaluation));
 }
 function maybeDeliverFuelWindowWatch(live){
   const selfFuelGuard=activeStrategyPlaybook?.evidence?.luna_self_memory_tags?.includes('fuel_window_proactive')===true;

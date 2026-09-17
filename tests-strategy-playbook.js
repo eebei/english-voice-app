@@ -171,9 +171,16 @@ check('a new driver can build the first playbook from three live laps',
 check('renderer updates after live clean laps before evaluating a switch',
   renderer.indexOf('updateStrategyPlaybookFromLive(lastTelemetry)')
     < renderer.indexOf('evaluateLiveStrategySwitch(lastTelemetry)'));
-check('live decision has trace and speech path',
-  renderer.includes("diagnosticLog('STRATEGY_PLAYBOOK_DECISION'")
-  && renderer.includes("kind:'strategy_playbook_switch'"));
+// ★2026-09-17 Codex MD#8差戻し（P1-4）：JS評価は**自前の発話経路を持たない**。
+//   以前はここで `kind:'strategy_playbook_switch'` の存在を要求していたが、それこそが
+//   Bridgeと競合する第二の決定エンジン（`playbook:<session>:<lap>:B|C` という別decision ID）
+//   だった。現在の契約は「Bridge推薦のcanonical IDだけが発話・pending・応答になり、
+//   JSは現在frameでそれをallow/hold/dropする」——評価結果は配信precheckが読む
+//   `liveStrategyValidation` へ保存されるだけである。
+//   （実行による証明は tests-bridge-strategy-proposal-roundtrip.js ⑧ が担当する。）
+check('live evaluation feeds the delivery precheck, not a second speech path',
+  renderer.includes('liveStrategyValidation={')
+  && !renderer.includes("kind:'strategy_playbook_switch'"));
 check('playbook switch refuses to speak before bridge strategy authority exists',
   fs.readFileSync(__dirname+'/desktop/strategy-playbook.js','utf8').includes('authority.available !== true'));
 

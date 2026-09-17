@@ -29,7 +29,7 @@ def recalc_execution_block():
     the assertions keep testing the block itself as it grows."""
     src = bridge_src()
     start = src.index('if _pending_recalculations:')
-    end = src.index('# A selected Plan B creates', start)
+    end = src.index('# A selected Plan B/C creates', start)
     return src[start:end]
 
 
@@ -350,8 +350,12 @@ class RecalculationActuallyRecomputes(unittest.TestCase):
         """4つのトリガー（クリーン3周・燃費/ペース乖離・修理検出・ドライバー申告）
         が全て再計算へ到達すること。"""
         src = bridge_src()
-        self.assertEqual(src.count('queue_recalculation('), 6,
-                         'five trigger sites plus the helper definition')
+        # ★2026-09-16 Codex MD#4差戻し：trigger⑥（rival_pit_or_rejoin_shift）のrequeueが、
+        #   即時commit(Plan A)経路と、Driver合意で昇格した後の経路の2箇所に増えた
+        #   （B/Cは合意されるまでこのrequeueへ到達しないため）。
+        self.assertEqual(src.count('queue_recalculation('), 7,
+                         'five trigger sites plus the helper definition plus the '
+                         'post-agreement requeue site')
         for reason in ("reason='clean_3_laps_established'",
                        "reason='repair_detected_or_opt_not_taken'",
                        "reason='driver_reported_damage'"):
@@ -371,8 +375,14 @@ class RecalculationActuallyRecomputes(unittest.TestCase):
         window = src[i:i + 3000]
         self.assertIn('options_mod.reevaluate_plans(', window,
                       'the recalculation must rebuild Plan A/B/C')
-        self.assertIn('srs_mod.register_active_plan(', window,
-                      'the rebuilt plan must become the active plan')
+        # ★2026-09-16 Codex MD#5差戻し（P1）：再計算は「推薦」だけを更新し、
+        #   Driver合意なしに active_plan を動かしてはならない（合意済みactive plan化は
+        #   build_strategy_decision()のcommit(A)／resolve_strategy_proposal()の
+        #   accepted(B/C)だけの責務）。
+        self.assertIn('srs_mod.register_recommended_plan(', window,
+                      'the rebuilt plan must become the recommended plan, not active')
+        self.assertNotIn('srs_mod.register_active_plan(', window,
+                      'recalculation must not promote to active_plan without agreement')
         self.assertIn('srs_mod.recalculate_strategy(', window)
 
     def test_execution_runs_after_the_authoritative_inputs_are_fresh(self):
@@ -431,14 +441,22 @@ class PlanCWiring(unittest.TestCase):
     """Codex差戻し#4 — Plan C が実配線されており、根拠なしでは提案されないこと。"""
 
     def test_plan_c_conditions_are_never_assumed_true(self):
+        # ★2026-09-16 Codex MD#4差戻し：生条件の導出は`derive_plan_c_live_conditions()`
+        #   （本番関数。decision-lock直前の再検証と同じ関数）へ集約された。
+        #   recalc実行ブロックはその結果を受け取るだけで、直接`= None`の初期化はしない
+        #   ——初期化は関数側の責務。両方を確認する。
         window = recalc_execution_block()
-        # 条件は実測から導く。導けない時は None のまま＝未証明。
         for condition, expr in (
                 ('rival_pitted_first', '_recalc_rival_pitted'),
                 ('clean_air', '_recalc_clean_air'),
                 ('rejoin_not_worse', '_recalc_rejoin_ok')):
             self.assertIn("'%s': %s," % (condition, expr), window)
-            self.assertIn('%s = None' % expr, window,
+            self.assertIn("%s = _plan_c_live['%s']" % (expr, condition), window)
+        src = bridge_src()
+        fn = src[src.index('def derive_plan_c_live_conditions('):
+                 src.index('def queue_recalculation(')]
+        for condition in ('rival_pitted_first', 'clean_air', 'rejoin_not_worse'):
+            self.assertIn('%s = None' % condition, fn,
                           '%s must default to unproven' % condition)
 
     def test_plan_c_evidence_is_traced(self):
@@ -508,14 +526,14 @@ class FinalLapSpeechBlockWiring(unittest.TestCase):
     def test_plan_decision_gated_by_strategy_speech_blocked(self):
         src = bridge_src()
         i = src.index("# rejoin for this lap versus one lap later from one live snapshot.")
-        window = src[i:i + 700]
+        window = src[i:i + 900]
         self.assertIn('not session_race_state_mod.strategy_speech_blocked(_session_race_state)',
                       window)
 
     def test_box_call_gated_by_strategy_speech_blocked(self):
         src = bridge_src()
-        i = src.index('# A selected Plan B creates a second, mandatory trigger')
-        window = src[i:i + 900]
+        i = src.index('# A selected Plan B/C creates a second, mandatory trigger')
+        window = src[i:i + 1900]
         self.assertIn('not session_race_state_mod.strategy_speech_blocked(_session_race_state)',
                       window)
 
@@ -594,8 +612,13 @@ class StraightSideBySideWiring(unittest.TestCase):
 class StartSafetyAndFinalLapWiring(unittest.TestCase):
     def test_startup_stopped_car_has_conservative_no_last_lap_path(self):
         src = bridge_src()
-        i = src.index("_startup_close = (not _has_lap_time")
-        window = src[i - 500:i + 2400]
+        i = src.index("# ── 停止/クラッシュ車両の警告")
+        j = src.index("_same_class_main = set()", i)
+        window = src[i:j]
+        self.assertIn("STOPPED_WARN_SEC = 10.0", src)
+        self.assertIn("STOPPED_REARM_SEC = 12.0", src)
+        self.assertIn("_sdist > STOPPED_REARM_SEC", window)
+        self.assertIn("_sdist <= STOPPED_WARN_SEC", window)
         self.assertIn("pct_diff <= 0.0015", window)
         self.assertIn("_speech_speed >= 5.0", window)
         self.assertIn("Stopped car ahead. Caution.", window)

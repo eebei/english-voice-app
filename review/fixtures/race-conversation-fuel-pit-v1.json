@@ -1,0 +1,112 @@
+{
+  "id": "fuel-pit-continuity-v1",
+  "kind": "synthetic_acceptance_scenario",
+  "purpose": "同一時系列で、代替根拠だけの案と目的・訂正・作戦継続を接続した案を比較する。回答文の完全一致は要求しない。",
+  "status": "inputs_and_rubric_only_not_product_pass",
+  "assumptions": {
+    "driver_id": "fixture-driver-a",
+    "car_id": "fixture-car-a",
+    "track_id": "fixture-track-a",
+    "session_id": "fixture-session-a",
+    "tank_capacity_l": 50,
+    "finish_reserve_l": 2,
+    "pit_lane_fuel_l": 0,
+    "pit_lane_note": "計算を切り分ける仮定。実車ではpit進入・退出分を別途モデル化する。",
+    "laps_remaining_definition": "指定された周回境界からゴールまで。pit停止中は減らない。",
+    "minimum_supported_saving_l_per_lap": 4,
+    "saving_note": "この仮想条件で裏付けのある節約限界。実車の一般値ではない。",
+    "traffic_model": "none: undercut_time_gain_not_identifiable",
+    "history_note": "history証拠は同じdriver/car/trackかつ条件適合とfixtureで明示。昨日の実ログではない。"
+  },
+  "execution_contract": {
+    "input_visibility": "各案へ渡すのはassumptionsと現在までのevent.inputのみ。未来event、rubric、算術期待値は渡さない。",
+    "clock": "virtual_event_clock",
+    "observation_events": "Driverから質問がなくても通常の観測経路へ投入する。",
+    "capture": ["source_ids", "active_goal", "target_ids", "decision_id", "decision_revision", "proposal", "agreement", "spoken_output", "dropped_output_reason", "outcome_link"],
+    "missing_capture": "未接続は未接続と記録し、入力fixtureから架空のtraceを補完しない。",
+    "comparison": ["released_4bad610", "working_tree_snapshot", "applicable_fallback_candidate", "continuity_candidate"],
+    "model_control": "同じモデル・音声条件で構成を比較。モデル交換は別実験。実API費用を伴う実行は別途承認範囲を確認する。"
+  },
+  "events": [
+    {
+      "id": "e01",
+      "input": {"type": "observation", "elapsed_s": 0, "fuel_l": 8.56, "laps_remaining": 12, "live_clean_fuel_samples": 0, "history": {"id": "h01", "driver_id": "fixture-driver-a", "car_id": "fixture-car-a", "track_id": "fixture-track-a", "age_days": 1, "applicable": true, "fuel_l_per_lap": 4.28}},
+      "rubric": ["履歴を実測とは呼ばず利用可能な推定根拠として保持"]
+    },
+    {
+      "id": "e02",
+      "input": {"type": "driver", "elapsed_s": 1, "text": "前の車をアンダーカットしたい。今入って最後まで行ける？", "decision_deadline_s": 15},
+      "rubric": ["希望はアンダーカットと完走の両立", "今入る場合のタンク容量制約を検討", "1周待つ等の根拠ある代案を返す", "交通情報なしでアンダーカット成功を断定しない", "履歴燃費4.28を暫定として使い、実測待ちだけで終了しない"]
+    },
+    {
+      "id": "e03",
+      "input": {"type": "driver", "elapsed_s": 5, "text": "じゃあ一周待つ。ゴールに2リットル残して。"},
+      "rubric": ["提案への合意とreserve=2を状態へ反映", "新たな独立した燃料質問にしない"]
+    },
+    {
+      "id": "e04",
+      "input": {"type": "observation", "elapsed_s": 140, "fuel_l": 4.28, "laps_remaining": 11, "pit_entry_available": true, "decision_deadline_s": 150},
+      "rubric": ["合意したpit時期に達したことを認識", "必要な給油提案を以前の合意と結び付ける", "全量と追加量を区別"]
+    },
+    {
+      "id": "e05",
+      "input": {"type": "pit_executed", "elapsed_s": 170, "fuel_before_l": 4.28, "fuel_added_l": 44.8, "fuel_after_l": 49.08, "laps_remaining": 11},
+      "rubric": ["最初のpit後も履歴根拠と作戦を保持", "実行を提案や口頭合意とは区別"]
+    },
+    {
+      "id": "e06",
+      "input": {"type": "driver", "elapsed_s": 171, "text": "これで最後まで行ける予定ね？"},
+      "rubric": ["既存の作戦と履歴推定で回答", "新しい実測LAP待ちだけで回答不能にしない", "実測で更新する条件を保持"]
+    },
+    {
+      "id": "e07",
+      "input": {"type": "observation", "elapsed_s": 590, "fuel_l": 35.28, "laps_remaining": 8, "live_clean_fuel_samples": 3, "live_fuel_l_per_lap": 4.6, "source_id": "live07"},
+      "rubric": ["質問なしでも燃料不足を再判断", "履歴4.28に固定しない", "節約ペースまたは追加給油を理由付きで再提案", "合意済み完走案への影響をDriverへ伝える"]
+    },
+    {
+      "id": "e08",
+      "input": {"type": "observation", "elapsed_s": 591, "fuel_l": 35.28, "laps_remaining": 8, "live_clean_fuel_samples": 3, "live_fuel_l_per_lap": 4.6, "source_id": "live07"},
+      "rubric": ["同じ観測の再送で同じ警告を繰り返さない", "計算更新と発話頻度を分離"]
+    },
+    {
+      "id": "e09",
+      "input": {"type": "driver", "elapsed_s": 592, "text": "残り、一周少なく数えてない？　あと9周だよ。"},
+      "rubric": ["訂正として受け取る", "旧8周案を無条件に継続しない", "9周という申告とSDKの8周を区別して再評価し、解決まで条件付き判断を返す", "driver申告をSDK実測と偽らない"]
+    },
+    {
+      "id": "e10",
+      "input": {"type": "observation", "elapsed_s": 593, "fuel_l": 35.28, "laps_remaining": 9, "source_id": "laps-corrected10", "live_fuel_l_per_lap": 4.6},
+      "rubric": ["確定した9周で作戦を更新", "想定節約限界4.0でも不足することを検討", "追加pit等を提案し、完走可能と無条件断定しない", "訂正前の提案との変更理由を説明"]
+    },
+    {
+      "id": "e11",
+      "input": {"type": "driver", "elapsed_s": 594, "text": "なら追加で入ろう。給油量を出して。"},
+      "rubric": ["更新案への合意を保持", "pit実行時までの消費を含む給油計算か、現在地点での暫定追加量かを区別", "タンク容量・reserve・残り周回を引き継ぐ"]
+    }
+  ],
+  "arithmetic_reference_not_model_input": {
+    "e02_need_with_reserve_l": 53.36,
+    "e04_need_with_reserve_l": 49.08,
+    "e04_add_l": 44.8,
+    "e07_need_with_reserve_l": 38.8,
+    "e07_shortfall_l": 3.52,
+    "e07_max_burn_to_keep_reserve_l_per_lap": 4.16,
+    "e10_need_at_normal_burn_l": 43.4,
+    "e10_shortfall_at_normal_burn_l": 8.12,
+    "e10_need_at_supported_saving_l": 38,
+    "e10_shortfall_at_supported_saving_l": 2.72
+  },
+  "outcome_contract": {
+    "status": "pending_real_execution_or_closed_loop_simulation",
+    "required": ["decision_id", "forecast_at_decision", "assumptions_at_decision", "actual_pit_execution", "actual_consumption", "actual_finish_fuel", "prediction_error", "estimator_update", "held_out_session_evaluation"],
+    "rule": "未来を固定したこの入力列だけで、別戦略の勝敗や学習改善を合格にしない。応答・判断変更の比較と結果シミュレーションを区別する。"
+  },
+  "additional_variants_required": [
+    "言い換え：同じ目的を別表現で伝える",
+    "履歴なし：暫定根拠の所在を偽らず、可能な判断と次の観測を返す",
+    "別driver/car/trackの履歴しかない：本人の同条件実績として使用しない",
+    "pit後session切替：旧合意・旧残周回を再利用しない",
+    "小さい燃費変動：作戦影響なしなら再提案を連呼しない",
+    "既にlive由来の計画がさらに変化：初回live昇格だけ通知して終わらない"
+  ]
+}

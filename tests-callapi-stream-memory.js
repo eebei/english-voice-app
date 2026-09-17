@@ -52,6 +52,15 @@ check('記憶まわりの関数も取り出せる', memSrc.every(Boolean),
   memSrc.map((v, i) => v ? 'ok' : ['recordLunaTurn','ensureConversationBox','saveConversationBox',
     'conversationSessionKey','addMsg','convoLog'][i]));
 
+// ★2026-09-13：callAPI() は <<PW_JUDGE ...>> 抽出のため stripProposalJudgeTag() を
+//   直接呼ぶ（[JA:...]と同じ形の除去）。この記憶テストの関心事ではないが、実体を
+//   渡さないと ReferenceError で callAPI() 全体がcatchへ落ちる。純粋関数なので
+//   実体をそのまま使う（applyProposalJudgeTag は提案state依存のため下でno-opにする）。
+const judgeTagSrc = grabFn('stripProposalJudgeTag', false);
+const judgeConstDecl = (renderer.match(/const PW_JUDGE_TAG_START = [\s\S]*?;/) || [''])[0]
+  + '\n' + (renderer.match(/const PW_JUDGE_TAG_RE = [\s\S]*?;/) || [''])[0];
+check('stripProposalJudgeTag を取り出せる', !!judgeTagSrc, judgeTagSrc);
+
 if (!callApiSrc || !memSrc.every(Boolean)) {
   console.log(`\n[callAPI stream memory] 合格 ${pass} / 不合格 ${fail}`);
   process.exit(1);
@@ -115,6 +124,9 @@ function makeContext(chunks, options = {}) {
     hasTelemetryOwnedVehicleClaim: () => false,
     normalizeLunaSpeech: (t) => t,
     speak: (t) => { spoken.push(t); },
+    // 提案state（session-strategy-state.js）はこのテストの関心事ではない。
+    // stripProposalJudgeTag は純粋関数なので実体を使うが、適用側はno-opにする。
+    applyProposalJudgeTag: () => {},
     // ★2026-09-05 第6回P1：内部IDが**実際に付いた履歴**を送信させないと反証にならない。
     //   本番と同じく非列挙で `_mid` を付ける。
     _msgSeq: 0,
@@ -157,7 +169,7 @@ let ranOk = false;
 const ctx = makeContext(CHUNKS);
 vm.createContext(ctx);
 try {
-  vm.runInContext(decls + '\n' + memSrc.join('\n') + '\n' + callApiSrc
+  vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + memSrc.join('\n') + '\n' + callApiSrc
     + '\nthis.callAPI = callAPI; this.ensureConversationBox = ensureConversationBox;', ctx);
   ranOk = true;
 } catch (e) {
@@ -219,7 +231,7 @@ if (ranOk) {
       const errCtx = makeContext([]);
       errCtx.fetch = async () => { throw new Error('network down'); };
       vm.createContext(errCtx);
-      vm.runInContext(decls + '\n' + memSrc.join('\n') + '\n' + callApiSrc
+      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + memSrc.join('\n') + '\n' + callApiSrc
         + '\nthis.callAPI = callAPI; this.ensureConversationBox = ensureConversationBox;', errCtx);
       await errCtx.callAPI('typed');
       const eb = errCtx.ensureConversationBox();
@@ -237,7 +249,7 @@ if (ranOk) {
       const reply='危険を避けながらP10からP8、1xで50を持ち帰った。判断は正しかった。';
       const brainCtx=makeContext([reply.slice(0,18),reply.slice(18)],{brainPrompt,brainRecord:{memory_id:'evaluation|1'}});
       vm.createContext(brainCtx);
-      vm.runInContext(decls + '\n' + memSrc.join('\n') + '\n' + callApiSrc+'\nthis.callAPI=callAPI;',brainCtx);
+      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + memSrc.join('\n') + '\n' + callApiSrc+'\nthis.callAPI=callAPI;',brainCtx);
       await brainCtx.callAPI('typed');
       check('Memory Brain検索結果が実callAPI requestへ注入される',
         brainCtx._requests[0]&&brainCtx._requests[0].profileNote.includes('race|88462769|315555'));

@@ -463,6 +463,54 @@ class DriverReportedDamage(unittest.TestCase):
         self.assertIsNone(srs.parse_driver_reported_damage(''))
         self.assertIsNone(srs.parse_driver_reported_damage(None))
 
+    def test_rear_wing_phrase_classified(self):
+        # ★2026-09-11 実走Gate 8不合格：「リアウイング無くしてる？」が
+        #   どのカテゴリにも一致せず、rejoin文脈へ誤って継承されていた。
+        self.assertEqual(srs.parse_driver_reported_damage('リアウイング無くしてる'),
+                         'rear_wing')
+        self.assertEqual(srs.parse_driver_reported_damage('rear wing is gone'),
+                         'rear_wing')
+
+
+class DamageAssertionRole(unittest.TestCase):
+    """★2026-09-11 Codex差戻し（P1）：「話題」の一致と「断定申告」を区別する。
+    疑問・否定は record_driver_reported_damage / invalidate_assumptions へ
+    到達してはいけない。bridge.py の呼び出し側がこの role で continue する
+    契約を、5つの実発話パターンで固定する（Codex指定の永続回帰試験）。
+    """
+
+    def test_assertion_phrases_are_classified_as_assertion(self):
+        self.assertEqual(srs.classify_damage_assertion_role('リアウイング壊れた'), 'assertion')
+        self.assertEqual(srs.classify_damage_assertion_role('フロントバンパーが割れた'), 'assertion')
+
+    def test_denial_phrase_is_not_an_assertion(self):
+        self.assertEqual(srs.classify_damage_assertion_role('リアウイングは壊れてない'), 'denial')
+        self.assertNotEqual(srs.classify_damage_assertion_role('リアウイングは壊れてない'), 'assertion')
+
+    def test_question_phrase_is_not_an_assertion(self):
+        # 実走原文（2026-09-11 20:37:21）そのもの。
+        self.assertEqual(
+            srs.classify_damage_assertion_role('リアウイング 無くしてる？これ？'), 'question')
+        self.assertEqual(srs.classify_damage_assertion_role('リアウイング壊れてる？'), 'question')
+
+    def test_question_takes_priority_over_denial_when_both_could_match(self):
+        self.assertEqual(srs.classify_damage_assertion_role('壊れてない？'), 'question')
+
+    def test_unrelated_setup_request_is_not_treated_as_denial_or_blocked(self):
+        # 「外れにくくしたい」はダメージ申告ではなくセットアップ相談。
+        # parse_driver_reported_damage 側で category=None になり、
+        # bridge.py はそもそも role を見る前に continue する。
+        self.assertIsNone(srs.parse_driver_reported_damage('外れにくくしたい'))
+
+    def test_unrelated_retraction_has_no_damage_category(self):
+        # 「さっきの破損は勘違い」はパーツ名を伴わないため既存パターンに
+        # 一致しない。将来の撤回対応はinvalidate系の別機構で扱う。
+        self.assertIsNone(srs.parse_driver_reported_damage('さっきの破損は勘違い'))
+
+    def test_empty_and_none_role_is_none(self):
+        self.assertIsNone(srs.classify_damage_assertion_role(''))
+        self.assertIsNone(srs.classify_damage_assertion_role(None))
+
     def test_record_driver_reported_damage_marks_source_as_report(self):
         s = srs.init_state()
         s = srs.record_driver_reported_damage(

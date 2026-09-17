@@ -110,6 +110,9 @@ if node tests-build280-20260823-replay.js >/dev/null 2>&1; then echo "   ✅ 全
 echo "── レース形式→Plan A/B/C事前戦略・ライブ切替（次期Build）"
 if node tests-strategy-playbook.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-playbook.js 2>&1|tail -15; fail=1; fi
 
+echo "── A/B/C常時比較→Driver戦略質問・単一推薦配線（次期Build）"
+if node tests-strategy-call-routing.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-call-routing.js 2>&1|tail -20; fail=1; fi
+
 echo "── Memory Action Layer 履歴統合→自発戦略→3周更新（次期Build）"
 if node tests-memory-action-layer.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-action-layer.js 2>&1|tail -20; fail=1; fi
 
@@ -199,6 +202,12 @@ if python3 irsdk-bridge/tests_practice_profile.py >/dev/null 2>&1; then echo "  
 
 echo "── Strategy Plan所有・Pit Loss配線（Build 255）"
 if python3 irsdk-bridge/tests_strategy_plan_wiring.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_strategy_options.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_strategy_plan_wiring.py; python3 irsdk-bridge/tests_strategy_options.py; fail=1; fi
+
+echo "── Bridge再計算トリガー配線（静的検査・Build 266 Phase E）"
+if python3 irsdk-bridge/tests_bridge_recalculation_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_bridge_recalculation_wiring.py 2>&1|tail -15; fail=1; fi
+
+echo "── 再計算→desktop向けstrategy_options同期（実execute_recalculation実行・2026-09-16 Codex MD#1差戻し対応）"
+if python3 irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_bridge_strategy_options_recalc_sync.py 2>&1|tail -20; fail=1; fi
 
 echo "── Build 232 実走ハードニング（TTS・話法・ピット・燃料・更新）"
 if node tests-build232-hardening.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build232-hardening.js; fail=1; fi
@@ -324,6 +333,18 @@ if node tests-dispute-boundaries.js >/dev/null 2>&1; then echo "   ✅ 15ケー�
 
 echo "▶ 9月Luna-only表示：他キャラクターは2027年予定・選択不可"
 if out=$(node tests-luna-2027-ui.js 2>&1); then echo "   ✅ ${out##*[}"; else echo "   ❌ 不合格"; node tests-luna-2027-ui.js 2>&1|tail -8; fail=1; fi
+
+echo "▶ 提案→合意ブリッジ：Plan B/C提案とpit_plan正本の一致（2026-09-13）"
+if out=$(node tests-proposal-agreement-bridge.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+
+echo "▶ Bridge戦略提案の製品経路：data event→発話→onSpoken→合意→Bridge応答送信（2026-09-17）"
+if out=$(node tests-bridge-strategy-proposal-roundtrip.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+
+echo "▶ 燃料の履歴フォールバック：strategyFuelEvidenceのanswerFuel梯子への配線（2026-09-14）"
+if out=$(node tests-fuel-history-fallback.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+
+echo "▶ 残り周回のdriver訂正保留：fixture e09（申告 vs SDK を区別し条件付きで答える・2026-09-14）"
+if out=$(node tests-laps-dispute-hold.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi

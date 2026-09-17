@@ -209,7 +209,12 @@ function classify(text, options = {}) {
       : /摩耗|残量|残り|wear/i.test(t) ? 'wear' : 'status';
     return { topic: TOPIC.TYRE_STATUS, tyreQuery, confidence: 0.98 };
   }
-  if (/ダメージ|損傷|修理|壊れ|damage|repair/i.test(t)) return { topic: TOPIC.DAMAGE_STATUS, confidence: 0.98 };
+  // ★2026-09-11 実走Gate 8不合格で判明：この正規表現が「壊れ/damage/repair」等の
+  //   直接語しかカバーしておらず、「リアウイング無くしてる？」のような車体パーツ名＋
+  //   消失表現がヒットしなかった。マッチしないと下のfollow-up継承（"これ"）へ落ち、
+  //   無関係な直前話題（rejoin）を誤って引き継いでいた。パーツ名＋消失/破損動詞の
+  //   組み合わせを追加する。
+  if (/ダメージ|損傷|修理|壊れ|damage|repair|(?:ウイング|ウィング|バンパー|リア|フロント|ノーズ|ディフューザー|ミラー|ボンネット|ドア|サイド).{0,10}(?:無く|なく|外れ|取れ|折れ|吹っ飛|飛ん|欠け|消え|潰れ|曲が)|(?:wing|bumper|splitter|diffuser|mirror|hood|door|fender).{0,10}(?:missing|gone|broken|lost|off|bent|crushed)/i.test(t)) return { topic: TOPIC.DAMAGE_STATUS, confidence: 0.98 };
 
   // ★八木さん実走ログ 7-2（2026-08-11）：アンダーステア相談の直後に
   //   「どうしたらいいですか？」と聞かれ、対象を見失った。

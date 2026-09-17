@@ -339,6 +339,92 @@
     return null;
   }
 
+  // One current strategy picture for every consumer.  The background caller,
+  // direct Driver questions and proactive radio must not independently decide
+  // between A/B/C from slightly different snapshots.
+  function evaluateStrategies(playbook, live = {}) {
+    const plans = playbook && playbook.plans && typeof playbook.plans === 'object'
+      ? playbook.plans : {};
+    const authority = live && live.strategy_options && typeof live.strategy_options === 'object'
+      ? live.strategy_options : null;
+    const lap = Math.trunc(finite(live && live.lap) || 0);
+    const authorityPlan = id => authority && authority[`plan_${id.toLowerCase()}`]
+      && typeof authority[`plan_${id.toLowerCase()}`] === 'object'
+      ? authority[`plan_${id.toLowerCase()}`] : {};
+    const candidate = (id, kind) => {
+      const plan = plans[id] && typeof plans[id] === 'object' ? plans[id] : {};
+      const livePlan = authorityPlan(id);
+      const target = finite(livePlan.target_lap) ?? finite(plan.first_pit_lap);
+      const targetIn = finite(livePlan.target_in_laps);
+      return {
+        id, kind,
+        available: plan.available === true && (!('available' in livePlan) || livePlan.available === true),
+        status: 'monitoring',
+        target_lap: target == null ? null : Math.trunc(target),
+        target_in_laps: targetIn == null ? null : Math.trunc(targetIn),
+        conditions: Array.isArray(plan.conditions) ? plan.conditions.slice() : [],
+        evidence: {},
+      };
+    };
+    const candidates = {
+      A: candidate('A', 'normal'),
+      B: candidate('B', 'undercut'),
+      C: candidate('C', 'overcut'),
+    };
+    const unavailableSnapshot = reason => ({
+      available: false, reason, lap: lap || null,
+      snapshot_id: authority && authority.snapshot_id ? authority.snapshot_id : null,
+      candidates, recommendation: null,
+    });
+    if (!playbook || playbook.available !== true) return unavailableSnapshot('playbook_unavailable');
+    if (!/race/i.test(String(live.session_type || '')) || live.on_track !== true
+        || live.on_pit_road === true) return unavailableSnapshot('race_not_active');
+    if (!authority || authority.available !== true) return unavailableSnapshot('strategy_authority_unavailable');
+    const crossings = finite(live.fuel_strategy && live.fuel_strategy.estimated_crossings_to_finish);
+    if (!Number.isInteger(crossings)) return unavailableSnapshot('finish_distance_unavailable');
+
+    const switchDecision = evaluateSwitch(playbook, live);
+    let recommendation = null;
+    if (switchDecision) {
+      recommendation = {
+        ...switchDecision,
+        action: switchDecision.selected_plan === 'B' ? 'pit_now' : 'stay_out_one_lap',
+      };
+      candidates[switchDecision.selected_plan].status = 'recommended';
+      candidates[switchDecision.selected_plan].evidence = { ...(switchDecision.evidence || {}) };
+    } else if (authority.selected_plan === 'A' && candidates.A.available) {
+      const due = candidates.A.target_in_laps !== null
+        ? candidates.A.target_in_laps <= 0
+        : (candidates.A.target_lap !== null && lap >= candidates.A.target_lap);
+      recommendation = {
+        decision_id: `playbook:${live.session_num ?? 'x'}:${lap}:A`,
+        selected_plan: 'A', reason: 'bridge_authoritative_normal_plan',
+        action: due ? 'pit_now' : 'continue_to_normal_stop',
+        evidence: { lap, target_lap: candidates.A.target_lap,
+          target_in_laps: candidates.A.target_in_laps },
+      };
+      candidates.A.status = 'recommended';
+      candidates.A.evidence = { ...recommendation.evidence };
+    } else if ((authority.selected_plan === 'B' || authority.selected_plan === 'C')
+        && candidates[authority.selected_plan]) {
+      // Bridge selected an alternate but the desktop's same-frame proof is not
+      // complete.  Do not silently fall back to A or let another consumer speak
+      // the alternate: one coordinator reports it as held.
+      candidates[authority.selected_plan].status = 'held_for_latest_evidence';
+    }
+    for (const id of ['A', 'B', 'C']) {
+      if (!candidates[id].available && candidates[id].status === 'monitoring') {
+        candidates[id].status = 'unavailable';
+      }
+    }
+    return {
+      available: true,
+      reason: recommendation ? 'recommendation_ready' : 'recommendation_held',
+      lap, snapshot_id: authority.snapshot_id || null,
+      candidates, recommendation,
+    };
+  }
+
   function formatLapList(plan) {
     return plan && plan.pit_laps && plan.pit_laps.length ? plan.pit_laps.join('・') : 'ノーストップ';
   }
@@ -373,5 +459,6 @@
       : `${rememberedSessions ? `履歴${rememberedSessions}セッション。` : ''}Plan Aで開始、クリーン3周で更新。`;
   }
 
-  return { durationSeconds, normalizeFormat, buildPlaybook, updateWithLive, evaluateSwitch, briefing };
+  return { durationSeconds, normalizeFormat, buildPlaybook, updateWithLive,
+    evaluateSwitch, evaluateStrategies, briefing };
 }));
