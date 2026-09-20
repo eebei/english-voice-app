@@ -1,8 +1,19 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-09-17 JST（MD #9合格・完了。次はMD #10）
+最終更新: 2026-09-20 22:55 JST（Build 302 Gate 4独立確認合格・公開GO待ち）
 
-## 2026-09-20 追記：Build 302 private candidate（Gate 5合格）・公開はYuji判断待ち
+## 2026-09-20 追記：Build 302 Gate 4独立確認合格・公開はYuji判断待ち
+
+Codexが対象SHA `e1a796369563bf9c932985bfacc26c1f5133f6c7`を独立確認し、**P0/P1=0、Gate 4は公開可**と判定した。
+Desktop run `35510577284`・Bridge run `35510578616`は同一SHAで成功し、publish stepは両方skip。
+取得したDesktop artifact ZIPのSHA-256は`1013A852AE34C90549B0159D164D90D0A7F4BD7B231364AB8233E4384CEEE212`、
+installerは100,197,832 bytes・`4398FA3657A229298D9CC782A1E68717048B7923F4EBEC67956D4710727BC7F1`でmanifestと一致。
+展開した`app.asar`と同梱Bridgeもmanifestと一致し、renderer参照ローカルJS 18/18を同梱、ソースと改行正規化後に一致した。
+workflow差分はartifact縮小・保持1日の2ファイルだけで、Release添付3ファイルと公開条件は維持されている。
+
+**Build 302の公開は未実施**。次はYujiの明示的な公開GOを受けてClaudeが`publish=true`を実行し、
+公開後のGate 9（公開物の再取得・hash照合）を行う。Gate 6（Windows実機）とGate 8（iRacing実走）は公開後に確認する。
+詳細な署名・検証値は`review/PITWALL_SHARED_WORKING_LOG.md`末尾「Codex Gate 4確認」を参照。
 
 commit `2522c7d`（Build 302）・`e1a7963`（CI軽量化）push済み・Railway本番SHA一致・GitHubはPrivate維持。
 `/api/chat`・`requireAdmin`・`verify-deploy`はYuji環境で全合格（Codex環境の不合格は`listen EPERM`）。

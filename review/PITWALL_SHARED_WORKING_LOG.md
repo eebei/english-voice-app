@@ -18975,3 +18975,58 @@ app.asar module検査:
 workflow確認:
 最終判定: 公開可 / 公開不可
 ```
+
+---
+
+# 2026-09-20 22:55 JST — Codex Gate 4確認：Build 302公開可
+
+Claudeの報告を転載せず、対象commit、GitHub workflow run、ダウンロードしたartifact、展開したpackageをCodexが独立に確認した。
+
+## 独立確認結果
+
+| 確認項目 | 結果 |
+|---|---|
+| 対象Git SHA | `e1a796369563bf9c932985bfacc26c1f5133f6c7` |
+| 製品コードSHA | `2522c7d88eb5bff3291a5e99e10b6c6e1b1ac44a` |
+| 差分 | `2522c7d..e1a7963`はDesktop／Bridge workflowの2ファイルのみ。製品コード差分なし。`git diff --check`合格 |
+| Desktop run | `35510577284`、success、対象SHA一致、private artifact upload成功、Publish to Releaseはskip |
+| Bridge run | `35510578616`、success、対象SHA一致、artifact upload成功、Publishはskip |
+| GitHub公開状態 | repositoryはPrivate。現行Desktop／Bridge ReleaseはBuild 301。Build 302は未公開 |
+| P0 | 0件 |
+| P1 | 0件 |
+
+## artifact・manifest照合
+
+- Desktop artifact ZIP：100,200,644 bytes、SHA-256 `1013A852AE34C90549B0159D164D90D0A7F4BD7B231364AB8233E4384CEEE212`。GitHub artifact APIのdigestと一致し、ZIP integrity検査も合格。
+- ZIP内容はinstaller 1つと`BUILD-302-GATE5-MANIFEST.json`だけ。installer：100,197,832 bytes、SHA-256 `4398FA3657A229298D9CC782A1E68717048B7923F4EBEC67956D4710727BC7F1`でmanifestと一致。
+- manifestの`target_sha`は対象SHAと一致し、`product_build`は302。package内`build-info.json`と対象SHAの`bridge.py`もBuild 302で一致。
+- installerから独立展開した`app.asar`：4,661,240 bytes、SHA-256 `3F5B600595C0D78197643A51E92A95B8B766A2A85353DED3A8FAB39E7D56DC1E`。同梱Bridge：17,074,526 bytes、SHA-256 `691A4B7B0EE4E62FC5D17262ADD0E4A56717DBD21D8AB52399F4B322E8D51E8B`。いずれもmanifestと一致し、Bridgeは0 byteではない。
+- rendererが参照するローカルJSは18件で、package内に18/18存在。改行を正規化して対象SHAのソースと全18件一致し、`verifyPackagedRuntime`も合格。Build 281で起きた参照JS欠落は再現しない。
+- Bridge artifact ZIP：32,667,716 bytes、SHA-256 `B196FC6F288F9D6E1CAB7BA64DFED271B985E31DF68032934D0E8527A7CBAE04`。GitHub artifact APIのdigestと一致し、ZIP integrity検査も合格。
+
+## workflow・回帰確認
+
+- Desktopのprivate artifactはinstaller 1つ＋Gate 5 manifestへ縮小し、`retention-days: 1`を設定。Bridgeにも同じ保持期間を設定。
+- DesktopのRelease添付3ファイルは変更されていない。両workflowの公開stepは`workflow_dispatch && inputs.publish`条件を維持し、今回の`publish=false`では実行されていない。
+- artifact容量超過の原因に対して、保存物縮小・保持期間短縮・YujiのActions予算変更が対応しており、今回の両run成功で失敗経路を再反証した。
+- 戦略関連の独立回帰：Python strategy 62件、strategy wiring 34/34、session parser、round-trip 85/85、proposal agreement 134/134、decision-memory tunnel 74/74、server 54/54が合格。
+- Codex環境ではlocalhost待受が`EPERM`になるため、`/api/chat`・`requireAdmin`・`verify-deploy`のHTTP再実行はGate 4で要求されていない。対象CI commitはserver変更を含まず、Railwayの製品コードSHAは`2522c7d`と報告・記録されている。
+
+## 公開後に残る確認
+
+- Gate 6：Windows実機でクリーン／上書きインストール、起動、同梱Bridge、PTT／TTS。
+- Gate 8：iRacing実走と`SubSessionID`の実データ確認。
+- 公開workflowは再ビルドするため、Gate 9で公開物を再取得し、公開後のbytes／SHA-256を改めて照合する。
+
+```text
+確認者: Codex
+独立確認時刻: 2026-09-20 22:55 JST
+対象SHA: e1a796369563bf9c932985bfacc26c1f5133f6c7
+P0/P1: 0件 / 0件
+artifact取得・SHA-256一致: 合格（Desktop／Bridge ZIP、installer、app.asar、同梱Bridge）
+app.asar module検査: 合格（renderer参照18/18、対象SHAソースと正規化後一致）
+workflow確認: 合格（容量対策、保持1日、Release添付維持、publish条件維持）
+最終判定: 公開可
+```
+
+この判定はYujiへ公開GOを求められる状態を意味する。**公開操作そのものは行っていない**。
