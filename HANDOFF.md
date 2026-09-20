@@ -1,6 +1,18 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-09-20 22:55 JST（Build 302 Gate 4独立確認合格・公開GO待ち）
+最終更新: 2026-09-21 JST（Build 302 公開済み・Gate 9照合完了。次はYuji実機確認とMD #10）
+
+## 2026-09-21 追記：Build 302 公開済み（Desktop）・公開後取得物の照合完了
+
+Codex Gate 4「公開可（P0/P1=0）」＋Yuji公開GOで、`build-desktop.yml publish=true`（run `35542509895`、対象SHA `e1a7963`）を実行。
+`desktop-latest`＝Build 302（Latest）。公開installer 100,199,099 bytes・SHA-256 `69E4F7C63E9D56FD2DDE46B63D59AE3589986AFC3BBEC7C4C0F7057D3CD2C83C`
+を公開URLから取得して再計算し、manifest・release digest・日付版・Setup-latest・旧互換Desktop-latestの全てと一致。
+公開installerを展開して`app.asar`（`8E4806A8…AC80`）・同梱Bridge（`F99E8805…EE4C`）もmanifest一致、必須18モジュール存在、
+`e1a7963`ソースと一致、`buildNum 302`。公開は再ビルドのためcandidateとhashが異なる（`build-info.json`の時刻差）。
+`bridge-latest`は未更新（Build 301と同じ運用）。GitHubはPrivate維持。Railway本番SHA `2522c7d`（server変更なし）。
+**残り（公開後にYuji）**：Windows実機（Gate 6）、旧Buildからの更新動線、iRacing実走・SubSessionID実測（Gate 8）。
+停止条件（Gate 10）に該当したら独断で差し替えず、Yujiへrollback案（Build 301再公開）を提示。詳細は共有ログ末尾。
+次はMD #10（合意後の交通・燃料・rejoin安全条件崩壊に対するchange/cancel）。**以下の「公開はまだ実施していない」は古い記述（公開済み）**。
 
 ## 2026-09-20 追記：Build 302 Gate 4独立確認合格・公開はYuji判断待ち
 
