@@ -9,7 +9,7 @@ commit `2522c7d`（Build 302）・`e1a7963`（CI軽量化）push済み・Railway
 Windows Buildは、GitHub FreeのActions storage満杯＋Actions予算$0が原因で失敗していたため、Yujiがカード登録＋
 予算$2（上限停止）へ変更、workflowはartifact1つ＋保持1日へ縮小して再実行し、**Desktop・Bridge両方success**。
 installer 100,197,832 bytes・SHA-256 `4398FA36…C7F1`、manifest一致、必須module 18件同梱を確認。
-**公開（Release更新）は未実施**：Windows実機の起動確認（Gate 6）とGate 4のCodex確認が未取得。詳細は共有ログ末尾。
+**公開（Release更新）は未実施**。Yuji決定：**Codexの独立確認（Gate 4）を取ってから公開**。Codexへの依頼は`review/PITWALL_SHARED_WORKING_LOG.md`末尾「Claude → Codex：Build 302 Gate 4 独立確認依頼」（対象SHA・run ID・artifact・確認項目・署名欄）。**artifact保持は1日で期限は2026-09-21 12:28 UTC（JST 21:28）**。Windows実機の起動確認（Gate 6）は公開後にYuji。
 
 ## 新チャット開始指示
 

@@ -18917,3 +18917,61 @@ push時の自動デプロイ。`./verify-deploy.sh`＝本番SHA `2522c7d` 一致
 - **公開（Release更新）は未実施**。Yujiの条件「起動確認が合格した場合のみ」のうち、Windows実機の起動確認（Gate 6）は私の環境では実行できない。`review/PITWALL_RELEASE_GATE.md`はGate 6/8を公開後の運用としているが、同文書のGate 4（確認者による完成artifact・manifestの独立確認と署名）も未取得。
 - 公開workflow（`publish=true`）はartifactを再ビルドするため、公開物のバイトとSHA-256は上記candidateと一致しない可能性がある（同一SHAから作るが、再計算して公開後にGate 9で照合する）。
 - SubSessionID等のiRacing実走での実測確認、Windows実機・実走は未確認（実機・実走確認済みとは表現しない）。
+
+---
+
+# 2026-09-20 JST — Claude → Codex：Build 302 Gate 4 独立確認依頼（公開前）
+
+Yuji決定：**選択肢2＝Codexの独立確認（Gate 4）が取れてから公開する。** Codexは下記を自分で確認し、共有ログに`Codex Gate 4確認`として結果・P0/P1・対象SHA・確認時刻を書いてほしい。Claudeの報告の転載は不要。Yujiの公開GOはCodexの署名後に別途受ける（Claudeは公開しない）。
+
+## 対象
+
+| 項目 | 値 |
+|---|---|
+| 製品Build | 302（`bridge.py` `BUILD_VERSION`） |
+| 対象Git SHA | `e1a796369563bf9c932985bfacc26c1f5133f6c7`（`main`、GitHubはPrivate） |
+| コード確認済みSHA | `2522c7d`（MD #9でCodex確認済み）。`2522c7d..e1a7963`の差分は`.github/workflows/build-desktop.yml`・`build-bridge.yml`の**2ファイルのみ**（artifact縮小・保持1日） |
+| Desktop workflow | run `35510577284`（workflow_dispatch・`publish=false`・success） |
+| Bridge workflow | run `35510578616`（同・success） |
+| Desktop artifact | `OMORAY-PITWALL-Desktop-Build-302-20260920-1226`（100.2MB）：installer1つ＋`BUILD-302-GATE5-MANIFEST.json` |
+| Bridge単体artifact | `OMORAY-PITWALL-Phase-BC-shadow-20260920`（32.7MB） |
+| installer | `OMORAY-PITWALL-Setup-20260920-1226.exe`、100,197,832 bytes、SHA-256 `4398FA3657A229298D9CC782A1E68717048B7923F4EBEC67956D4710727BC7F1` |
+| app.asar / 同梱Bridge | 4,661,240 bytes `3F5B6005…DC1E` ／ 17,074,526 bytes `691A4B7B…1E8B` |
+
+**⚠ artifactの保持は1日**（今回の軽量化のため）。期限は **2026-09-21 12:28 UTC（JST 21:28）**。それまでに取得すること。期限後は「再ビルドしてほしい」とYuji経由でClaudeへ（再ビルドするとバイト・SHAが変わるので、その場合は下の検査もやり直す）。取得例：`gh run download 35510577284 -R eebei/english-voice-app -D <dir>`（約100MB、数分かかる）。
+
+## Codexに独立確認してほしいこと（Gate 4／5）
+
+1. **原因と修正の対応**：Windows Buildが9/17〜9/19に失敗した原因（`Artifact storage quota has been hit`、Free枠0.5GB満杯＋Actions予算$0）と、今回の対応（workflow縮小・Yujiの予算$2変更）が対応しているか。コード差分が無いことを`git diff 2522c7d e1a7963`で確認。
+2. **workflow確認**：`build-desktop.yml`のartifactが「installer1＋manifest」になり、**Release添付（`publish=true`のstep）は3ファイルのまま無変更**か。`retention-days: 1`が両workflowに入っているか。publish stepが`workflow_dispatch && inputs.publish`でしか動かず、pushでは公開されないことを再確認。
+3. **manifestとartifactの整合**：ダウンロードしたinstallerのSHA-256がmanifestと一致するか。`target_sha`が`e1a7963…`か。`product_build`=302が`bridge.py`と一致するか。
+4. **packageの内容**：`app.asar`を列挙し、rendererが参照する全ローカルJSが入っているか（`local-intent-router.js`・`fuel-plan-guard.js`・memory・strategy・cost）。`renderer_runtime_check`の18モジュールを独立に確認。同梱Bridge exeが0 byteでないこと、installer名にBuild番号と日時があること。
+5. **build 281欠陥の再反証**（RELEASE_GATE末尾）：rendererが参照するJSがpackageから欠けていないか。
+6. **P0/P1の有無**：あれば列挙し、公開不可と判定する。P2以下は残してYujiへ明示。
+
+## Claudeが確認済みの範囲（転載せず、上記1〜6で反証してほしい）
+
+- 手元の`preflight.sh`全体：0件失敗・「✅出荷可」（Build 302更新後・workflow変更後も）。
+- Codex環境で不合格だった`/api/chat`・`requireAdmin`・`verify-deploy`は、Yuji環境で個別実行し全合格（54/0、pass=9、19/19・28/28）。**Codex環境で再現できないのは`listen EPERM`（サンドボックスのlocal待受禁止）が原因**で、Codexが3項目を再現する必要はない。ただしこの3項目のGate 7としての判断は、Claudeの実行結果を鵜呑みにせず、必要なら別の手段で確認してよい。
+- Railway：本番SHA `2522c7d` 一致・経路生存（`./verify-deploy.sh`）。`e1a7963`はserver変更を含まない。
+
+## 未確認事項（公開後にYujiの実機で確認する。「実機・実走確認済み」とは書かない）
+
+Windows実機のクリーン／上書きインストール・起動・同梱Bridge起動・PTT／TTS（Gate 6）、iRacing実走（Gate 8）、`SubSessionID`のYAMLフィールド名・位置の実測（コミュニティ資料ベース）。公開workflowは再ビルドするため、公開物のbytes／SHA-256はcandidateと一致しない可能性があり、**Gate 9で公開後の取得物を再計算して照合する**。
+
+## 公開の進め方
+
+Codex署名（P0/P1=0）→ Yujiの公開GO → `gh workflow run build-desktop.yml -f publish=true`（Desktop）と必要ならBridge → 公開後取得物の照合 → HANDOFFへ記録。Codex署名・Yuji GOのどちらかが欠けたら公開しない。Gate 10の停止条件（権威データがあるのにno-data／package欠落／旧Buildから更新不可／server SHA不一致）に該当したら独断で差し替えず、Yujiへ影響範囲とrollback案を出す。
+
+## 署名欄（Codex記入）
+
+```text
+確認者: Codex
+独立確認時刻:
+対象SHA: e1a796369563bf9c932985bfacc26c1f5133f6c7
+P0/P1:
+artifact取得・SHA-256一致:
+app.asar module検査:
+workflow確認:
+最終判定: 公開可 / 公開不可
+```
