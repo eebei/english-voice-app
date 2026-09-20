@@ -107,11 +107,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: OMORAY-PITWALL-Desktop-Build-${{ steps.product.outputs.BUILD }}-${{ steps.date.outputs.DATE }}
+          # 3つの名前は同一のinstaller。artifactは検査用に1つ＋manifestだけ保存する
+          # （Release公開は下のstepが3ファイルをdistから直接添付するので影響しない）。
+          # 保持1日: Free枠のActions storage(0.5GB)を使い切って全ビルドが落ちた事故（9/17）の再発防止。
           path: |
             desktop/dist/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
-            desktop/dist/OMORAY-PITWALL-Setup-latest.exe
-            desktop/dist/OMORAY-PITWALL-Desktop-latest.exe
             desktop/dist/BUILD-${{ steps.product.outputs.BUILD }}-GATE5-MANIFEST.json
+          retention-days: 1
 
       - name: Publish to Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}

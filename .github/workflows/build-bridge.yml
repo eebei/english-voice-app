@@ -66,6 +66,7 @@ jobs:
             installer_output/OMORAY-PITWALL-Setup-${{ steps.date.outputs.DATE }}.exe
             dist/OMORAY-PITWALL-Bridge-${{ steps.date.outputs.DATE }}.exe
           if-no-files-found: error
+          retention-days: 1
 
       - name: Publish to Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
