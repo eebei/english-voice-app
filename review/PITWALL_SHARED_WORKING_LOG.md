@@ -18876,3 +18876,44 @@ Practice/Qualify/Race番号でしかなく、**別レース**でも同じ値を�
 - Windows/iRacing実走での`SubSessionID`実測確認は未実施（フィールド名・位置はコミュニティ
   資料ベース）。
 - 段階4は保留。commit・Build・公開GOなし。
+
+---
+
+# 2026-09-20 JST — Claude：Build 302 commit・push・Railway・Windows private candidate（Gate 5）結果
+
+Yuji指示：MD #9合格を区切りにcommit→Windows Build。preflight・起動確認が合格した場合のみ公開。GitHubはPrivate維持。
+
+## 1. commit・push・リポジトリ
+- commit `2522c7d`（Build 302。`BUILD_VERSION`を301→302へ更新）、CI軽量化commit `e1a7963`。いずれもmainへpush済み。
+- `gh repo view`：`eebei/english-voice-app` **PRIVATE**（push前後とも維持。設定は変更していない）。
+- `git add -A`の前に差分の秘密情報スキャン（api key／secret／token形式）＝該当0件、`.gitignore`は`/review/local-evidence/`の追加のみ。
+
+## 2. Codex環境で不合格だった3項目の再確認（Yuji環境）
+| 項目 | 結果 |
+|---|---|
+| `/api/chat` HTTP統合（tests-chat-http.js） | 54 / 0（合格） |
+| `requireAdmin`（tests-require-admin.js） | pass=9 fail=0（合格） |
+| `verify-deploy`（tests-deploy-verification.js＋`./verify-deploy.sh`） | 19/19・28/28。本番SHA=`2522c7d`一致、経路生存（戦略判断の正本GETは未認証で401＝生きている） |
+
+Codex環境で不合格だった原因は、サンドボックスがlocalhost待受を禁止する`listen EPERM`（コード不合格ではない）という前回の切り分けと整合する。`preflight.sh`全体：0件失敗・「✅出荷可」（commit前・Build番号更新後・workflow変更後の3回）。
+
+## 3. Railway（Gate 7）
+push時の自動デプロイ。`./verify-deploy.sh`＝本番SHA `2522c7d` 一致・経路生存（9/17・9/19の2回確認）。その後のCI-only commit（`e1a7963`）はserver.js等を含まない。
+
+## 4. Windows Build（経緯）
+9/17〜9/19の再実行は全て`Failed to CreateArtifact: Artifact storage quota has been hit`で失敗（ビルド／パッケージ自体は成功、最後のartifactアップロードのみ失敗）。
+原因はGitHub Free「Actions storage 0.5GB/0.5GB」満杯＋**Actions予算が$0・Stop usage=Yes**（Budgets and alerts）。Build 301の2件（Yuji許可の範囲）を削除しても集計は月次で戻らなかった。
+対応：①Yujiが決済カード登録＋Actions予算を$0→$2（上限で停止）へ変更 ②workflowのartifactを「同一installerの3重保存」から「installer1＋Gate 5 manifest」へ縮小し保持1日（`.github/workflows/build-desktop.yml`・`build-bridge.yml`、Release添付は無変更）。
+
+## 5. Gate 5 private candidate（workflow_dispatch・publish=false）
+- Desktop run `35510577284`＝success（3m1s）／Bridge run `35510578616`＝success（1m5s）。target SHA `e1a796369563bf9c932985bfacc26c1f5133f6c7`（`2522c7d`からの差分はworkflow 2ファイルのみ・コード差分なし）。
+- 製品Build番号 `302`（`bridge.py`と`build-info.json`が一致）。
+- installer `OMORAY-PITWALL-Setup-20260920-1226.exe`：100,197,832 bytes、SHA-256 `4398FA3657A229298D9CC782A1E68717048B7923F4EBEC67956D4710727BC7F1`。ダウンロード後に手元で再計算し**manifestと一致**。
+- `app.asar`：4,661,240 bytes、SHA-256 `3F5B6005…DC1E`。同梱Bridge exe：17,074,526 bytes（0 byteでない）、SHA-256 `691A4B7B…1E8B`。
+- packaged runtime検査（`verify-packaged-runtime.js`）：`local-intent-router.js`・`fuel-plan-guard.js`・`session-strategy-state.js`・`session-memory.js`・`decision-memory.js`・`strategy-playbook.js`・`cost-meter.js`ほか計18モジュールの存在を確認。
+- Bridge単体版artifact（`OMORAY-PITWALL-Phase-BC-shadow-20260920`、32.7MB）も生成済み。
+
+## 6. 未実施・公開の判断待ち
+- **公開（Release更新）は未実施**。Yujiの条件「起動確認が合格した場合のみ」のうち、Windows実機の起動確認（Gate 6）は私の環境では実行できない。`review/PITWALL_RELEASE_GATE.md`はGate 6/8を公開後の運用としているが、同文書のGate 4（確認者による完成artifact・manifestの独立確認と署名）も未取得。
+- 公開workflow（`publish=true`）はartifactを再ビルドするため、公開物のバイトとSHA-256は上記candidateと一致しない可能性がある（同一SHAから作るが、再計算して公開後にGate 9で照合する）。
+- SubSessionID等のiRacing実走での実測確認、Windows実機・実走は未確認（実機・実走確認済みとは表現しない）。

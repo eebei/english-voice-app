@@ -2,6 +2,15 @@
 
 最終更新: 2026-09-17 JST（MD #9合格・完了。次はMD #10）
 
+## 2026-09-20 追記：Build 302 private candidate（Gate 5合格）・公開はYuji判断待ち
+
+commit `2522c7d`（Build 302）・`e1a7963`（CI軽量化）push済み・Railway本番SHA一致・GitHubはPrivate維持。
+`/api/chat`・`requireAdmin`・`verify-deploy`はYuji環境で全合格（Codex環境の不合格は`listen EPERM`）。
+Windows Buildは、GitHub FreeのActions storage満杯＋Actions予算$0が原因で失敗していたため、Yujiがカード登録＋
+予算$2（上限停止）へ変更、workflowはartifact1つ＋保持1日へ縮小して再実行し、**Desktop・Bridge両方success**。
+installer 100,197,832 bytes・SHA-256 `4398FA36…C7F1`、manifest一致、必須module 18件同梱を確認。
+**公開（Release更新）は未実施**：Windows実機の起動確認（Gate 6）とGate 4のCodex確認が未取得。詳細は共有ログ末尾。
+
 ## 新チャット開始指示
 
 新しいチャットでは最初に`AGENTS.md`、本`HANDOFF.md`、
