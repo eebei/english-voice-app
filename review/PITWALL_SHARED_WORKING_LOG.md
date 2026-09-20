@@ -19030,3 +19030,36 @@ workflow確認: 合格（容量対策、保持1日、Release添付維持、publi
 ```
 
 この判定はYujiへ公開GOを求められる状態を意味する。**公開操作そのものは行っていない**。
+
+---
+
+# 2026-09-21 JST — Claude：Build 302 公開（Gate 9）と公開後照合
+
+Yuji公開GO（2026-09-21 朝、Codex Gate 4「公開可・P0/P1=0」署名済み）。公開範囲は**Desktopのみ**。`bridge-latest`（Build 301の時も更新していない運用）は更新していない。
+
+## 公開操作
+- `gh workflow run build-desktop.yml --ref main -f publish=true`、run `35542509895`＝success。対象SHA `e1a796369563bf9c932985bfacc26c1f5133f6c7`（Codexが確認したSHAそのもの。手元のdocs-only commitはpush前で、公開workflowはGitHub上のmainを使用）。
+- `Verify packaged runtime modules`・`Upload private build artifact`・`Publish to Release`＝success。
+- `desktop-latest` Release名＝「OMORAY PITWALL Desktop — Build 302」、Latest、prerelease=false。GitHubリポジトリはPrivateのまま。
+
+## 公開後取得物の照合（Gate 9）
+- 公開時は再ビルドのため、candidateとバイト・SHA-256が異なる（想定どおり）：
+
+| | candidate（Codex確認） | 公開物 |
+|---|---|---|
+| installer | 100,197,832 / `4398FA36…C7F1` | **100,199,099 / `69E4F7C63E9D56FD2DDE46B63D59AE3589986AFC3BBEC7C4C0F7057D3CD2C83C`** |
+| app.asar | 4,661,240 / `3F5B6005…DC1E` | 4,661,240 / `8E4806A8A6E9AD9731B8C1C604BA14A5BA225CD7E4CC3F62E3F78F10622AAC80` |
+| 同梱Bridge | 17,074,526 / `691A4B7B…1E8B` | 17,075,447 / `F99E88050588C55D6B5CB6302FF807E4AF6FB133D31FD39B5137469046C2EE4C` |
+
+- 公開URLから`OMORAY-PITWALL-Setup-latest.exe`・`OMORAY-PITWALL-Desktop-latest.exe`を実際に取得し、bytes＝100,199,099、SHA-256＝`69E4F7C6…C83C`を**手元で再計算して、workflowのmanifestとGitHub release asset digestの両方と一致**。
+- 日付版`OMORAY-PITWALL-Setup-20260920-2244.exe`・`Setup-latest`・旧互換`Desktop-latest`の3つが**同一digest**（同じ中身を指す）。
+- 取得した公開installerを`7zz`で展開し、`app.asar`のSHA-256がmanifestの`8E4806A8…AC80`と一致、同梱Bridge exeのSHA-256がmanifestの`F99E8805…EE4C`と一致（0 byteでない）。
+- `app.asar`内：必須18モジュール（local-intent-router・fuel-plan-guard・session-strategy-state・session-memory・decision-memory・strategy-playbook・cost-meterほか）全て存在。`renderer.html`が参照するローカルJS18件が18/18存在し、**全て`e1a7963`のソースと（改行正規化後）一致**。`build-info.json`＝`buildNum: 302`、`buildTag: 20260920-2244`。
+- app.asarのSHA-256がcandidateと異なるのは、`build-info.json`の`buildDate`／`buildTag`が再ビルド時刻で変わるため（同一サイズ）。モジュール18件のソース一致は上記のとおり確認済み。
+- 製品コード差分なし：公開SHA＝Codex確認SHA。Railway本番SHA`2522c7d`（server変更なし）。
+
+## 未確認（公開後にYujiの実機で確認・「実機／実走確認済み」とは書かない）
+- Gate 6：Windows実機でクリーン／上書きインストール、起動、同梱Bridge開始（二重起動しない）、PTT／TTS／overlay、更新通知から新installerへ到達。
+- **旧Build利用者の更新動線（Gate 9）**：実際の旧Buildからの更新到達は未検証。
+- Gate 8：iRacing実走、`SubSessionID`のYAMLフィールド名・位置の実測。
+- Gate 10停止条件（権威データがあるのにno-data回答／旧Buildから更新不可／起動不可／PTT・TTS不動作）に該当したら、Releaseの差し替えは独断で行わずYujiへ影響範囲とrollback案（Build 301の再公開）を提示する。
