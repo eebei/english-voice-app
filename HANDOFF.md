@@ -25,10 +25,12 @@ installer 100,197,832 bytes・SHA-256 `4398FA36…C7F1`、manifest一致、必�
 ## 新チャット開始指示
 
 新しいチャットでは最初に`AGENTS.md`、本`HANDOFF.md`、
-`review/PITWALL_SHARED_WORKING_LOG.md`の最新項目を確認する。**MD #9はCodex再確認まで完了**。
-次はMD #10（合意後の安全条件崩壊に対するchange/cancel）から開始する。
+`review/PITWALL_SHARED_WORKING_LOG.md`の最新項目を確認する。Build 302はGate 4／5まで合格し、P0/P1=0。
+**公開はまだ実施していない**。最初にYujiへ現在の状態を短く報告し、公開GOが明示された場合のみClaudeが
+`publish=true`で公開する。公開後はGate 9で公開物のhashを照合し、その後YujiがGate 6／8を実機・実走確認する。
+公開対応が終わった後、開発はMD #10（合意後の安全条件崩壊に対するchange/cancel）から再開する。
 
-開始文：`MDチェック、引継ぎから開始。MD #10から。`
+開始文：`MDチェック、引継ぎから開始。Build 302の公開判断から。`
 
 現在の番号は固定する。
 
