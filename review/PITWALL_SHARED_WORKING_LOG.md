@@ -19063,3 +19063,32 @@ Yuji公開GO（2026-09-21 朝、Codex Gate 4「公開可・P0/P1=0」署名済�
 - **旧Build利用者の更新動線（Gate 9）**：実際の旧Buildからの更新到達は未検証。
 - Gate 8：iRacing実走、`SubSessionID`のYAMLフィールド名・位置の実測。
 - Gate 10停止条件（権威データがあるのにno-data回答／旧Buildから更新不可／起動不可／PTT・TTS不動作）に該当したら、Releaseの差し替えは独断で行わずYujiへ影響範囲とrollback案（Build 301の再公開）を提示する。
+
+---
+
+# 2026-09-22 JST — Claude：リポジトリをPublicへ復帰（Yuji指示）
+
+## 事象
+Build 301を起動しても更新バナーが出ない、とYujiから報告。原因は、リポジトリがPrivateのため
+`desktop/main.js`の更新確認（GitHub Releases APIとinstaller URLを無認証で取得）が404になり、
+アプリが「最新版なし」と判定していたこと。実際に無認証で叩き404を確認した。
+サイトのダウンロードリンク（`public/setup.html`・`welcome.html`・`help.html`）も同じURLで、
+新規テスターも取得不能になっていた。
+
+## 対応
+Yuji指示によりリポジトリをPublicへ戻した（`gh repo edit --visibility public`）。復帰後、
+Releases APIとinstaller URLとも200を確認。
+
+## 復帰前に確認したこと（Private化の理由との整合）
+Private化は2026-09-02の「診断ログに他ドライバー実名72人分」発見が発端。ただし記録を精査すると、
+その生ログは**commit前に発見して停止**しており、`git log --all --diff-filter=A`で全履歴を検索した結果、
+実名を含む生ログ・生データファイルは一度もcommitされていない（commit済みは`review/corpus/raw/*-redacted.log`
+の伏せ字版4本のみ）。よってPublic復帰そのものが、この過去事故の再発（既存commitの再公開）には当たらない
+ことを確認した上で実施した。
+
+## 残るリスク・運用ルール（変更なし）
+- 実走ログ等を今後このリポジトリへ入れる際は、引き続き伏せ字版（`-redacted`）のみをcommitする
+  （`bridge.py`のDRIVERログ実名出力は既に削除済み・機能不変）。
+- `.gitignore`の`OMORAY-bridge-debug-*.log`・`/review/local-evidence/`は維持。
+- Public化に伴い、今後の作業で生ログ・個人情報を含むファイルを誤ってcommitしないよう、
+  commit前のレビューを従来以上に徹底する。
