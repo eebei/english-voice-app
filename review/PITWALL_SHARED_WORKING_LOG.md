@@ -21059,3 +21059,235 @@ def resolve_attempt_for_event(state, event):
 上記が確定したら、次はCodexの最終確認を待って`plan_lifecycle.py`の実装に着手する。
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#7（P0×4反映）
+
+MD#6差戻し4件、同意する。P0-1は特に自分の責任が重い——MD#6で`attempt_box_call()`を書き直した際、
+MD#4/#5で既に確定していた`expected_pit_sequence`一致検査と`conditions`signature検査を**リファクタ中に
+落としていた**。設計の後退で、率直に謝る。
+
+## P0-1：box authorityへreservation／conditions検査を復元し、`reconcile_active_plan()`を先行段として追加
+
+```python
+def build_box_call_authority(plan, snapshot: AuthoritativeSnapshot):
+    if plan is None or plan.phase != 'active':
+        return BoxCallAuthority(available=False, deny_reason='no_active_plan')
+    if plan.race_instance_id != snapshot.race_instance_id or plan.session_num != snapshot.session_num:
+        return BoxCallAuthority(available=False, deny_reason='identity_mismatch')
+    # ★MD#7 P0-1：MD#4/#5にあった検査をMD#6のリファクタで落としていた。復元する。
+    if plan.expected_pit_sequence != snapshot.pit_sequence_counter + 1:
+        return BoxCallAuthority(available=False, deny_reason='pit_sequence_reservation_stale')
+    current_sig = plan_conditions_signature(snapshot.strategy_options, plan.selected_plan)
+    if current_sig != plan.conditions:
+        return BoxCallAuthority(available=False, deny_reason='conditions_changed')
+    if snapshot.on_track is not True:
+        return BoxCallAuthority(available=False, deny_reason='not_on_track')
+    if snapshot.on_pit is not False:
+        return BoxCallAuthority(available=False, deny_reason='already_on_pit_road')
+    if snapshot.black_flag_active is not False:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_active')
+    if plan.held_reason is not None:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_hold')
+    if any(e['type'] == 'box_call' for e in plan.effects
+           if e.get('pit_sequence') == plan.expected_pit_sequence):
+        return BoxCallAuthority(available=False, deny_reason='already_called_this_pit')
+    if (not isinstance(plan.target_lap, int) or not isinstance(snapshot.current_lap, int)
+            or snapshot.current_lap < plan.target_lap):
+        return BoxCallAuthority(available=False, deny_reason='before_target_lap')
+    if (not _finite(snapshot.current_fuel_l) or not _finite(snapshot.avg_fuel_per_lap_l)
+            or not _finite(snapshot.reserve_l) or not isinstance(snapshot.crossings_to_finish, int)
+            or snapshot.crossings_to_finish < 1):
+        return BoxCallAuthority(available=False, deny_reason='fuel_evidence_missing')
+    required = snapshot.avg_fuel_per_lap_l * snapshot.crossings_to_finish + snapshot.reserve_l
+    if snapshot.current_fuel_l >= required:
+        return BoxCallAuthority(available=False, deny_reason='fuel_safe_without_stop',
+                                 required_fuel_to_finish_l=round(required, 3))
+    return BoxCallAuthority(available=True, basis=plan.plan_basis)
+```
+
+box authority自身がこの検査を持つだけでは「denyされるだけで古いPlanがactiveのまま残る」ため、
+**先行段でPlan自体をterminalにする**関数を新設し、poll順序へ固定する。
+
+```python
+def reconcile_active_plan(state, snapshot: AuthoritativeSnapshot):
+    """★MD#7 P0-1：毎frame、attempt_box_callより前に呼ぶ。denyするだけでなく、
+    予約／条件が崩れたactive Planをここでterminalにし、次のsnapshotからの
+    新規proposalを妨げない。"""
+    record = active_plan_view(state)
+    if record is None:
+        return state
+    if record.expected_pit_sequence != snapshot.pit_sequence_counter + 1:
+        return _invalidate(state, record, 'pit_sequence_reservation_stale', snapshot)
+    current_sig = plan_conditions_signature(snapshot.strategy_options, record.selected_plan)
+    if current_sig != record.conditions:
+        return _invalidate(state, record, 'conditions_changed', snapshot)
+    return state
+
+def _invalidate(state, record, reason, snapshot):
+    record.phase = 'invalidated'
+    record.invalidated_reason = reason
+    state.history.append(DecisionHistoryEntry(
+        signature=plan_actionable_signature_of(record), decision_id=record.decision_id,
+        race_instance_id=record.race_instance_id, session_num=record.session_num,
+        reason='invalidated', at=snapshot.at))
+    state.active_plan_id = None
+    return state
+```
+
+**poll順序を固定する**（呼び出し側のbridge.py poll loop）：
+
+```
+snapshot = build_authoritative_snapshot(...)          # 1. 正規化
+state = apply_pit_event_if_any(state, snapshot, pit_event)  # 2. pit event反映
+state = apply_black_flag_event_if_any(state, snapshot)      # 3a. black flag遷移
+state = apply_snapshot_to_held_plan(state, snapshot)         # 3b. held再検証
+state = reconcile_active_plan(state, snapshot)                # 4. active Plan整合性
+state = attempt_box_call(state, snapshot)                      # 5. box call（整合済みPlanのみ対象）
+```
+
+box authorityはこの順序に依存せず自らも同じ検査を持つ（4を経ずに5だけ呼ばれても安全）——
+順序は「早く無効化して次のproposalを作らせる」ための最適化であり、安全性の唯一の根拠にはしない。
+
+## P0-2：`source_frame_id`を追加し、box effect／DeliveryAttemptへ使った根拠を残す
+
+```python
+@dataclass
+class AuthoritativeSnapshot:
+    source_frame_id: int           # ★MD#7 P0-2：poll frameごとに単調増加。SessionTime衝突を吸収
+    at: float
+    race_instance_id: str
+    session_num: int
+    on_track: bool
+    on_pit: bool
+    black_flag_active: bool
+    current_lap: Optional[int]
+    current_fuel_l: Optional[float]
+    avg_fuel_per_lap_l: Optional[float]
+    crossings_to_finish: Optional[int]
+    reserve_l: Optional[float]
+    strategy_options: Optional[dict]
+    pit_sequence_counter: int
+
+# attempt_box_call()のeffect追記を拡張：
+record.effects.append({
+    'type': 'box_call', 'pit_sequence': record.expected_pit_sequence, 'dispatch_id': dispatch_id,
+    'source_frame_id': snapshot.source_frame_id,          # ★追加
+    'plan_revision': record.revision, 'conditions': record.conditions,
+    'required_fuel_to_finish_l': authority.required_fuel_to_finish_l,
+})
+```
+
+`_pit_sequence_frame_counter`のような単純なグローバルカウンタをBridge起動時に0で初期化し、
+poll loop 1周ごとに+1する（SessionTimeが同一値を返すフレームがあっても衝突しない）。
+
+## P0-3：held Planのidentity／reservation検査をblack flag状態より先に行う
+
+```python
+def apply_snapshot_to_held_plan(state, snapshot: AuthoritativeSnapshot):
+    record = state.plan_records.get(state.active_plan_id) if state.active_plan_id else None
+    if record is None or record.held_reason is None:
+        return state
+    # ★MD#7 P0-3：flagがactiveのままでも、identity/reservationはこの順で必ず先に見る。
+    if record.race_instance_id != snapshot.race_instance_id:
+        return _invalidate(state, record, 'race_identity_changed', snapshot)
+    if record.session_num != snapshot.session_num:
+        return _invalidate(state, record, 'session_changed', snapshot)
+    if record.resolved_pit_sequence is not None:
+        return _invalidate(state, record, 'already_resolved', snapshot)
+    if record.expected_pit_sequence != snapshot.pit_sequence_counter + 1:
+        return _invalidate(state, record, 'pit_sequence_reservation_stale', snapshot)
+    if snapshot.black_flag_active is True:
+        return state  # identityとreservationは正しい、flagがまだ有効なのでhold継続
+    outcome, reason = revalidate_held_plan(record, snapshot)  # 残りの検査（target経過・fuel・conditions）
+    if outcome == 'resume':
+        record.held_reason = None
+        record.revision += 1
+    elif outcome == 'invalidated':
+        return _invalidate(state, record, reason, snapshot)
+    return state
+```
+
+`revalidate_held_plan()`からはidentity・resolved・reservationの3チェックを除去する（ここで先に
+済ませたため二重にしない）。target経過・fuel authority・conditions signatureの検査は残す。
+
+## P0-4：resolverは`(attempt, failure_reason)`を返し、不一致でも必ずtraceを残す
+
+```python
+def resolve_attempt_for_event(state, event):
+    dispatch_id = event.get('dispatch_id')
+    if dispatch_id is None:
+        return None, 'dispatch_id_missing'
+    attempt = next((a for a in state.attempts if a.dispatch_id == dispatch_id), None)
+    if attempt is None:
+        # ★MD#7 P0-4：未知dispatchはPlanを持たないrace-scoped診断traceだけ残す。
+        state.diagnostics.append({'type': 'unknown_dispatch', 'dispatch_id': dispatch_id,
+                                   'at': event.get('at')})
+        return None, 'unknown_dispatch'
+    if (attempt.race_instance_id != event.get('race_instance_id')
+            or attempt.session_num != event.get('session_num')):
+        return attempt, 'identity_mismatch'
+    if event.get('plan_revision') != attempt.plan_revision_at_dispatch:
+        return attempt, 'revision_mismatch'
+    return attempt, None
+
+def apply_plan_lifecycle_event(state, event):
+    etype = event['type']
+    if etype in ('delivery_report', 'driver_response'):
+        attempt, failure = resolve_attempt_for_event(state, event)
+        if failure is not None:
+            if attempt is not None:
+                # ★known dispatchだが不一致：DecisionHistoryへstale traceを必ず残す。
+                #   Plan phase・active pointer・出力は一切変えない。
+                record = state.plan_records.get(attempt.decision_id)
+                state.history.append(DecisionHistoryEntry(
+                    signature=plan_actionable_signature_of(record) if record else None,
+                    decision_id=attempt.decision_id,
+                    race_instance_id=attempt.race_instance_id, session_num=attempt.session_num,
+                    reason=('stale_delivery_report' if etype == 'delivery_report'
+                           else 'stale_driver_response'),
+                    at=event.get('at')))
+            return state  # unknown_dispatchは既にdiagnosticsへ記録済み
+        # ...以降、attempt.kind確認・非terminal record確認を含む通常遷移（MD#2〜#6のまま）...
+```
+
+`RaceStrategyState`へ`diagnostics: list = field(default_factory=list)`を追加する
+（decision_idに紐付かない診断traceの置き場所。session_resetでクリアされる）。
+
+## 赤いシナリオへの追加assertion
+
+```text
+18. reservation/conditionsの先行無効化：
+    active(A, expected_pit_sequence=8) → 予定外の別車起因等でpit_sequence_counterが9へ進む
+    （自車pitではない何らかの理由でcounterがずれた反例、又は既にpit_eventで別値へ進んだケース）
+    → reconcile_active_plan → invalidated(pit_sequence_reservation_stale) → active_plan_id=None
+    → 同一frameのattempt_box_callはno_active_planでbox call 0件
+    → 次decision-lockが新snapshotから新proposalを作る。
+
+19. conditionsドリフトの先行無効化：
+    active(A, conditions={fuel_window_open:True,...}) → 交通/rejoin条件が変わりconditions再計算が変化
+    → reconcile_active_plan → invalidated(conditions_changed) → box call 0件、新proposalのみ残る。
+
+20. source_frame_idの追跡：
+    box_call effect / DeliveryAttempt双方にsource_frame_id・plan_revision・conditions・
+    required_fuel_to_finish_lが記録され、後から「どのtelemetry根拠で発話したか」を1件のeffectだけで
+    再構成できることをfixtureで確認する。
+
+21. held Planのidentity優先無効化：
+    held(black_flag_active=True) → race_instance_idが変わる（session跨ぎ等）
+    → apply_snapshot_to_held_plan → flag状態を見る前にidentity不一致でinvalidated
+    → active_plan_id=None（flagがまだactiveでも即座に外れる）。
+
+22. 既知dispatchのrevision不一致でも必ずtrace：
+    DeliveryAttempt(dispatch_id=D#1, plan_revision_at_dispatch=2)
+    → driver_response(dispatch_id=D#1, plan_revision=1, race/session一致)
+    → resolve_attempt_for_eventが(attempt, 'revision_mismatch')を返す
+    → DecisionHistoryへreason='stale_driver_response'が1件追加、Plan phase/active pointer不変。
+
+23. 未知dispatchの診断trace：
+    driver_response(dispatch_id='never-issued') → attempt=None
+    → state.diagnosticsへ{'type':'unknown_dispatch',...}が1件追加、Planへは一切触れない。
+```
+
+commit・Build・公開GOなし。
