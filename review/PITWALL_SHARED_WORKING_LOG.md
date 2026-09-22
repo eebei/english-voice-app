@@ -19092,3 +19092,31 @@ Private化は2026-09-02の「診断ログに他ドライバー実名72人分」�
 - `.gitignore`の`OMORAY-bridge-debug-*.log`・`/review/local-evidence/`は維持。
 - Public化に伴い、今後の作業で生ログ・個人情報を含むファイルを誤ってcommitしないよう、
   commit前のレビューを従来以上に徹底する。
+
+---
+
+# 2026-09-22 JST — Codex：Build 302 IMSA Fixed Road Atlanta 実走のGate 8不合格・修正指示
+
+| 項目 | 確認結果 |
+|---|---|
+| 確認者・対象 | Codex／公開Build 302（Bridge表示`Build 302`、ログ`OMORAY-bridge-debug-20260922-0934.log`）。製品コード変更・commit・Build・公開操作なし |
+| 実走事実 | IMSA Fixed、Road Atlanta、Mercedes-AMG GT3。11:07:17にPlan A判断を発話、11:21:54〜11:22:34にlap 15 pit（給油16.79L）、11:23:46〜11:25:23にlap 16 penalty pit（給油0L、lane 93.5秒）、11:30:47にlap 21の再pit/給油18Lを実発話 |
+| Build 302主配線 | B/Cは全区間`unavailable`。`strategy_plan_proposal`、`STRATEGY_DELIVERY`、`STRATEGY_DECISION_RESPONSE`、ackのログが0件で、Bridge提案→Driver合意/拒否→Bridge反映はこの実走で一度も通っていない。通ったのは旧来のPlan A `strategy_plan_decision`だけ |
+| P0：旧Planがpit後も発話 | first pitの`STRATEGY OPTIONS outcome`はplanned lap 21にactual lap 15（error -6）。second pitも同じactive Plan Aとしてactual lap 16（error -5）へ結合。active decisionを取消・再評価せず、lap 21で`strategy_plan_box_call`が旧Planの18Lを指示。直前の燃料判定は18.14L、必要9.98L、余裕8.16L、`safe`。`bridge.py`のbox callは`active_decision_plan`とlapだけを確認し、pit実行済み/現在のfuel requirement/penaltyを確認しない |
+| P1：Driver相談が作戦を変えない | 11:21:14「ピット入るぞ」は`strategy_recommendation`へ分類され、通常Planを再読するだけ。11:21:32「前#25が遅いから先に」はrelative paceを返すだけで、早期pitの理由・変更・取消へ接続しない。`pit_this_lap`は「この/今の/次の周」という狭い表現のみで、Desktop内stateにもBridge正本への反映経路が無い |
+| P1：ピットウィンド質問 | 11:20:08「ピットウィンド湧いてる？」はlocal routerの`fuel/燃料 + window` regexに当たらずunhandled→server engineer cardの`unresolved_operational`→「そのピット操作は確認できない」。同時刻BridgeにはA=lap21、B=lap12、C=lap22のstrategy snapshotがある |
+| P1：penalty | iRacing SDKは`SessionFlags 0x00010000`をblack/penalty flagとして定義する。BridgeはSessionFlagsを読むが`0xC000`のcautionだけを処理し、black flagのraw trace・state・Desktop配信・P0 call・Plan cancelは未実装。11:23:06のDriver申告はunhandled→`unresolved_operational`。11:24には`PlayerCarPitSvStatus=103`も観測したが、これはpit service statusでありblack flagの根拠にせず、既存コードはbox検出だけに使用。exactのSessionFlags値をログへ残していないため、その時点のbit値は後追い不能 |
+| P1：復帰相談 | 11:22:30の#25とのblend質問はrejoin cardへ到達したが、pit entry時のforecastが`available:false`／snapshot nullで固定文を返した。予測が無い場合にも、質問対象・現在の順位・再観測時点を繋ぐ会話は無い |
+| P1：訂正 | race後の「給油後にまたpitを指示した」は`disputeLatestDecision`が対象を発見できず`decision_not_found`。同一raceで発話したstrategy box callは`RADIO_HISTORY_EXCLUDED`で、訂正の対象へ結合されない |
+| P1：debrief反復 | `pddp.js:debriefQuestion()`はincidentsが存在する全raceで、conversion以外は固定の接触質問を返す。PDDP質問はローテーション前にunshiftされるため、penalty・strategy error・Driver訂正を次の問いにできず、同じインシデント話題が繰り返される |
+| 判定 | **Gate 8不合格。Gate 10停止条件該当。** Build 302を「戦略を実行する頭脳」とは扱わない。release rollbackはYuji GOなしに行わない |
+
+## Claudeへの修正順・完成条件
+
+1. このログをfixture化し、`pit window? → early pit because #25 slower → pit entry/fill → penalty flag/penalty pit → old plan cannot call again → Driver dispute → debrief`を一つの製品経路で再生する。各発話とstate transitionにsession、decision ID、pit sequence、authority snapshotを残す。
+2. 早期pit、penalty pit、pit exitでactive planを「実行済み」「変更待ち」「取消」のいずれかへ遷移させる。penalty pitをstrategy executionとして採点しない。旧planのbox callは、pit sequence・現fuel・finish requirement・penalty stateの同一frame確認なしに絶対に発話しない。
+3. `SessionFlags & 0x00010000`をBridgeの権威stateとして全frame観測・状態遷移/trace化し、発生時は短いP0/P1通知、Driver質問への事実回答、strategyのhold/cancelへ接続する。実SDK logでbitの立上がり/解除とdrive-throughを固定する。
+4. 日本語の「ピットウィンド」「入るぞ」「前が遅いから先に」を同じstrategy conversationへ分類し、Driverの理由を含むchange proposalをBridge正本へ戻す。B/C proposal-agreementのテストだけで合格にせず、Plan A、Driver起点変更、未合意、penalty、切断を通す。
+5. debriefは今回のstrategy/penalty/訂正traceを第一候補にし、incidentsがあるだけでは固定接触質問を出さない。直近の質問テーマを保持して同じテーマを避ける。
+
+必要な検査：上記fixtureのBridge→Desktop→speech queue→Bridge trace、既存戦略回帰、package runtime、Windows/iRacing再走。Build/公開はYuji GOなしに行わない。

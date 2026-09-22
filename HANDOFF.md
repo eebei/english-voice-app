@@ -1,6 +1,34 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-09-21 JST（Build 302 公開済み・Gate 9照合完了。次はYuji実機確認とMD #10）
+最終更新: 2026-09-22 JST（Build 302 Gate 8実走不合格・Gate 10停止判断が必要）
+
+## 2026-09-22 追記：IMSA Fixed Road Atlanta 実走でBuild 302不合格
+
+ログ`OMORAY-bridge-debug-20260922-0934.log`をCodexが確認。Build 302の主変更である
+Bridge提案→Desktop発話→Driver合意/拒否→Bridge反映は、Plan B/Cが全区間`unavailable`で
+`strategy_plan_proposal`／delivery／response／ackが**一度も発生せず、実走で未成立**。
+動いたのは既存のPlan A自動決定だけだった。
+
+11:21のDriver「ピット入るぞ」「前#25が遅いから先に」に対し、前者は`strategy_recommendation`
+として通常Planを返し、後者はrelative paceを返すだけで、早期ピットを作戦変更として受け取らなかった。
+実際のピットはlap 15で給油16.79L、Bridgeは`planned_entry_lap=21`との差`-6`を記録したが、
+active Plan Aを取消/再計算しなかった。続くペナルティpit（lap 16、給油0L、93.5秒）まで同じPlan Aの
+実行として記録した。lap 21には燃料18.14L・完走必要9.98L・余裕8.16L=`safe`にもかかわらず、
+残った旧Planで「この周でピット、給油18L」を実発話した。これはGate 10の「ピット指示で事実と異なる断定」に該当する。
+
+「ピットウィンド湧いてる？」はローカルrouterのfuel-window表現に`ピットウィンド`が無くunhandled→
+`unresolved_operational`へ落ちた。ブラックフラッグはSDKの`SessionFlags` bit `0x00010000`で取得可能だが、
+Bridgeは`0xC000`の黄旗だけを処理し、raw値の記録・black flagのstate化・Desktopへの配信・会話/Plan取消への接続が無い。
+したがって「テレメトリに来ていない」は誤りで、未実装の経路をno-dataとして返した。exactのbit値はログへ出していないため、
+当該瞬間のbit立上がりは後追い確認不能。
+
+デブリーフは、incidentsがnullでない全レースで固定の「一番危なかった接触は…」を選ぶ`pddp.js`の分岐が、
+通常の質問ローテーションより先に動く。今回の戦略失敗・ペナルティ・Driver訂正は選択対象にならず、同じテーマを繰り返す。
+
+**Build 302はGate 8不合格、P0/P1未解消。公開物の差替えは独断で行わない。** YujiがGOするまで
+`desktop-latest`のBuild 301再公開などのrollbackは実施しない。次の実装はMD #10を単独で進めず、
+本ログの一本の経路（ウィンド質問→早期pit申告/理由→pit実行→penalty→旧Plan取消→訂正→debrief）を
+入口から出力まで直して再生することを先にする。詳細は`review/PITWALL_SHARED_WORKING_LOG.md`末尾。
 
 ## 2026-09-21 追記：Build 302 公開済み（Desktop）・公開後取得物の照合完了
 
