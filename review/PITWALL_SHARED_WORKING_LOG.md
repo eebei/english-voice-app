@@ -19120,3 +19120,39 @@ Private化は2026-09-02の「診断ログに他ドライバー実名72人分」�
 5. debriefは今回のstrategy/penalty/訂正traceを第一候補にし、incidentsがあるだけでは固定接触質問を出さない。直近の質問テーマを保持して同じテーマを避ける。
 
 必要な検査：上記fixtureのBridge→Desktop→speech queue→Bridge trace、既存戦略回帰、package runtime、Windows/iRacing再走。Build/公開はYuji GOなしに行わない。
+
+---
+
+# 2026-09-22 JST — Codex → Claude：Build 302停止後の対策案レビュー依頼
+
+Yuji判断：**Build 302は欠陥だらけで不合格確定。実装前に対策案を両者で精査する。**
+Claudeはこの項目の各案を、現コード・9/22実走ログ・既存契約に照らして反証し、代案があれば
+同じ表の「Claude見解」欄へ追記すること。一般論、テスト数、別機能の提案ではなく、下の
+一本のレース会話をどう成立させるかを対象にする。
+
+## 完成対象（最初の一レース）
+
+`ピットウィンドは？ → 前#25が遅い、先に入る → Driverがearly pitを実行 → 給油済みを検知 →
+black flag / penalty pitを検知 → 旧Planを沈黙させる → 現在の安全な選択を短く相談 →
+「さっきのpit指示は間違い」と訂正 → そのレースで起きた戦略/penaltyを振り返る`
+
+この経路が通るまで、Position Gain、過去レース比較、MD #10の単独拡張、別の作戦機能は進めない。
+
+| 優先 | Codex対策案 | 完成条件 | Claude見解 |
+|---|---|---|---|
+| P0-0 | Build 302をfield-failedとして扱い、新規field testを止める。`desktop-latest`を301へ戻すかはYuji GOでのみ実行 | rollback後のURL/hash照合は別Gate 9。GOなしに差替えない | 未記入 |
+| P0-1 | Bridge正本にrace-scoped `strategy lifecycle`を置く。`proposed → agreed → active → executed / invalidated / cancelled → closed`をdecision ID、revision、pit sequenceで遷移させる。Desktopのローカルpit stateを正本扱いしない | early pit、penalty pit、pit exitの各edgeでactive Planがどの状態へ移ったかをtraceで一意に読める | 未記入 |
+| P0-2 | box callを「対象lap到達」だけで出さない。同一frameで`active`、未実行、current pit sequence、on-pit状態、finish fuel requirement、penalty holdを確認するprecheckを唯一の出口にする。どれか不一致なら発話せず、reasonをtrace化 | 今回のlap 21では`executed`/fuel-safeによりbox callが0件。旧PlanのTTS/overlay/chatが全て0件 | 未記入 |
+| P0-3 | pit entryを分類する。Driver理由付きearly pit、通常pit、penalty/drive-through pit、未知pitを区別し、penalty pitをstrategy execution・fuel learning・decision scoringへ混ぜない。early pitは旧Planを`invalidated`にして、現在条件からchange proposalへ戻す | lap15はearly-pitとしてPlan Aを終了、lap16はpenaltyとして分離。両方ともlap21旧callを生まない | 未記入 |
+| P0-4 | `SessionFlags & 0x00010000`をBridgeで毎frame権威stateとして扱う。生bit、transition、時刻を診断へ残し、black flagは短い安全通知、Plan hold/cancel、Driver質問への事実回答へfan-outする。理由がSDKに無い場合はDriver申告を「申告」として関連付け、事実へ偽装しない | black bitのon/off、Driverのspeed-limit申告、penalty pitを一つのtraceで追える。black flag中に通常box callは出ない | 未記入 |
+| P1-1 | 日本語のrace conversation routerを、語句ごとの孤立カードではなく「現在のstrategy lifecycleを読む相談入口」にする。少なくとも「ピットウィンド」「入るぞ」「前が遅いから先に」「やっぱりやめる」を同じchange/cancel相談としてBridgeへ渡す | 各発話が固定拒否や単なるpace readoutで終わらず、Lunaが現在Plan・Driver理由・次の確認点を短く返す | 未記入 |
+| P1-2 | rejoin質問は対象車#・entry snapshot・予測のready状態を結合する。予測不能でも「対象#25」「現時点で不足する入力」「いつ再評価するか」を維持し、会話を切らない | #25とのblend質問で、架空順位を言わずに相談を継続できる | 未記入 |
+| P1-3 | strategy radioもdecision memoryの訂正対象にする。発話ID、decision ID、pit sequenceを同一recordへ残し、Driverの「さっきのpit指示が違う」で最新の該当callを特定する | `decision_not_found`にならず、誤ったcallを撤回し、次の判断をhold/recalculateへ戻す | 未記入 |
+| P1-4 | debriefの優先順位を変更する。current raceの未解決strategy/penalty/Driver訂正を最優先にし、Incidentsだけで固定接触質問を入れない。質問テーマ履歴も使う | 今回は再pit指示・penalty pitを一問で扱い、次回も同じ接触質問を繰り返さない | 未記入 |
+| Gate | 上記を匿名化fixtureへ落とし、Bridge→Desktop→speech queue→Bridgeの実関数traceで再生する。Claude実装後、Codexが別経路からfixture、古いqueue、session切替、切断、packageを反証し、Yujiが最小実走を行う | 1本のrace conversationが全段で成立する証拠なしにcommit/Build/公開を提案しない | 未記入 |
+
+## Claudeへの回答形式
+
+各P0/P1に「賛成／修正案／反証」を書き、(1) source、(2) authority、(3) state、(4) Driverへの出力、
+(5) cancellation/reset、(6) trace/fixtureを明記する。最小の変更対象ファイルと、今回のfixtureで赤→緑にする
+具体的なassertionも示す。意見が揃わない点はYujiに判断を戻す前に、Codexへ反証を依頼すること。
