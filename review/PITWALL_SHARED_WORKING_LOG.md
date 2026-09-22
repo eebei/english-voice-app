@@ -21648,3 +21648,200 @@ MD#7 scenario 18（他車pitでcounterが進む例）は撤回する。実装（
 ```
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#9（P0×3反映）
+
+MD#8差戻し3件、同意する。P0-1は一番重い——`crossings_to_finish`と`required fuel`は通常走行でも
+毎周減る値で、これをPlan Aのconditions signatureへ含めたことで、**燃料もペースも交通も何も問題が
+無い正常な周回進行だけで、毎lap`conditions_changed`としてPlanを自壊させていた**。監査用の生値と、
+Planを継続させる境界を混同していたのが原因。
+
+## P0-1：`AuthorityProof`（監査・毎frame変わって良い）と`PlanValidityContract`（継続境界・固定）を分離する
+
+```python
+@dataclass
+class PlanValidityContract:
+    """Plan作成時に固定する、継続してよい境界。動的値そのものは持たない。"""
+    plan_basis: str
+    selected_plan: str
+    boundary_conditions: Optional[dict] = None
+    # ★MD#9 P0-1：Plan A（fuel_baseline）は根拠となる「成立条件」を持たない——
+    #   単に「まだ止まっていない」だけであり、undercut/overcutのような機会条件が無い。
+    #   Aの安全性は`build_box_call_authority()`がbox call**を試みるその瞬間**に
+    #   燃料要否を再計算することだけで担保する（MD#3以来ずっとそうだった）。
+    #   「conditionsが変わっていないか」という等値比較をAへ適用したこと自体が誤りだった。
+
+def plan_still_within_contract(plan, snapshot):
+    if plan.plan_basis == 'fuel_baseline':
+        return True   # ★境界チェック対象外。box call時のfresh fuel-safe判定だけがゲート
+    current = plan_conditions_signature(snapshot, plan.plan_basis, plan.selected_plan)
+    if current is None:
+        return False  # 証拠欠落はfail-closed
+    boundary = plan.validity_contract.boundary_conditions or {}
+    # ★数値の完全一致ではなく、固定した境界（bool方向・許可された組み合わせ）だけを見る。
+    #   B/Cの成立条件（fuel_window_open・relative_pace_advantageの符号・rejoin_not_worse・
+    #   rival_pitted_first等）はレース状況が変わらない限り安定するため、これらは
+    #   通常の周回進行では自壊しない。
+    for key, required_value in boundary.items():
+        if current.get(key) != required_value:
+            return False
+    return True
+
+def build_validity_contract(plan_basis, selected_plan, conditions_signature):
+    if plan_basis == 'fuel_baseline':
+        return PlanValidityContract(plan_basis=plan_basis, selected_plan=selected_plan)
+    # B/CはconditionsをそのままB boundaryとして固定する（bool群はconditions_signatureの
+    # dict部分そのもの）。
+    return PlanValidityContract(plan_basis=plan_basis, selected_plan=selected_plan,
+                                 boundary_conditions=dict(conditions_signature) if conditions_signature else None)
+```
+
+`reconcile_active_plan()`は`conditions_still_valid()`の代わりに`plan_still_within_contract()`を呼ぶ。
+`PlanLifecycleRecord`は`conditions`（凍結時点のsignature、監査・debrief用にそのまま保持）と
+`validity_contract`（継続判定用）を**両方**持つ——前者は変えない記録、後者が判定に使う唯一の入力。
+
+Fuel関連の生値（`current_fuel_l`・`required_fuel_to_finish_l`・`avg_fuel_per_lap_l`・
+`crossings_to_finish`・`reserve_l`）は引き続き`AuthorityProof`（監査trail、box call発火のたびに新規、
+毎frame変わって当然）へだけ入る。**Planの生死を決める入力と、box call可否を決める入力を、
+別々のオブジェクトへ分離した**——これがMD#9で確定した境界。
+
+## P0-2：`DriverPitEvent`を不変のfact objectとして新設する
+
+```python
+@dataclass(frozen=True)
+class DriverPitEvent:
+    driver_pit_sequence: int
+    race_instance_id: str
+    session_num: int
+    entry_lap: Optional[int]
+    entry_source_frame_id: int
+    exit_source_frame_id: Optional[int]
+    fuel_before_l: Optional[float]
+    fuel_after_l: Optional[float]
+    fuel_delta_l: Optional[float]
+    service_duration_s: Optional[float]
+    black_flag_active_during: bool
+    penalty_evidence_source: Optional[str]   # 'sdk_black_flag'|'driver_reported'|None
+    classification_source: str                # 'sdk_confirmed'|'driver_reported'|'heuristic'
+
+def classify_pit_relation(plan, pit_event: DriverPitEvent):
+    """★MD#9 P0-2：`DriverPitEvent`という一つの事実だけを入力にする。
+    lap 15の16.79L early pitとlap 16の0L penalty pitのように、給油量・penalty証跡が
+    異なる2つのpitを、この関数が別のrelationへ確実に振り分ける。"""
+    if plan is None:
+        return 'unrelated'
+    if pit_event.penalty_evidence_source is not None:
+        return 'penalty'   # 給油量に関わらず、penalty証跡があれば最優先
+    if (plan.expected_pit_sequence is not None
+            and pit_event.driver_pit_sequence == plan.expected_pit_sequence):
+        return 'normal'
+    if isinstance(plan.target_lap, int) and isinstance(pit_event.entry_lap, int):
+        return 'early' if pit_event.entry_lap < plan.target_lap else 'unresolved'
+    return 'unresolved'   # 判定に必要な事実が欠ければfail-closed（MD#4以来の契約）
+```
+
+Road Atlantaの反例：lap15（`fuel_delta_l=16.79`, `penalty_evidence_source=None`,
+`driver_pit_sequence`が予約値と不一致）→`early`→`invalidated`。lap16（`fuel_delta_l=0.0`,
+`penalty_evidence_source='sdk_black_flag'`）→給油量を見るまでもなく`penalty`最優先で判定される。
+
+`entry_lap`／`fuel_delta_l`はBridgeの既存pit進入・退出ブロック
+（[bridge.py:5718](irsdk-bridge/bridge.py:5718)〜[bridge.py:5952](irsdk-bridge/bridge.py:5952)）が
+既に計算済みの値（`pit_enter_lap`・`_fuel_added`）をそのまま`DriverPitEvent`のfieldへ写すだけで作れる。
+`penalty_evidence_source`は、Build 302対策の元P0-4（`SessionFlags & 0x00010000`のBridge権威化）が
+未実装のままなので、この設計は**その実装を前提**にする——実装順（後述）へ明記する。
+
+## P0-3：`AuthorityProof`を`frozen=True`にし、race-scopedストアへ一度だけ保存する
+
+```python
+@dataclass(frozen=True)
+class AuthorityProof:
+    authority_proof_id: str
+    source_frame_id: int
+    race_instance_id: str
+    session_num: int
+    authority_revision: int
+    dispatch_revision: int
+    driver_pit_sequence_expected: int
+    current_fuel_l: float
+    required_fuel_to_finish_l: float
+    avg_fuel_per_lap_l: float
+    crossings_to_finish: int
+    reserve_l: float
+    conditions_signature: Optional[tuple]
+
+def store_authority_proof(state, proof: AuthorityProof):
+    existing = state.authority_proofs.get(proof.authority_proof_id)
+    if existing is not None:
+        if existing != proof:
+            raise ValueError('authority_proof_id collision with different content: %s'
+                             % proof.authority_proof_id)
+        return state  # 同一内容の再保存は許す（冪等）
+    state.authority_proofs[proof.authority_proof_id] = proof
+    return state
+```
+
+`RaceStrategyState`へ`authority_proofs: dict = field(default_factory=dict)`を追加。`attempt_box_call()`は
+`proof`オブジェクトをそのまま`effects`へ埋め込まず、`store_authority_proof()`で保存してから
+`authority_proof_id`（文字列）だけをeffectとDeliveryAttemptへ持たせる。`session_reset`時、
+`authority_proofs`はrace summary/debrief入力へfinalizeしてから空にする（terminal Plan recordと同じ規律）。
+
+## PlanLifecycleRecordの更新
+
+```python
+@dataclass
+class PlanLifecycleRecord:
+    decision_id: str
+    race_instance_id: str
+    session_num: int
+    revision: int = 0
+    selected_plan: str = 'A'
+    plan_basis: str = 'fuel_baseline'
+    target_lap: Optional[int] = None
+    add_fuel_l: Optional[float] = None
+    set_fuel_l: Optional[float] = None
+    conditions: Optional[tuple] = None          # 凍結時点のsignature（監査・debrief用の記録）
+    validity_contract: Optional[PlanValidityContract] = None   # ★MD#9新規：継続判定はこちらだけを使う
+    evidence_snapshot_id: Optional[str] = None
+    decided_at_lap: Optional[int] = None
+    entry_class_position: Optional[int] = None
+    options_snapshot: Optional[dict] = None
+    phase: PlanPhase = 'awaiting_driver'
+    expected_pit_sequence: Optional[int] = None
+    resolved_pit_sequence: Optional[int] = None
+    invalidated_reason: Optional[str] = None
+    execution_relation: Optional[str] = None
+    held_reason: Optional[str] = None
+    effects: list = field(default_factory=list)
+```
+
+## 実装順への追記（MD#9時点）
+
+上記`DriverPitEvent.penalty_evidence_source`は、Build 302元対策のP0-4
+（`SessionFlags & 0x00010000`のBridge権威化・未実装）を前提にする。`plan_lifecycle.py`の実装着手前に、
+まずこの黒旗権威化を独立して先に入れる必要がある——順番を「黒旗権威化 → plan_lifecycle.py」へ明記する。
+
+## 赤いシナリオの訂正・追加
+
+```text
+1'. 正常走行3周でPlanが自壊しない（MD#9で直った反例そのもの）：
+    active(A) → lap N, N+1, N+2と進み、current_fuel_l・required_fuel_to_finish_l・crossings_to_finishは
+    毎周変わる（正常な燃焼） → plan_still_within_contract()はplan_basis=='fuel_baseline'のため
+    常にTrue → reconcile_active_planはinvalidatedにしない → 同一decision_id・phase='active'が維持され、
+    targetで初めてbox callが一度だけ発生する。
+
+2'. early fuel pitとzero-fuel penalty pitの区別（Road Atlanta反例そのもの）：
+    lap15 DriverPitEvent(fuel_delta_l=16.79, penalty_evidence_source=None,
+    driver_pit_sequence!=expected) → relation='early' → invalidated
+    → lap16 DriverPitEvent(fuel_delta_l=0.0, penalty_evidence_source='sdk_black_flag')
+    → relation='penalty'（fuel_deltaを見るまでもなく最優先） → invalidated(execution_relation='penalty')
+    → lap21、active_plan_id=Noneのため旧box callは出ない。
+
+3'. AuthorityProofの不変性：
+    store_authority_proof()で保存した後、同じauthority_proof_idで異なる内容を再保存しようとすると
+    例外になる。effect／DeliveryAttemptはIDだけを持ち、session_reset後もarchiveされたproofストアから
+    同一内容を復元できる。
+```
+
+commit・Build・公開GOなし。
