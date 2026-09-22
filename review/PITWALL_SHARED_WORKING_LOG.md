@@ -20561,3 +20561,168 @@ def apply_plan_lifecycle_event(state, event):
 ```
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#5（P0再々々差戻し反映）
+
+MD#4差戻し3件、全て同意する。P0-1は「flag clear時の実状態を見る」設計のはずが、その場でリテラルの
+`True`/`False`を渡していた——検査を書いた直後に自分で迂回していた、率直に一番恥ずかしいミスだった。
+
+## P0-1：`revalidate_after_black_flag()`はcurrent_snapshotの実値をそのまま渡す
+
+```python
+def revalidate_after_black_flag(plan, current_snapshot):
+    if plan.race_instance_id != current_snapshot['race_instance_id']:
+        return 'invalidated', 'race_identity_changed'
+    if plan.session_num != current_snapshot['session_num']:
+        return 'invalidated', 'session_changed'
+    if plan.resolved_pit_sequence is not None:
+        return 'invalidated', 'already_resolved'
+    current_lap = current_snapshot['fuel_frame']['current_lap']
+    if isinstance(plan.target_lap, int) and isinstance(current_lap, int) and current_lap >= plan.target_lap:
+        return 'invalidated', 'target_elapsed_during_black_flag'
+    if plan.expected_pit_sequence != current_snapshot['pit_sequence_counter'] + 1:
+        return 'invalidated', 'pit_sequence_reservation_stale'
+    # ★MD#5 P0-1：ここが誤りの箇所だった。on_track/on_pit/black_flag_activeを
+    #   リテラルで渡すと、実際にまだpit road/garageにいる・黒旗が同フレームで
+    #   再度立っている場合でも安全ゲートを迂回してresumeできてしまう。
+    #   current_snapshotが持つ**実測値**をそのまま渡す——安全ゲートは
+    #   revalidate専用の別経路を持たない。
+    if plan.phase == 'active':
+        authority = build_box_call_authority(
+            plan,
+            on_track=current_snapshot['on_track'],
+            on_pit=current_snapshot['on_pit'],
+            black_flag_active=current_snapshot['black_flag_active'],
+            race_instance_id=plan.race_instance_id, session_num=plan.session_num,
+            current_lap=current_lap, **current_snapshot['fuel_frame_values'])
+        if not authority.available and authority.deny_reason in (
+                'not_on_track', 'already_on_pit_road', 'black_flag_active'):
+            # ★flagが再度立った／まだpit-inしていない等、resume自体を今は判断できない。
+            #   invalidatedにはせず、held_reasonを維持したまま次frameへ持ち越す
+            #   （black_flag(off)イベントの再入力を待つ——このrevalidateは
+            #   「今resumeできるか」を聞かれた時にNoと答えるだけで、Planを壊さない）。
+            return 'hold', authority.deny_reason
+        if not authority.available and authority.deny_reason == 'fuel_safe_without_stop':
+            return 'invalidated', 'fuel_safe_after_black_flag'
+        if not authority.available and authority.deny_reason == 'fuel_evidence_missing':
+            return 'invalidated', 'fuel_evidence_missing_after_black_flag'
+    current_sig = plan_conditions_signature(current_snapshot['strategy_options'], plan.selected_plan)
+    if current_sig != plan.conditions:
+        return 'invalidated', 'conditions_changed_during_hold'
+    return 'resume', None
+```
+
+`'hold'`という3つ目の戻り値を追加した（`resume`/`invalidated`だけでは「まだ分からないので待つ」を
+表現できなかった）。`black_flag(off)`イベント側は、`revalidate_after_black_flag()`が`'hold'`を返した場合
+`held_reason`を変えずそのまま維持し、次にもう一度`black_flag`イベント（実際の状態変化）が来た時に
+再評価する。
+
+## P0-2：`box_call_attempt` eventは自身のidentityとauthority snapshotを持ち、全一致でだけeffectを確定する
+
+```python
+def build_box_call_authority(plan, *, ..., pit_sequence_counter):
+    ...（MD#4の検査はそのまま）...
+    authority_snapshot_id = '%s:%d:%d' % (plan.decision_id, plan.revision, pit_sequence_counter)
+    return BoxCallAuthority(available=True, ..., authority_snapshot_id=authority_snapshot_id,
+                             expected_pit_sequence=plan.expected_pit_sequence)
+
+# 呼び出し側（bridge.py poll loop、同一frame内で完結）：
+if authority.available:
+    event = {'type': 'box_call_attempt', 'decision_id': plan.decision_id,
+             'race_instance_id': plan.race_instance_id, 'session_num': plan.session_num,
+             'plan_revision': authority.plan_revision, 'expected_pit_sequence': plan.expected_pit_sequence,
+             'authority_snapshot_id': authority.authority_snapshot_id, 'at': session_time}
+    state = apply_plan_lifecycle_event(state, event)
+
+def apply_plan_lifecycle_event(state, event):
+    ...
+    elif event['type'] == 'box_call_attempt':
+        record = state.plan_records.get(event['decision_id'])
+        expected_snapshot_id = ('%s:%d:%d' % (event['decision_id'], event['plan_revision'],
+                                               state.pit_sequence_counter))
+        if (record is None or record.phase != 'active'
+                or record.race_instance_id != event['race_instance_id']
+                or record.session_num != event['session_num']
+                or record.revision != event['plan_revision']
+                or record.expected_pit_sequence != event['expected_pit_sequence']
+                or event['authority_snapshot_id'] != expected_snapshot_id):
+            # ★MD#5 P0-2：precheckで得たauthorityが、effect claimの瞬間には既に
+            #   古くなっている可能性を防ぐ。同一frame同期実行なら理論上ずれないが、
+            #   「一致を確認してから書く」契約自体をここへ強制する。
+            record and record.effects.append({'type': 'stale_box_call_attempt', 'at': event.get('at')})
+            return state  # 出力0件
+        dispatch_id = '%s#box#%d' % (record.decision_id, len(state.attempts) + 1)
+        record.effects.append({'type': 'box_call', 'pit_sequence': record.expected_pit_sequence,
+                                'dispatch_id': dispatch_id})
+        record.revision += 1
+        state.attempts.append(DeliveryAttempt(
+            dispatch_id=dispatch_id, decision_id=record.decision_id, kind='box_call',
+            race_instance_id=record.race_instance_id, session_num=record.session_num,
+            plan_revision_at_dispatch=record.revision, attempted_at=event.get('at'),
+            outcome='queued'))
+        return state
+```
+
+## P0-3：`DeliveryAttempt.kind`を追加し、driver_responseは`kind='proposal'`のaudible attemptだけ受理する
+
+```python
+DeliveryKind = Literal['proposal', 'box_call', 'notification']
+
+@dataclass
+class DeliveryAttempt:
+    dispatch_id: str
+    decision_id: str
+    race_instance_id: str
+    kind: DeliveryKind = 'proposal'   # ★MD#5 P0-3：新規field
+    session_num: Optional[int] = None
+    plan_revision_at_dispatch: Optional[int] = None
+    attempted_at: Optional[float] = None
+    outcome: DeliveryOutcome = 'queued'
+    response_accepted: Optional[bool] = None
+    response_at: Optional[float] = None
+
+def apply_plan_lifecycle_event(state, event):
+    if event['type'] == 'driver_response':
+        attempt = resolve_attempt_for_event(state, event)
+        if attempt is None:
+            return state
+        if attempt.kind != 'proposal' or attempt.outcome != 'audible':
+            # ★MD#5 P0-3：box_call／notification attemptへのresponseはPlanを一切動かさない。
+            record = state.plan_records.get(attempt.decision_id)
+            if record is not None:
+                record.effects.append({'type': 'stale_driver_response',
+                                        'accepted': event.get('accepted'), 'at': event.get('at'),
+                                        'attempt_kind': attempt.kind})
+            return state
+        # ...proposal・audibleへの通常遷移（MD#2〜#4のまま）...
+```
+
+`proposal_built`（propose分岐）で作るattemptは`kind='proposal'`を明示する（デフォルト値と一致するが、
+可読性のため呼び出し側でも書く）。black flag通知（Driverへの短い確認文言、P0-4/black flag契約で
+言及した「了解。ただしペナルティ処理が優先」）を将来DeliveryAttemptとして追跡する場合は`kind='notification'`
+を使う（現時点では未実装、fieldの定義だけ用意する）。
+
+## 赤いシナリオへの追加assertion
+
+```text
+12. flag clear時の実状態迂回防止：
+    held中 → black_flag(off) event到来 → だがDriverはまだon_pit=True（garage/pit road）
+    → revalidate_after_black_flagがbuild_box_call_authorityへon_pit=Trueを実値で渡す
+    → authority.deny_reason='already_on_pit_road' → 'hold'（held_reason維持、Planは壊さない）
+    → box call・resumeとも0件。
+
+13. box call revision drift：
+    active(A, revision=2) → authority計算（authority_snapshot_id='D:2:7'）
+    → 同一frame内でDriverの訂正等によりrevisionが3へ進む
+    → box_call_attempt eventのplan_revision=2をrecord.revision=3と照合 → 不一致
+    → stale_box_call_attempt、effect/DeliveryAttempt/TTS/overlay/chatとも0件。
+
+14. box-call attemptへの誤配response：
+    active(A) → box_call_attempt成功 → DeliveryAttempt(kind='box_call', outcome='audible')
+    → driver_response(accepted=True, dispatch_id=このbox call attempt)
+    → attempt.kind!='proposal' → stale_driver_response、Plan phase・active_plan_id・revision不変。
+```
+
+commit・Build・公開GOなし。
