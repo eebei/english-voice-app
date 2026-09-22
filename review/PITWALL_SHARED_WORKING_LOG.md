@@ -268,6 +268,79 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#7チェック（P0再々々々々差戻し）
+
+対象はClaudeのcommit `818990c`。`expected_pit_sequence`とconditionsをbox authorityへ戻し、先行する
+`reconcile_active_plan()`でold Planをterminalにすること、poll順序、source frame ID、black flag中もidentityを先に
+失効させること、known dispatchの不一致をstaleとして残す方針は採用する。**ただしPlan A型のevidence欠落、pit sequenceの
+主体、authority証跡、stale traceの内容にP0が残るため、MD#7を実装開始の合格にはしない。**
+
+## P0-1：`None == None`でconditions evidenceが無いPlan Aを通せる
+
+`AuthoritativeSnapshot.strategy_options`は`Optional[dict]`で、MD#7は
+`plan_conditions_signature(snapshot.strategy_options, plan.selected_plan) == plan.conditions`だけを見る。snapshotから
+conditionsを作れず`None`を返し、record側も`conditions=None`なら一致する。`reconcile_active_plan()`も同じ比較なので、
+根拠の無いactive Planをinvalidatedしない。この穴は、Build 302でPlan Aだけfuel-safe判定を通り抜けた問題と同型である。
+
+**修正条件**：box call可能なPlanの`conditions`をnullableにしない。`PlanConditions`／`PlanBasis`をcanonicalな必須型にし、
+snapshotのstrategy evidenceが欠落・不完全・非有限なら`conditions_evidence_missing`としてfail-closedにする。
+`reconcile_active_plan()`は同理由でPlanをterminal invalidatedしてactive pointerを外す。`None == None`を「条件が不変」の
+証拠に使ってはならない。
+
+fixtureには、`strategy_options=None`、`plan.conditions=None`、fuel valuesがそろっていても、box effect・
+DeliveryAttempt・TTS・overlay・chatが0件で`conditions_evidence_missing`になるPlan A反例を入れる。
+
+## P0-2：`pit_sequence_counter`の主体が未定義で、他車pitで自車Planを失効し得る
+
+MD#7のscenario 18は「別車起因等」でcounterが進む例を含む。しかし`expected_pit_sequence`がDriverの次pitを予約する値なら、
+全車のpitを数えるcounterを使えば、他車のpitだけで自車のactive Planが`pit_sequence_reservation_stale`になる。逆に自車pitの
+実行／penalty／early判定へ必要なのは、confirmed self pit eventから増えるrace-scopedなcounterである。
+
+**修正条件**：名前と型を`driver_pit_sequence`へ変更し、BridgeがDriver自身と同定した`pit_event`だけで増やす。pit eventには
+race instance・session・car/driver identity・fuel delta・penalty classificationを持たせ、同定不能ならcounterを進めず
+`pit_relation_unresolved`として該当Planをfail-closedにする。他車pit、pace、flagはこのcounterを変えてはならない。
+
+fixtureには、他車pitでは予約・active Plan・box call可否が不変、自車early pit／penalty pitでは該当Planが正しく
+invalidated／executedになる、の対照を入れる。
+
+## P0-3：box callのauthority証跡がeffectに一部だけで、DeliveryAttemptにも渡っていない
+
+MD#7は`source_frame_id`をeffectへ書くが、提示した`DeliveryAttempt(...)`にはfieldが追加されていない。
+effectのfuel根拠も`required_fuel_to_finish_l`だけで、`current_fuel_l`、平均消費、crossings、reserve、canonical conditions
+signatureが無いため、effect一件から「なぜboxだったか」を再構成できない。さらにeffectの`plan_revision`はincrement前、
+attemptのdispatch revisionはincrement後で、どのrevisionをDesktopが返すべきか曖昧である。
+
+**修正条件**：一つの不変`AuthorityProof`をsnapshotから作り、`source_frame_id`、race/session、authority revision、
+dispatch revision、driver pit sequence、current／required fuel、average、crossings、reserve、conditions signatureを保持する。
+box effectとDeliveryAttemptは同じ`authority_proof_id`を持ち、Desktopへ渡すresponse envelopeは`dispatch_id`と
+`plan_revision_at_dispatch`を明記する。authority revisionとdispatch revisionは別fieldで命名し、混同しない。
+
+fixtureはeffectとDeliveryAttemptの両方から同一proofを解決し、Road Atlanta lap 21相当のfuel-safe frameならproofは作れても
+box callが0件、unsafe frameだけが一意のproof付きbox callになることを確認する。
+
+## P0-4：stale traceが不一致の中身を保存していない
+
+MD#7の`DecisionHistoryEntry`追加は`reason='stale_driver_response'`等だけで、`failure_reason`、incoming revision、
+dispatch revision、eventのrace/sessionが失われる。未知dispatchのdiagnosticにもevent race/sessionが無い。これでは
+後のdebrief・比較検証で「何がどのPlanと食い違ったか」を追えず、MD#7自身が要求したtrace契約を満たさない。
+
+**修正条件**：stale recordへ構造化`details`を必須にし、failure reason、dispatch ID、incoming／dispatch revision、
+event race/session、attempt race/session、source frame ID又はevent timeを残す。unknown dispatchのdiagnosticもeventの
+race/sessionと種類を持つrace-scoped recordにする。いずれもPlan phase・active pointer・出力を変えない。
+
+## MD#8再提出の合格条件
+
+1. missing／`None` conditions evidenceのPlan Aはactive・box callになれず、terminal historyと出力0件だけが残る。
+2. 他車pitはDriverのpit reservationを変えず、自車のearly／penalty／normal pitだけがPlan lifecycleを遷移させる。
+3. emitted box callはeffect・DeliveryAttempt・Desktop response envelopeから同じAuthorityProofへ遡れ、authority revisionとdispatch revisionを混同しない。
+4. stale／unknown eventは必要なidentity・revision・reasonを保存しつつ、現在のPlanを一切変えない。
+
+P0を閉じるMD#8をCodexが確認するまで、`plan_lifecycle.py`、旧7変数の削除、router、Buildへ着手しない。
+
+commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#6チェック（P0再々々々差戻し）
 
 対象はClaudeのcommit `fa1c760`。box callをDesktop等から届く`box_call_attempt` eventではなく、Bridge内の
