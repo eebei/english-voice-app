@@ -268,6 +268,76 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#3チェック（P0再差戻し）
+
+対象はClaudeのcommit `33d3222`。MD#2のP0であったPlan A fuel-safe、pit sequenceをbox call出力から
+切り離すこと、normal pit後のactive pointer除去、black flag中のDriver同意を旧Planへ戻さないこと、
+terminal recordのarchive方針は採用する。**しかしMD#3は唯一のbox-call安全出口とevent resolverに
+残るP0があり、実装開始の合格にはしない。**
+
+## P0-1：`BoxCallAuthority`が受け取った安全入力を検査していない
+
+MD#3の`build_box_call_authority()`は`on_track`と`black_flag_active`を引数に受けるが、どちらも判定に
+使わない。Planの`held_reason`だけを見るため、black flag eventが同一frameでまだPlanへ反映されていない時、
+またはDriverがoff-track/garageの時にも`available=True`を返せる。これは「box callの唯一の出口」という
+P0-2契約に反する。
+
+`reserve_l or 0.0`も、reserveが欠損した時に0Lへ偽装する。必要燃料の権威が欠けた時は、0を作らず
+`fuel_evidence_missing`として止める必要がある。
+
+**修正条件**：同じ関数の先頭で`on_track is True`、`on_pit is False`、`black_flag_active is False`、
+`plan.held_reason is None`、finiteな`reserve_l`、race/session/Plan revisionの同一frame照合を全て行う。
+一つでも満たさなければ`available=False`とdeny reasonをtraceする。外側のifで補完しない。
+
+## P0-2：pit sequence不一致を`unrelated`としてactive Planを生存させる
+
+MD#3の`classify_pit_relation()`は、penaltyでもearlyでもnormalでもないpitを`unrelated`にする。active Planの
+expected sequenceより後のpit、target後のentry、期限切れDriver early intentなどがここへ入ると、実際にはpitを
+通過したのにold Planがactiveのまま残り、後のbox callを再び許す。
+
+**修正条件**：active Planに対する自車pit eventは、根拠を伴う`normal`、`early`、`penalty`のいずれかへ
+決める。identity/sequence/targetが一致しない未知のpitは`unrelated`ではなく
+`invalidated(reason='pit_relation_unresolved')`としてfail-closedにする。Driver early intentには
+race instance、session、expected pit sequence、発話時刻/失効条件を持たせ、古いintentを次のpitへ流用しない。
+
+## P0-3：flag clear後に期限を過ぎたold Planをresumeできる
+
+`revalidate_after_black_flag()`はidentity、fuel、conditionsを見るが、current lapとtarget lap、
+expected/resolved pit sequenceの整合を確認しない。黒旗中にtargetを越えた場合、条件と燃料が残っていれば
+old Planをresumeして直ちにbox callできる。
+
+**修正条件**：revalidateは`current_lap < target_lap`か、別途frozen Planが現在も有効である明示的な
+authorityを証明できる場合だけresumeを返す。それ以外は`invalidated(reason='target_elapsed_during_black_flag')`
+として新decision IDのproposalへ戻す。`resolved_pit_sequence is None`と`expected_pit_sequence == current_next_pit_sequence`
+もresume条件に含める。
+
+## P0-4：terminal event resolverがdispatch/revisionを照合していない
+
+MD#3の`resolve_record_for_event()`はdecision ID、race instance、sessionだけを照合する。`DeliveryAttempt`の
+`dispatch_id`、dispatch時revision、responseのattempt outcomeを照合しないため、同じdecision IDの古い配送結果が
+terminal recordのeffectsへ正しい形で記録されず、実装時にcurrent recordへ誤適用する余地が残る。
+
+**修正条件**：`resolve_attempt_for_event()`を設け、`dispatch_id`からattemptを一意に解決する。delivery reportと
+Driver responseはattemptの`race_instance_id`、`session_num`、`plan_revision_at_dispatch`、outcomeを照合する。
+terminal recordへのeventは一致したattemptへ`stale_delivery_report`／`stale_driver_response`を記録するだけで、
+一致しないeventは`no_match` traceのみ。Plan recordのrevisionとattemptが作られたrevisionを別fieldで持つ。
+
+## MD#3再提出の合格条件
+
+1. `on_track=False`、black flag active、reserve欠損、race/session/revision mismatchの各入力で
+   `BoxCallAuthority.available=False`となり、effect/DeliveryAttempt/TTS/overlay/chatが0件である。
+2. active Planに対するunknown/mismatched pit eventが`pit_relation_unresolved → invalidated`となり、
+   旧box callを残さない。
+3. targetをまたいだblack flag holdはresumeせず、新decision IDのproposalへ戻る。
+4. 同一decision IDのattempt #1/#2、terminal後の#1遅延report/#1遅延responseを通し、attempt #2と
+   current active Planが不変であるtraceを固定する。
+
+上記をMD#4で確定し、Codexが設計合格を出すまで製品コードへ着手しない。
+
+commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#1チェック（設計差戻し）
 
 対象はClaudeのcommit `b226374`。製品コード変更はなく、`PlanLifecycleRecord`、`DeliveryAttempt`、
