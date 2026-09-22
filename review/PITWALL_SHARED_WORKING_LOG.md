@@ -21364,3 +21364,226 @@ def apply_plan_lifecycle_event(state, event):
 ```
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#8（P0×4反映）
+
+MD#7差戻し4件、同意する。P0-1は指摘どおり、**Build 302本体の欠陥（conditions無しのPlan Aが検査を
+素通りする）と同型の穴**をこの設計自身に再び作っていた。`None == None`を「変化なし」として扱っていた
+のが原因で、率直に一番重く受け止める。
+
+## P0-1：conditionsを非nullable canonicalにし、`None==None`を変化なしと扱わない
+
+```python
+def plan_conditions_signature(snapshot: AuthoritativeSnapshot, plan_basis: str, selected_plan: str):
+    """欠落は欠落のまま返す（Noneを「一致」の材料に使わせない）。呼び出し側が判断する。"""
+    if plan_basis == 'fuel_baseline':      # ★MD#8 P0-1：Plan Aにも証拠のあるsignatureを持たせる。
+        #   以前は`conditions=None`のまま放置していた——これがBuild 302本体の欠陥と同型の穴だった。
+        if not (_finite(snapshot.avg_fuel_per_lap_l) and isinstance(snapshot.crossings_to_finish, int)
+                and snapshot.crossings_to_finish >= 1 and _finite(snapshot.reserve_l)
+                and _finite(snapshot.current_fuel_l)):
+            return None  # 証拠欠落
+        required = snapshot.avg_fuel_per_lap_l * snapshot.crossings_to_finish + snapshot.reserve_l
+        return ('fuel_baseline', round(required, 3), snapshot.crossings_to_finish)
+    if plan_basis == 'fuel_undercut':
+        return plan_conditions_from_options(snapshot.strategy_options, 'B')  # 既存関数のまま
+    if plan_basis == 'fuel_overcut':
+        return plan_conditions_from_options(snapshot.strategy_options, 'C')
+    return None
+
+def conditions_still_valid(plan, snapshot):
+    """★MD#8 P0-1：片方でもNoneなら無条件にFalse——「証拠欠落」は「変化なし」の代用にしない。"""
+    current = plan_conditions_signature(snapshot, plan.plan_basis, plan.selected_plan)
+    if plan.conditions is None or current is None:
+        return False
+    return plan.conditions == current
+```
+
+`reconcile_active_plan()`と`build_box_call_authority()`は、直接の等値比較（`==`）をやめ、
+必ず`conditions_still_valid(record, snapshot)`を経由する。
+
+```python
+def reconcile_active_plan(state, snapshot):
+    record = active_plan_view(state)
+    if record is None:
+        return state
+    if record.expected_pit_sequence != snapshot.driver_pit_sequence_counter + 1:  # P0-2で改称
+        return _invalidate(state, record, 'pit_sequence_reservation_stale', snapshot)
+    if not conditions_still_valid(record, snapshot):
+        reason = ('conditions_evidence_missing'
+                  if plan_conditions_signature(snapshot, record.plan_basis, record.selected_plan) is None
+                  else 'conditions_changed')
+        return _invalidate(state, record, reason, snapshot)
+    return state
+```
+
+**Plan作成時点でも同じ規律を課す**：`proposal_built`遷移は、`plan_conditions_signature()`が`None`を
+返す間はrecordを作らない（decision-lockが評価をスキップし、次frameへ持ち越す——証拠が揃うまで
+「まだ判断できない」のまま沈黙する。既存Aは即commitなので、この変更は「conditions無しのAが
+即座にactiveになる」現行挙動を止める、実質的な仕様変更になる）。
+
+## P0-2：`pit_sequence_counter`を`driver_pit_sequence_counter`へ改称し、自車pitでだけ増やす
+
+現行`bridge.py`のpit進入検知（[bridge.py:5718](irsdk-bridge/bridge.py:5718)の`onPit`ブロック）は、
+`PlayerTrackSurface`等プレイヤー専用telemetryだけを読んでおり、**他車のpitで反応する経路は元々存在
+しない**。MD#7のscenario 18（「別車起因でcounterが進む」）は、この実装を正しく反映していない
+誤った反例だった——撤回する。
+
+とはいえ命名は曖昧だったので、Codex指摘どおり`driver_pit_sequence_counter`へ改称し、
+「自車の確定pit entryだけが増やす」契約をfield定義とコメントで明示する。
+
+```python
+@dataclass
+class AuthoritativeSnapshot:
+    source_frame_id: int
+    at: float
+    race_instance_id: str
+    session_num: int
+    on_track: bool
+    on_pit: bool                          # ★これ自体が既にplayer専用telemetry由来
+    black_flag_active: bool
+    current_lap: Optional[int]
+    current_fuel_l: Optional[float]
+    avg_fuel_per_lap_l: Optional[float]
+    crossings_to_finish: Optional[int]
+    reserve_l: Optional[float]
+    strategy_options: Optional[dict]
+    driver_pit_sequence_counter: int      # ★MD#8 P0-2：改称。自車の確定entryでのみ増える
+```
+
+`pit_event`自体（entry確定時にBridgeが作る）にも`race_instance_id`・`session_num`を持たせ（既存の
+telemetry自体が自車専用なので、他車混入の余地はコード構造上そもそも無いが、identityは明示しておく）、
+`classify_pit_relation()`が`penalty`/`normal`/`early`のいずれにも決められない場合は`unresolved`として
+fail-closedにする（MD#4のP0-2のまま維持）。
+
+## P0-3：`AuthorityProof`を新設し、authority revisionとdispatch revisionを別名で分離する
+
+```python
+@dataclass
+class AuthorityProof:
+    authority_proof_id: str        # '<decision_id>:<source_frame_id>'
+    source_frame_id: int
+    race_instance_id: str
+    session_num: int
+    authority_revision: int         # ★authority計算時点のrecord.revision（変異前）
+    dispatch_revision: int          # ★box_call effectでrevision+=1した**後**の値。
+                                     #   Desktopが応答で返すべき値はこちら（既存
+                                     #   plan_revision_at_dispatchと同じ意味を持たせる）
+    driver_pit_sequence_expected: int
+    current_fuel_l: float
+    required_fuel_to_finish_l: float
+    avg_fuel_per_lap_l: float
+    crossings_to_finish: int
+    reserve_l: float
+    conditions_signature: tuple
+
+def attempt_box_call(state, snapshot):
+    record = active_plan_view(state)
+    if record is None:
+        return state
+    authority = build_box_call_authority(record, snapshot)
+    if not authority.available:
+        record.effects.append({'type': 'box_call_denied', 'reason': authority.deny_reason,
+                                'at': snapshot.at, 'source_frame_id': snapshot.source_frame_id})
+        return state
+    proof = AuthorityProof(
+        authority_proof_id='%s:%d' % (record.decision_id, snapshot.source_frame_id),
+        source_frame_id=snapshot.source_frame_id, race_instance_id=record.race_instance_id,
+        session_num=record.session_num, authority_revision=record.revision,
+        dispatch_revision=record.revision + 1,   # box_call effect確定と同時にincrementする値を先に確定
+        driver_pit_sequence_expected=record.expected_pit_sequence,
+        current_fuel_l=snapshot.current_fuel_l, required_fuel_to_finish_l=authority.required_fuel_to_finish_l,
+        avg_fuel_per_lap_l=snapshot.avg_fuel_per_lap_l, crossings_to_finish=snapshot.crossings_to_finish,
+        reserve_l=snapshot.reserve_l, conditions_signature=record.conditions)
+    record.revision = proof.dispatch_revision
+    dispatch_id = '%s#box#%d' % (record.decision_id, len(state.attempts) + 1)
+    record.effects.append({'type': 'box_call', 'authority_proof_id': proof.authority_proof_id,
+                            'proof': proof, 'dispatch_id': dispatch_id,
+                            'pit_sequence': record.expected_pit_sequence})
+    state.attempts.append(DeliveryAttempt(
+        dispatch_id=dispatch_id, decision_id=record.decision_id, kind='box_call',
+        race_instance_id=record.race_instance_id, session_num=record.session_num,
+        plan_revision_at_dispatch=proof.dispatch_revision,   # ★Desktopが返すべき値そのもの
+        authority_proof_id=proof.authority_proof_id, attempted_at=snapshot.at, outcome='queued'))
+    return state
+```
+
+`DeliveryAttempt`へ`authority_proof_id: Optional[str] = None`を追加する。box callのDesktop向け
+broadcast messageは`dispatch_id`と`plan_revision_at_dispatch`（=`proof.dispatch_revision`）を明記し、
+Desktopが何らかの応答を返す時はこの値を`plan_revision`として返す契約（既存`resolve_attempt_for_event()`の
+revision照合と一致させる）。effectとDeliveryAttemptは同じ`authority_proof_id`を通じて1件のproofから
+双方とも再構成できる。
+
+## P0-4：stale/unknown traceへ構造化`details`を必須にする
+
+```python
+@dataclass
+class DecisionHistoryEntry:
+    signature: tuple
+    decision_id: str
+    race_instance_id: str
+    session_num: int
+    reason: str
+    at: Optional[float] = None
+    disputed: bool = False
+    dispute_at: Optional[float] = None
+    dispute_resolution: Optional[str] = None
+    details: Optional[dict] = None   # ★MD#8 P0-4：新規field
+
+def apply_plan_lifecycle_event(state, event):
+    etype = event['type']
+    if etype in ('delivery_report', 'driver_response'):
+        attempt, failure = resolve_attempt_for_event(state, event)
+        if failure is not None:
+            details = {
+                'failure_reason': failure, 'dispatch_id': event.get('dispatch_id'),
+                'incoming_revision': event.get('plan_revision'),
+                'dispatch_revision': attempt.plan_revision_at_dispatch if attempt else None,
+                'event_race_instance_id': event.get('race_instance_id'),
+                'event_session_num': event.get('session_num'),
+                'attempt_race_instance_id': attempt.race_instance_id if attempt else None,
+                'attempt_session_num': attempt.session_num if attempt else None,
+                'source_frame_id': event.get('source_frame_id'), 'at': event.get('at'),
+            }
+            if attempt is not None:
+                record = state.plan_records.get(attempt.decision_id)
+                state.history.append(DecisionHistoryEntry(
+                    signature=plan_actionable_signature_of(record) if record else None,
+                    decision_id=attempt.decision_id, race_instance_id=attempt.race_instance_id,
+                    session_num=attempt.session_num,
+                    reason=('stale_delivery_report' if etype == 'delivery_report'
+                           else 'stale_driver_response'),
+                    at=event.get('at'), details=details))
+            else:
+                state.diagnostics.append({'type': 'unknown_dispatch', 'details': details})
+            return state
+        # ...以降、非terminal通常遷移（MD#2〜#7のまま）...
+```
+
+## 赤いシナリオの訂正・追加
+
+MD#7 scenario 18（他車pitでcounterが進む例）は撤回する。実装（player専用telemetry）と矛盾する誤った
+反例だった。代わりに次を追加する。
+
+```text
+18'. conditions証拠欠落のPlan Aはfail-closed：
+    strategy_options=None（またはfuel評価に必要な値のいずれかが非有限）
+    → plan_conditions_signature()がNoneを返す → proposal_builtの時点でrecordを作らない
+    （既にactiveなPlan Aがある場合はreconcile_active_planが'conditions_evidence_missing'で
+    invalidated）→ box effect・DeliveryAttempt・TTS・overlay・chatとも0件。
+
+19'. AuthorityProofの追跡：
+    box_call effectとDeliveryAttemptが同じauthority_proof_idを持ち、
+    proof.authority_revision（変異前）とproof.dispatch_revision（変異後、Desktop応答が返すべき値）が
+    別fieldであることをfixtureで確認する。Road Atlanta lap21相当のfuel-safe frameはproofを作らず
+    box_call_deniedで終わる（authorityがavailable=Falseの時点でproof自体を作らない）。
+
+20'. stale traceの内容確認：
+    driver_response(dispatch_id=D#1, plan_revision=1)がattempt.plan_revision_at_dispatch=2と不一致
+    → DecisionHistoryEntry.detailsに failure_reason='revision_mismatch'、dispatch_id='D#1'、
+    incoming_revision=1、dispatch_revision=2、event/attemptのrace_instance_id・session_numが
+    全て記録されることを確認する。
+```
+
+commit・Build・公開GOなし。
