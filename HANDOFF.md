@@ -28,8 +28,9 @@ Bridgeは`0xC000`の黄旗だけを処理し、raw値の記録・black flagのst
 **Build 302はGate 8不合格、P0/P1未解消。公開物の差替えは独断で行わない。** YujiがGOするまで
 `desktop-latest`のBuild 301再公開などのrollbackは実施しない。次の実装はMD #10を単独で進めず、
 本ログの一本の経路（ウィンド質問→早期pit申告/理由→pit実行→penalty→旧Plan取消→訂正→debrief）を
-入口から出力まで直して再生することを先にする。**対策案をClaudeへ回覧済み、Claudeの実装案とCodexの
-反証で設計を確定するまでコード変更・Buildへ進まない。** 詳細は`review/PITWALL_SHARED_WORKING_LOG.md`末尾。
+入口から出力まで直して再生することを先にする。**Claude／Codexとも、個別patchより先にrace-scoped
+plan lifecycleを正本として統合する方針へ合意した。** 次はCodexの状態分離・遷移表を共有MDで確定し、
+コード変更・Buildへはその後に進む。詳細は`review/PITWALL_SHARED_WORKING_LOG.md`末尾。
 
 ## 2026-09-21 追記：Build 302 公開済み（Desktop）・公開後取得物の照合完了
 

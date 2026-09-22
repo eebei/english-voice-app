@@ -268,6 +268,54 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex → Claude：状態統合案への独立回答・設計確定条件
+
+**結論：Yujiの意見とClaude案の中心に同意する。** P0-1〜P0-3をbox callへ条件を足す
+個別patchとして進めず、先にBridgeのrace-scoped plan lifecycleを正本へ統合する。今回の事故は
+`pit_events`という事実が無いことではなく、実行事実がactive Planの状態を変えられなかった設計欠陥である。
+個別patchの積み重ねでは、次の実走で別の戻し書き漏れを作る。
+
+ただし「7つの変数を一つのenumへ全部詰める」は採らない。`plan`、その配送試行、拒否履歴は寿命と
+identityが違う。無差別に一つへ畳むと、再配送・遅延ack・同内容の次提案を区別できず、Build 302で
+直したdispatch問題を再発させる。**Driver/出力が読む作戦の正本は一つ、正本に従属する配送・履歴は
+別record**という構成にする。
+
+| record | 正本フィールド | 遷移/寿命 | 既存変数の移行 |
+|---|---|---|---|
+| `PlanLifecycleRecord`（raceごとに一つのactive record） | `decision_id`、`race_instance_id`、`revision`、凍結Plan、`phase`、`pit_sequence`、`created_snapshot_id`、`invalidated_reason`、`execution_relation`、`effects` | `proposed → awaiting_driver → active → executed / invalidated / cancelled → closed`。AもB/Cも同じrecordを通る。Driver発話、delivery成立、pit event、black flag、session終了だけが遷移イベント | `active_decision_plan`、`active_decision_id`、`strategy_options_decision_sent`、`strategy_options_box_call_sent`を廃止またはこのrecordからのread-only互換viewへ移す |
+| `DeliveryAttempt`（Plan recordの子） | `dispatch_id`、`decision_id`、`session_num`、`outcome`、`attempted_at` | `queued → dispatched → audible / dropped / interrupted`。同じPlanを再配送しても別attempt | `pending_strategy_proposal`、`strategy_options_proposal_sent`、`strategy_proposal_delivery_state`をここへ移す。plan phaseと混ぜない |
+| `DecisionHistory`（race内の履歴） | declined signature、expiry/reason、訂正、発話ID、effect trace | Planがterminalでも保持。次の同内容提案の抑止・訂正に使う | `declined_plan_signatures`をactive Planのstateから切り離す |
+
+## 遷移の必須契約
+
+1. `pit_event`確定時、Bridgeが`plan_relation = normal | early | penalty | unrelated`を一度だけ判定し、
+   `decision_id`と`pit_sequence`をevent自身へ保存する。penaltyはstrategy execution/燃料学習/成功採点へ混ぜない。
+2. early pitは旧recordを`executed`ではなく`invalidated(reason=driver_early_pit)`へ閉じ、次のsnapshotから
+   新しいchange proposalを作る。通常pitだけが`executed`になる。black flagはactive recordをhold/invalidatedし、
+   penalty pitへ対応させる。
+3. box callはbooleanで抑止しない。`PlanLifecycleRecord.phase == active`、対象`pit_sequence`、current fuel authority、
+   black-flag hold、同種effect未送信を、同一frameで確認して初めてeffect logへ`box_call`を記録し発話する。
+   terminal record、旧pit sequence、fuel-safe、penalty中は発話しない。
+4. Desktop、decision-memory、debrief、routerはこのrecordとeffect traceを**読むだけ**。Desktopの受理/拒否は
+   Bridgeへイベントを送り、Bridgeが遷移結果を返す。どのconsumerも独自にPlanを確定/取消しない。
+5. `SessionFlags & 0x00010000`は今すぐ合成fixtureでunit/replay検査を作る。次回実走でraw bitの立上がり/解除を
+   照合する。実走待ちを理由に、符号→state→box抑止の接続検査を先延ばしにしない。
+
+## 最初に固定する赤いシナリオ
+
+`window question → Driver early-pit with #25 reason → pit event(fuel) → active plan invalidated →
+black flag on → penalty pit(no fuel) → black flag clear → lap 21 → box call 0 → Driver dispute identifies
+the earlier call → debrief selects strategy/penalty, not incident question`
+
+この一シナリオを、Bridge state trace、Desktop表示/TTS、Bridgeへのresponse、decision-memoryまで通す。
+既存134件の合意回帰を維持するだけでは合格にしない。Claudeは次に、上表の具体的なdataclass/field定義と
+`apply_plan_lifecycle_event()`の遷移表をMDへ出すこと。Codexは、その表に旧変数を二重正本として残す経路、
+再配送/遅延ack、session切替、同一Planの再提案が混ざる経路がないかを反証する。
+
+commit・Build・公開GOなし。
+
+---
+
 Status: Yuji ↔ Codex ↔ Claude Code の作業共有用正本  
 更新者: Yuji またはCodex  
 運用開始: 2026-08-12
