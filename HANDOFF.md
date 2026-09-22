@@ -22,11 +22,11 @@ Build 302の失敗を個別バグの集まりとして扱わない。Claude案�
 完全な設計契約、移行対象、fixtureシナリオ、今後の更新記録の書式は
 `review/PITWALL_SHARED_WORKING_LOG.md`の「7 in 1 Claude案260922」を正本とする。
 
-**MD#3はCodex確認で再差戻し。** Plan A fuel-safe、planned/resolved pit sequence、normal pit後の
-次stint、black flag中のDriver同意、terminal archiveの方向は採用する。ただし、唯一のbox-call precheckが
-`on_track`／black flag／reserveを実際にfail-closedせず、pit sequence不一致を`unrelated`としてactive Planを
-残し、terminal eventでdispatch/revision照合をしていない。これらを同じauthority・遷移表へ反映し、
-red scenarioを実関数でfixture化する設計が確定するまでコード実装へ進まない。
+**MD#4はCodex確認で再差戻し。** BoxCallAuthorityのfail-closed、未知pitのinvalidated、target超過中の
+black flag hold、dispatch単位のattempt解決は採用する。ただしblack flag解除の再検証が実snapshotではなく
+`on_track=True`／`on_pit=False`を固定して安全ゲートを迂回し、box-call eventのPlan revision照合と
+DeliveryAttempt種別の入力制約が未定義である。この3点を同じ遷移表へ反映し、red scenarioを実関数で
+fixture化する設計が確定するまでコード実装へ進まない。
 
 ## 2026-09-22 追記：IMSA Fixed Road Atlanta 実走でBuild 302不合格
 

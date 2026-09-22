@@ -268,6 +268,58 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#4チェック（P0再差戻し）
+
+対象はClaudeのcommit `03051c7`。BoxCallAuthorityが`on_track`、pit、black flag、identity、reserveを
+自らfail-closedにする設計、unknown pitを`pit_relation_unresolved`で失効させる設計、target超過holdを
+新proposalへ戻す設計、attempt単位のarchive方針は採用する。**ただし以下3点が残るため、MD#4を実装開始の
+合格にはしない。**
+
+## P0-1：black flag clearの再検証が実snapshotを捨てて安全ゲートを迂回している
+
+`revalidate_after_black_flag()`は`build_box_call_authority()`を呼ぶ時、`on_track=True`、`on_pit=False`、
+`black_flag_active=False`をリテラルで渡している。flag clear時にDriverがまだpit road/garageにいる、
+またはblack bitが同一frameで再度立った場合でも、authorityは実際の状態を見ずresumeできる。
+
+**修正条件**：`current_snapshot`が持つon-track、on-pit、black flag、race/session、fuel frameをそのまま
+authorityへ渡す。`black_flag_active is not False`、`on_track is not True`、`on_pit is not False`ならresumeせず、
+hold継続またはinvalidatedとする。再検証のためだけに安全入力を真値へ置換してはならない。
+
+## P0-2：box-call event自身のPlan revisionを照合していない
+
+BoxCallAuthorityは`plan_revision`を返すが、`box_call_attempt`が`apply_plan_lifecycle_event()`へ入る時に、
+eventがそのrevision/race/session/decision IDを持ち、current recordと一致することを確認する遷移行が無い。
+precheckとeffect claimを一関数に置いても、古いauthority結果を使えるならatomic契約は成立しない。
+
+**修正条件**：`box_call_attempt` eventに`decision_id`、`race_instance_id`、`session_num`、`plan_revision`、
+`expected_pit_sequence`、authority snapshot IDを必須にする。`apply_plan_lifecycle_event()`はrecordとの全一致を
+確認してからeffect claim／DeliveryAttempt作成を行い、不一致は`stale_box_call_attempt`として出力0件・traceのみとする。
+同一の一致条件をred fixtureのrevision drift反例で固定する。
+
+## P0-3：DeliveryAttemptに種別が無く、box callへDriver応答を誤適用できる
+
+MD#4のattempt resolverはdispatchを一意化したが、attemptが`proposal`、`box_call`、black flag通知のどれかを
+持たない。`driver_response`はproposal attemptだけが受け取れる入力である。種類を持たなければ、active Planの
+box-call DeliveryAttemptに遅れて届いたresponseを通常response経路へ渡す余地が残る。
+
+**修正条件**：`DeliveryAttempt.kind = proposal | box_call | notification`を追加する。`driver_response`は
+`kind='proposal'`かつ`outcome='audible'`のattemptだけ受理する。box callとnotificationへのresponseは
+`stale_driver_response`としてhistoryへ残し、Plan phaseを変えない。delivery reportは各kindで受理するが、
+box callの配送結果はPlanの実行状態を変えない。
+
+## MD#4再提出の合格条件
+
+1. flag clear時にon-track false、on-pit true、black flag再立上がりの各snapshotを渡し、resume／box callが
+   0件になる。
+2. old `BoxCallAuthority(plan_revision=n)`をrecord revision `n+1`へ送っても、effect/DeliveryAttempt/TTS/overlay/chatが
+   0件で`stale_box_call_attempt`だけ残る。
+3. audibleなbox-call attemptへ`driver_response(accepted=True)`を送っても、Plan phase・active pointerが不変で、
+   `stale_driver_response`だけが残る。
+
+このMD#5で上記を確定したら、Codexは設計を合格として実装段階へ進める。commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#3チェック（P0再差戻し）
 
 対象はClaudeのcommit `33d3222`。MD#2のP0であったPlan A fuel-safe、pit sequenceをbox call出力から
