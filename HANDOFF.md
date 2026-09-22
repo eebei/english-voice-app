@@ -1,6 +1,26 @@
 # OMORAY PITWALL 引き継ぎ
 
-最終更新: 2026-09-22 JST（Build 302 Gate 8実走不合格・Gate 10停止判断が必要）
+最終更新: 2026-09-22 JST（Build 302 Gate 8実走不合格・「7 in 1 Claude案260922」を恒久設計記録として採用）
+
+## 2026-09-22 追記：「7 in 1 Claude案260922」— 今後の戦略開発の設計基準
+
+Build 302の失敗を個別バグの集まりとして扱わない。Claude案を含む両者の合意として、7つに散った
+戦略状態を、Bridge正本のrace-scoped lifecycleへ統合する方針を**「7 in 1 Claude案260922」**として記録する。
+この名称の記録は、以後のstrategy・pit・penalty・Driver会話・decision memory・debrief変更で必ず参照する。
+
+- 作戦本体の唯一の正本は`PlanLifecycleRecord`。`proposed → awaiting_driver → active → executed / invalidated /
+  cancelled → closed`を、race instance・decision ID・revision・pit sequence・authority snapshotとともに保持する。
+- 配送の成否は`DeliveryAttempt`、却下・訂正・効果の履歴は`DecisionHistory`に分離する。再配送・遅延ACK・
+  過去の却下が、現在のPlanの状態を壊してはならない。
+- pit event、Driver応答、black flag、配送結果、session終了だけがPlanを遷移させる。Desktopや各会話機能は
+  Planを独自に確定・取消せず、Bridgeへイベントを送って遷移結果を読む。
+- box callはactive plan、pit sequence、同一frameの燃料権威、penalty hold、effect未送信を満たす唯一の出口にする。
+  過去pit・fuel-safe・penalty中・terminal stateでは発話しない。
+- 実装・Build・公開の判定は、Road Atlantaの赤い一本のrace conversationをBridge→Desktop→speech→Bridge→
+  memory→debriefまで再生して初めて行う。個別テスト数や単独機能の成功は代替証拠にしない。
+
+完全な設計契約、移行対象、fixtureシナリオ、今後の更新記録の書式は
+`review/PITWALL_SHARED_WORKING_LOG.md`の「7 in 1 Claude案260922」を正本とする。
 
 ## 2026-09-22 追記：IMSA Fixed Road Atlanta 実走でBuild 302不合格
 

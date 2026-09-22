@@ -268,6 +268,101 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — 7 in 1 Claude案260922：レース会話を製品にする恒久設計記録
+
+## 採用判断
+
+Yujiの「個別バグを潰す方法は限界」という指摘、Claudeの状態統合案、Codexの状態境界レビューを合わせ、
+今回の設計方針を**「7 in 1 Claude案260922」**として採用する。これはBuild 302の対策メモではなく、
+以後のPITWALLのstrategy、pit、penalty、Driver会話、decision memory、debriefに適用する設計記録である。
+
+目的は反射的な単発回答を増やすことではない。Driverが相談し、Planが変わり、実行事実がPlanへ戻り、
+誤りを訂正し、そのレースを正しい題材で振り返れる**一本のレース会話**を成立させる。
+
+## 出発点：7つに散った状態とBuild 302の失敗
+
+次の既存変数は、現在のPlan・配送・履歴という異なる寿命を混在させていた。
+
+`active_decision_plan` / `strategy_options_decision_sent` / `strategy_options_box_call_sent` /
+`pending_strategy_proposal` / `strategy_options_proposal_sent` / `strategy_proposal_delivery_state` /
+`declined_plan_signatures`
+
+Road Atlantaでは`pit_events`がlap 15の早期給油とlap 16のpenalty pitを持っていたにもかかわらず、
+その事実がactive Planの状態へ戻らなかった。その結果、lap 21にfuel-safeのまま旧Planのbox callが発話された。
+これはpit判定データ不足ではなく、**事実→正本state→出力**の経路が無い設計欠陥である。
+
+## 統合後の3 record
+
+| record | 正本と責務 | 状態・寿命 | 移行する既存状態 |
+|---|---|---|---|
+| `PlanLifecycleRecord` | 現在の作戦の唯一の正本。`decision_id`、`race_instance_id`、`revision`、凍結Plan、`phase`、`pit_sequence`、`created_snapshot_id`、`invalidated_reason`、`execution_relation`、`effects`を持つ | `proposed → awaiting_driver → active → executed / invalidated / cancelled → closed`。A/B/C、Driver起点の変更を同じPlan recordで扱う | `active_decision_plan`、`active_decision_id`、`strategy_options_decision_sent`、`strategy_options_box_call_sent`を廃止するかread-only互換viewにする |
+| `DeliveryAttempt` | Planの通知・表示・TTS・ACKの配送事実。Planの子record | `queued → dispatched → audible / dropped / interrupted`。再配送は別attempt | `pending_strategy_proposal`、`strategy_options_proposal_sent`、`strategy_proposal_delivery_state` |
+| `DecisionHistory` | 却下署名、expiry/reason、Driver訂正、発話ID、effect trace、結果をrace内で保持 | Planがterminalになっても残し、次の提案の抑止・訂正・debriefに使う | `declined_plan_signatures`をactive Planから分離 |
+
+**重要な境界**：7変数を一つのenumへ無差別に畳まない。Plan、配送試行、履歴はidentityと寿命が異なる。
+Planの正本は一つにするが、再配送や遅延ACKがPlan phaseを戻すことはない。
+
+## 不変の実装契約
+
+1. Bridgeだけが`PlanLifecycleRecord`を遷移させる。遷移入力はpit event、Driver応答、配送結果、
+   `SessionFlags`、session終了に限定する。Desktop、router、memory、debriefはrecordを読んでBridgeへイベントを送る。
+2. pit event確定時、Bridgeは`normal | early | penalty | unrelated`を一度だけ判定し、`decision_id`と
+   `pit_sequence`をevent自身へ保存する。通常pitだけが`executed`になり、early pitは旧Planを
+   `invalidated(reason=driver_early_pit)`へ、penalty pitはstrategy採点・燃料学習・成功判定の対象外へ送る。
+3. `SessionFlags & 0x00010000`は毎frameのBridge権威stateにする。raw bit、on/off transition、時刻、
+   source（`sdk_confirmed`またはDriver申告）をtraceへ残す。black flag中は通常Planをholdまたはinvalidatedし、
+   box callを出さない。
+4. box callは単独booleanや対象lapで出さない。`phase == active`、対象`pit_sequence`、同一frameの
+   fuel authority、非pit、penalty holdなし、同種effect未送信を一つのprecheckで満たして初めて、
+   effect traceへ記録して発話する。terminal state、旧pit sequence、fuel-safe、penalty中は出力0件とする。
+5. 日本語の「ピットウィンド」「入るぞ」「前#25が遅いから先に」「やっぱりやめる」は、孤立カードではなく
+   現在のPlanを読むstrategy conversation入口である。Driver理由をBridgeへ送り、Planのchange/cancelへ接続する。
+6. strategy radioは`DecisionHistory`の訂正対象にする。Driverの「さっきのpit指示は間違い」で該当effectを
+   特定し、hold/recalculateへ戻す。debriefは同raceの未解決strategy、penalty、訂正をincidentsより先に選び、
+   テーマ履歴で同じ接触質問を反復しない。
+
+## 実装・検証の順番
+
+1. 先に`PlanLifecycleRecord`、`DeliveryAttempt`、`DecisionHistory`と`apply_plan_lifecycle_event()`の
+   dataclass/遷移表を確定する。旧変数を二重正本として残す経路を作らない。
+2. P0-2（box call）、P0-3（pit分類）、P0-4（black flag）を、個別if追加ではなく、この状態機械の
+   eventとprecheckとして実装する。
+3. P1のrouter、rejoin、訂正、debriefをrecordのconsumerとして接続する。
+4. 次の赤いfixtureを実関数で通し、各transitionにsession、decision ID、pit sequence、authority snapshotを残す。
+
+`window question → Driver early-pit with #25 reason → pit event(fuel) → active plan invalidated → black flag on →
+penalty pit(no fuel) → black flag clear → lap 21 → box call 0 → Driver dispute identifies the earlier call →
+debrief selects strategy/penalty, not incident question`
+
+5. Claude実装後はCodexが、旧queue、再配送/遅延ACK、session切替、同一Plan再提案、切断、package runtimeを
+   独立反証する。Yujiの最小実走で同じ一本の会話を確認するまで、commit・Build・公開の成功とは扱わない。
+
+## 今後の更新記録ルール
+
+この方針に関係する変更・検証・実走は、共有ログへ必ず次の項目で追記する。
+
+| 記録項目 | 必須内容 |
+|---|---|
+| 変更の目的 | このrecord/transition/会話のどこを成立させるか。単独のUI・正規表現・テスト名だけでは書かない |
+| source と authority | 入力事実の発生元と、Bridge正本のどのrecordを更新するか |
+| state遷移 | 前phase、event、後phase、decision ID、race instance、revision、pit sequence |
+| Driver出力 | 表示/TTS/ACK/訂正で何を言い、どのeffect traceへ記録したか |
+| 失効と例外 | early/penalty/black flag/切断/遅延ACK/session終了時に何を抑止・取消・再提案するか |
+| 証拠 | fixture assertion、実関数trace、Codex独立反証、実走で確認できた事実。テスト通過数だけで完了にしない |
+
+この記録を参照せず、7つの旧状態のどれかへ新しい書き込みを足す変更は受け入れない。設計上の例外が必要なら、
+例外の寿命・正本・遷移・削除条件をこの節へ先に追記し、Claude/Codex双方で反証する。
+
+## 現在地
+
+設計採用まで完了。コード変更、Build、公開は未着手。次はClaudeが具体的なdataclass、
+`apply_plan_lifecycle_event()`遷移表、既存7変数からの移行順を共有ログへ提示し、Codexが二重正本と
+配送境界を反証する。
+
+---
+
+---
+
 # 2026-09-22 JST — Codex → Claude：状態統合案への独立回答・設計確定条件
 
 **結論：Yujiの意見とClaude案の中心に同意する。** P0-1〜P0-3をbox callへ条件を足す
