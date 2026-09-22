@@ -20791,3 +20791,200 @@ def apply_plan_lifecycle_event(state, event):
 ```
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#6（P0×3反映）
+
+MD#5差戻し3件、同意する。P0-1は指摘どおり——「同一poll loopなら実質同フレーム」という運用上の期待に
+頼って、box_call_attemptを外部から来る`event`dict（self-report）として扱っていたこと自体が設計の誤り
+だった。box callはDesktop等の外部からの非同期eventではなく、**Bridge内部で完結する直接呼び出し**にすべき
+だった。delivery_report/driver_responseは本当に非同期（Desktop発）なのでevent+照合のままでよいが、
+box_call_attemptはそもそもevent化する必要が無かった。
+
+## P0-1：`attempt_box_call()`を唯一の入口にし、記録済みIDの自己申告をやめる
+
+```python
+@dataclass
+class AuthoritativeSnapshot:
+    """Bridgeのpoll loop 1frameにつき1つだけ作る、不変のraw telemetry束。
+    box call判定・black flag再評価は必ずこれ経由で行い、個別に値を渡し直さない。"""
+    at: float                      # SessionTime
+    race_instance_id: str
+    session_num: int
+    on_track: bool
+    on_pit: bool
+    black_flag_active: bool
+    current_lap: Optional[int]
+    current_fuel_l: Optional[float]
+    avg_fuel_per_lap_l: Optional[float]
+    crossings_to_finish: Optional[int]
+    reserve_l: Optional[float]
+    strategy_options: Optional[dict]   # conditions signature再計算用
+    pit_sequence_counter: int
+
+def attempt_box_call(state, snapshot: AuthoritativeSnapshot):
+    """★MD#6 P0-1：box call effectを確定できる唯一の関数。event dictを介さず、
+    現在のstate（record）とsnapshotから直接計算する——古い判定結果を自己申告で
+    持ち込む余地を無くす。"""
+    record = active_plan_view(state)  # phase=='active'だけを返す（P0-3で確定済み）
+    if record is None:
+        return state
+    authority = build_box_call_authority(record, snapshot=snapshot)  # 引数はsnapshot一つに統一
+    if not authority.available:
+        record.effects.append({'type': 'box_call_denied', 'reason': authority.deny_reason,
+                                'at': snapshot.at})
+        return state
+    dispatch_id = '%s#box#%d' % (record.decision_id, len(state.attempts) + 1)
+    record.effects.append({'type': 'box_call', 'pit_sequence': record.expected_pit_sequence,
+                            'dispatch_id': dispatch_id})
+    record.revision += 1
+    state.attempts.append(DeliveryAttempt(
+        dispatch_id=dispatch_id, decision_id=record.decision_id, kind='box_call',
+        race_instance_id=record.race_instance_id, session_num=record.session_num,
+        plan_revision_at_dispatch=record.revision, attempted_at=snapshot.at, outcome='queued'))
+    return state
+
+def build_box_call_authority(plan, snapshot: AuthoritativeSnapshot):
+    if plan is None or plan.phase != 'active':
+        return BoxCallAuthority(available=False, deny_reason='no_active_plan')
+    if plan.race_instance_id != snapshot.race_instance_id or plan.session_num != snapshot.session_num:
+        return BoxCallAuthority(available=False, deny_reason='identity_mismatch')
+    if snapshot.on_track is not True:
+        return BoxCallAuthority(available=False, deny_reason='not_on_track')
+    if snapshot.on_pit is not False:
+        return BoxCallAuthority(available=False, deny_reason='already_on_pit_road')
+    if snapshot.black_flag_active is not False:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_active')
+    if plan.held_reason is not None:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_hold')
+    if any(e['type'] == 'box_call' for e in plan.effects
+           if e.get('pit_sequence') == plan.expected_pit_sequence):
+        return BoxCallAuthority(available=False, deny_reason='already_called_this_pit')
+    if (not isinstance(plan.target_lap, int) or not isinstance(snapshot.current_lap, int)
+            or snapshot.current_lap < plan.target_lap):
+        return BoxCallAuthority(available=False, deny_reason='before_target_lap')
+    if (not _finite(snapshot.current_fuel_l) or not _finite(snapshot.avg_fuel_per_lap_l)
+            or not _finite(snapshot.reserve_l) or not isinstance(snapshot.crossings_to_finish, int)
+            or snapshot.crossings_to_finish < 1):
+        return BoxCallAuthority(available=False, deny_reason='fuel_evidence_missing')
+    required = snapshot.avg_fuel_per_lap_l * snapshot.crossings_to_finish + snapshot.reserve_l
+    if snapshot.current_fuel_l >= required:
+        return BoxCallAuthority(available=False, deny_reason='fuel_safe_without_stop',
+                                 required_fuel_to_finish_l=round(required, 3))
+    return BoxCallAuthority(available=True, basis=plan.plan_basis)
+```
+
+呼び出し側（poll loop）はframeごとに`snapshot = AuthoritativeSnapshot(...)`を1つ作り、
+`state = attempt_box_call(state, snapshot)`を毎frame呼ぶだけにする。F10で`available=True`が出ても、
+`attempt_box_call()`はその場でrecordへeffectを書く（保留しない・後で使い回さない）ため、F11の状態が
+違えば単にF11呼び出しで`available=False`になるだけで、F10の結果を持ち越す経路自体が存在しない。
+
+## P0-2：held Planは毎frame再検証する。black flag(off) eventを待たない
+
+```python
+def apply_snapshot_to_held_plan(state, snapshot: AuthoritativeSnapshot):
+    """★MD#6 P0-2：poll loopが毎frame呼ぶ。black flagイベントの有無に関係なく、
+    heldなPlanがあれば常にこのframeのsnapshotで再評価する。"""
+    record = state.plan_records.get(state.active_plan_id) if state.active_plan_id else None
+    if record is None or record.held_reason is None:
+        return state
+    if snapshot.black_flag_active is True:
+        return state  # まだhold継続。出力0件。
+    outcome, reason = revalidate_held_plan(record, snapshot)
+    if outcome == 'resume':
+        record.held_reason = None
+        record.revision += 1
+    elif outcome == 'invalidated':
+        record.phase = 'invalidated'
+        record.invalidated_reason = reason
+        record.held_reason = None
+        state.history.append(DecisionHistoryEntry(signature=plan_actionable_signature_of(record),
+            decision_id=record.decision_id, race_instance_id=record.race_instance_id,
+            session_num=record.session_num, reason='invalidated', at=snapshot.at))
+        state.active_plan_id = None
+    return state
+
+def revalidate_held_plan(plan, snapshot: AuthoritativeSnapshot):
+    if plan.race_instance_id != snapshot.race_instance_id:
+        return 'invalidated', 'race_identity_changed'
+    if plan.session_num != snapshot.session_num:
+        return 'invalidated', 'session_changed'
+    if plan.resolved_pit_sequence is not None:
+        return 'invalidated', 'already_resolved'
+    if (isinstance(plan.target_lap, int) and isinstance(snapshot.current_lap, int)
+            and snapshot.current_lap >= plan.target_lap):
+        return 'invalidated', 'target_elapsed_during_black_flag'
+    if plan.expected_pit_sequence != snapshot.pit_sequence_counter + 1:
+        return 'invalidated', 'pit_sequence_reservation_stale'
+    if plan.phase == 'active':
+        authority = build_box_call_authority(plan, snapshot)
+        if not authority.available and authority.deny_reason in (
+                'not_on_track', 'already_on_pit_road', 'black_flag_active'):
+            return 'hold', authority.deny_reason  # 例：pit road上だがflagは既にclear
+        if not authority.available and authority.deny_reason == 'fuel_safe_without_stop':
+            return 'invalidated', 'fuel_safe_after_black_flag'
+        if not authority.available and authority.deny_reason == 'fuel_evidence_missing':
+            return 'invalidated', 'fuel_evidence_missing_after_black_flag'
+    current_sig = plan_conditions_signature(snapshot.strategy_options, plan.selected_plan)
+    if current_sig != plan.conditions:
+        return 'invalidated', 'conditions_changed_during_hold'
+    return 'resume', None
+```
+
+`black_flag(off)`という専用eventは廃止した。`black_flag_active`はsnapshotの1フィールドであり、
+毎frame`apply_snapshot_to_held_plan()`を呼ぶことで、flagが実際に下がった直後のframeから即座に
+再評価が走る（Driverがpit road上ならその場で`'hold'`を返し続け、コースへ戻った次のframeで
+自動的に`resume`/`invalidated`へ進む）。`black_flag(on)`イベントだけは引き続き「holdを開始する」
+遷移として残す（held開始のトリガーは状態変化そのものなのでevent化が妥当）。
+
+## P0-3：`delivery_report`／`driver_response`のevent自身が申告する`plan_revision`も照合する
+
+```python
+def resolve_attempt_for_event(state, event):
+    dispatch_id = event.get('dispatch_id')
+    if dispatch_id is None:
+        return None
+    attempt = next((a for a in state.attempts if a.dispatch_id == dispatch_id), None)
+    if attempt is None:
+        return None
+    if (attempt.race_instance_id != event.get('race_instance_id')
+            or attempt.session_num != event.get('session_num')):
+        return None
+    # ★MD#6 P0-3：event自身が申告するplan_revisionが、dispatch時に記録した
+    #   plan_revision_at_dispatchと一致するかを、record側の現在revisionとは別に照合する。
+    #   Desktop側が別の提案のrevisionを取り違えて返した場合の二重防御。
+    if event.get('plan_revision') != attempt.plan_revision_at_dispatch:
+        return None
+    return attempt
+```
+
+`delivery_report`／`driver_response`のevent構築側（renderer.html／local-intent-router.js）へ、
+`plan_revision`（Bridgeがdispatch時にDesktopへ渡した値をそのまま返す）を必須フィールドとして追加する
+——これはP1実装（router接続）時の変更点として持ち越す。
+
+## 赤いシナリオへの追加assertion
+
+```text
+15. 古いauthorityの持ち越し防止（indirectionそのものを排除）：
+    F10でattempt_box_call(state, snapshotF10)がavailable=Trueを返しeffect確定。
+    F11でstate.plan_records上のrecordは既にeffect済み（`already_called_this_pit`）のため、
+    同じrecordへ再度attempt_box_call(state, snapshotF11)を呼んでも新規effectは増えない
+    （F10の判定を「持ち越して使う」経路自体がコード上に存在しないことをテストで確認）。
+
+16. hold中の継続的な再評価：
+    held(on_pit=True) → 複数frame`apply_snapshot_to_held_plan`を呼ぶが毎回'hold'
+    → Driverがpit roadを出てon_track=Trueへ戻るframe → target未到達なら'resume'、
+    到達済みなら'invalidated(target_elapsed_during_black_flag)'。専用の"off" event到着を待たない。
+
+17. event自己申告revisionの不一致：
+    DeliveryAttempt(dispatch_id=D#1, plan_revision_at_dispatch=2)
+    → driver_response(dispatch_id=D#1, plan_revision=1)  # Desktop側が古いrevisionを申告
+    → resolve_attempt_for_eventがNoneを返す → Plan不変、stale trace。
+```
+
+## 実装順（変更なし、MD#2の5段階のまま）
+
+上記が確定したら、次はCodexの最終確認を待って`plan_lifecycle.py`の実装に着手する。
+
+commit・Build・公開GOなし。
