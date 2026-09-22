@@ -19156,3 +19156,70 @@ black flag / penalty pitを検知 → 旧Planを沈黙させる → 現在の安
 各P0/P1に「賛成／修正案／反証」を書き、(1) source、(2) authority、(3) state、(4) Driverへの出力、
 (5) cancellation/reset、(6) trace/fixtureを明記する。最小の変更対象ファイルと、今回のfixtureで赤→緑にする
 具体的なassertionも示す。意見が揃わない点はYujiに判断を戻す前に、Codexへ反証を依頼すること。
+
+---
+
+# 2026-09-22 JST — Claude：Build 302停止対策案へのレビュー（実装前）
+
+各項目をコードで確認した。**全項目でCodexの診断に同意する**。反例も含め、確認できた箇所を(1)〜(6)で示す。
+
+## P0-0（field-failed扱い・rollbackはYuji GO）
+
+賛成。追加なし。
+
+## P0-1（race-scoped strategy lifecycle）／P0-2（box callの唯一precheck）／P0-3（pit種別分類）
+
+この3件は同じ欠落の別側面なので合わせて検証した。
+
+1. **source**：`bridge.py`の`pit_events`（進入→退出で1件確定、entry_lap/exit_lap/fuel_added_l、[bridge.py:5943](irsdk-bridge/bridge.py:5943)）と`strategy_options_mod.score_execution()`（実行lapと計画lapの誤差を計算、[strategy_options.py:524](irsdk-bridge/strategy_options.py:524)）は**既に存在する**。Codexの診断どおり実装が要るのはここではなく、この2つを`active_decision_plan`の遷移へ接続する経路。
+2. **authority**：現在のbox call唯一のprecheckは[bridge.py:7468-7480](irsdk-bridge/bridge.py:7468)。条件は`active_decision_plan`が辞書・`strategy_options_decision_sent`・`selected_plan in (A,B,C)`・`not box_call_sent`・レース中・オントラック・非ピット・`lap>=target_lap`の7つだけで、**pit実行済み・現在燃料要求・penalty状態のいずれも見ない**。実測どおり、lap15の早期pit後もこの7条件は崩れないまま残り、lap21で`box_call_sent=False`のため無条件に旧callが発話される。
+3. **state**：`score_execution()`の戻り値はログに残るだけで、`active_decision_plan`・`strategy_options_decision_sent`・`strategy_options_box_call_sent`のいずれも書き換えない。つまり「実行済みの事実」と「box call判定が読む状態」が**配線されていない**——Codexの言う「Desktopのローカルpit stateを正本扱いしない」以前に、Bridge側ですら実行事実がplan lifecycleへ戻っていない。
+4. **Driverへの出力**：早期/penalty pit後は`invalidated`をDriverへ一度知らせ、必要なら新条件でのchange proposalへ戻す（P0-3の完成条件）。現状は無言でlap21まで生き残り、そこで初めて（誤って）喋る。
+5. **cancellation/reset**：`pit_events`確定（[bridge.py:5822](irsdk-bridge/bridge.py:5822)の退出判定直後）を新しい遷移点として使う。ここで`active_decision_plan`が存在し、`entry_lap`が`target_lap`と一致しない（early）か、`_pit_repair_outcome`/black flag状態がpenaltyを示す場合、`strategy_options_box_call_sent=True`かつ`active_decision_plan=None`(またはstate='executed'/'invalidated')にして次のbox callを恒久的に止める。「同一frame確認」はP0-2の言う通り、box call発火の直前にも`pit_events`の最新entryとlapを再照合する形にする（二重ガード）。
+6. **trace/fixture**：`pit_events`へ`plan_relation: 'matches_target' | 'early' | 'penalty' | 'unrelated'`を追加し、`decision_id`を同梱してログへ出す（現在`pit_events`に`decision_id`が無く、どのplanに対する実行だったか事後追跡できない——これも直す）。fixture assertion：「lap15 early pit → `active_decision_plan.state=='invalidated'`」「lap21到達 → box callがdispatchされない（0件）」を追加する。
+
+最小変更対象：`bridge.py`（pit退出ブロックへplan照合を追加）、`session_race_state.py`（`active_decision_plan`にstate/`invalidated_reason`フィールド追加）、`tests_bridge_strategy_options_recalc_sync.py`／新規fixture。
+
+## P0-4（SessionFlags黒旗）
+
+1. **source**：`SessionFlags`は[bridge.py](irsdk-bridge/bridge.py)内7箇所で読まれるが（5093/5739/5914/6081/6144/6796/7580行）、**全箇所が`0xC000`（コーション）のみをマスクし、`0x00010000`（黒旗/ペナルティ）を読む箇所は一つも無い**。Codexの「未実装」の診断はそのとおりで、「テレメトリに来ていない」ではなく実装漏れ。
+2. **authority**：新規`black_flag_active = bool(flags & 0x00010000)`を、既存のcautionと同じ毎frame読み取り箇所（例：pit判定と同じ場所）に追加し、`_session_race_state`へ`black_flag_state`（None→'active'→'cleared'）として持たせる。
+3. **state**：transition（False→True／True→False）の時だけ通知を出す設計を、既存のcaution実装（`_pit_caution_entry`等）と同型で作る。raw bit値と時刻を`log()`へ出す（Codex指摘どおり、今回のログには値が残っていないため後追い不能——次回実走から診断ログに追加する）。
+4. **Driverへの出力**：黒旗発生時は短いP0通知（「ペナルティコールが出た」）。Driver申告（「ペナルティ食らった」）が先に来た場合はSDK未確定のまま「申告」として扱い、`black_flag_source: 'driver_reported' | 'sdk_confirmed'`を区別する（Codexの「事実へ偽装しない」を字面どおり実装）。
+5. **cancellation/reset**：黒旗active中は通常box callを抑止（P0-2のprecheckに`not black_flag_active`を追加）。黒旗penalty pit自体は上のP0-3のpit分類で`penalty`として扱い、strategy execution／fuel learningの母数に混ぜない。
+6. **trace/fixture**：実SDKログでbit立上がり→drive-through→解除の一連を固定するテストは、次回実走ログが無いと作れない（現行ログにbit値が残っていないため）。今回はまず**符号だけを実装し、次の実走ログでfixture化する**二段構えを提案する。Codexの完成条件4「実SDK logで固定」は次回実走待ちとして明記したい。
+
+## P1-1（日本語strategy conversation routerの再設計）
+
+1. **source**：`local-intent-router.js`の燃料window検出は[local-intent-router.js:517](desktop/local-intent-router.js:517)で、正規表現が`(?:フューエル|燃料|給油).{0,10}(?:ウ[ィイ]?ンドウ|ウインド|window)`——**「ピット」始まりの語幹を受け付けない**。実際に「ピットウィンド湧いてる？」はこの正規表現にマッチせず、実測どおりunhandledへ落ちることを確認した。
+2. **authority**：Codex案「語句ごとの孤立カードではなく現在のstrategy lifecycleを読む相談入口」に賛成。ただし全面書き換えは既存134件のproposal-agreement回帰と衝突しやすい。最小案：まず**このregexへ「ピット」語幹を追加**（`(?:フューエル|燃料|給油|ピット).{0,10}(?:ウ[ィイ]?ンドウ|ウインド|window)`）して個別語彙の穴を塞ぎ、同時に「入るぞ」「前が遅いから先に」のような**理由付きearly-pit宣言**を新しいintent（`pit_early_with_reason`）として`strategyCallAnswer`の手前に追加する。
+3. **state**：`pit_early_with_reason`はDriverの理由文字列をそのままBridgeへ渡し（LLMに解釈させない）、Bridge側は理由の有無だけを見てP0-3の「early pit invalidation」を早める（本来pit_events確定を待つところを、Driver宣言時点でも`pending_early_pit`として仮マークする）。
+4. **Driverへの出力**：Lunaは「了解、次で入る。プランは調整する」と短く返し、固定拒否・単なるpace readoutで終わらせない。
+5. **cancellation/reset**：「やっぱりやめる」は既存の`pit_plan_cancel`intentへ合流させる（新規は理由付き早期pit宣言だけ）。
+6. **trace/fixture**：新規`tests-strategy-call-routing.js`（既存ファイルへ追加）に、「ピットウィンド湧いてる？」「入るぞ」「前#25が遅いから先に」の3文が`unresolved_operational`にならないことを固定する。
+
+## P1-2（rejoin相談の継続）
+
+賛成。**source**：`pit_exit_forecast_live`が`available:false`の時、renderer側のrejoin card応答テンプレートが対象車番・現順位・再評価タイミングを持たず終端していることを確認していない（renderer側の該当箇所を次回特定要）。**修正方針**：`available:false`でも`{targetCarNumber, currentClassPos, nextEvaluationTrigger}`を含む定型文へ差し替える。優先度はP0群より低いため、次段でCodexへ該当行を提示する。
+
+## P1-3（strategy radioをdecision memory訂正対象へ）
+
+1. **source**：`recordDecisionStage('proposal',data)`は`strategy_plan_decision`トリガーだけで呼ばれる（[renderer.html:4284](desktop/renderer.html:4284)）。**`strategy_plan_box_call`はdecision-memoryへ一度も記録されない**（[renderer.html:4605](desktop/renderer.html:4605)のcase節は別処理）。訂正時に`disputeLatestDecision()`（[renderer.html:8480](desktop/renderer.html:8480)）が対象を見つけられない`decision_not_found`は、この記録漏れが直接原因。
+2. **authority／state**：box call発火時にも`recordDecisionStage('proposal_or_execution', data)`相当を呼び、box callの`decision_id`をdecision-memoryへ載せる。
+3. **Driverへの出力**：訂正時に該当recordが見つかれば、既存の`m.dispute()`経路（[renderer.html:8483](desktop/renderer.html:8483)付近）でhold/recalculateへ戻す——ここは既存契約のままでよい。
+4. **trace/fixture**：box call発火→即座に`loadDecisions()`へ1件増えることをvm実行テストで固定する。
+
+## P1-4（debrief優先順位）
+
+1. **source**：`debriefQuestion()`（[pddp.js:210](desktop/pddp.js:210)）は`incidents !== null`なら**無条件**に固定の接触質問へ分岐する（[pddp.js:220](desktop/pddp.js:220)）。今回のstrategy失敗・penalty・Driver訂正を選択肢にする分岐が存在しないことを確認した。
+2. **authority**：race単位の未解決イベント（P0-3のinvalidated記録、black flag、decision-memoryのdisputed record）を`issue`引数として渡せるよう、呼び出し元（`selectForBriefing`等）を拡張する。
+3. **state**：`debriefQuestion(race, issue)`の先頭に、`issue.category==='strategy_error'||'penalty'||'disputed_decision'`の分岐を、`incidents`チェックより**前**に追加する。
+4. **Driverへの出力**：「今回、給油後にもう一度ピット指示をした点についてだが、原因は特定できた。次同じことを繰り返さないようにする」のような一本化した質問。
+5. **cancellation/reset**：直近の質問テーマ履歴（新規、セッションまたぎで持たない）を持たせ、同じテーマの連続提示を避ける（Codex案どおり）。
+6. **trace/fixture**：今回のRoad Atlanta fixtureで、strategy_error/penaltyが存在する時は接触質問が**選ばれない**ことを固定する。
+
+## 全体
+
+上記6項目とも「賛成・修正案あり」。反対項目なし。P0-4のみ、実SDKでのbit確認が次回実走待ちである点をCodexへ明記して反証を仰ぎたい。それ以外はfixture化・実装に着手してよいと考える。着手順はCodexの1〜5のままでよい（P0-1〜P0-3同時、P0-4は符号のみ先行、P1群はその後）。
+
+Codexの反証・完成条件の確定を待って実装に入る。commit・Build・公開GOなし。
