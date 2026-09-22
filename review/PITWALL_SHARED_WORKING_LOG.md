@@ -20023,3 +20023,209 @@ race-globalなblack flag eventはdecision IDを要求せず、同一race/session
 P0を閉じるMD#3をCodexが確認するまで、`plan_lifecycle.py`、旧7変数の削除、router、Buildへ着手しない。
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#3（P0再差戻し反映）
+
+MD#2差戻し5件、全て同意する。特にP0-1（Plan Aは`conditions=None`のためfuel-safe判定を素通りする）は
+今回の実走事故の**直接原因そのもの**を見逃していた指摘で、重い。以下へ直した。
+
+## P0-1：`plan_basis`を凍結し、fuel判定をconditions有無から独立させる
+
+```python
+def plan_basis_for(selected_plan: str) -> str:
+    return {'A': 'fuel_baseline', 'B': 'fuel_undercut', 'C': 'fuel_overcut'}.get(selected_plan, 'fuel_baseline')
+```
+
+`PlanLifecycleRecord`へ`plan_basis: str`を追加し、record作成時（`proposal_built`）に必ず設定する
+（`conditions`の有無を見ない）。A/B/Cは全てfuel起点（strategy_options.py自体がPlan B/Cもfuel windowから
+組み立てている——[strategy_options.py:81-122](irsdk-bridge/strategy_options.py:81)の`total_required =
+average * crossings_to_finish + reserve`が全Planの土台）なので、basisは3つとも同じfuel-safety判定を通す。
+
+`build_box_call_authority()`は既存`_fuel_strategy_live`/`strategy_options`（最新・変動する計算推薦）を
+一切読まない。frozen Planと、現在frameの燃費観測（`current_fuel_l`・`avg_fuel_per_lap_l`・
+`crossings_to_finish`・`reserve_l`——これらはBridgeが既に毎frame持つ生の観測値で、計算済みの
+`strategy_options`ではない）だけから、**この関数自身が**要否を計算する：
+
+```python
+def build_box_call_authority(plan, *, current_lap, current_fuel_l, avg_fuel_per_lap_l,
+                             crossings_to_finish, reserve_l, on_track, on_pit, black_flag_active):
+    if plan is None or plan.phase != 'active':
+        return BoxCallAuthority(available=False, deny_reason='no_active_plan')
+    if plan.held_reason is not None:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_hold', black_flag_active=True)
+    if on_pit:
+        return BoxCallAuthority(available=False, deny_reason='already_on_pit_road')
+    if any(e['type'] == 'box_call' for e in plan.effects
+           if e.get('pit_sequence') == plan.expected_pit_sequence):
+        return BoxCallAuthority(available=False, deny_reason='already_called_this_pit')
+    if not isinstance(plan.target_lap, int) or not isinstance(current_lap, int) or current_lap < plan.target_lap:
+        return BoxCallAuthority(available=False, deny_reason='before_target_lap')
+    # ★MD#3 P0-1：Road Atlanta lap21再発防止の核心。conditionsの有無やPlan文字で分岐しない。
+    #   basisに関わらず全Planへ同一の燃料要否判定を通す。frozen Planに依存する値は無く、
+    #   全て現在frameの生観測だけを使う——ここが「凍結Plan基準」の意味。
+    if (not _finite(current_fuel_l) or not _finite(avg_fuel_per_lap_l)
+            or not isinstance(crossings_to_finish, int) or crossings_to_finish < 1):
+        return BoxCallAuthority(available=False, deny_reason='fuel_evidence_missing')  # fail-closed
+    required_fuel_to_finish_l = avg_fuel_per_lap_l * crossings_to_finish + (reserve_l or 0.0)
+    stop_required_to_finish = current_fuel_l < required_fuel_to_finish_l
+    if not stop_required_to_finish:
+        return BoxCallAuthority(available=False, deny_reason='fuel_safe_without_stop',
+                                 required_fuel_to_finish_l=round(required_fuel_to_finish_l, 3),
+                                 current_fuel_l=round(current_fuel_l, 3))
+    return BoxCallAuthority(available=True, race_instance_id=plan.race_instance_id,
+                             session_num=plan.session_num, plan_revision=plan.revision,
+                             current_fuel_l=current_fuel_l,
+                             required_fuel_to_finish_l=round(required_fuel_to_finish_l, 3),
+                             basis=plan.plan_basis)
+```
+
+Road Atlanta lap21は`current_fuel_l=18.14`・`required_fuel_to_finish_l=9.98+reserve`のため
+`stop_required_to_finish=False`→`available=False, deny_reason='fuel_safe_without_stop'`となり、box call・
+TTS・overlay・chatは0件になる。
+
+## P0-2：`expected_pit_sequence`はPlanが`active`になった瞬間に固定する（box call effectの時ではない）
+
+MD#2の誤り：box call effectが確定した時だけ予約していたため、box callが抑止・配送失敗・中断だった場合、
+Planが予定どおり実行されても`early`に誤分類された。修正：`proposal_built`（commit）および
+`driver_response(accepted=True)`の遷移**そのもの**で`expected_pit_sequence = pit_sequence_counter + 1`を
+書く。box callはこの後に起きる（起きなくてもよい）純粋な通知effectに格下げする。
+
+```python
+def classify_pit_relation(plan, pit_event, driver_early_pit_intent, penalty_evidence):
+    if penalty_evidence:
+        return 'penalty'
+    if plan is None:
+        return 'unrelated'
+    if (plan.expected_pit_sequence is not None
+            and pit_event.pit_sequence == plan.expected_pit_sequence
+            and isinstance(plan.target_lap, int) and pit_event.entry_lap >= plan.target_lap):
+        return 'normal'
+    if driver_early_pit_intent or (isinstance(plan.target_lap, int) and pit_event.entry_lap < plan.target_lap):
+        return 'early'
+    return 'unrelated'
+```
+
+box call未配送のまま予定lapで実行されたpitは、`expected_pit_sequence`が既に`active`遷移時点で
+設定済みのため正しく`normal`になる。
+
+## P0-3：`executed`遷移で`active_plan_id`を必ず外す。`active_plan_view()`は`active`だけ返す
+
+```python
+def active_plan_view(state):
+    p = state.plan_records.get(state.active_plan_id) if state.active_plan_id else None
+    return p if p and p.phase == 'active' else None  # ★MD#3：'executed'を除外
+```
+
+遷移表の`pit_event（relation='normal'）`行の副作用へ`active_plan_id=None`を明記する（下表）。
+normal pit後、次stintのdecision-lockは`active_plan_id is None`を前提どおり満たし、新規proposalを作れる。
+
+## P0-4：黒旗hold中のDriver応答契約を確定する
+
+**確定契約**：hold中に届いたDriver応答（accepted true/false問わず）は、
+
+1. 必ず受領・trace・`DecisionHistory`へ記録する（消さない）。
+2. Planは`invalidated(reason='driver_response_during_black_flag')`へ遷移し、**accept/declineの値に関わらず
+   activeへは絶対に昇格させない**。
+3. Driverへ「了解。ただしペナルティ処理が優先。解除後の状態で作戦を出し直す。」を返す。
+4. flag clear後は新しいsnapshotから新しいdecision_idで再提案する。**古いacceptの再適用は行わない。**
+
+`revalidate_after_black_flag()`も同じ理由（旧acceptを絶対に再適用しない）で、awaiting_driver中のPlanが
+holdへ入った場合はこの経路（応答を待たず、flag clear時点で無応答なら）そのままrevalidateへ進む。
+再検証は次の4点全てを満たした時だけ`resume`：
+
+```python
+def revalidate_after_black_flag(plan, current_snapshot):
+    if plan.race_instance_id != current_snapshot['race_instance_id']:
+        return 'invalidated', 'race_identity_changed'
+    if plan.session_num != current_snapshot['session_num']:
+        return 'invalidated', 'session_changed'
+    # penalty pitがhold中に起きていれば、pit_eventの優先遷移で既にinvalidated済み
+    # （このrelaidateへ来る時点でそれは通っていない＝penaltyは起きていない）。
+    if plan.phase == 'active':
+        authority = build_box_call_authority(plan, **current_snapshot['fuel_frame'])
+        if not authority.available and authority.deny_reason == 'fuel_safe_without_stop':
+            return 'invalidated', 'fuel_safe_after_black_flag'
+        if not authority.available and authority.deny_reason == 'fuel_evidence_missing':
+            return 'invalidated', 'fuel_evidence_missing_after_black_flag'
+    current_sig = plan_conditions_signature(current_snapshot['strategy_options'], plan.selected_plan)
+    if current_sig != plan.conditions:
+        return 'invalidated', 'conditions_changed_during_hold'
+    return 'resume', None
+
+def plan_conditions_signature(strategy_options, selected_plan):
+    """既存 plan_conditions_from_options()（bridge.py）をそのまま呼ぶ。新規実装しない。"""
+    return plan_conditions_from_options(strategy_options, selected_plan)
+```
+
+## P0-5：eventはdecision_id/dispatch_idからrecordを解決し、terminal recordはtraceのみ更新する
+
+```python
+def resolve_record_for_event(state, event):
+    decision_id = event.get('decision_id')
+    if decision_id is None:
+        return None  # pit_event/black_flagはrace-global（下で別処理）
+    record = state.plan_records.get(decision_id)
+    if record is None:
+        return None  # 完全に未知のID＝no_match
+    if (record.race_instance_id != event.get('race_instance_id')
+            or record.session_num != event.get('session_num')):
+        return None  # identity不一致＝stale、recordへ触れない
+    return record
+
+def apply_plan_lifecycle_event(state, event):
+    record = resolve_record_for_event(state, event)
+    etype = event['type']
+    if etype in ('delivery_report', 'driver_response') and record is not None:
+        if record.phase not in ('active', 'awaiting_driver'):
+            # terminal recordへの遅延event：traceのみ、current active_plan_idには一切触れない
+            record.effects.append({'type': 'stale_' + etype, 'at': event.get('at')})
+            return state
+        # ...非terminalの通常遷移（MD#2の表のまま）...
+    if etype in ('pit_event', 'black_flag'):
+        # race-global。現在のnon-terminal Planは高々1つ（active_plan_idが指す1件）という
+        # design不変条件により、"全non-terminal Planへ適用"は実質この1件に一致する。
+        record = state.plan_records.get(state.active_plan_id) if state.active_plan_id else None
+        if record is not None and record.phase not in ('active', 'awaiting_driver'):
+            record = None  # 既にterminalなら対象外
+        # ...relation/black flag遷移（MD#2〜#3の表のまま）...
+    ...
+```
+
+## 遷移表（差分のみ。他はMD#2のまま）
+
+| 現phase | event | 変更点 |
+|---|---|---|
+| `(active_plan_id=None)` | `proposal_built`（commit） | 副作用に`expected_pit_sequence=pit_sequence_counter+1`、`plan_basis=plan_basis_for(selected_plan)`を追加 |
+| `awaiting_driver` | `driver_response`（accepted=True） | held_reason is Noneに加え、遷移時に`expected_pit_sequence=pit_sequence_counter+1`を設定 |
+| `awaiting_driver`／`active` | `driver_response`（**held_reason is not None**） | 新規行：accept/declineに関わらず`invalidated(reason='driver_response_during_black_flag')`、`active_plan_id=None`、Driverへ確定文言、`DecisionHistoryEntry`へ応答値ごと記録 |
+| `active` | `pit_event`（relation='normal'） | 副作用に`active_plan_id=None`を明記（MD#2で欠落） |
+| held中 | `black_flag`（off） | `revalidate_after_black_flag()`が`resume`なら`held_reason=None`（phase不変）、`invalidated`ならその理由で終端＋`active_plan_id=None` |
+| any（terminal record） | `delivery_report`／`driver_response`（identity一致） | `record.effects`へ`stale_*`追記のみ。`active_plan_id`・phaseに触れない |
+
+## 赤いシナリオへの追加assertion
+
+```text
+4. Plan A fuel-safe再発防止：
+   active(A, plan_basis='fuel_baseline') → lap21到達 → box_call_attempt event
+   → BoxCallAuthority(available=False, deny_reason='fuel_safe_without_stop')
+   → TTS/overlay/chat/DeliveryAttempt作成が0件。
+
+5. box call未配送でも実行を正しく記録：
+   active → expected_pit_sequence確定（active遷移時） → box_call_attempt が
+   black_flag_hold等で拒否され続ける → Driverが独自判断でtarget lap以降にpit
+   → pit_event(pit_sequence==expected, entry_lap>=target_lap) → relation='normal' → executed。
+
+6. normal pit後、次stintのPlanを作れる：
+   active → pit_event(normal) → executed かつ active_plan_id=None
+   → 次decision-lockのproposal_builtが素通りせず新規recordを作る。
+
+7. 黒旗hold中の同意は再有効化しない：
+   awaiting_driver(A) → black_flag(on) → held → driver_response(accepted=True, held中)
+   → invalidated(reason='driver_response_during_black_flag')、active_plan_id=None、
+   DecisionHistoryへaccepted=True含めて記録 → black_flag(off)で何も復活しない
+   → 次decision-lockが新しいsnapshotから新decision_idで再提案。
+```
+
+commit・Build・公開GOなし。
