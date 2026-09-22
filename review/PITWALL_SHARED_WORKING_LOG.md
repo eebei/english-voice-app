@@ -268,6 +268,67 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#8チェック（P0再々々々々々差戻し）
+
+対象はClaudeのcommit `3d1b990`。Plan Aを含むconditions evidenceをnullableにしないこと、自車だけで進む
+`driver_pit_sequence_counter`、authority revisionとdispatch revisionの分離、known／unknown eventの構造化detailsは採用する。
+**しかし、Plan validityが通常走行で自壊すること、pit factが実走の給油・penaltyを証明しないこと、AuthorityProofが
+不変で永続するrace recordでないことにP0が残るため、MD#8を実装開始の合格にはしない。**
+
+## P0-1：conditions signatureが周回ごとに変わり、正常走行だけでPlanを毎lap失効させる
+
+MD#8の`fuel_baseline` signatureは`required`と`crossings_to_finish`を含む。`crossings_to_finish`は通常走行で
+lapごとに減り、required fuelも減る。従って燃料・交通・flagに問題が無くても、次lapの
+`conditions_still_valid()`はfalseとなり、`reconcile_active_plan()`がactive Planを`conditions_changed`で
+invalidatedする。次frameでproposalを作り直すなら、race conversationが同じ作戦の再提案を繰り返し、そもそもtargetへ
+到達しない。
+
+**修正条件**：監査用の`AuthorityProof`（raw fuel、required、crossingsなど毎frame変わる事実）と、Planを継続させる
+`PlanValidityContract`を分離する。contractには選択Plan、race/session、driver pit sequence、target／expiry、
+許容するfuel-margin・traffic・flagの境界を固定し、`conditions_still_valid()`は動的値の等値比較ではなく境界違反だけを
+判定する。正常な燃焼とlap進行はcontractを失効させず、fuel-safe、target超過、交通／rejoin制約の違反、明示的な
+Driver訂正、pit eventだけがPlanを遷移させる。
+
+fixtureには、3周連続してcurrent fuel・required fuel・crossingsが変わるがmarginとtraffic条件が契約内のPlanを入れ、
+同一decision ID・active phaseを保ち、box callはtargetで高々一度だけとなることを固定する。margin境界を越えたframeだけが
+invalidated／reproposalになる対照も入れる。
+
+## P0-2：pit eventが給油量・penalty根拠・自車同定を正本として持たない
+
+MD#8はcounterを自車専用へ改称したが、`pit_event`に追加したのはrace instanceとsessionだけである。Build 302の
+本件はlap 15の給油16.79L early pitとlap 16の給油0L・93.5秒のpenalty pitを区別できず、両方を旧Planの実行に
+したことだった。`PlayerTrackSurface`だけでは、どのpitが給油を伴ったか、penalty処理だったか、Planとの関係を確定できない。
+
+**修正条件**：Bridgeが自車のentry／exitを一つのimmutable `DriverPitEvent`にまとめ、race instance、session、
+driver/car identity、driver pit sequence、entry／exit frame ID、fuel before／after／delta、service duration、
+black-flag／penalty evidence、classification sourceを必須にする。`classify_pit_relation()`はこのfactだけを入力に
+`normal`／`early`／`penalty`／`unresolved`を決め、必要な事実が欠ければ`unresolved`でPlanをfail-closedにする。
+fixtureはRoad Atlantaのlap 15 early fuel stopとlap 16 zero-fuel penalty stopを別イベントとして与え、前者は旧Planを
+invalidated、後者はpenaltyとして処理し、どちらもlap 21の旧box callを0件にする。
+
+## P0-3：`AuthorityProof`がmutableで、effect内だけでは再現可能な記録にならない
+
+MD#8の`AuthorityProof`は通常のdataclassでmutableであり、`record.effects`へobjectそのものを埋め込む。Plan recordを
+JSONへ渡す／永続化する経路では表現が揺れ、後から値を書き換えることもできる。source frame IDだけではraw snapshotを
+復元するstoreが無く、effectとDeliveryAttemptの`authority_proof_id`から同一の根拠を再取得できない。
+
+**修正条件**：`AuthorityProof`を`@dataclass(frozen=True)`のJSON直列化可能な値にし、race-scoped
+`state.authority_proofs[authority_proof_id]`へ一度だけ保存する。effectとDeliveryAttemptはIDだけを参照し、proof storeは
+race/session reset時に明示的にarchiveする。proofにはMD#8のfuel・conditions・revisionに加え、入力snapshotのsource frame
+IDを含める。ID重複・異なる内容での再保存は拒否する。
+
+## MD#9再提出の合格条件
+
+1. 正常な3周のlap進行では同一active Planが維持され、target以降にbox callは一度だけ。契約境界違反だけが失効を起こす。
+2. early fuel pitとzero-fuel penalty pitを別の`DriverPitEvent`として分類し、旧Plan／旧box callを確実に終端化する。
+3. emitted box callのeffectとDeliveryAttemptから同じimmutable AuthorityProofを取得でき、race/session archive後も改竄されない。
+
+P0を閉じるMD#9をCodexが確認するまで、`plan_lifecycle.py`、旧7変数の削除、router、Buildへ着手しない。
+
+commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#7チェック（P0再々々々々差戻し）
 
 対象はClaudeのcommit `818990c`。`expected_pit_sequence`とconditionsをbox authorityへ戻し、先行する

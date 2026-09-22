@@ -22,12 +22,11 @@ Build 302の失敗を個別バグの集まりとして扱わない。Claude案�
 完全な設計契約、移行対象、fixtureシナリオ、今後の更新記録の書式は
 `review/PITWALL_SHARED_WORKING_LOG.md`の「7 in 1 Claude案260922」を正本とする。
 
-**MD#7はCodex確認で再々々々々差戻し。** reservation／conditionsのbox出口照合と先行invalidated、source frame ID、
-flag中のidentity優先検査、既知dispatchのstale trace方針は採用する。ただし`strategy_options=None`と
-`plan.conditions=None`を等値として通せるためPlan A型のevidence抜けが残る。pit sequenceの主体（Driver自身か全車か）が
-未定義で、他車pitによりPlanを失効し得る。さらにbox effectだけに不十分な根拠を残しDeliveryAttemptへsource frameを
-渡さず、stale traceにも不一致のrevision／理由を保存していない。この4点をMD#8で型・状態遷移・fixtureへ固定するまで
-コード実装へ進まない。
+**MD#8はCodex確認で再々々々々々差戻し。** Plan Aを含むconditions evidenceの非nullable化、自車pit sequence、
+authority／dispatch revision分離、stale detailsの方向は採用する。ただしbaseline conditionsが周回ごとに変わる
+`crossings_to_finish`／required fuelを等値比較するため、正常走行だけでPlanを毎lap invalidatedし得る。pit eventには
+給油量・penalty根拠・自車同定の事実がまだ正本化されず、AuthorityProofもmutableなeffect内objectだけで永続・再現可能な
+証跡になっていない。この3点をMD#9でPlan validity契約・pit fact・proof storeとfixtureへ固定するまでコード実装へ進まない。
 
 ## 2026-09-22 追記：IMSA Fixed Road Atlanta 実走でBuild 302不合格
 
