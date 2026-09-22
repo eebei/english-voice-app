@@ -22,13 +22,11 @@ Build 302の失敗を個別バグの集まりとして扱わない。Claude案�
 完全な設計契約、移行対象、fixtureシナリオ、今後の更新記録の書式は
 `review/PITWALL_SHARED_WORKING_LOG.md`の「7 in 1 Claude案260922」を正本とする。
 
-**MD#5はCodex確認で再々々差戻し。** 実snapshot値をblack flag clearの再検証へ渡すこと、box-call eventの
-revision照合、`DeliveryAttempt.kind`による誤配response遮断は採用する。ただし`authority_snapshot_id`が
-`decision_id:revision:pit_sequence`だけで、実際にauthorityを決めたtelemetry frame（on-track/pit/black flag/
-fuel/conditions）を証明していない。またclear時にpit road等で`hold`になったPlanを次のblack flagイベントまでしか
-再評価しないため、Driverがコースへ戻っても停止し得る。authorityをBridgeの単一の実frameから再計算・claimし、
-hold中はblack flag解除後の各新frameで再検証する遷移とfixture、さらにdelivery/response eventのdispatch revision
-照合をMD#6で確定するまでコード実装へ進まない。
+**MD#6はCodex確認で再々々々差戻し。** box-callを外部の自己申告eventではなくBridge内部のsnapshot直結関数へ
+統合したこと、held Planを毎frame再評価すること、配送／応答event revisionをattempt revisionと照合することは採用する。
+ただし唯一のbox出口から`expected_pit_sequence`とPlan conditionsの照合が落ち、実際に使ったsource frame IDも記録しない。
+black flagがまだactiveならheld Planのrace/session/pit identityを検査せず残し、revision不一致eventも`None`で捨てて
+DecisionHistoryへtraceしない。この4点をMD#7で状態遷移・poll順序・fixtureへ固定するまでコード実装へ進まない。
 
 ## 2026-09-22 追記：IMSA Fixed Road Atlanta 実走でBuild 302不合格
 

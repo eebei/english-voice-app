@@ -268,6 +268,77 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#6チェック（P0再々々々差戻し）
+
+対象はClaudeのcommit `fa1c760`。box callをDesktop等から届く`box_call_attempt` eventではなく、Bridge内の
+`attempt_box_call(state, AuthoritativeSnapshot)`だけで確定する構造、black flag clear後にheld Planを各frameで
+再検証する構造、`delivery_report`／`driver_response`がevent revisionとdispatch revisionを照合する構造は採用する。
+**しかし、唯一のbox出口のreservation・conditions検査、snapshotの証跡、black flag中のidentity、stale traceに
+P0が残るため、MD#6を実装開始の合格にはしない。**
+
+## P0-1：唯一のbox出口からpit reservationとPlan conditionsが落ちた
+
+MD#6の`build_box_call_authority()`には、以前の設計にあった
+`plan.expected_pit_sequence == snapshot.pit_sequence_counter + 1`が無い。既にpit eventが進んだPlan、またはpit eventの
+状態反映より先にpollされたPlanでも、燃料条件だけでbox callできる。また通常active Planでは
+`plan_conditions_signature(snapshot.strategy_options, plan.selected_plan) == plan.conditions`を確認していないため、
+traffic・fuel・safety条件の根拠が変わった古いPlanも発話できる。これはRoad Atlantaで起きた「終わった給油ネタ」の
+再発経路である。
+
+**修正条件**：`build_box_call_authority()`はexpected pit sequenceとPlan conditionsを必須のfail-closed入力として検査する。
+不一致はbox callを0件にするだけでなく、snapshot処理の先行段階`reconcile_active_plan(state, snapshot)`が
+`pit_sequence_reservation_stale`又は`conditions_changed`としてPlanをinvalidatedし、`active_plan_id`を外して新snapshotから
+proposalを作り直す。poll順序を「snapshot正規化 → pit event反映 → black flag遷移／held再検証 → active Plan整合性 →
+attempt_box_call」と固定し、box authorityはこの順序に依存せず自らも同じreservationを再検査する。
+
+fixtureには、予定外pitでcounterが進んだactive Plan、および同じrace/sessionでstrategy conditionsだけが変わったactive Planを
+入れ、box effect・DeliveryAttempt・TTS・overlay・chatが全て0件、旧Planがterminal、次proposalだけが新snapshot由来で
+作られることを固定する。
+
+## P0-2：`AuthoritativeSnapshot`にsource frame IDが無く、実際に使った根拠を保存していない
+
+直接呼び出しにしたことで古いauthority結果の持込みは防げる。しかし`AuthoritativeSnapshot`は`at`だけで一意の
+source frame IDを持たず、box-call effect／DeliveryAttemptにも使ったsnapshot IDを残していない。7 in 1の正本が要求する
+authority snapshotを後から検証できず、実走で再び誤指示が出ても「どのtelemetry根拠で発話したか」を追えない。
+
+**修正条件**：Bridgeがpollごとに単調増加の`source_frame_id`（同一SessionTimeでも衝突しない）を付与する。box effectと
+DeliveryAttemptへそのID、Plan revision、pit sequence、frozen fuel evidence／conditions signatureを記録する。
+このIDは外部が申告する許可証ではなく、Bridge内部snapshotの出所を示すtraceである。box callの条件判断とeffect claimは
+引き続き同じsnapshot呼び出し内で完結させる。
+
+## P0-3：black flag active時にidentity変化を検査せず、古いheld Planが次sessionへ残る
+
+`apply_snapshot_to_held_plan()`は`snapshot.black_flag_active is True`で直ちにreturnする。そのためblack flagが立ったまま
+race instance／sessionが変わると、`revalidate_held_plan()`のidentity・resolved pit sequence検査に到達せず、旧Planが
+active pointerを占有し続ける。
+
+**修正条件**：held Planのrace instance、session、resolved／expected pit sequenceはblack flagの状態に関係なく、毎frameの
+最初に検査する。identity又はreservationが変われば直ちにterminal invalidated＋`active_plan_id=None`にする。black flagが
+まだactiveの場合に限り、identityが正しいPlanだけをhold継続にする。
+
+## P0-4：revision不一致eventがtraceされず、実装とfixtureの契約が矛盾している
+
+MD#6の`resolve_attempt_for_event()`はrevision不一致で`None`を返す。既存の呼出側は`None`ならstateを返すため、
+scenario 17が期待する`stale trace`は残らない。これはDecisionHistoryを後の比較・debriefに残す方針にも反する。
+
+**修正条件**：resolverは`attempt`と`failure_reason`を返す。dispatch IDが既知ならrace/session/revision不一致でも
+attemptまたはrecordの`DecisionHistory`へ`stale_delivery_report`／`stale_driver_response`と理由・event revision・
+dispatch revision・source frame/timeを残し、Plan phase・active pointer・出力を変えない。未知dispatchはrace-scopedの
+diagnostic traceだけを残し、Planを作らない。
+
+## MD#7再提出の合格条件
+
+1. pit sequence又はconditionsが変わったactive Planは同frameでterminalになり、旧Planのbox callが0件、新snapshotのproposalだけが残る。
+2. emitted box callはBridge内部の一意なsource frame IDと、そのfuel／conditions／pit sequence根拠から完全に追跡できる。
+3. black flagがactiveのままsession又はpit reservationが変わっても旧held Planを即時invalidatedし、active pointerを残さない。
+4. known dispatchへ異なるevent revisionを返すと、Plan不変かつDecisionHistoryにstale traceが1件残る。
+
+P0を閉じるMD#7をCodexが確認するまで、`plan_lifecycle.py`、旧7変数の削除、router、Buildへ着手しない。
+
+commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#5チェック（P0再々々差戻し）
 
 対象はClaudeのcommit `3c2dc20`。MD#4の3点、すなわちblack flag clearで実測の`on_track`／`on_pit`／
