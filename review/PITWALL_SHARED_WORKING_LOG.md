@@ -20299,3 +20299,213 @@ def apply_plan_lifecycle_event(state, event):
 ```
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Claude：7 in 1 Claude案260922 MD#4（P0再々差戻し反映）
+
+MD#3差戻し4件、全て同意する。特にP0-1（`on_track`/`black_flag_active`を引数に持ちながら検査していない）は
+**自分で定義した安全ゲートを自分で無視していた**ミスで、率直に重く受け止める。以下へ直した。
+
+## P0-1：`BoxCallAuthority`の入力を全て検査する。reserve欠損を0で偽装しない
+
+```python
+def build_box_call_authority(plan, *, current_lap, current_fuel_l, avg_fuel_per_lap_l,
+                             crossings_to_finish, reserve_l, on_track, on_pit, black_flag_active,
+                             race_instance_id, session_num):
+    if plan is None or plan.phase != 'active':
+        return BoxCallAuthority(available=False, deny_reason='no_active_plan')
+    # ★MD#4 P0-1：関数が受け取った安全入力を、この関数自身が検査する。
+    #   呼び出し側の外側ifで補完しない——それがP0-2「唯一の出口」契約の意味。
+    if on_track is not True:
+        return BoxCallAuthority(available=False, deny_reason='not_on_track')
+    if on_pit is not False:
+        return BoxCallAuthority(available=False, deny_reason='already_on_pit_road')
+    if black_flag_active is not False:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_active')
+    if plan.held_reason is not None:
+        return BoxCallAuthority(available=False, deny_reason='black_flag_hold')
+    if plan.race_instance_id != race_instance_id or plan.session_num != session_num:
+        return BoxCallAuthority(available=False, deny_reason='identity_mismatch')
+    if any(e['type'] == 'box_call' for e in plan.effects
+           if e.get('pit_sequence') == plan.expected_pit_sequence):
+        return BoxCallAuthority(available=False, deny_reason='already_called_this_pit')
+    if not isinstance(plan.target_lap, int) or not isinstance(current_lap, int) or current_lap < plan.target_lap:
+        return BoxCallAuthority(available=False, deny_reason='before_target_lap')
+    if (not _finite(current_fuel_l) or not _finite(avg_fuel_per_lap_l) or not _finite(reserve_l)
+            or not isinstance(crossings_to_finish, int) or crossings_to_finish < 1):
+        # ★MD#4：reserve_lも他の入力と同列でfiniteチェックする。欠損を0.0へ丸めない。
+        return BoxCallAuthority(available=False, deny_reason='fuel_evidence_missing')
+    required_fuel_to_finish_l = avg_fuel_per_lap_l * crossings_to_finish + reserve_l
+    if current_fuel_l >= required_fuel_to_finish_l:
+        return BoxCallAuthority(available=False, deny_reason='fuel_safe_without_stop',
+                                 required_fuel_to_finish_l=round(required_fuel_to_finish_l, 3),
+                                 current_fuel_l=round(current_fuel_l, 3))
+    return BoxCallAuthority(available=True, race_instance_id=race_instance_id, session_num=session_num,
+                             plan_revision=plan.revision, current_fuel_l=current_fuel_l,
+                             required_fuel_to_finish_l=round(required_fuel_to_finish_l, 3),
+                             basis=plan.plan_basis)
+```
+
+## P0-2：pit relationの`unrelated`は「Planが無い時」だけに限定し、根拠不明は`invalidated`にする
+
+```python
+def classify_pit_relation(plan, pit_event, driver_early_pit_intent, penalty_evidence):
+    if plan is None:
+        return 'unrelated'  # 対象Planが無い＝本当に無関係（terminal/未提案）
+    if penalty_evidence:
+        return 'penalty'
+    if (plan.expected_pit_sequence is not None
+            and pit_event.pit_sequence == plan.expected_pit_sequence
+            and isinstance(plan.target_lap, int) and pit_event.entry_lap >= plan.target_lap):
+        return 'normal'
+    if _valid_early_intent(driver_early_pit_intent, plan, pit_event) or (
+            isinstance(plan.target_lap, int) and pit_event.entry_lap < plan.target_lap):
+        return 'early'
+    # ★MD#4 P0-2：active/awaiting_driver中のPlanに対し、根拠を特定できないpitを
+    #   `unrelated`のまま生かさない。fail-closedでinvalidatedへ落とす——
+    #   古いPlanをactiveのまま残し、後続box callを許すことがP0で一番危険な形だった。
+    return 'unresolved'
+
+@dataclass
+class DriverEarlyPitIntent:
+    race_instance_id: str
+    session_num: int
+    expected_pit_sequence: Optional[int]   # 発話時点でplanが持っていた予約値
+    declared_at: float                     # SessionTime
+    expiry_pit_sequence: Optional[int] = None  # この値の次のpit entryを過ぎたら失効
+
+def _valid_early_intent(intent, plan, pit_event):
+    if intent is None:
+        return False
+    if intent.race_instance_id != plan.race_instance_id or intent.session_num != plan.session_num:
+        return False
+    if intent.expected_pit_sequence != plan.expected_pit_sequence:
+        return False  # Planが更新された後の古いintentは無効
+    if intent.expiry_pit_sequence is not None and pit_event.pit_sequence > intent.expiry_pit_sequence:
+        return False  # 次のpitより後まで持ち越さない
+    return True
+```
+
+遷移表：`active`／`awaiting_driver`行に`pit_event（relation='unresolved'）`を追加し、
+`invalidated(reason='pit_relation_unresolved')`、`active_plan_id=None`とする（penalty/earlyと同じ優先度）。
+
+## P0-3：flag clear時、targetを過ぎていたら無条件にresumeしない
+
+```python
+def revalidate_after_black_flag(plan, current_snapshot):
+    if plan.race_instance_id != current_snapshot['race_instance_id']:
+        return 'invalidated', 'race_identity_changed'
+    if plan.session_num != current_snapshot['session_num']:
+        return 'invalidated', 'session_changed'
+    if plan.resolved_pit_sequence is not None:
+        return 'invalidated', 'already_resolved'  # 本来terminal化済みのはずの防御的チェック
+    # ★MD#4 P0-3：hold中にtargetを越えていたら、条件・燃料が残っていても再開しない。
+    #   越えた時点で「時機を逃した提案」であり、新しいsnapshotから作り直す。
+    current_lap = current_snapshot['fuel_frame']['current_lap']
+    if isinstance(plan.target_lap, int) and isinstance(current_lap, int) and current_lap >= plan.target_lap:
+        return 'invalidated', 'target_elapsed_during_black_flag'
+    # ★hold開始からの間に他のpit機会が挟まっていないか、次に来るpit_sequenceの予約値が
+    #   まだ有効かを確認する（予約値そのものは変わらないが、カウンタ自体が別経路で
+    #   進んでいないかの整合性チェック）。
+    if plan.expected_pit_sequence != current_snapshot['pit_sequence_counter'] + 1:
+        return 'invalidated', 'pit_sequence_reservation_stale'
+    if plan.phase == 'active':
+        authority = build_box_call_authority(
+            plan, on_track=True, on_pit=False, black_flag_active=False,
+            race_instance_id=plan.race_instance_id, session_num=plan.session_num,
+            current_lap=current_lap, **current_snapshot['fuel_frame_values'])
+        if not authority.available and authority.deny_reason == 'fuel_safe_without_stop':
+            return 'invalidated', 'fuel_safe_after_black_flag'
+        if not authority.available and authority.deny_reason == 'fuel_evidence_missing':
+            return 'invalidated', 'fuel_evidence_missing_after_black_flag'
+    current_sig = plan_conditions_signature(current_snapshot['strategy_options'], plan.selected_plan)
+    if current_sig != plan.conditions:
+        return 'invalidated', 'conditions_changed_during_hold'
+    return 'resume', None
+```
+
+## P0-4：`DeliveryAttempt`単位でdispatch/revisionを照合する`resolve_attempt_for_event()`
+
+```python
+@dataclass
+class DeliveryAttempt:
+    dispatch_id: str
+    decision_id: str
+    race_instance_id: str
+    session_num: Optional[int] = None
+    plan_revision_at_dispatch: Optional[int] = None   # ★MD#4 P0-4：新規field
+    attempted_at: Optional[float] = None
+    outcome: DeliveryOutcome = 'queued'
+    response_accepted: Optional[bool] = None
+    response_at: Optional[float] = None
+
+def resolve_attempt_for_event(state, event):
+    """dispatch_idから一意にattemptを解決する。decision_idだけでは同じrecordの
+    複数attempt（再配送）を区別できない——これがMD#3までの欠落そのもの。"""
+    dispatch_id = event.get('dispatch_id')
+    if dispatch_id is None:
+        return None
+    attempt = next((a for a in state.attempts if a.dispatch_id == dispatch_id), None)
+    if attempt is None:
+        return None  # no_match
+    if (attempt.race_instance_id != event.get('race_instance_id')
+            or attempt.session_num != event.get('session_num')):
+        return None  # stale
+    return attempt
+
+def apply_plan_lifecycle_event(state, event):
+    etype = event['type']
+    if etype in ('delivery_report', 'driver_response'):
+        attempt = resolve_attempt_for_event(state, event)
+        if attempt is None:
+            return state  # no_match trace（呼び出し側でlog）
+        record = state.plan_records.get(attempt.decision_id)
+        if record is None or record.phase not in ('active', 'awaiting_driver'):
+            # terminal recordへの遅延event：**attempt自身**へstaleマーカーを記録するだけ。
+            attempt.outcome = ('stale_delivery_report' if etype == 'delivery_report'
+                               else attempt.outcome)  # driver_responseはattemptを書き換えない
+            if etype == 'driver_response':
+                if record is not None:
+                    record.effects.append({'type': 'stale_driver_response',
+                                            'accepted': event.get('accepted'), 'at': event.get('at')})
+            return state
+        # revisionも照合：配送時点のPlan revisionと現在のPlan revisionが違えば、
+        # 提案内容そのものが動いた後の応答としてstale扱いにする。
+        if attempt.plan_revision_at_dispatch != record.revision:
+            return state  # stale_event（revision drift）
+        # ...非terminalの通常遷移（MD#2〜#3の表のまま）...
+    ...
+```
+
+`DeliveryAttempt`作成時（`proposal_built`のpropose分岐）に`plan_revision_at_dispatch=record.revision`を
+必ず書く。terminal recordへのdriver_responseは、record自身の`effects`へ`stale_driver_response`として残す
+（record自体はterminalなので`active_plan_id`・phaseには一切触れない）。
+
+## 赤いシナリオへの追加assertion
+
+```text
+8. 安全入力の個別検査：
+   active(A) → on_track=False で box_call_attempt → available=False, deny_reason='not_on_track'。
+   同様にblack_flag_active=True、reserve_l=None（finiteでない）の各入力でavailable=False、
+   いずれもeffect/DeliveryAttempt/TTS/overlay/chatが0件。
+
+9. 根拠不明pitのfail-closed：
+   active(A, expected_pit_sequence=5) → pit_event(pit_sequence=7, 他car起因等でsequenceが飛ぶ)
+   → normal/early/penaltyのいずれにも一致しない → relation='unresolved'
+   → invalidated(reason='pit_relation_unresolved')、active_plan_id=None。
+
+10. target越えのhold：
+    active(A, target_lap=20) → black_flag(on) at lap19 → lap22まで保持 → black_flag(off)
+    → revalidate_after_black_flag → current_lap(22) >= target_lap(20)
+    → invalidated(reason='target_elapsed_during_black_flag') → resumeしない。
+
+11. dispatch単位のstale解決：
+    proposal_built → DeliveryAttempt#1(dispatch_id=D#1, plan_revision_at_dispatch=0)
+    → delivery_report(dropped, dispatch_id=D#1) → 再配送 → DeliveryAttempt#2(D#2, revision=0)
+    → driver_response(accepted=True, dispatch_id=D#2) → active(revision=1)
+    → 遅延して届くdelivery_report(dispatch_id=D#1) → attempt#1へstaleマーカーのみ、
+    現在activeなrecordのphase/revisionは不変。
+```
+
+commit・Build・公開GOなし。
