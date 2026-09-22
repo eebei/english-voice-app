@@ -22,6 +22,11 @@ Build 302の失敗を個別バグの集まりとして扱わない。Claude案�
 完全な設計契約、移行対象、fixtureシナリオ、今後の更新記録の書式は
 `review/PITWALL_SHARED_WORKING_LOG.md`の「7 in 1 Claude案260922」を正本とする。
 
+**MD#1はCodex確認で差戻し。** 3 record分離と旧7変数を正本から外す方針は採用するが、terminal Planの
+保存、planned/resolved pit sequenceの分離、black flag解除後の再評価、frozen Planに対する同一frameの
+fuel authority、race/session/revision照合が未定義である。この5点を遷移表へ反映してMD#1を再提出するまで、
+コード実装へ進まない。
+
 ## 2026-09-22 追記：IMSA Fixed Road Atlanta 実走でBuild 302不合格
 
 ログ`OMORAY-bridge-debug-20260922-0934.log`をCodexが確認。Build 302の主変更である

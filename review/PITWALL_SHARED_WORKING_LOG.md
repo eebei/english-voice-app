@@ -268,6 +268,107 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#1チェック（設計差戻し）
+
+対象はClaudeのcommit `b226374`。製品コード変更はなく、`PlanLifecycleRecord`、`DeliveryAttempt`、
+`DecisionHistory`、`RaceStrategyState`と遷移表の設計提出である。**3 recordへの分離、旧7変数を
+二重正本にしない方針、box callを一箇所へ集約する方針は採用する。だがMD#1は実装開始の合格にしない。**
+下のP0を遷移表とfield定義へ反映して再提出すること。
+
+## 採用する点
+
+1. Plan本体、DeliveryAttempt、DecisionHistoryを別recordにする。再配送・遅延ACK・却下履歴が
+   現在のPlan phaseを変えない境界は正しい。
+2. Bridgeだけがstateを遷移し、Desktop/router/memory/debriefはeventを送り結果を読む。これは
+   Road Atlantaで欠けた「pit事実→Plan正本→出力」の戻り経路を作る前提になる。
+3. `apply_plan_lifecycle_event()`と`plan_ready_for_box_call()`を唯一の入口／出口にする。旧booleanを
+   条件として足し続ける実装へ戻らない。
+
+## P0-1：terminal Planを消しており、訂正・debrief・遅延配送を追跡できない
+
+MD#1ではdelivery failure、Driver拒否、early pit、penalty pitで`state.plan=None`にする。一方で
+`DecisionHistoryEntry`は凍結Plan、effect、pit event、delivery attemptを持たず、`RaceStrategyState`にも
+terminal Planの保管場所が無い。これではred scenario終盤の「さっきのpit指示」を特定できず、debriefも
+strategy errorを読めない。またdelivery失敗後の新phaseを`proposed`と書きつつ`plan=None`にしており、
+phaseを持つrecord自体が無い。
+
+**修正条件**：`active_plan_id`と`plan_records: dict[decision_id, PlanLifecycleRecord]`（または同等の
+terminal archive）を持つ。terminal遷移はrecordを残したままactive pointerだけを外す。`effects`、
+pit relation、DeliveryAttempt、Driver訂正は決定IDから必ず遡れるようにする。`proposed`を残すなら
+recordが存在するphaseとして`proposal_built → proposed → delivery_queued → awaiting_driver`を定義し、
+不要ならphaseと表から削除する。古いdelivery reportはarchiveへ結果だけ記録し、現在のactive Planを
+変えない。
+
+## P0-2：`pit_sequence`が「次に予定するpit」と「完了したpit」を兼ねており、早期pitを判定できない
+
+現行`pit_events`はpit exit時にappendされ、sequence/indexを持たない。MD#1の`pit_sequence`はfield説明では
+実行済みpit eventのindexだが、遷移表ではnormal判定の対象、box precheckでは現在pitとの比較に使われる。
+まだpitをしていないactive Planは`None`のため、expected pitとの照合にならない。`entry_lap`とpit sequenceを
+比較する記述も型と意味が一致しない。
+
+**修正条件**：pit entryで単調増加の`pit_sequence`を発行し、exit確定まで同じ値を保持する。
+`PlanLifecycleRecord`は`expected_pit_sequence`と`resolved_pit_sequence`を別fieldにする。Plan作成時の
+expected値、pit eventのsequence、relationを同じeventに保存する。relationは、Driver early-pit intent、
+entry時からexit時までのpenalty evidence、凍結Planのtarget lapを入力にBridgeが一度だけ決める。`pit_events`
+配列のindexは採番元にしない。
+
+## P0-3：black flagの解除が、古いPlanを無条件に再び有効にする
+
+MD#1の`black_flag(on)`はactive Planへ`held_reason='black_flag'`を入れ、`off`で単に`None`へ戻す。
+flag中にpit、燃料変化、交通変化、Driver応答が起きても、解除時に古いtarget/fuelがそのままbox call可能に戻る。
+awaiting_driverのPlanが黒旗中にacceptされる場合も未定義である。
+
+**修正条件**：flag clearはactive化の復帰イベントではなく`revalidate_after_black_flag`を要求する。凍結Planの
+expected pit sequence、current fuel authority、penalty pitの有無、session/race identityが全て新しいsnapshotで
+一致した時だけholdを外せる。不一致・penalty pit・authority不足は`invalidated`または`cancelled`にして、
+新しいrevision/decision IDのproposalへ戻す。awaiting_driverでのacceptもblack flag中はactiveへ遷移させない。
+
+## P0-4：box call precheckがfail-closedでもatomicでもなく、指定した燃料fieldも存在しない
+
+`fuel_authority.get('already_safe_without_stop')`は現コードに存在しない。現在の
+`_fuel_strategy_live['pit_timing_authority']`には`available`、`required_fuel_to_finish_l`、
+`stop_required_to_finish`、`decision`、`selected_plan`があるが、これは最新`strategy_options`から作るため、
+凍結済みPlanのtarget/fuelとずれる可能性がある。そのままbox callの正本には使えない。
+
+**修正条件**：current frameのlive fuelと**frozen Plan**から`BoxCallAuthority`を作る。少なくとも
+`available`、race/session ID、Plan revision、expected pit sequence、on-track、not-in-pit、black-flag state、
+current fuel、required fuel、stop-required、frozen Planとの条件signatureを持たせる。どれか欠けたら
+`False`とdeny reasonをtraceへ出す。fuelだけでなくPlanのbasis（fuel/traffic/safety等）もrecordに保存し、
+fuel-safeで止める対象を明示する。precheck成功から`box_call` effectのclaim、配送attempt作成までを
+`apply_plan_lifecycle_event()`内でatomicに行い、checkと別の場所でeffectを書き込まない。
+
+## P0-5：全eventにrace/session/revisionの照合が無く、古いACK・別raceのpitで遷移できる
+
+MD#1のdelivery report／Driver responseはdispatch ID一致だけ、pit/black flagはidentity条件なしで遷移する。
+現行は`SessionNum`とrace instanceをdecision IDの境界に使っている。state machineへ移す時にこの照合を落とすと、
+Build 302以前に直した遅延ACK・session跨ぎの事故を戻す。
+
+**修正条件**：全eventに`race_instance_id`、`session_num`、`plan_revision`（deliveryは`dispatch_id`も）を載せ、
+Bridgeがcurrent stateと照合する。mismatchはstateを変えず、`stale_event`としてtrace/attempt historyへ残す。
+revisionを「遷移のたびに+1」と定義するなら、delivery report、pit event、black flag、effect claimを含む全mutationで
+一貫して更新する。session reset前にはterminal record/effectをrace summary/debrief入力へfinalizeしてから新stateを作る。
+
+## P1：MD#1で合わせて明確化する点
+
+- `active_plan_view()`は`active`だけを返す。`executed`をactive viewに含めない。
+- `DecisionHistoryEntry`へrace instance、session、Plan record参照、発話/effect IDを追加する。
+- Driver early-pit intent、cancel、disputeをevent typeとして表へ載せる。P1のrouter実装は後段でも、Bridgeが受ける
+  event契約はMD#1で固定する。
+- penalty判定がDriver申告、SDK black bit、pit serviceのどれに基づくかをevent evidenceへ区別して残す。
+  `PlayerCarPitSvStatus`だけをpenalty事実にしない。
+
+## MD#1再提出の合格条件
+
+1. 上のP0-1〜P0-5を反映したfield定義と遷移表を提示する。
+2. `pit_sequence`はentry採番・expected/resolved分離、fuel authorityはfrozen Plan基準、black flag clearは
+   再評価必須であることを表の行で示す。
+3. red scenarioに、delivery failure→遅延ACK、session reset、flag clear後のstale Planという反例を追加する。
+4. この再提出をCodexが確認するまで、`plan_lifecycle.py`、既存7変数の削除、router、Buildへ着手しない。
+
+commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — 7 in 1 Claude案260922：レース会話を製品にする恒久設計記録
 
 ## 採用判断
