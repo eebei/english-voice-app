@@ -19938,3 +19938,88 @@ Codex指定の3反例を追加する。
   P1群実装時に別MDで出す。
 
 commit・Build・公開GOなし。
+
+---
+
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#2チェック（P0再差戻し）
+
+対象はClaudeのcommit `fdea208`。MD#1で指摘したterminal archive、race/session identity、pit event連番、
+black flag解除後の再評価、atomicなbox-call effectという方向は正しい。**しかしMD#2のまま実装すると、
+Road Atlantaで起きたPlan Aのfuel-safe再pitを防げない。実装開始は不合格とする。**
+
+## P0-1：Plan Aではfuel-safe判定が走らず、今回の再pitをそのまま再発する
+
+MD#2の`build_box_call_authority()`は、`plan.conditions`が存在し、その`fuel_window_open`がtrueの時だけ
+`stop_required_to_finish`を確認する。しかし現行`build_strategy_decision()`はPlan Aに`conditions=None`を
+保存する。`fuel_window_open`はPlan Bの条件であり、Road Atlantaで旧callを出したPlan Aには無い。
+従ってlap 21で燃料がsafeでも、この分岐を通らず`BoxCallAuthority(available=True, basis='traffic')`を返す。
+これは実走P0を残す直接の反例である。
+
+**修正条件**：Plan作成時に`plan_basis`を必ず凍結する。Plan Aは`fuel`、Bは`undercut`、Cは`overcut`等であり、
+`conditions`の有無からbasisを推測しない。fuel根拠のPlanは全て、frozen Planのtarget/add/set fuelとcurrent frameの
+fuel/burn/finish requirementから組み立てたauthorityで`stop_required_to_finish`を判定する。既存
+`pit_timing_authority`は最新`strategy_options`を読むため、そのまま使わない。frozen Planを引数に取る
+`build_box_call_authority()`自身が数値を算出し、fuel evidence不足はbox callをfail-closedにする。
+
+## P0-2：pit relationがPlanと実行事実ではなくbox call出力の有無に依存している
+
+MD#2は`expected_pit_sequence`をbox call effectの時だけ`counter+1`で書く。通常Planがtarget lapで
+実行されても、box callが抑止・配送失敗・TTS中断だった場合はexpectedが無く、pit eventは`early`になる。
+逆にrelation表はsequence一致だけで`normal`にしており、entry lapとDriverのearly-pit意図を評価しない。
+
+**修正条件**：`expected_pit_sequence=pit_sequence_counter+1`をPlanが`active`になった時点で固定する。
+box callはこのPlanに紐付くeffectであり、pit relationの採番元ではない。relationは
+`penalty`を最優先にし、次に`expected sequence`、entry lap対target lap、Driverのearly-pit intent、
+Planのcancel/holdを入力に一度だけ決める。planned target pitは出力が届かなかった場合でも`normal`として
+実行を記録でき、target前のDriver早期pitは確実に`early → invalidated`になることを表とfixtureで示す。
+
+## P0-3：normal実行後のPlanがactive pointerに残り、次のstintを塞ぐ
+
+MD#2のnormal pitは`phase='executed'`にするだけで`active_plan_id`を外さない。さらに`active_plan_view()`は
+`executed`を返す。次の`proposal_built`は`active_plan_id=None`を前提にしているため、normal pit後の耐久raceで
+次のPlanを作れず、consumerも実行済みPlanをactiveと誤読する。
+
+**修正条件**：`executed`はterminal recordとしてarchiveに残し、同じ遷移内で`active_plan_id=None`にする。
+`active_plan_view()`は`phase=='active'`だけを返す。結果採点・debrief・訂正は`plan_records[decision_id]`から
+terminal recordを読む。これを「normal pit→次stintの新Plan」というfixtureで固定する。
+
+## P0-4：black flag中のDriver同意を失わせず、旧Planも再有効化しない仕様を確定する
+
+MD#2はhold中のaccepted responseを`stale_event`として無視する案と、clear後にold responseを再適用する案を
+未決定のまま残している。前者はDriverの意思を消し、後者はblack flag前のPlanを再有効化する危険がある。
+
+**確定する契約**：matching responseは必ず受領・trace・Driverへの短い確認を残す。ただしblack flag中なら
+通常Planをactiveにしない。`driver_response_during_black_flag`としてPlanを`invalidated`し、responseは
+次proposalの条件として`DecisionHistory`へ残す。Driverには「了解。ただしペナルティ処理が優先。解除後の
+状態で作戦を出し直す」と返す。flag clear後は新しいsnapshot・新decision IDのproposalを作り、古いacceptを
+再適用しない。
+
+`revalidate_after_black_flag()`も、未定義の`plan_conditions_signature()`比較だけでは不十分である。
+race/session ID、expected/resolved pit sequence、black flag中のpit event、frozen Plan基準のfuel authority、
+Plan basisの全てを確認し、不足なら`invalidated`にする。
+
+## P0-5：identity照合の対象がactive Planだけで、terminal recordの遅延eventを正しく処理できない
+
+MD#2の共通照合は`state.plan_records[active_plan_id]`を前提にする。early/declined/penalty後は
+`active_plan_id=None`なので、遅れて届くdelivery reportやresponseのidentityを照合するPlanが無い。
+delivery attemptの結果だけをarchiveへ追記し、current Planを絶対に変えないresolverが必要である。
+
+**修正条件**：eventの`decision_id`または`dispatch_id`からrecord/attemptを解決し、そのrecordの
+race instance・session・dispatch時revisionを照合する。terminal recordへの遅延delivery reportはattemptの
+traceだけを更新し、Driver responseは`stale_event`として履歴化する。current active Planへの遷移は一切しない。
+race-globalなblack flag eventはdecision IDを要求せず、同一race/sessionで保持する全non-terminal Planへ
+明示的に適用する。
+
+## MD#2再提出の合格条件
+
+1. Plan A fuel-safeのlap 21で`BoxCallAuthority.available=False`になり、TTS/overlay/chat/DeliveryAttemptが
+   すべて0件になる表とassertionを提示する。
+2. `Plan active → Driver early pit → invalidated`、`Plan active → scheduled pit without audible box call → executed`、
+   `normal pit → active_plan_id=None → next-stint proposal`を同じfixtureに入れる。
+3. black flag中のDriver同意は上記の確定契約で処理し、旧acceptの再適用を禁止する。
+4. delivery failure→遅延ACK、session reset、terminal Planへの遅延responseも、current Planを変えないtraceを
+   fixtureで示す。
+
+P0を閉じるMD#3をCodexが確認するまで、`plan_lifecycle.py`、旧7変数の削除、router、Buildへ着手しない。
+
+commit・Build・公開GOなし。
