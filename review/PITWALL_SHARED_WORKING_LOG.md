@@ -268,6 +268,71 @@ commit・Build・公開GOなし。
 
 ---
 
+# 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#5チェック（P0再々々差戻し）
+
+対象はClaudeのcommit `3c2dc20`。MD#4の3点、すなわちblack flag clearで実測の`on_track`／`on_pit`／
+`black_flag_active`を渡すこと、box-call eventのrecord identity・revision・pit sequence照合、
+`DeliveryAttempt.kind`でbox callとnotificationへのDriver responseを遮断することは採用する。
+**しかし、authorityの出所とholdの再評価にP0が2点、配送・応答のrevision照合にP0が1点残るため、
+MD#5を実装開始の合格にはしない。**
+
+## P0-1：`authority_snapshot_id`が実テレメトリを表しておらず、claim時にauthorityを再確認していない
+
+MD#5の`authority_snapshot_id`は`decision_id:plan_revision:pit_sequence_counter`である。この三値には、
+box callの可否を決めた`on_track`、`on_pit`、black flag、current lap、frozen fuel evidence、strategy conditionsが
+入らない。さらに`apply_plan_lifecycle_event()`はeventが持つIDを同じ三値で組み直すだけで、実frameから
+`BoxCallAuthority.available`を再計算していない。したがって、古い「available」判定を持つeventが、新しい
+pit-road／black flag／fuel-safe frameへ届いても通り得る。これは同一poll loopという運用上の期待では防げない。
+
+**修正条件**：Bridgeがraw telemetryを一度だけ不変の`AuthoritativeSnapshot`へ正規化し、そのsnapshotの
+source frame ID（又はauthorityに使う全入力を指紋化したID）を持たせる。`attempt_box_call(state, snapshot)`を
+唯一の入口にし、この関数内でcurrent recordとのidentity・revision・pit sequenceを照合し、同じsnapshotから
+`build_box_call_authority()`を再計算して`available=True`の場合だけeffect claimとDeliveryAttempt作成を行う。
+呼び出し側が作った`box_call_attempt` eventの自己申告だけでclaimしてはならない。不一致・denyは出力0件で
+traceだけ残す。
+
+fixtureには、frame F10でauthorityがavailableになった直後、F11で`on_pit=True`又はblack flag activeへ変わり、
+F10由来のattemptがF11状態へ届く反例を入れる。effect、DeliveryAttempt、TTS、overlay、chatがすべて0件であることを
+固定する。
+
+## P0-2：flag clear後の`hold`が次のflagイベント待ちで停止し得る
+
+MD#5はclear frameで`on_pit=True`等なら`hold`にして安全に止める。しかし説明では「次のblack flagイベント」でしか
+再評価しない。penalty処理後にDriverがpit roadを出て`on_track=True`へ戻っても、新しいblack flag変化が無ければ
+Planは永続的にheldとなる。これは安全側ではあるが、長時間レースのrace conversationを再開・失効・再提案のどれにも
+進めない。
+
+**修正条件**：black flagがclearになった後、non-terminal held Planは**各新しいAuthoritativeSnapshot**（少なくとも
+on-track、on-pit、black flag、pit sequence、current lap、fuel evidence、conditionsのいずれかが変わったframe）で
+`revalidate_held_plan()`を通す。結果は`hold`（出力0件）、`resume`、又は`invalidated`だけとし、target超過、
+pit sequence変化、fuel-safe、evidence欠落、conditions変化では新proposalへ戻す。再評価自体はbox callを発話しない。
+
+fixtureには、clear F30で`on_pit=True`→hold、F31でDriverがコースへ戻るがtarget未到達→再検証、F31までにtargetを
+越える→`target_elapsed_during_black_flag`でinvalidated、の両方を入れる。いずれも古いbox callが出ないことを固定する。
+
+## P0-3：DeliveryAttemptのrevisionをeventで照合していない
+
+`resolve_attempt_for_event()`はdispatch ID、race instance、sessionを照合し、attemptのrevisionとcurrent recordの
+revisionを比べる。しかしevent自身の`plan_revision`をattemptの`plan_revision_at_dispatch`と比べない。同じdispatch IDを
+持つ遅延・不整合report/responseを、配送時のPlan内容として検証できない。
+
+**修正条件**：`delivery_report`と`driver_response`は`dispatch_id`、race instance、session、`plan_revision`を必須にする。
+resolverはevent revisionがattemptのdispatch revisionと一致し、さらに非terminal Planではrecord revisionとも一致した時だけ
+通常処理する。不一致はattempt/DecisionHistoryへstale traceだけを残し、Plan phase・active pointer・出力を変えない。
+box-call attemptのdelivery reportはtraceを更新してもPlan実行状態を変えないというMD#5の制約を維持する。
+
+## MD#6再提出の合格条件
+
+1. old available authority frameが新しいpit-road、black flag、fuel-safe frameへ届いてもbox effect・配送・TTS・overlay・chatが0件である。
+2. flag clear後のheld Planが新しい実frameで必ず再検証され、target超過ならinvalidated、条件を満たす場合のみresumeし、旧box callを出さない。
+3. 同じdispatch IDでもevent revisionが異なるdelivery report／Driver responseはstale traceだけとなり、現Planを一切変えない。
+
+P0を閉じるMD#6をCodexが確認するまで、`plan_lifecycle.py`、旧7変数の削除、router、Buildへ着手しない。
+
+commit・Build・公開GOなし。
+
+---
+
 # 2026-09-22 JST — Codex：7 in 1 Claude案260922 MD#4チェック（P0再差戻し）
 
 対象はClaudeのcommit `03051c7`。BoxCallAuthorityが`on_track`、pit、black flag、identity、reserveを
