@@ -322,7 +322,8 @@ console.log('\n══ ⑨ 配線：出口が外れていないこと ══');
     /kind:'decision_strategy_briefing'/.test(renderer));
   check('★条件付き Plan 採用も queue へ入れる', /kind:'decision_plan_advice'/.test(renderer));
   check('LLM に数字を言い直させない', /周回・順位・Plan名を言い直すな/.test(renderer));
-  check('★「それ違う」が LLM ではなく台帳を止める', /disputeLatestDecision\(_lang\)/.test(renderer));
+  // WO017：止める対象は直前に記憶から喋った判断（出所）だけ。挙動はtests-wo017-race-memory-boundary.js D8/D9。
+  check('★「それ違う」が LLM ではなく台帳を止める', /disputeLatestDecision\(_lang,\(_src&&_src\.kind==='decision'\)\?_src:null\)/.test(renderer));
   check('合意で訂正が有効化される', /confirmDecisionCorrection\(\{\},_lang\)/.test(renderer));
   check('fate が trace に残る', /DECISION_BRIEFING','available=/.test(renderer));
 

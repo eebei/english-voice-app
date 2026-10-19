@@ -181,6 +181,8 @@
     const finish = Number.isInteger(record.finishPos) && record.finishPos > 0 ? record.finishPos : null;
     return {
       available: true,
+      // WO017：訂正対象を日付ではなく記録IDで名指しするため（同日別raceを巻き添えにしない）。
+      raceRecordId: record.raceRecordId ? String(record.raceRecordId) : null,
       date: String(record.date || '') || null,
       track: record.track || null,
       car: record.car || record.carClass || null,
@@ -344,6 +346,7 @@
       previousBestLap: finite(before.bestLap),
       deltaS: finite(now.bestLap) - finite(before.bestLap),
       previousDate: String(before.date || '') || null,
+      previousRaceRecordId: before.raceRecordId ? String(before.raceRecordId) : null,
       // 申告は出所を明示して持つ。SDK 実測と混ぜない。
       declaredLabel: declared && declared.label ? String(declared.label) : null,
       declaredSource: declared ? 'declared' : null,

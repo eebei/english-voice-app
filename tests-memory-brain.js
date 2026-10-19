@@ -9,7 +9,8 @@ const race={memory_id:'race|88462769|315555',userId:77,custId:315555,subsessionI
   track:identity.track,car:identity.car,startPos:10,finishPos:8,startOverallPos:27,finishOverallPos:14,
   totalLaps:12,incidents:1,bestLap:'3:55.8245',iratingBefore:2027,iratingAfter:2077,sof:2018,
   planName:'A',planSuccess:true,pitEntryLap:6,pitExitLap:7,recordedAt:'2026-09-04T09:00:00Z'};
-const debrief={memory_id:'debrief|88462769|315555',userId:77,custId:315555,track:identity.track,car:identity.car,
+// WO017：振り返りは結果と同じ発生raceの時だけ結合する（BridgeのSubSessionID由来のrace identity）。
+const debrief={memory_id:'debrief|88462769|315555',userId:77,custId:315555,race_instance_id:'sub:88462769',track:identity.track,car:identity.car,
   driverStatement:'周囲が危険だったためレースをコントロールし、無理な追い抜きをしなかった。',recordedAt:'2026-09-04T09:10:00Z'};
 
 const matches=B.search({raceHistory:[race],debriefRecords:[debrief]},identity);
@@ -26,6 +27,8 @@ ck('変異: user identity変更で取得ゼロ',B.search({raceHistory:[race],deb
 ck('変異: session owner(cust_id)変更で取得ゼロ',B.search({raceHistory:[race],debriefRecords:[debrief]},{...identity,custId:1}).length===0);
 ck('変異: debrief削除で危険回避評価が成立しない',B.derive(B.search({raceHistory:[race]},identity)).assessment.brought_home_result===false);
 const restarted=JSON.parse(JSON.stringify({raceHistory:[race],debriefRecords:[debrief]}));
+ck('WO017: 発生raceが不明な振り返りは結果へ推測結合しない',B.derive(B.search({raceHistory:[race],debriefRecords:[{...debrief,race_instance_id:undefined}]},identity)).facts.driver_statement===null);
+ck('WO017: 別raceの振り返りは結果へ結合しない',B.derive(B.search({raceHistory:[race],debriefRecords:[{...debrief,race_instance_id:'sub:1'}]},identity)).facts.driver_statement===null);
 ck('保存後の再起動相当でも再取得',B.derive(B.search(restarted,identity)).assessment.brought_home_result===true);
 ck('Luna注入は使用memory IDと事実を含む',/race\|88462769/.test(B.promptBlock(result))&&/"positions_gained":2/.test(B.promptBlock(result)));
 const evaluation=B.evaluationRecord(result,'危険を避けながらP10からP8、1xで+50を持ち帰った。判断は正しかった。',identity,Date.parse('2026-09-04T10:00:00Z'));

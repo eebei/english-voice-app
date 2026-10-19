@@ -6,6 +6,31 @@ const vm = require('vm');
 const renderer = fs.readFileSync('desktop/renderer.html', 'utf8');
 const bridge = fs.readFileSync('irsdk-bridge/bridge.py', 'utf8');
 const prompts = fs.readFileSync('prompts.js', 'utf8');
+const CanonicalCache = require('./desktop/canonical-lifecycle-cache');
+const StrategyProjection = require('./desktop/strategy-state-projection');
+const { fixture: canonicalFixture } = require('./tests-canonical-lifecycle');
+
+// WO014: telemetryTruthFallback()'s fuel/pit branches now read canonical
+// authority via ensureStrategyState()/currentStrategyStateAPI() instead of
+// composing a reply from the raw `live` argument (that raw composition was
+// the exact "rawfallback" pattern WO014 closes elsewhere). The harness must
+// wire a REAL canonicalLifecycleCache + strategy-state-projection instance
+// (not a stub) so the fuel assertion below still proves a genuine
+// source->consumer computation, not an echoed input.
+function buildTruthGateFuelProjection() {
+  const snap = canonicalFixture({ frame: 10 });
+  snap.continuity.stable_scope = { race_instance_id: snap.race_instance_id, session_num: snap.session_num, driver_id: 1 };
+  snap.current_facts.fuel_level_l = 12.83;
+  snap.finish.remaining_after_current = 3;
+  snap.finish.remaining_sf_crossings = 4;
+  snap.recommendations = { fuel_strategy: { value: { avg_fuel_per_lap: 3.40325 }, role: 'reference',
+    calculation_source: { session_time_s: 90, source_frame_sequence: 9 } } };
+  const cache = CanonicalCache.create({ now: () => 0 });
+  const g = cache.beginSocket();
+  cache.hello(g, { type: 'connected', schema_version: 1, bridge_process_epoch: snap.bridge_process_epoch });
+  if (!cache.receive(snap, g)) throw new Error('truth_gate_fuel_fixture_invalid');
+  return StrategyProjection.create({ canonical: cache, now: () => 0 });
+}
 
 let pass = 0, fail = 0;
 function check(label, ok) {
@@ -52,14 +77,34 @@ if(claimFn){
 const truthFallbackFn = renderer.match(/function telemetryTruthFallback\(live, userText, isJP\)\{[\s\S]*?\n\}/);
 check('Truth Gateの再計算fallbackを抽出', !!truthFallbackFn);
 if(truthFallbackFn){
-  const context={fmtDuration:()=>'',lastWeekendAuthority:null,sel:'LunaJP'};
+  // telemetryTruthFallback()のfuel/pit分岐は実canonical authority
+  // （ensureStrategyState()/currentStrategyStateAPI()）を直接呼ぶ。以前の
+  // harnessはこの2関数を定義せずcurrentStrategyStateAPI未定義のReferenceErrorで
+  // 即exit1していた（WO014停止時引継ぎの既知blocker）。no-op stubでは
+  // raw値をそのまま echo しただけになり、WO014が閉じた「raw fallback」契約と
+  // 矛盾するため、実canonicalLifecycleCache + strategy-state-projectionを
+  // 接続する（buildTruthGateFuelProjection）。これにより以下のfuel assertは
+  // 「入力をそのまま返す」ことの検査ではなく、実canonical snapshotからの
+  // 実計算（fuel 12.83L・avg 3.40L/周・残り4クロッシング→0.783L不足）が
+  // 実canonical authority経由でtruth-gateのreplyへ正しく届くことの検査になる。
+  const fuelProjection = buildTruthGateFuelProjection();
+  const context={fmtDuration:()=>'',lastWeekendAuthority:null,sel:'LunaJP',
+    currentCanonicalStrategyLive:(live)=>live,
+    strategyProjection: fuelProjection,
+    ensureStrategyState: fuelProjection.state,
+    currentStrategyStateAPI: () => fuelProjection.api};
   vm.runInNewContext(truthFallbackFn[0], context);
   const reply=context.telemetryTruthFallback({
     fuel:12.83,
     fuel_strategy:{required_fuel_l:13.613,margin_l:-0.783,estimated_crossings_to_finish:4},
   },'2リッター 足りないってこと？',true);
-  check('遮断後は最新値で不足量と給油設定を言い直す',
-    /2リットル不足という意味ではない.*現在12\.8リットル.*13\.6リットル必要.*0\.8リットル不足.*1リットル/.test(reply));
+  // 旧assertはraw live.fuel_strategyをそのまま文章へ埋め込むだけの実装を検査
+  // していた（WO014が閉じた対象のraw fallbackそのもの）。現在の実装はその
+  // raw引数を無視し、実strategyProjection.answerFuel()が同じ数値(12.83L
+  // fuel、4クロッシング、0.783L不足)を実canonical snapshotから独立に再計算
+  // して返す。旧assertを弱めるのではなく、実計算経路を要求する分だけ厳格化する。
+  check('遮断後は実canonical計算で不足量と給油根拠を言い直す(raw fallbackではない)',
+    reply==='現在燃料12.8L。Bridgeの燃費計算3.40L/周（10.0秒前）を暫定根拠にすると、完走まで4回のライン通過に対して0.8L不足する推定。');
   check('完走目標をtruth-gateが否定しない',
     context.telemetryTruthFallback({}, '無事完走を目指す。', true)==='うん、完走しよう。インシデントゼロでいこう。');
   check('フロントのフィーリングをtruth-gateが否定しない',

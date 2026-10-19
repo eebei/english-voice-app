@@ -7,6 +7,7 @@ const fs = require('fs');
 const vm = require('vm');
 
 const renderer = fs.readFileSync('desktop/renderer.html', 'utf8');
+const boxAuthority = fs.readFileSync('irsdk-bridge/box_authority_delivery.py','utf8');
 const bridge = fs.readFileSync('irsdk-bridge/bridge.py', 'utf8');
 let pass = 0, fail = 0;
 function check(label, ok) {
@@ -67,10 +68,12 @@ check('戦略バトルだけはstart rushで抑止を維持',
 check('Fuel Windowの一周前に戦略決定',
   /int\(lap\) >= max\(0, _decision_target - 1\)/.test(bridge));
 check('決定後の対象周だけ短いBOX call',
-  /int\(lap\) >= _box_target/.test(bridge) && /Box this lap\. Set %s liters\./.test(bridge));
+  bridge.includes('box_authority_delivery_mod.advance(')
+  && boxAuthority.includes("'message':'Box this lap. Set %s liters.'%record.set_fuel_l")
+  && boxAuthority.includes('fa.evaluate('));
 check('事前判断とBOX callは別trigger',
   /'trigger': 'strategy_plan_decision'/.test(bridge) &&
-  /'trigger': 'strategy_plan_box_call'/.test(bridge));
+  /'trigger':'strategy_plan_box_call'/.test(boxAuthority));
 
 console.log(`\n[chief engineer mode] 合格 ${pass} / 不合格 ${fail}`);
 process.exit(fail ? 1 : 0);

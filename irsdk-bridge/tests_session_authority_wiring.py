@@ -116,10 +116,9 @@ def test_renderer_contract():
             'data.car_model||lastCarModel||data.car_class' in renderer,
         'car-track memory key prefers model':
             'lastCarModel||lastCarClass' in renderer,
-        'legacy class-key memory remains retrievable':
-            'function findCarTrackMemory(' in renderer
-            and "mem[carClass+'|'+track]" in renderer
-            and renderer.count('findCarTrackMemory(') >= 4,
+        'current briefing/pace consumers retrieve exact and legacy memory (behavior + fault cut)':
+            subprocess.run(['node', 'tests-session-memory-consumers.js'], cwd=ROOT,
+                           capture_output=True, text=True).returncode == 0,
         'unknown class cannot poison fallback state':
             "trim().toLowerCase()!=='unknown') lastCarClass=" in renderer,
     }

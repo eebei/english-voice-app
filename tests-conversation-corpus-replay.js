@@ -8,6 +8,7 @@
 // 実マイク、Windows音声デバイス、iRacingメモリ、実走時タイミングはGate 6/8。
 
 const fs = require('fs');
+const WO017Scope = require('./tests-wo017-memory-scope-harness');
 const path = require('path');
 const vm = require('vm');
 const box = require('./desktop/conversation-memory-box.js');
@@ -41,6 +42,21 @@ const fnNames = ['callAPI', 'recordLunaTurn', 'ensureConversationBox',
 const fnSrc = fnNames.map(n => grabFn(n, n === 'callAPI'));
 check('rendererの再生対象関数を取得できる', fnSrc.every(Boolean),
   fnSrc.map((v, i) => v ? 'ok' : fnNames[i]));
+// WO015: callAPI() calls strategyNumericFactBinding() (which itself now
+// calls the shared _hasUnqualifiedCurrentNumericMention() sentence
+// classifier, defined BEFORE it), and (residual "verifiedaux GAP/position")
+// strategyReplyBindingValid() -- which itself calls
+// verifiedAuxFieldsStillFresh()/captureVerifiedAuxBinding(). All of these
+// are pure top-level helpers co-located contiguously
+// (_hasUnqualifiedCurrentNumericMention through strategyReplyBindingValid,
+// up to but not including `async function callAPI`) -- grabFn()'s
+// single-function `\n}\n` boundary does not fit a one-liner, so the whole
+// block is sliced as one contiguous unit instead of per-function.
+const auxBlockStart = renderer.indexOf('function _hasUnqualifiedCurrentNumericMention(text,keywordRe){');
+const auxBlockEnd = renderer.indexOf('\nasync function callAPI', auxBlockStart);
+check('_hasUnqualifiedCurrentNumericMention+strategyNumericFactBinding+captureVerifiedAuxBinding+verifiedAuxFieldsStillFresh+strategyReplyBindingValid抽出',
+  auxBlockStart >= 0 && auxBlockEnd > auxBlockStart);
+const auxBlockSrc = renderer.slice(auxBlockStart, auxBlockEnd);
 const judgeConstDecl = (renderer.match(/const PW_JUDGE_TAG_START = [\s\S]*?;/) || [''])[0]
   + '\n' + (renderer.match(/const PW_JUDGE_TAG_RE = [\s\S]*?;/) || [''])[0];
 
@@ -94,6 +110,44 @@ function contextFor(entries) {
     speak: t => spoken.push(String(t)), speakReplyChunk: t => spoken.push(String(t)),
     // 提案state（session-strategy-state.js）はこの再生テストの関心事ではない。
     applyProposalJudgeTag: () => {},
+    // WO012以降callAPI()が送信直前に無条件で呼ぶ（tests-callapi-stream-memory.js
+    // と同じ既存harness gap。提案state/canonical/raceContextはこの再生テストの
+    // 関心事ではないのでno-op化する——WO014で新規に追加されたのはbuildCurrentRaceContextのみ）。
+    currentStrategyStateAPI: () => null, currentPlanReplyDependsOn: () => false,
+    // ★WO014 round3修復：callAPI()は現在どの分岐でも
+    // strategyProjection.binding('critical_context'/'facts'/...)を無条件に
+    // 呼ぶ（raceContext reply fenceの一般化）。buildCurrentRaceContext同様、
+    // 実canonical cacheを構築しないこの再生テストでは「canonical
+    // unavailable」が正直な表現（binding()がnull＝fence無し）であり、
+    // 「fenceが掛かっていないふりをする」ための偽装ではない。
+    // WO015: callAPI() now also calls strategyProjection.bindAll() (to AND
+    // the numeric-fact binding with whatever domain binding exists). Mirror
+    // the real bindAll()'s trivial compose-or-passthrough semantics
+    // (strategy-state-projection.js) -- this suite's scope is conversation
+    // memory/history replay, not strategy freshness (validBinding() staying
+    // a blanket `true` keeps that scope intact).
+    strategyProjection: { binding: () => null, validBinding: () => true,
+      bindAll: (parts) => { const list = (Array.isArray(parts) ? parts : []).filter(Boolean);
+        return list.length === 0 ? null : list.length === 1 ? list[0] : { kind: 'and', parts: list }; } },
+    currentCanonicalStrategyLive: (live) => live,
+    // WO015 residual ("verifiedaux GAP/position"): strategyReplyBindingValid()
+    // now independently fail-closes a GAP/position-asserting reply whenever
+    // captureVerifiedAuxBinding(buildCurrentRaceContext()).available is false
+    // ("no correlated proof" sentinel, same fail-closed principle as
+    // missing-proof facts bindings) -- a bare `()=>null` stub (as before
+    // WO015) would
+    // discard the small number of real corpus replies that happen to mention
+    // 順位/ポジション/ギャップ/gap, which is NOT this harness's concern (it
+    // replays real callAPI()->history persistence, not strategy freshness --
+    // see strategyProjection.validBinding:()=>true just below for the same
+    // existing scope boundary). A STABLE non-null auxiliary_observations
+    // (identical fields on every call) makes the request-time capture and
+    // the precheck-time recheck always compare equal, so this independent aux
+    // gate never engages here either, consistent with validBinding's blanket
+    // true.
+    buildCurrentRaceContext: () => ({ auxiliary_observations: {
+      gap_ahead: 1, gap_behind: 1, position: 1, class_position: 1, leaders: null, standings_gaps: null } }),
+    lastQueuedSpeakItem: null,
     pushMsg(){},
     sel: 'LunaJP', selMode: 'race', userName: 'Yuji', messages: [],
     turns: 0, sessionMsgCount: 0, isBusy: false, iracingLive: true,
@@ -135,10 +189,10 @@ let totalNonCloud = 0;
 (async () => {
   for (const [log, entries] of groups) {
     const ctx = contextFor(entries);
-    vm.createContext(ctx);
+    WO017Scope.install(ctx); vm.createContext(ctx);
     let loaded = false;
     try {
-      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + fnSrc.join('\n')
+      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + auxBlockSrc + '\n' + WO017Scope.source(renderer) + fnSrc.join('\n')
         + '\nthis.callAPI=callAPI; this.addMsg=addMsg; this.ensureConversationBox=ensureConversationBox;', ctx);
       loaded = true;
     } catch (e) {
@@ -210,7 +264,7 @@ let totalNonCloud = 0;
       ctx.messages.push({ role: 'assistant', content: e.reply });
     }
     check(`${log}: localStorageへ永続化される`,
-      typeof ctx._store.pw_conversation_box_v1 === 'string', Object.keys(ctx._store));
+      typeof ctx._store.pw_conversation_boxes_v2 === 'string', Object.keys(ctx._store));
   }
 
   check('68件すべてを再生（cloud 67件＋local 1件）',

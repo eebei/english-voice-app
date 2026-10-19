@@ -143,26 +143,79 @@ def test_p0_1_manual_resume_at_garage_does_not_reboard():
 def test_p0_1_bridge_ptt_hook_does_not_mark_resume():
     print('\n══ P0-1：bridge の PTT 経路が activity signal を set しない ══')
     src = _bridge_source()
-    # PTT 押下の joystick hook から _mark_manual_resume_signal が呼ばれない
+    # WO016: the joystick edge body lives in _ptt_physical_edge(), the renderer CMDs in
+    # _ptt_renderer_start()/_ptt_renderer_stop(). Follow the wiring into those helpers.
     m = re.search(
         r'if cur and not ptt_pressed:([\s\S]*?)elif not cur and ptt_pressed:',
         src)
     check('joystick PTT down block が見つかる', m is not None)
     if m:
         block = m.group(1)
-        check('block 内で PTT down を broadcast',
-              "broadcast({'type': 'ptt', 'state': 'down'})" in block)
+        check('block は _ptt_physical_edge(True) へ委譲', '_ptt_physical_edge(True)' in block)
         check('block 内で _mark_manual_resume_signal() を呼ばない',
               '_mark_manual_resume_signal()' not in block)
-    # renderer cmd 'ptt_start' でも呼ばれない
-    m2 = re.search(
-        r'cmd == "ptt_start"[\s\S]{0,300}?start_ptt_record\(\)',
-        src)
+    m2 = re.search(r'cmd == "ptt_start":([\s\S]*?)elif cmd == ', src)
     check('renderer PTT cmd block が見つかる', m2 is not None)
     if m2:
-        block2 = m2.group(0)
+        check('renderer ptt_start は _ptt_renderer_start へ委譲', '_ptt_renderer_start(' in m2.group(1))
         check('block 内で _mark_manual_resume_signal() を呼ばない',
-              '_mark_manual_resume_signal()' not in block2)
+              '_mark_manual_resume_signal()' not in m2.group(1))
+
+    def body(name):
+        mm = re.search(r'\ndef ' + name + r'\(([\s\S]*?)\n(?=def |\S)', src)
+        return mm.group(1) if mm else None
+    for name in ('_ptt_physical_edge', '_ptt_renderer_start', '_ptt_renderer_stop',
+                 'start_ptt_record', 'stop_ptt_record'):
+        b = body(name)
+        check(name + ' が見つかり、activity resume signal を作らない',
+              b is not None and '_mark_manual_resume_signal' not in b)
+
+    # Behaviour: the real edge helpers and the real websocket handler for ptt_start/ptt_stop
+    # never call _mark_manual_resume_signal and never change driver activity.
+    import asyncio
+    import json as _json
+    from unittest import mock
+    calls = []
+
+    class Socket:
+        def __init__(self, msg):
+            self.msg = msg
+
+        async def send(self, data):
+            pass
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if hasattr(self, 'done'):
+                raise StopAsyncIteration
+            self.done = True
+            return _json.dumps(self.msg)
+    saved = (bridge.ptt_audio, bridge.ptt_recording, bridge.ptt_discard_recording,
+             bridge._manual_resume_pending, bridge._driver_activity)
+    real_mark = bridge._mark_manual_resume_signal
+    try:
+        bridge.ptt_audio = object(); bridge.ptt_recording = False
+        bridge._manual_resume_pending = False
+        bridge._set_driver_activity(da.INACTIVE_DRIVER)
+        with mock.patch.object(bridge, '_mark_manual_resume_signal', lambda *a, **k: (calls.append(1), real_mark())), \
+                mock.patch.object(bridge, 'broadcast', lambda e: None), \
+                mock.patch.object(bridge, 'log', lambda *a: None), \
+                mock.patch.object(bridge, 'list_input_devices', lambda: []):
+            bridge._ptt_physical_edge(True)
+            cap = bridge.ptt_current_capture_id
+            asyncio.run(bridge.handler(Socket({'cmd': 'ptt_start', 'lang': 'ja-JP', 'capture_id': cap})))
+            asyncio.run(bridge.handler(Socket({'cmd': 'ptt_stop', 'capture_id': cap})))
+            bridge._ptt_physical_edge(False)
+            asyncio.run(bridge.handler(Socket({'cmd': 'ptt_start', 'lang': 'ja-JP'})))   # legacy renderer
+        check('実PTT edge/handlerで _mark_manual_resume_signal 呼び出し0', calls == [])
+        check('実PTT edge/handler後も手動resume signalは未set', bridge._manual_resume_pending is False)
+        check('実PTT edge/handlerで INACTIVE のまま（再搭乗扱いしない）', bridge._driver_activity == da.INACTIVE_DRIVER)
+    finally:
+        (bridge.ptt_audio, bridge.ptt_recording, bridge.ptt_discard_recording,
+         bridge._manual_resume_pending, saved_activity) = saved
+        bridge._set_driver_activity(saved_activity)
 
 
 def test_p0_1_bridge_has_resume_cmd_handler():
@@ -505,14 +558,19 @@ def test_ptt_record_edges_are_idempotent():
 def test_ptt_hardware_edge_starts_before_renderer_roundtrip():
     print('\n══ PTT hardware edgeでrenderer往復前に録音開始 ══')
     src = _bridge_source()
+    # WO016: the edge body moved into _ptt_physical_edge(), which starts/stops recording
+    # first and then broadcasts down/up with the take's capture_id/epoch.
     down = src.find("if cur and not ptt_pressed:")
-    start = src.find("start_ptt_record()", down)
-    down_broadcast = src.find("broadcast({'type': 'ptt', 'state': 'down'})", down)
     up = src.find("elif not cur and ptt_pressed:", down)
-    stop = src.find("stop_ptt_record()", up)
-    up_broadcast = src.find("broadcast({'type': 'ptt', 'state': 'up'})", up)
-    check('down edge: start → broadcast', down < start < down_broadcast < up)
-    check('up edge: stop → broadcast', up < stop < up_broadcast)
+    check('down edge calls _ptt_physical_edge(True)', down < src.find("_ptt_physical_edge(True)", down) < up)
+    check('up edge calls _ptt_physical_edge(False)', up < src.find("_ptt_physical_edge(False)", up))
+    edge = src.find("def _ptt_physical_edge(pressed):")
+    start = src.find("start_ptt_record()", edge)
+    down_broadcast = src.find("'state': 'down'", edge)
+    stop = src.find("stop_ptt_record()", edge)
+    up_broadcast = src.find("'state': 'up'", edge)
+    check('down edge: start → broadcast', edge < start < down_broadcast)
+    check('up edge: stop → broadcast', down_broadcast < stop < up_broadcast)
     check('busy renderer用abort CMDあり', 'cmd == "ptt_abort"' in src)
 
 

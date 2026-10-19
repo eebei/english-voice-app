@@ -29,7 +29,7 @@ function extract(name, kind) {
   return rest.slice(0, end > 0 ? end : rest.length);
 }
 
-const parts = ['speak', 'speechMayStart', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
+const parts = ['deriveUtteranceSource', 'stableTextHash', 'speak', 'speechMayStart', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
   .map(n => extract(n, n === 'drainQueue' ? 'async' : 'fn')).join('\n');
 
 // テストごとに新しいサンドボックスを作って独立実行する
@@ -117,6 +117,7 @@ function makeSandbox({ fetchImpl, AudioImpl, webSpeechImpl, voiceLang = 'ja-JP',
   // 「呼ばれたことを記録するだけ」で、契約は tests-gap-display-sync.js が持つ。
   sandbox._uttSeq = 0;
   sandbox.nextUtteranceId = () => 'u' + (++sandbox._uttSeq);
+  sandbox.utteranceTrace = () => {};
   sandbox.__finalized = [];
   sandbox.finalizeUtterance = (item, outcome, finalText, reason) => {
     sandbox.__finalized.push({ uid: item && item.utteranceId, outcome, reason });

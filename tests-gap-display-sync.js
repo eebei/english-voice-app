@@ -14,6 +14,7 @@
 //   ③ 別Luna発話を挟んだ rebuild ④ 全TTS失敗   ⑤ play_started 時の同一発話ID
 
 const fs = require('fs');
+const WO017Scope = require('./tests-wo017-memory-scope-harness');
 const path = require('path');
 const vm = require('vm');
 const box = require('./desktop/conversation-memory-box.js');
@@ -80,7 +81,16 @@ for (const [name, re] of [
 // ★受入条件2：stable utterance_id が candidate→queue→表示→trace を貫く
 check('受入② candidate で採番する', /const _uid = nextUtteranceId\(\);/.test(renderer));
 check('受入② 表示要素へ持たせる', /div\._uid = opts\.uid/.test(renderer));
-check('受入② queue item へ持たせる', /utteranceId:o\.utteranceId\|\|\(o\.displayEl&&o\.displayEl\._uid\)/.test(renderer));
+// ★独立root audit「stale UID assertion」修復：旧regexはitem literal内の
+// インライン`utteranceId:o.utteranceId||(o.displayEl&&o.displayEl._uid)`を
+// 期待していたが、現product（WO015 trace条件）はこの同じfallback chain
+// （明示utteranceId→displayEl._uid→nextUtteranceId()）を`_uid`という名前付き
+// 変数へ一度だけ確定し、同じ値をutteranceTrace('generated')とqueue item両方
+// へ使う（二重算出・二重ID発行をしない設計）。意味（explicit→display→
+// fallbackの優先順位がqueue itemのutteranceIdへ実際に伝播すること）は不変
+// のまま、実際のsourceテキストに合わせて検査する（acceptance緩和ではない）。
+check('受入② queue item へ持たせる（explicit→display→fallbackのUIDが実際にqueue itemへ伝播する）',
+  /const _uid = o\.utteranceId\|\|\(o\.displayEl&&o\.displayEl\._uid\)\|\|nextUtteranceId\(\);[\s\S]{0,5000}?utteranceId:_uid/.test(renderer));
 check('受入② final trace に uid が出る', /UTTERANCE_FINAL','uid='\+_uid/.test(renderer));
 // ★第3回P1-3：**製品の** speechLatencyTrace に utterance_id があること。
 //   旧テストは stub 側へ uid を入れて「貫いた」と判定していた＝オラクル汚染。
@@ -179,7 +189,14 @@ const names = ['addMsg', 'recordLunaTurn', 'amendLunaTurnById', 'dropLunaTurnByI
                'finalizeUtterance', 'discardQueuedUtterances', 'nextUtteranceId', 'speak',
                'ensureConversationBox', 'saveConversationBox', 'conversationSessionKey', 'convoLog',
                // ★2026-09-06 ② fan-out 監査：会話Boxの本文を**箱側から**読む関数も実物で動かす。
-               'lunaTurnTextById'];
+               'lunaTurnTextById',
+               // ★独立root audit「tests-gap-display-sync.js: deriveUtteranceSource
+               // undefined」修復：speak()は'generated'/'suppressed' traceのために
+               // deriveUtteranceSource()/stableTextHash()/utteranceTrace()を
+               // 無条件（typeof guard無し）で呼ぶ。noop/固定値stubで欠落記号を
+               // 隠さない、同じgrab()抽出器（一行関数・既定値`{}`パラメータ対応
+               // 済み）で実体を取り出す。
+               'deriveUtteranceSource', 'stableTextHash', 'utteranceTrace', 'utteranceTraceFor'];
 const parts = names.map(n => grab(renderer, n));
 check('実経路の関数群を renderer から取り出せる', parts.every(Boolean),
   names.filter((_, i) => !parts[i]).join(', '));
@@ -245,6 +262,8 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
     lastTelemetry: null, lastTrack: 'le mans', lastCarModel: 'Mercedes-AMG GT3 2020',
     lastCarClass: 'GT3', lastSessionType: 'Race',
     currentMemoryUserId: () => 'u1', lastSessionNum: 1, irBridge: null, sel: 'LunaJP',
+    // ★独立root audit修復：実utteranceTrace()が参照するmodule変数。
+    utteranceTraceLog: [], UTTERANCE_TRACE_MAX: 200,
     // 実物の mirrorToOverlay は言語判定・翻訳に依存するため、ここでは
     // 「Overlay へ push して行IDを返す」役割だけを与える（行IDの結合を実行で確かめる）。
     mirrorToOverlay: (type, text) => {
@@ -255,9 +274,10 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
     diagnosticLog: (tag, line) => { (ctxTraces[tag] = ctxTraces[tag] || []).push(String(line)); }, console,
   };
   ctx.globalThis = ctx;
-  vm.createContext(ctx);
+  WO017Scope.install(ctx); vm.createContext(ctx);
   // renderer の module 変数（関数外なので grab では取れない）を先に置く。
-  vm.runInContext("var _convoBox = null; var CONVO_BOX_KEY = 'pw_conversation_box_v1';"
+  // WO017：会話箱は本人・race別archive（pw_conversation_boxes_v2）。本人・race scopeは実helper。
+  vm.runInContext(WO017Scope.source(renderer) + "var _convoBox = null; var CONVO_BOX_KEY = 'pw_conversation_boxes_v2';"
     + " var _uttSeq = 0; var currentSpeakItem = null; var speakGeneration = 0;"
     + " var voiceOn = true; var currentSpeakPrio = 9; var draining = false; var isSpeaking = false;"
     + " var MAX_RADIO_QUEUE = 8; var MAX_DEFER = 2;\n"
@@ -265,7 +285,8 @@ if (parts.every(Boolean) && ovlParts.every(Boolean)) {
 
   const boxOf = () => {
     const k = Object.keys(store).find(x => /conversation/i.test(x));
-    return k ? JSON.parse(store[k]) : null;
+    const v = k ? JSON.parse(store[k]) : null;
+    return Array.isArray(v) ? v[v.length - 1] || null : v;
   };
   const lunaTexts = () => {
     const b = boxOf();

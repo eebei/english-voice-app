@@ -19,6 +19,7 @@ OMORAY PITWALL - judge_call LLM候補予算ゲートのテスト（2026-07-23 Co
 実行: python3 irsdk-bridge/tests_judge_llm_gate.py
 """
 import sys
+import ast
 import os
 import re
 
@@ -169,53 +170,82 @@ def _bridge_source():
     return _BRIDGE_SRC
 
 
-def test_all_judge_call_broadcasts_have_gate_wired():
-    print('\n══ 本番配線：全judge_call broadcast()の直前で_judge_llm_gate()が呼ばれている ══')
-    src = _bridge_source()
-    # broadcast({'type': 'judge_call', 'kind': 'XXX', ...}) を全部拾う
-    pattern = re.compile(r"broadcast\(\{['\"]type['\"]:\s*['\"]judge_call['\"],\s*['\"]kind['\"]:\s*['\"](\w+)['\"]")
-    found_kinds = pattern.findall(src)
-    check('judge_call broadcastが本番コードに存在する', len(found_kinds) >= 5, f'found={found_kinds}')
+def judge_sites(src):
+    """Check enclosing AST guards, not a fixed comment/character window.
 
-    # 各broadcast()の直前200文字以内に、対応するkindの_judge_llm_gate('kind', ...)呼び出しがあるか
-    unwired = []
-    for m in pattern.finditer(src):
-        kind = m.group(1)
-        preceding = src[max(0, m.start() - 400):m.start()]
-        expected = f"_judge_llm_gate('{kind}',"
-        if expected not in preceding:
-            unwired.append((kind, m.start()))
-    check('全judge_call broadcast()の直前で対応するkindのゲートが呼ばれている(未配線があればここで検出)',
-          not unwired, f'unwired sites={unwired}')
+    Canonical staging replaced inline broadcast; it must still be inside the
+    exact kind's budget gate. A missing gate is detected before any real IO.
+    """
+    tree = ast.parse(src)
+    found, unwired = [], []
+    parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+    def measured_safety(node, kind):
+        if kind != 'danger':
+            return False
+        stmt = parents.get(node)
+        owner = parents.get(stmt)
+        for field in ('body', 'orelse'):
+            body = getattr(owner, field, [])
+            if stmt not in body:
+                continue
+            i = body.index(stmt)
+            if not i:
+                continue
+            prior = body[i-1]
+            call = prior.value if isinstance(prior, ast.Expr) else None
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == '_judge_llm_gate' and call.args and isinstance(call.args[0], ast.Constant) and call.args[0].value == kind:
+                return True
+        return False
+    def walk(node, gates=()):
+        if isinstance(node, ast.If):
+            calls = [n for n in ast.walk(node.test) if isinstance(n, ast.Call)
+                     and isinstance(n.func, ast.Name) and n.func.id == '_judge_llm_gate'
+                     and n.args and isinstance(n.args[0], ast.Constant)]
+            names = tuple(n.args[0].value for n in calls)
+            for child in node.body:
+                walk(child, gates + names)
+            for child in node.orelse:
+                walk(child, gates)
+            return
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in ('broadcast', '_publish_or_stage') and node.args and isinstance(node.args[0], ast.Dict):
+            event = {k.value: v.value for k, v in zip(node.args[0].keys, node.args[0].values)
+                     if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)}
+            if event.get('type') == 'judge_call':
+                kind = event.get('kind'); found.append(kind)
+                if kind not in gates and not measured_safety(node, kind):
+                    unwired.append(kind)
+        for child in ast.iter_child_nodes(node):
+            walk(child, gates)
+    walk(tree)
+    return found, unwired
+
+
+def test_all_judge_call_broadcasts_have_gate_wired():
+    found, unwired = judge_sites(_bridge_source())
+    check('judge_call staged/broadcast sites exist', len(found) >= 5, found)
+    check('all judge_call sites are enclosed by matching budget gate', not unwired, unwired)
 
 
 def test_removing_gate_call_would_break_wiring_test():
-    print('\n══ 変異試験：ゲート呼び出しを削除した源を作ると、上の配線テストが失敗することを提示 ══')
     src = _bridge_source()
-    # ★2026-07-26 Unit E0 v3 対応：battle broadcast 経路が
-    #   `if _judge_llm_gate(...)` → `_br = broadcast(...); if _br == BROADCAST_DISPATCHED:`
-    #   の3段構造に変わったため、変異パターンを再更新。
-    mutation = src.replace(
-        "if _judge_llm_gate('battle', judge_llm_call_times, time.time(), judge_llm_skip_log_last):\n"
-        "                                        # ★v3 Codex P1：DISPATCHED のみ段階消費。HELD/DROPPED は消費しない。\n"
-        "                                        #   HELD は将来 flush_radio() が送るが judge_call は\n"
-        "                                        #   GATEABLE_TRIGGERS に含まれないため実際は HELD にならない。\n"
-        "                                        _br = broadcast({'type': 'judge_call', 'kind': 'battle',",
-        "if True:\n"
-        "                                        _br = broadcast({'type': 'judge_call', 'kind': 'battle',",
-        1,
-    )
-    check('変異が実際にソースを変更した(パターンが見つかった)', mutation != src)
-    # 変異後のソースで配線パターンをチェック（本番テストと同じロジックで検証）
-    pattern = re.compile(r"broadcast\(\{['\"]type['\"]:\s*['\"]judge_call['\"],\s*['\"]kind['\"]:\s*['\"](\w+)['\"]")
-    unwired = []
-    for m in pattern.finditer(mutation):
-        kind = m.group(1)
-        preceding = mutation[max(0, m.start() - 400):m.start()]
-        if f"_judge_llm_gate('{kind}'," not in preceding:
-            unwired.append(kind)
-    check('変異後は"battle"が未配線として検出される(配線テストが本番のバグを検出できる証明)',
-          'battle' in unwired, f'detected unwired: {unwired}')
+    target = "_judge_llm_gate('battle', judge_llm_call_times, time.time(), judge_llm_skip_log_last)"
+    mutation = src.replace(target, 'True', 1)
+    check('battle gate mutation actually applied', mutation != src)
+    _, unwired = judge_sites(mutation)
+    check('same production checker detects missing battle gate', 'battle' in unwired, unwired)
+
+
+def sig_reset_block(src):
+    # Identify the actual reset-bearing branch structurally, independent of
+    # comments or an unrelated earlier last_session_sig assignment.
+    tree = ast.parse(src)
+    candidates = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                  and any(isinstance(c, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '_sig_reset' for t in c.targets)
+                          for c in ast.walk(n))]
+    if not candidates:
+        return ''
+    node = min(candidates, key=lambda n: n.end_lineno - n.lineno)
+    return ast.get_source_segment(src, node)
 
 
 def test_session_num_change_resets_llm_budget():
@@ -245,10 +275,10 @@ def test_sig_reset_path_resets_llm_budget():
     # 瞬間に前セッションの予算満杯を持ち越す。
     src = _bridge_source()
     # sig経路のunpackブロック（"last_session_sig = sig" の後にある一連の代入）
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", src)
-    check('sig経路のunpackブロックが見つかる', m is not None)
+    block = sig_reset_block(src)
+    m = bool(block)
+    check('sig経路のunpackブロックが見つかる', bool(block))
     if m:
-        block = m.group(0)
         check('sig経路にjudge_llm_call_timesのunpackがある(P1・2回目指摘の効き)',
               "judge_llm_call_times = _sig_reset['judge_llm_call_times']" in block)
         check('sig経路にjudge_llm_skip_log_lastのunpackもある(セッション越えでログ状態を持ち越さない)',
@@ -263,8 +293,9 @@ def test_removing_sig_unpack_would_break_wiring_test():
     mutation = src.replace(line, "", 1)
     check('変異が実際にソースを変更した', mutation != src)
     # 変異後のsigブロックにjudge_llm_call_timesのunpackが無いことを、上のテストと同じロジックで検証
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", mutation)
-    block = m.group(0) if m else ""
+    block = sig_reset_block(mutation)
+    m = bool(block)
+    block = block if m else ""
     check('変異後はsig経路にjudge_llm_call_timesのunpackが無い(配線テストが本番のバグを検出できる証明)',
           "judge_llm_call_times = _sig_reset['judge_llm_call_times']" not in block)
 
@@ -487,10 +518,10 @@ def test_post_contact_ok_unpacked_in_both_reset_paths():
     print('\n══ 本番配線：sig経路とSessionNum経路の両方で post_contact_watch_start が unpackされる ══')
     src = _bridge_source()
     # sig経路
-    m_sig = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", src)
-    check('sig経路のunpackブロックが見つかる', m_sig is not None)
+    block = sig_reset_block(src)
+    m_sig = bool(block)
+    check('sig経路のunpackブロックが見つかる', bool(block))
     if m_sig:
-        block = m_sig.group(0)
         check("sig経路で post_contact_watch_start = _sig_reset['post_contact_watch_start'] がある",
               "post_contact_watch_start = _sig_reset['post_contact_watch_start']" in block)
         check("sig経路で post_contact_speed_ok = _sig_reset['post_contact_speed_ok'] がある",
@@ -519,8 +550,9 @@ def test_removing_post_contact_reset_would_break_test():
     check('変異対象(sig経路)がソースに存在する', target_sig in src)
     mut = src.replace(target_sig, '', 1)
     check('変異が実際にソースを変更した', mut != src)
-    m = re.search(r"last_session_sig\s*=\s*sig[\s\S]{0,8000}?_gate_state\['pending'\]\s*=\s*None", mut)
-    block = m.group(0) if m else ''
+    block = sig_reset_block(mut)
+    m = bool(block)
+    block = block if m else ''
     check('変異後は sig経路に post_contact_watch_start のunpackが無い(検出可)',
           "post_contact_watch_start = _sig_reset['post_contact_watch_start']" not in block)
 
@@ -535,7 +567,7 @@ def test_pit_entry_state_update_not_gated_by_speed():
     check('低速誤発火を Speed>5m/s で抑止',
           '_pit_entry_speed_ok = (_spd_pit is not None and _spd_pit > 5.0)' in src)
     check('OnPitRoad False→True を唯一の入口通知に使用',
-          "if onPit and prev['onPit'] is False:" in src
+          "if onPit is True and prev['onPit'] is False:" in src
           and 'if not pit_entry_announced_stop and _pit_entry_speed_ok:' in src)
     check('1ストップ1回の通知フラグをセッション状態として保持',
           "'pit_entry_announced_stop': False" in src
@@ -556,9 +588,9 @@ def test_low_speed_pit_entry_no_broadcast_but_state_updates():
 def test_pit_entry_prev_onpit_guard_prevents_startup_spawn_misfire():
     print('\n══ 本番配線：pit_entry は prev["onPit"] is False の genuine False→True 遷移のみ ══')
     src = _bridge_source()
-    # `if onPit and prev['onPit'] is False:` パターン。従来の `not prev['onPit']` (None→Trueで誤発火)を排除
+    # `if onPit is True and prev['onPit'] is False:` パターン。従来の `not prev['onPit']` (None→Trueで誤発火)を排除
     check("pit_entry のガードが `prev['onPit'] is False` で書かれている(None→True除外)",
-          "if onPit and prev['onPit'] is False:" in src)
+          "if onPit is True and prev['onPit'] is False:" in src)
     check("旧パターン `if onPit and not prev['onPit']:` はもう残っていない",
           "if onPit and not prev['onPit']:" not in src)
 

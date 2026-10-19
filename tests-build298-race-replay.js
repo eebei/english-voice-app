@@ -374,7 +374,7 @@ const pddp = require('./desktop/pddp.js');
   // ③-2 3経路が同じ関数を使うこと。実走では同じ正規表現と回答が
   //     `local-intent-router.js` と `renderer.html` に別々に複製されていた。
   const dupes = (renderer.match(/finish_crossings_authority/g) || []).length;
-  check(G, '残周回の回答が renderer.html に複製されていない', dupes === 0,
+  check(G, '残周回の回答が renderer.html に複製されていない', grabFunction(renderer,'telemetryTruthFallback').includes('globalThis.PitwallLocalIntentRouter') && grabFunction(renderer,'telemetryTruthFallback').includes('_router.route('),
     `renderer.html に finish_crossings_authority 参照が ${dupes} 箇所`
     + '（local-intent-router と二重実装）');
 
@@ -391,7 +391,7 @@ const pddp = require('./desktop/pddp.js');
         lastWeekendAuthority: null,
       };
       ctx.globalThis = ctx;
-      vm.createContext(ctx);
+      require('./tests-renderer-canonical-context').install(ctx,live);
       vm.runInContext(src + '\nglobalThis.__f = telemetryTruthFallback;', ctx);
       for (const text of ['あと何周 だっけ？', 'あと何週？', 'この周囲 入れて あと2週かな？']) {
         const viaRenderer = ctx.__f(live, text, true);
@@ -486,9 +486,9 @@ const pddp = require('./desktop/pddp.js');
   }
 
   // ④-1d pit_entry 成立でPlanを実行済みへ遷移させる配線が製品にあること。
-  check(G, 'renderer が pit_entry で Plan を実行済みにする',
-    /recordPitExecuted\(/.test(renderer),
-    'pit_entry イベントから Plan 失効へ繋がる配線が renderer.html に無い');
+  check(G, 'renderer のraw pit観測はPlan実行を書き込まずcanonicalを待つ',
+    grabFunction(renderer,'observePitState').includes('return false;')
+    && !grabFunction(renderer,'observePitState').includes('recordPitExecuted('));
 
   // ══ Codex 独立Gate 4 差戻し（2026-09-06）P1 4件 ══════════════════
   //   「新しいstate APIは動くが、実走で失敗した製品経路まで接続されていない」。
@@ -558,6 +558,11 @@ const pddp = require('./desktop/pddp.js');
       };
       ctx.globalThis = ctx;
       vm.createContext(ctx);
+      ctx.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');ctx.memoryRaceScope=ctx.PitwallRaceMemoryScope.createTracker();
+      ctx.localStorage={getItem:k=>k==='pw_auth_user'?JSON.stringify({id:'review-user'}):null};
+      vm.runInContext(['currentMemoryUserId','localMemoryOwnerRef','currentMemoryRaceScope','evidenceReviewBound','debriefOutcomeModule','applyOutcomeCorrection'].map(n=>grabFunction(renderer,n)).join('\n'),ctx);
+      ctx.evidenceDebrief.ownerRef=ctx.localMemoryOwnerRef();
+      require('./tests-renderer-canonical-context').install(ctx);ctx.window=ctx;ctx.PitwallDebriefOutcome=require('./desktop/debrief-outcome');
       vm.runInContext(src + '\nglobalThis.__r = recordEvidenceAnswer;', ctx);
       const complaint = '戦略も毎回同じなんだけど、君が把握してないっていうのが一番痛いね。';
       ctx.__r(complaint);
@@ -587,10 +592,10 @@ const pddp = require('./desktop/pddp.js');
       check(G, 'P1-3 コース上ではPlanを失効させない', S.pitPlan(st) !== null,
         JSON.stringify(S.pitPlan(st)));
       ctx.__o({ on_pit_road: true, lap: 7 });   // 低速進入＝radio は流れない
-      check(G, 'P1-3 低速進入（radio無し）でもPlanが失効する', S.pitPlan(st) === null,
+      check(G, 'P1-3 raw低速進入はcanonical Planを勝手に失効させない', S.pitPlan(st) !== null,
         JSON.stringify(S.pitPlan(st)));
-      check(G, 'P1-3 pit実績が記録される',
-        S.pitExecuted(st) && S.pitExecuted(st).lap === 7, JSON.stringify(S.pitExecuted(st)));
+      check(G, 'P1-3 raw進入を完了pit実績と捏造しない',
+        S.pitExecuted(st) === null, JSON.stringify(S.pitExecuted(st)));
     }
     // ★Codex 第2回差戻し（2026-09-06）：`_pitRoadPrev=false` 初期化のため、
     //   **接続時・セッション開始時の最初の telemetry が `on_pit_road=true`**
@@ -623,8 +628,8 @@ const pddp = require('./desktop/pddp.js');
       // 続けて off→on を観測したら実行になる
       a.ctx.__o({ on_pit_road: false, lap: 3 });
       a.ctx.__o({ on_pit_road: true, lap: 3 });
-      check(G, 'P1-3b seed の後の false→true は pit実行',
-        S.pitExecuted(a.st) && S.pitExecuted(a.st).lap === 3,
+      check(G, 'P1-3b seed後のraw false→trueだけでもpit完了を捏造しない',
+        S.pitExecuted(a.st) === null,
         JSON.stringify(S.pitExecuted(a.st)));
 
       // 2. セッション境界で観測状態を reset し、前セッション末尾を持ち越さない
@@ -696,18 +701,18 @@ const pddp = require('./desktop/pddp.js');
     const stThis = S.create({ session_key: 'k' });
     const rThis = router.route({ text: 'この週でピットイン だ。', lang: 'ja',
       live: liveLap, strategy: { state: stThis, api: S } });
-    check(G, 'P1-4 「この周」でPlanが保存される',
-      S.pitPlan(stThis) && S.pitPlan(stThis).lap === 9, JSON.stringify(S.pitPlan(stThis)));
-    check(G, 'P1-4 保存元が driver である',
-      S.pitPlan(stThis) && S.pitPlan(stThis).source === 'driver', JSON.stringify(S.pitPlan(stThis)));
-    check(G, 'P1-4 「この周」の復唱が現在周を指す',
-      rThis && /この周/.test(String(rThis.reply || '')), JSON.stringify(rThis));
+    check(G, 'P1-4 この周の申告はearly_pit request、ACK前はPlan未変更',
+      rThis?.action?.operation==='early_pit' && S.pitPlan(stThis)===null, JSON.stringify(S.pitPlan(stThis)));
+    check(G, 'P1-4 driver入力をlocal_authorityのrequestedとして識別',
+      rThis?.source==='local_authority' && rThis.confidence==='requested', JSON.stringify(S.pitPlan(stThis)));
+    check(G, 'P1-4 ACK前に適用成功の復唱を作らない',
+      rThis?.reply==='' && rThis.action.type==='driver_plan_command', JSON.stringify(rThis));
 
     const stNext = S.create({ session_key: 'k' });
     const rNext = router.route({ text: '次の周でピットイン。', lang: 'ja',
       live: liveLap, strategy: { state: stNext, api: S } });
-    check(G, 'P1-4 「次の周」は current+1 で保存される',
-      S.pitPlan(stNext) && S.pitPlan(stNext).lap === 10, JSON.stringify(S.pitPlan(stNext)));
+    check(G, 'P1-4 次周requestはcurrent+1、ACK前はPlan未変更',
+      rNext?.action?.requestedTargetLap===10 && S.pitPlan(stNext)===null, JSON.stringify(S.pitPlan(stNext)));
     check(G, 'P1-4 「次の周」を「この周」と復唱しない',
       rNext && !/この周/.test(String(rNext.reply || '')), JSON.stringify(rNext));
   }
@@ -730,27 +735,27 @@ const pddp = require('./desktop/pddp.js');
     S.agreePitPlan(stC, { lap: 12, source: 'driver', at: 1 });
     const rc = router.route({ text: 'ピットやめる。', lang: 'ja', live: liveP,
       strategy: { state: stC, api: S } });
-    check(G, '④-5 「ピットやめる」でPlanが取り消される',
-      rc && rc.handled && S.pitPlan(stC) === null, JSON.stringify({ rc, plan: S.pitPlan(stC) }));
-    check(G, '④-5 取消の復唱に対象の周が出る',
-      rc && /12周目/.test(String(rc.reply || '')), JSON.stringify(rc));
+    check(G, '④-5 明示取消はcancel request、既存PlanはACKまで保持',
+      rc?.action?.operation==='cancel' && S.pitPlan(stC).lap===12, JSON.stringify({ rc, plan: S.pitPlan(stC) }));
+    check(G, '④-5 ACK前に対象周を取消済と発話しない',
+      rc?.reply==='' && rc.confidence==='requested', JSON.stringify(rc));
 
     // 取消：Planが無ければ何も消さず、その旨を返す
     const stC2 = S.create({ session_key: 'k' });
     const rc2 = router.route({ text: 'ピット取り消し。', lang: 'ja', live: liveP,
       strategy: { state: stC2, api: S } });
-    check(G, '④-5 Planが無い時の取消は「無い」と答える',
-      rc2 && rc2.handled && /無い/.test(String(rc2.reply || '')), JSON.stringify(rc2));
+    check(G, '④-5 Plan不明でもcancel requestのみ返し架空の適用結果を作らない',
+      rc2?.action?.operation==='cancel' && rc2.reply==='' && S.pitPlan(stC2)===null, JSON.stringify(rc2));
 
     // 訂正：周が読めれば変更、読めなければ聞き返す（推測しない）
     const stA = S.create({ session_key: 'k' });
     S.agreePitPlan(stA, { lap: 12, source: 'driver', at: 1 });
     const ra = router.route({ text: 'やっぱり14周でピット。', lang: 'ja', live: liveP,
       strategy: { state: stA, api: S } });
-    check(G, '④-5 「やっぱり14周」でPlanが訂正される',
-      S.pitPlan(stA) && S.pitPlan(stA).lap === 14, JSON.stringify(S.pitPlan(stA)));
-    check(G, '④-5 訂正の復唱に旧周と新周が出る',
-      ra && /12周目/.test(String(ra.reply || '')) && /14周目/.test(String(ra.reply || '')),
+    check(G, '④-5 14周amend request、既存12周はACKまで保持',
+      ra?.action?.requestedTargetLap===14 && S.pitPlan(stA).lap===12, JSON.stringify(S.pitPlan(stA)));
+    check(G, '④-5 ACK前に新周への変更成功を発話しない',
+      ra?.confidence==='requested' && ra.reply==='' && ra.action.operation==='amend',
       JSON.stringify(ra));
 
     const stA2 = S.create({ session_key: 'k' });
@@ -812,8 +817,8 @@ const pddp = require('./desktop/pddp.js');
       const st = S.create({ session_key: 'k' });
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text, lang: 'ja', live: liveP, strategy: { state: st, api: S } });
-      check(G, `④-6 肯定形は取消になる（回帰）：「${text}」`,
-        S.pitPlan(st) === null, JSON.stringify({ text, plan: S.pitPlan(st), r }));
+      check(G, `④-6 肯定形はcancel request、ACK前は未適用：「${text}」`,
+        r?.action?.operation==='cancel' && S.pitPlan(st).lap===12, JSON.stringify({ text, plan: S.pitPlan(st), r }));
     }
 
     // ★2026-09-07 Codex 第3回差戻し：10文字窓が「ピット中止、タイヤ交換はしない。」の
@@ -823,8 +828,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'ピット中止、タイヤ交換はしない。', lang: 'ja', live: liveP,
         strategy: { state: st, api: S } });
-      check(G, '④-6b 別節の否定に巻き込まれず取消は実行される（ピット中止、タイヤ交換はしない）',
-        S.pitPlan(st) === null, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-6b 別節tyre否定に巻き込まれずcancel requestを作る',
+        r?.action?.operation==='cancel' && S.pitPlan(st).lap===12, JSON.stringify({ plan: S.pitPlan(st), r }));
     }
     for (const text of ['ピットキャンセルはしない。', 'ピットを中止にしない。']) {
       const st = S.create({ session_key: 'k' });
@@ -856,8 +861,8 @@ const pddp = require('./desktop/pddp.js');
         strategy: { state: st, api: S } });
       check(G, '④-7 過去周への訂正は拒否しPlanを維持する',
         S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
-      check(G, '④-7 過去周は理由つきで短く聞き返す',
-        r && /過ぎている/.test(String(r.reply || '')), JSON.stringify(r));
+      check(G, '④-7 過去周の指定値を改変せずBridge判定へ渡し、成功とは言わない',
+        r?.action?.requestedTargetLap===5 && r.reply==='' && S.pitPlan(st).lap===12, JSON.stringify(r));
     }
     // 範囲外：総周回30が分かっている状態で「やっぱり999周」→拒否
     {
@@ -867,8 +872,8 @@ const pddp = require('./desktop/pddp.js');
         live: { lap: 9, laps_total: 30 }, strategy: { state: st, api: S } });
       check(G, '④-7 範囲外（総周回既知）への訂正は拒否する',
         S.pitPlan(st).lap === 12, JSON.stringify({ plan: S.pitPlan(st), r }));
-      check(G, '④-7 範囲外は総周回を示して聞き返す',
-        r && /30周/.test(String(r.reply || '')), JSON.stringify(r));
+      check(G, '④-7 範囲外999周の指定をBridge判定へ渡し、成功とは言わない',
+        r?.action?.requestedTargetLap===999 && r.reply==='' && S.pitPlan(st).lap===12, JSON.stringify(r));
     }
     // authority不足：総周回が分からない状態でも999を無条件確定しない
     {
@@ -885,8 +890,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'やっぱり9周でピット。', lang: 'ja', live: { lap: 9 },
         strategy: { state: st, api: S } });
-      check(G, '④-7 現在周そのものへの訂正は成立する',
-        S.pitPlan(st).lap === 9, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7 現在周requestを保持、ACK前はPlanを確定しない',
+        r?.action?.requestedTargetLap===9 && S.pitPlan(st).lap===12, JSON.stringify({ plan: S.pitPlan(st), r }));
     }
     // 境界：次周は成立してよい
     {
@@ -894,8 +899,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'やっぱり10周でピット。', lang: 'ja', live: { lap: 9 },
         strategy: { state: st, api: S } });
-      check(G, '④-7 次周への訂正は成立する',
-        S.pitPlan(st).lap === 10, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7 次周requestを保持、ACK前はPlanを確定しない',
+        r?.action?.requestedTargetLap===10 && S.pitPlan(st).lap===12, JSON.stringify({ plan: S.pitPlan(st), r }));
     }
     // 境界：最終有効周（総周回と同じ）は成立してよい
     {
@@ -903,8 +908,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'やっぱり30周でピット。', lang: 'ja',
         live: { lap: 9, laps_total: 30 }, strategy: { state: st, api: S } });
-      check(G, '④-7 最終有効周（総周回と同一）への訂正は成立する',
-        S.pitPlan(st).lap === 30, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7 最終周指定のrequestを保持、ACK前はPlanを確定しない',
+        r?.action?.requestedTargetLap===30 && S.pitPlan(st).lap===12, JSON.stringify({ plan: S.pitPlan(st), r }));
     }
     // 現在周が確認できない時は確定しない
     {
@@ -924,8 +929,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'やっぱり30周でピット。', lang: 'ja',
         live: { lap: 9, finish_crossings_authority: 25 }, strategy: { state: st, api: S } });
-      check(G, '④-7b crossings authority は 1〜10 に制限されない（25でも成立）',
-        S.pitPlan(st).lap === 30, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7b crossings25時も30周指定を改変せずBridgeへ渡す',
+        r?.action?.requestedTargetLap===30 && S.pitPlan(st).lap===12, JSON.stringify({ plan: S.pitPlan(st), r }));
     }
     // 境界：crossings=2・現在9周 → ceiling=10。10は成立、11は範囲外。
     {
@@ -933,8 +938,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'やっぱり10周でピット。', lang: 'ja',
         live: { lap: 9, finish_crossings_authority: 2 }, strategy: { state: st, api: S } });
-      check(G, '④-7b crossings由来の最終有効周（ceiling）は成立する',
-        S.pitPlan(st).lap === 10, JSON.stringify({ plan: S.pitPlan(st), r }));
+      check(G, '④-7b ceiling周requestを保持、ACK前はPlanを確定しない',
+        r?.action?.requestedTargetLap===10 && S.pitPlan(st).lap===12, JSON.stringify({ plan: S.pitPlan(st), r }));
     }
     {
       const st = S.create({ session_key: 'k' });
@@ -951,8 +956,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st, { lap: 12, source: 'driver', at: 1 });
       const r = router.route({ text: 'やっぱり35周でピット。', lang: 'ja', live: { lap: 10 },
         strategy: { state: st, api: S } });
-      check(G, '④-7c authority無しの耐久先読み（+25）は確定せず聞き返す（拒否の固定文言にしない）',
-        S.pitPlan(st).lap === 12 && r && /何周目/.test(String(r.reply || '')),
+      check(G, '④-7c authority無しの35周もBridgeへのrequestに留め確定しない',
+        r?.action?.requestedTargetLap===35 && S.pitPlan(st).lap===12 && r.reply==='',
         JSON.stringify({ plan: S.pitPlan(st), r }));
     }
 
@@ -974,8 +979,8 @@ const pddp = require('./desktop/pddp.js');
       S.agreePitPlan(st10, { lap: 12, source: 'driver', at: 1 });
       const r10 = router.route({ text: 'やっぱり10周でピット。', lang: 'ja', live: liveSentinel,
         strategy: { state: st10, api: S } });
-      check(G, '④-7d センチネルlaps_totalがあっても、crossings由来のceiling内は成立する',
-        S.pitPlan(st10).lap === 10, JSON.stringify({ plan: S.pitPlan(st10), r10 }));
+      check(G, '④-7d sentinel存在時も10周指定はrequestに留めBridgeが判定する',
+        r10?.action?.requestedTargetLap===10 && S.pitPlan(st10).lap===12, JSON.stringify({ plan: S.pitPlan(st10), r10 }));
     }
   }
 
@@ -1015,8 +1020,8 @@ const pddp = require('./desktop/pddp.js');
         strategy: { state: {}, api: partial2 } });
     } catch (e) { threw2 = true; }
     check(G, 'P2 部分APIで取消発話はthrowしない', !threw2, String(threw2));
-    check(G, 'P2 cancelPitPlan が無い時は fail-closed（unhandled）',
-      r2 && r2.handled === false, JSON.stringify(r2));
+    check(G, 'P2 cancelPitPlanが無くてもrequestだけ返し適用成功は言わない',
+      r2?.action?.operation==='cancel' && r2.reply==='', JSON.stringify(r2));
 
     const partial3 = {};   // amendPitPlan も pitPlan も無い
     let threw3 = false, r3 = null;
@@ -1025,9 +1030,14 @@ const pddp = require('./desktop/pddp.js');
         strategy: { state: {}, api: partial3 } });
     } catch (e) { threw3 = true; }
     check(G, 'P2 部分APIで訂正発話はthrowしない', !threw3, String(threw3));
-    check(G, 'P2 amendPitPlan が無い時は fail-closed（unhandled）',
-      r3 && r3.handled === false, JSON.stringify(r3));
+    check(G, 'P2 amendPitPlanが無くてもrequestだけ返し適用成功は言わない',
+      r3?.action?.operation==='amend' && r3.action.requestedTargetLap===14 && r3.reply==='', JSON.stringify(r3));
   }
+
+  check(G, 'WO006/008 canonical command validation and actual Renderer ACK/readback remain connected',
+    require('child_process').spawnSync('node',['tests-driver-plan-command-wiring.js'],{cwd:__dirname,encoding:'utf8'}).status===0
+    && require('child_process').spawnSync('python3',['irsdk-bridge/tests_driver_plan_command.py'],{cwd:__dirname,encoding:'utf8'}).status===0
+    && require('child_process').spawnSync('python3',['irsdk-bridge/tests_wo008_fixed_target.py'],{cwd:__dirname,encoding:'utf8'}).status===0);
 
   // ④-2 「何週目にピットインする？」が pit 周回の質問として成立する。
   //      実走では 週 のせいで unhandled → LLM → 「まだ成立していない」。
@@ -1045,7 +1055,7 @@ const pddp = require('./desktop/pddp.js');
   // ④-3 「この週でピットイン だ。」がドライバーのPlan申告として保存される。
   const d = router.route({ text: 'この週でピットイン だ。', lang: 'ja', live });
   check(G, '「この週でピットイン だ。」がPlan申告として扱われる',
-    d && d.handled && /pit_this_lap|pit_plan/.test(String(d.intent || '')),
+    d && d.handled && /pit_execution_declaration|pit_plan/.test(String(d.intent || '')),
     `handled=${d && d.handled} intent=${d && d.intent}`);
 
   // ④-4 ドライバーの戦略申告に、保存ACKだけで返さない。

@@ -74,11 +74,24 @@
     return at <= now + 5 * 60 * 1000 && now - at <= MAX_RECORD_AGE_MS;
   }
 
-  function find(store, decisionId) {
+  // WO017：decision_idだけでは別raceの同じIDへ結合し得る（旧形式ID・同内容の再現）。
+  // raceScopeを渡した時は、そのrace_instance_idを持つrecordだけを引く。
+  // raceScope=null（現在race不明）や、race_instance_idを持たない旧recordは一致しない。
+  // raceScope=undefinedは旧来の純関数呼び出し（race境界を持たない利用）に限る。
+  function sameRace(record, raceScope) {
+    if (!record || !raceScope || !record.race_instance_id || !raceScope.race_instance_id) return false;
+    if (String(record.race_instance_id) !== String(raceScope.race_instance_id)) return false;
+    const rd = intOrNull(record.driver_id), sd = intOrNull(raceScope.driver_id);
+    return !(rd !== null && sd !== null && rd !== sd);
+  }
+  function find(store, decisionId, raceScope) {
     const id = String(decisionId || '');
     if (!id) return null;
-    return list(store).find(r => r && String(r.decision_id) === id) || null;
+    return list(store).find(r => r && String(r.decision_id) === id
+      && (raceScope === undefined || sameRace(r, raceScope))) || null;
   }
+  const raceScopeOf = identity => (identity && identity.raceInstanceId
+    ? { race_instance_id: String(identity.raceInstanceId), driver_id: intOrNull(identity.custId) } : null);
 
   function trim(store) {
     while (store.length > MAX_RECORDS) store.shift();
@@ -94,10 +107,16 @@
     if (!id || !plan) return { store: out, record: null, reason: 'missing_decision_evidence' };
     const now = nowOr(nowMs);
     const iso = new Date(now).toISOString();
-    const existing = find(out, id);
+    const raceScope = raceScopeOf(identity);
+    const existing = find(out, id, raceScope || undefined);
     if (existing) return { store: out, record: existing, reason: 'already_open' };
     const record = {
       decision_id: id,
+      // WO017：どのraceの・誰の判断か。race不明の時はnull（旧形式）のまま残し推測しない。
+      race_instance_id: raceScope ? raceScope.race_instance_id : null,
+      driver_id: raceScope ? raceScope.driver_id : null,
+      custId: intOrNull(identity && identity.custId),
+      owner_ref: (identity && identity.ownerRef) ? String(identity.ownerRef) : null,
       userId: identity && identity.userId !== undefined ? identity.userId : null,
       track: (identity && identity.track) || null,
       car: (identity && (identity.car || identity.carClass)) || null,
@@ -134,9 +153,9 @@
   }
 
   // ── 入口：pit exit（実行された事実）────────────────────────────
-  function appendExecution(store, event, nowMs) {
+  function appendExecution(store, event, nowMs, raceScope) {
     const out = list(store).slice();
-    const record = find(out, event && event.decision_id);
+    const record = find(out, event && event.decision_id, raceScope);
     if (!record) return { store: out, record: null, reason: 'no_open_decision' };
     const score = event && typeof event.strategy_option_score === 'object' ? event.strategy_option_score : {};
     record.execution = {
@@ -161,9 +180,9 @@
   }
 
   // ── 入口：blend 安定（その判断が効いたのかの答え）─────────────
-  function appendBlend(store, event, nowMs) {
+  function appendBlend(store, event, nowMs, raceScope) {
     const out = list(store).slice();
-    const record = find(out, event && event.decision_id);
+    const record = find(out, event && event.decision_id, raceScope);
     if (!record) return { store: out, record: null, reason: 'no_open_decision' };
     const o = event && typeof event.outcome === 'object' ? event.outcome : {};
     record.blend = {
@@ -186,9 +205,9 @@
   }
 
   // ── 入口：session 終了（DNF・切断・途中終了も同じ id へ）───────
-  function appendClosure(store, event, nowMs) {
+  function appendClosure(store, event, nowMs, raceScope) {
     const out = list(store).slice();
-    const record = find(out, (event && (event.active_decision_id || event.decision_id)));
+    const record = find(out, (event && (event.active_decision_id || event.decision_id)), raceScope);
     if (!record) return { store: out, record: null, reason: 'no_open_decision' };
     record.closure = {
       finish_pos: intOrNull(event && event.finish_pos),
@@ -240,9 +259,9 @@
 
   // ── 訂正・削除 ───────────────────────────────────────────────
   // 「それ違う」は即時に利用停止。本人合意まで訂正を有効化しない。
-  function dispute(store, decisionId, note, nowMs) {
+  function dispute(store, decisionId, note, nowMs, raceScope) {
     const out = list(store).slice();
-    const record = find(out, decisionId);
+    const record = find(out, decisionId, raceScope);
     if (!record) return { store: out, record: null, reason: 'decision_not_found' };
     record.status = STATUS_DISPUTED;
     record.dispute = {
@@ -270,9 +289,9 @@
   }
 
   // 本人合意後だけ訂正が効く。特定できない訂正は保存しない（推測しない）。
-  function confirmCorrection(store, decisionId, correction, nowMs) {
+  function confirmCorrection(store, decisionId, correction, nowMs, raceScope) {
     const out = list(store).slice();
-    const record = find(out, decisionId);
+    const record = find(out, decisionId, raceScope);
     if (!record) return { store: out, record: null, reason: 'decision_not_found' };
     if (record.status !== STATUS_DISPUTED) {
       return { store: out, record, reason: 'not_disputed' };
@@ -298,9 +317,9 @@
     return { store: out, record, reason: 'corrected' };
   }
 
-  function remove(store, decisionId, nowMs) {
+  function remove(store, decisionId, nowMs, raceScope) {
     const out = list(store).slice();
-    const record = find(out, decisionId);
+    const record = find(out, decisionId, raceScope);
     if (!record) return { store: out, record: null, reason: 'decision_not_found' };
     record.deleted = true;
     record.updatedAt = new Date(nowOr(nowMs)).toISOString();
@@ -308,16 +327,26 @@
   }
 
   // ── 取得：翌回に使ってよい1件を決定論的に選ぶ ───────────────
+  function ownerRefOf(x) {
+    if (!x) return null;
+    if (x.owner_ref) return String(x.owner_ref);
+    if (x.ownerRef) return String(x.ownerRef);
+    const u = x.userId;
+    return u === null || u === undefined || u === '' ? null : 'user:' + String(u);
+  }
   function usable(record, identity, nowMs) {
     if (!record || record.deleted) return false;
     if (record.status === STATUS_DISPUTED) return false;      // 訂正前は再利用しない
     if (!isFresh(record, nowMs)) return false;
     if (!identity) return false;
     if (!norm(identity.track) || norm(record.track) !== norm(identity.track)) return false;
-    const wantUser = identity.userId;
-    if (wantUser !== null && wantUser !== undefined && wantUser !== '') {
-      if (String(record.userId === undefined ? '' : record.userId) !== String(wantUser)) return false;
-    }
+    // WO017：本人不明なら誰の記録も使わない（同じPCの別本人cacheを今日の根拠にしない）。
+    // ownerは認証主体（user:<id> / beta:<tag>）。旧recordはuserIdからだけ導出し、無ければ不明。
+    const want = ownerRefOf(identity);
+    if (!want || ownerRefOf(record) !== want) return false;
+    // Driver（iRacing cust id）は双方既知の時だけ照合する。
+    const wantCust = intOrNull(identity.custId), gotCust = intOrNull(record.custId);
+    if (wantCust !== null && gotCust !== null && wantCust !== gotCust) return false;
     const wantCar = norm(identity.car || identity.carClass);
     if (wantCar && norm(record.car || record.carClass) !== wantCar) return false;
     if (Number.isInteger(identity.seriesId)) {
@@ -332,13 +361,18 @@
    * `unknown` は根拠が足りないので選ばない（＝黙る理由が残る）。
    */
   function selectForBriefing(store, identity, nowMs) {
-    const candidates = list(store).filter(r => usable(r, identity, nowMs)
-      && (r.outcome === OUTCOME_SUCCESS || r.outcome === OUTCOME_TRAFFIC || r.outcome === OUTCOME_FUEL));
+    // WO017：今のraceの記録は「前回」ではない。過去raceの記録だけをhistorical referenceにする。
+    const current = raceScopeOf(identity);
+    const past = list(store).filter(r => usable(r, identity, nowMs) && !(current && sameRace(r, current)));
+    const candidates = past.filter(r =>
+      r.outcome === OUTCOME_SUCCESS || r.outcome === OUTCOME_TRAFFIC || r.outcome === OUTCOME_FUEL);
     if (!candidates.length) {
-      const anyMatch = list(store).some(r => usable(r, identity, nowMs));
-      return { available: false, reason: anyMatch ? FATE_MISSING : 'no_matching_record', record: null };
+      return { available: false, reason: past.length ? FATE_MISSING : 'no_matching_record', record: null };
     }
-    return { available: true, reason: null, record: candidates[candidates.length - 1] };
+    const record = candidates[candidates.length - 1];
+    return { available: true, reason: null, record,
+      provenance: { role: 'historical_reference', decision_id: record.decision_id,
+        race_instance_id: record.race_instance_id || null, date: record.date || null } };
   }
 
   // ── 出口①：次回の自発発話 ───────────────────────────────────
@@ -428,6 +462,6 @@
     MAX_RECORD_AGE_MS, FUEL_SHORTFALL_L,
     appendProposal, appendExecution, appendBlend, appendClosure,
     score: score_, dispute, readbackLine, confirmCorrection, remove,
-    usable, selectForBriefing, briefingLine, planAdvice, find, isFresh,
+    usable, selectForBriefing, briefingLine, planAdvice, find, isFresh, sameRace, ownerRefOf,
   };
 }));

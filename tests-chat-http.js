@@ -15,6 +15,10 @@
 'use strict';
 const { spawn } = require('child_process');
 const http = require('http');
+const CanonicalCache = require('./desktop/canonical-lifecycle-cache');
+const StrategyProjection = require('./desktop/strategy-state-projection');
+const RaceContextBuilder = require('./desktop/race-context-builder');
+const { fixture: canonicalFixture } = require('./tests-canonical-lifecycle');
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {
@@ -202,6 +206,115 @@ async function testBaseline(port) {
       /スプラッシュ不要.*約0\.8L余る/.test(r.body) && !/S\/F|9回/.test(r.body), r.body);
     check('④a4 splash: deterministic fuel handler',
       r.headers['x-pitwall-intent'] === 'fuel_plan', r.headers['x-pitwall-intent']);
+  }
+  // ── ④a5 WO014 round2: deterministic guards (fuel_guard) must consume the
+  //   SAME raceContext-validated input as buildSystem(), not raw liveData
+  //   ahead of validation. A modern caller (raceContext key sent) whose
+  //   context fails schema validation must get the guard's "no clean-lap
+  //   data" fallback, never the raw poisoned fuel value. ──────────────────
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { fuel: 777.25, fuel_strategy: {
+        avg_fuel_per_lap: 3.65, provisional_laps_to_time_expiry: 7,
+        required_fuel_l: 25.55, margin_l: -5.55,
+      } },
+      raceContext: { schema: 'wrong_schema' },   // modern caller, fails validate()
+      messages: [{ role: 'user', content: '最後まで足りる？何リッター必要？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④a5 modern caller + invalid raceContext: poisoned raw fuel never reaches the fuel guard reply',
+      !text.includes('777.25'), text);
+    // ★WO014 round3修復：round2時点のこのテストは「fuel_strategy(参考計算)
+    //   だけは生のliveDataから答えてよい」という期待を書いていたが、これは
+    //   まさに親が実HTTPで再現した欠陥そのもの（raceContext:null＋生
+    //   fuel_strategy.avg=13.37→200「平均13.37L/周」）。canonicalizeLiveData
+    //   がfuel_strategyもraceContext.calculation_referencesから正規化する
+    //   ようになった今、無効contextでは平均消費も一切出さない（完全
+    //   fail-closed）のが正しい挙動——以前のbugfixを理由に旧rawaliasの
+    //   期待を残さない。
+    check('④a5 modern caller + invalid raceContext: fuel guard gives NO numeric reading at all (fuel_strategy also fails closed, not just current fuel)',
+      !/\d/.test(text) && /確定していない|not authoritative/.test(text), text);
+  }
+  {
+    // CONTROL: the exact same liveData/question WITHOUT a raceContext key at
+    // all is a genuinely legacy caller and must keep the pre-WO014 raw
+    // fallback -- this is NOT the defect and must not regress (this is the
+    // same fixture as ④a above, just with the poisoned fuel value swapped in
+    // to prove the raw path is untouched for legacy callers).
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { fuel: 777.25, fuel_strategy: {
+        avg_fuel_per_lap: 3.65, provisional_laps_to_time_expiry: 7,
+        required_fuel_l: 25.55, margin_l: -5.55,
+      } },
+      messages: [{ role: 'user', content: '最後まで足りる？何リッター必要？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④a5 CONTROL: a truly legacy caller (no raceContext field at all) keeps the raw fuel reading',
+      text.includes('777.3L'), text);
+  }
+  // ── ④a6 WO014 round4 residual ("reference role/age"): fuelRef.source_valid
+  //    only proves the calculation_source's refs are internally consistent --
+  //    it does not bound AGE. A genuinely stale fuel-per-lap reference
+  //    (telemetry/recompute stuck) must not reach the deterministic fuel
+  //    guard as if it were current, even though source_valid is true. ─────
+  function buildFuelRefContext(ageS, totalSessionTimeS) {
+    const snap = canonicalFixture({ frame: 10, decision: 'd-active', lap: 5 });
+    snap.continuity.stable_scope = { race_instance_id: snap.race_instance_id, session_num: snap.session_num, driver_id: 7 };
+    snap.source_frame.session_time_s = totalSessionTimeS;
+    snap.race_facts.source_frame.session_time_s = totalSessionTimeS;
+    snap.race_facts.black_flag.observed_session_time = totalSessionTimeS;
+    snap.current_facts.source_frame.session_time_s = totalSessionTimeS;
+    snap.recommendations = { fuel_strategy: {
+      value: { avg_fuel_per_lap: 3.65, required_fuel_l: 25.55, margin_l: -5.55, estimated_crossings_to_finish: 9 },
+      role: 'reference',
+      calculation_source: { session_time_s: totalSessionTimeS - ageS, source_frame_sequence: snap.source_frame.sequence },
+    } };
+    const cache = CanonicalCache.create({ now: () => 0 });
+    const g = cache.beginSocket();
+    cache.hello(g, { type: 'connected', schema_version: 1, bridge_process_epoch: snap.bridge_process_epoch });
+    if (!cache.receive(snap, g)) throw new Error('fuelRefContext fixture rejected by canonical cache');
+    const projection = StrategyProjection.create({ canonical: cache, now: () => 0 });
+    const ctx = RaceContextBuilder.build({ projectionView: projection.current(), snapshot: cache.current(),
+      evaluation: projection.strategyEvaluation(), now: () => Date.now() });
+    if (!RaceContextBuilder.validate(ctx, Date.now())) throw new Error('fuelRefContext built an invalid raceContext');
+    return ctx;
+  }
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { fuel: 5 },
+      raceContext: buildFuelRefContext(5, 100),   // 5s old -- fresh
+      messages: [{ role: 'user', content: '最後まで足りる？何リッター必要？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④a6 FRESH fuel reference (age 5s): required-fuel figure reaches the deterministic reply as reference information',
+      text.includes('25.6') || text.includes('25.5'), text);
+    // ★WO014 round4 residual ("reference role/age"), audit-corrected: even a
+    // FRESH (age 0) reference is still a reference, not canonical current
+    // authority -- source_valid/age-bound alone do not license a current
+    // execution instruction. The reply must label itself as a reference
+    // (with its age) and must NOT read as a current fueling command
+    // ("給油設定XL"/"セット"/"推奨"), even though the SAME numbers are
+    // present as plain reference information.
+    check('④a6 FRESH fuel reference: reply is explicitly labeled as reference/age, not current authority',
+      /参考計算|reference calculation/.test(text)
+      && /実行指示ではない|not a current fuel amount or execution instruction/.test(text)
+      && /計算根拠|calc basis/.test(text), text);
+    check('④a6 FRESH fuel reference: reply does NOT give a current fueling COMMAND (no "set XL"/box recommendation)',
+      !/給油設定|セット|推奨|Set \d/.test(text), text);
+  }
+  {
+    const r = await post(port, {
+      stream: false, character: 'LunaJP', mode: 'race', sessionType: 'Race',
+      liveData: { fuel: 5 },
+      raceContext: buildFuelRefContext(990, 1000),   // 990s old -- stale, same source_valid:true
+      messages: [{ role: 'user', content: '最後まで足りる？何リッター必要？' }],
+    });
+    const text = JSON.parse(r.body).content[0].text;
+    check('④a6 STALE fuel reference (age 990s, source_valid:true): required-fuel figure does NOT reach the reply (fails closed on age, not just on source_valid)',
+      !text.includes('25.6') && !text.includes('25.5') && /確定していない|not authoritative/.test(text), text);
   }
   {
     const r = await post(port, {

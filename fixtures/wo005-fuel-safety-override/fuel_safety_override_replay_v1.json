@@ -1,0 +1,135 @@
+{
+  "box_call_broadcasts": [],
+  "fuel_strategy_warning_broadcasts": [
+    {
+      "add_fuel_l": 43.54,
+      "bridge_process_epoch": "c947fb6f93f54b2a8980be9d486d8103",
+      "canonical_snapshot_id": "c947fb6f93f54b2a8980be9d486d8103:28",
+      "canonical_snapshot_sequence": 28,
+      "effective_capacity_l": 60.0,
+      "endurance_plan": {
+        "available": true,
+        "box_this_lap": false,
+        "current_stint_laps_remaining": 9,
+        "effective_capacity_l": 60.0,
+        "future_stop_count": 1,
+        "multi_stop": false,
+        "next_fuel_stop_in_laps": 8,
+        "race_progress_fraction": 0.2667,
+        "reason": "endurance_horizon",
+        "reserve_l": 0.5,
+        "splash_forecast": {
+          "available": false,
+          "avoid_splash_feasible": false,
+          "avoid_splash_save_fraction": 0.0,
+          "avoid_splash_save_l_per_lap": 0.0,
+          "final_stint_capacity_laps": 16,
+          "final_stint_window_in_laps": 6,
+          "final_stint_window_open": false,
+          "final_stint_window_reachable": true,
+          "planning_available": true,
+          "projected_final_service_l": 44.04,
+          "reason": "race_not_halfway",
+          "splash_candidate": false,
+          "traffic_rejoin_check_required": false
+        },
+        "total_fuel_to_add_l": 44.04,
+        "total_fuel_to_finish_l": 80.14
+      },
+      "estimated_crossings_to_finish": 22,
+      "execution_hold": "box_verdict:cannot_reach_requested_target",
+      "fact_only": true,
+      "fuel": 36.1,
+      "fuel_band": "critical",
+      "margin_l": -43.54,
+      "message": "Fuel 36.1. Execution held.",
+      "one_stop_shortfall_l": 0.0,
+      "origin_record_ref": {
+        "bridge_process_epoch": "c947fb6f93f54b2a8980be9d486d8103",
+        "decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+        "race_instance_id": "sub:992009999",
+        "revision": 0,
+        "session_num": 0
+      },
+      "pit_best_position": null,
+      "pit_cycle_pack_count": null,
+      "pit_cycle_position": null,
+      "pit_physical_position": null,
+      "pit_required": false,
+      "pit_worst_position": null,
+      "post_stop_fuel_projection": {
+        "available": false,
+        "reason": "not_timed_race"
+      },
+      "required_fuel_l": 79.64,
+      "safety_override": {
+        "activated_source_frame_sequence": 16,
+        "decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+        "diagnostic": "authority_requires_new_decision",
+        "override_reason": "cannot_reach_selected_pit_window",
+        "revision": 0
+      },
+      "set_fuel_l": null,
+      "trigger": "fuel_strategy_warning",
+      "type": "radio"
+    }
+  ],
+  "source": "tests_bridge_fuel_safety_override_replay.py (regenerated on every run — deterministic synthetic telemetry through the real bridge.poll_iracing())",
+  "telemetry_live_active_plan_fields": [
+    {
+      "active_plan_activated_source_frame_sequence": null,
+      "active_plan_decision_id": null,
+      "active_plan_revision": null
+    },
+    {
+      "active_plan_activated_source_frame_sequence": null,
+      "active_plan_decision_id": null,
+      "active_plan_revision": null
+    },
+    {
+      "active_plan_activated_source_frame_sequence": null,
+      "active_plan_decision_id": null,
+      "active_plan_revision": null
+    },
+    {
+      "active_plan_activated_source_frame_sequence": null,
+      "active_plan_decision_id": null,
+      "active_plan_revision": null
+    },
+    {
+      "active_plan_activated_source_frame_sequence": null,
+      "active_plan_decision_id": null,
+      "active_plan_revision": null
+    },
+    {
+      "active_plan_activated_source_frame_sequence": 16,
+      "active_plan_decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+      "active_plan_revision": 0
+    },
+    {
+      "active_plan_activated_source_frame_sequence": 16,
+      "active_plan_decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+      "active_plan_revision": 0
+    },
+    {
+      "active_plan_activated_source_frame_sequence": 16,
+      "active_plan_decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+      "active_plan_revision": 0
+    },
+    {
+      "active_plan_activated_source_frame_sequence": 16,
+      "active_plan_decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+      "active_plan_revision": 0
+    },
+    {
+      "active_plan_activated_source_frame_sequence": 16,
+      "active_plan_decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+      "active_plan_revision": 0
+    },
+    {
+      "active_plan_activated_source_frame_sequence": 16,
+      "active_plan_decision_id": "sub:992009999:initial:0:115.0:initial:sig-3cb0aec20641",
+      "active_plan_revision": 0
+    }
+  ]
+}

@@ -375,17 +375,17 @@ check('generic unresolved replies do not auto-repeat at the next S/F',
 check('renderer promotes SessionInfo duration into Race live telemetry',
   renderer.includes('function applySessionFormatAuthority(snapshot)')
   && renderer.includes('configured_duration_s:duration')
-  && renderer.includes('lastTelemetry=applySessionFormatAuthority(data)'));
+  && renderer.includes('lastTelemetry=currentCanonicalStrategyLive(applySessionFormatAuthority(data))'));
 check('critical fuel radio is a short driver action, not a telemetry dump',
   /この周ボックス。\$\{setting\}リットル/.test(renderer)
   && !/return `この周でピットを推奨。現在/.test(renderer));
-check('both fuel reflex paths become Luna working state',
-  renderer.includes("data.trigger==='fuel_warning'||data.trigger==='fuel_strategy_warning'")
+check('both fuel reflex paths require the current canonical publication',
+  renderer.includes("'fuel_strategy_safe','fuel_margin_hold','fuel_warning'].includes(data?.trigger)")
   && renderer.includes('buildActiveRaceFactsNote(_isJP_pre)'));
-check('initial Plan A/B radio becomes Luna working state',
+check('initial Plan A/B radio shares the canonical strategy projection',
   renderer.includes("case 'initial_strategy_plans'")
-  && renderer.includes("data.trigger==='initial_strategy_plans'")
-  && renderer.includes('strategyOptions:data.strategy_options'));
+  && renderer.includes("const strategyRadio=['initial_strategy_plans'")
+  && renderer.includes('const evaluation=strategyProjection.strategyEvaluation();'));
 // ★Plan B定義の判断（2026-08-12）：B は「1周延長」ではなく条件付きアンダーカット。
 // 旧文言（1周延長／延長案）が残っていないことも併せて確認する。
 check('Fuel Window T-1 has a proactive measured A/B decision path',

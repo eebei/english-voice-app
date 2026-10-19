@@ -49,6 +49,32 @@ console.log('\n══ 「別のコードから作られた artifact」を掴ま�
     /\*"Build-\$BUILD_NUM-"\*\)/.test(script));
   check('build-info.json の buildNum も検査する',
     /build-info\.json の buildNum が \$GOT/.test(script));
+  // WO021：tracked sourceの未Build印（buildTag "dev"）が同梱されたら不合格。asar展開済みでbuild-info欠落も不合格。
+  check('★未Buildのsource印（buildTag dev）のまま同梱されたartifactを不合格にする',
+    /\[ "\$TAG" != "dev" \]/.test(script) && /未Buildのsource印のまま同梱/.test(script));
+  // 実際にverify-artifact.shの該当ブロックを実行する（ok/badだけ差し替え、tmpのasar展開先を見る）。
+  const os = require('os');
+  const start = script.indexOf('BI="$WORK/asar/build-info.json"');
+  const end = script.indexOf('# ── 8. Bridge 実行体');
+  const block = start >= 0 && end > start ? script.slice(start, end) : '';
+  const run = (files) => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'wo021-artifact-'));
+    fs.mkdirSync(path.join(work, 'asar'));
+    for (const [n, body] of Object.entries(files)) fs.writeFileSync(path.join(work, 'asar', n), body);
+    const out = execFileSync('bash', ['-c', 'fail=0; ok(){ echo "OK $1"; }; bad(){ echo "BAD $1"; fail=1; }\n' + block + '\necho "FAIL=$fail"'],
+      { env: { ...process.env, WORK: work, BUILD_NUM: '302' }, encoding: 'utf8' });
+    fs.rmSync(work, { recursive: true, force: true });
+    return out;
+  };
+  const html = { 'renderer.html': '<html></html>' };
+  const built = run({ ...html, 'build-info.json': '{"buildNum":302,"buildTag":"20261019-0627"}' });
+  const unbuilt = run({ ...html, 'build-info.json': '{"buildNum":302,"buildTag":"dev","channel":"source"}' });
+  const absent = run(html);
+  const notExtracted = run({});
+  check('★実行：Build固有tagのbuild-infoは合格', !!block && /FAIL=0/.test(built) && /OK build-info\.json の buildTag = 20261019-0627/.test(built), built);
+  check('★実行：未Buildのsource印（buildTag dev）のまま同梱されたartifactは不合格', /FAIL=1/.test(unbuilt) && /BAD build-info\.json の buildTag が 'dev'/.test(unbuilt), unbuilt);
+  check('★実行：asar展開済みでbuild-info.jsonが無ければ不合格', /FAIL=1/.test(absent) && /BAD build-info\.json が asar に無い/.test(absent), absent);
+  check('対照：asar未展開（前段で既に不合格）では二重に数えない', /FAIL=0/.test(notExtracted) && !/BAD/.test(notExtracted), notExtracted);
 }
 
 console.log('\n══ 公開状態が「期待どおりか」を見る ══');
@@ -113,13 +139,13 @@ console.log('\n══ 停滞しても完走できる（Codex が踏んだ 302MB 
 
 console.log('\n══ 同梱物を実物で見る（manifest を証拠にしない）══');
 {
-  check('installer を実際に展開する', /bsdtar -xf "\$INST" resources/.test(script));
+  check('installer を実際に展開する', /artifact_gate\.py extract --installer/.test(script));
   check('app.asar と Bridge のハッシュを自分で計算する',
     /shasum -a 256 "\$R\/\$f"/.test(script));
   check('★CI manifest は「突合相手」であって証拠ではないと明示している',
     /runner の自己申告/.test(script));
   check('installer 3本の同一性を見る（latest が古い版を指す事故）',
-    /installer 3本すべて同一ハッシュ/.test(script));
+    /検出installer \$\{INSTALLER_COUNT\}本の実測ハッシュ一致/.test(script));
   check('同梱物が欠けていれば失敗する', /が installer に入っていない/.test(script));
 }
 

@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const WO017Scope = require('./tests-wo017-memory-scope-harness');
 const vm = require('vm');
 const renderer = fs.readFileSync('desktop/renderer.html', 'utf8');
 const bridge = fs.readFileSync('irsdk-bridge/bridge.py', 'utf8');
@@ -103,13 +104,27 @@ if(candidateFn){
 }
 const questionsFn=renderer.match(/function buildEvidenceQuestions\(data\)\{[\s\S]*?\n\}/);
 if(questionsFn){
-  const questionContext={lastSessionType:'Race',Array,Number,Math,
+  // WO018：buildEvidenceQuestionsは実debrief-outcome module経由のcanonical質問を先に見る（helperも実原文）。
+  const questionContext={lastSessionType:'Race',Array,Number,Math,Object,String,Set,JSON,
     evidenceCopy:()=>({raceLow:[],raceMid:[],raceTop:[]}),evidenceLanguage:()=> 'ja'};
+  questionContext.window=questionContext;questionContext.globalThis=questionContext;
+  vm.runInNewContext(fs.readFileSync('desktop/debrief-outcome.js','utf8'),questionContext);
+  for(const name of ['debriefOutcomeModule','outcomeFirstQuestion']){
+    const fn=renderer.match(new RegExp('function '+name+'\\(\\)?[^\\n]*\\{[\\s\\S]*?\\n\\}'));
+    if(fn) vm.runInNewContext(fn[0],questionContext);
+  }
   vm.runInNewContext(questionsFn[0],questionContext);
   const contextual=questionContext.buildEvidenceQuestions({event_type:'Race',incidents:4,
     pit_events:[{entry_lap:8}]});
   check('実コードで事故と実pit周を一問へ接続する',
     contextual.length===1 && /インシデント4/.test(contextual[0]) && /8周目/.test(contextual[0]));
+  // Bridgeがpenaltyと分類済みの停止（発生race/session付き）は、本人に「予定どおり？」と分類させない。
+  const pen={schema_version:1,pit_event_id:'p1',race_instance_id:'sub:1',session_num:0,driver_pit_sequence:1,
+    entry_lap:8,execution_relation:'penalty',penalty_evidence:{state:'true'}};
+  const canonical=questionContext.buildEvidenceQuestions({event_type:'Race',incidents:4,race_instance_id:'sub:1',
+    session_num:0,pit_events:[pen]});
+  check('WO018 実コードでcanonical penaltyを先に聞き、分類を本人に求めない',
+    canonical.length===1 && /8周目の停止はペナルティだった/.test(canonical[0]) && !/予定どおり、前倒し/.test(canonical[0]));
 }else{
   check('実コードで事実ベース質問を生成する',false);
 }
@@ -131,13 +146,16 @@ check('rapid PTTは次質問の回答枠へ進めない',
   && renderer.includes('if(isSpeaking || questionPending || Date.now() < (evidenceDebrief.acceptAfter||0))'));
 const recordFn = renderer.match(/function recordEvidenceAnswer\(text\)\{[\s\S]*?\n\}/);
 if(recordFn){
+  // WO018：回答前に実evidenceReviewBound（本人・race binding）を通る。同じ本人・race不明のreview。
   const rapidContext={
-    evidenceDebrief:{active:true,index:0,acceptAfter:0,answers:[],questions:['Q1','Q2','Q3']},
+    evidenceDebrief:{active:true,index:0,acceptAfter:0,answers:[],questions:['Q1','Q2','Q3'],ownerRef:'user:1',data:{}},
     speakQueue:[{kind:'debrief_question'}],isSpeaking:false,Date,
     addMsg:()=>{},askEvidenceQuestion:()=>{},document:{getElementById:()=>({})},
-    pushMsg:()=>{},speak:()=>{},evidenceCopy:()=>({wait:'wait'})
+    pushMsg:()=>{},speak:()=>{},evidenceCopy:()=>({wait:'wait'}),
+    localMemoryOwnerRef:()=> 'user:1',currentMemoryRaceScope:()=>null,diagnosticLog:()=>{},dismissEvidenceDebrief:()=>{}
   };
-  vm.runInNewContext(recordFn[0],rapidContext);
+  const boundFn=(renderer.match(/function evidenceReviewBound\(review\)\{[\s\S]*?\n\}/)||[''])[0];
+  vm.runInNewContext(boundFn+'\n'+recordFn[0],rapidContext);
   rapidContext.recordEvidenceAnswer('連打回答');
   check('実コードで質問待機中の回答indexは進まない',rapidContext.evidenceDebrief.index===0);
 }else{
@@ -182,9 +200,19 @@ if(memoryStart>=0&&memoryEnd>memoryStart){
     loadEvidenceRecords:()=>JSON.parse(store.get('pw_session_evidence')||'[]'),
     usageCount:k=>usage.push(k),saveStrategyObjectiveFromDebrief:()=>null,
     evidenceCopy:()=>({missing:'missing',failed:'failed',saved:'saved',discarded:'discarded'}),
-    evidenceLanguage:()=> 'en',addMsg:()=>{},dismissEvidenceDebrief:()=>{},diagnosticLog:()=>{}
+    evidenceLanguage:()=> 'en',addMsg:()=>{},dismissEvidenceDebrief:()=>{},diagnosticLog:()=>{},
+    // WO017：振り返り記録は本人（実localMemoryOwnerRef）と発生race identityを持つ。
+    currentMemoryUserId:()=> 'driver-1'
   };
-  vm.runInNewContext(renderer.slice(memoryStart,memoryEnd),memoryContext);
+  // WO018：保存recordはrace_outcome（実debrief-outcome module経由）も持つ。
+  memoryContext.window=memoryContext;
+  const outcomeModuleFn=(renderer.match(/function debriefOutcomeModule\(\)\{[\s\S]*?\n\}/)||[''])[0];
+  const reviewBoundFn=(renderer.match(/function evidenceReviewBound\(review\)\{[\s\S]*?\n\}/)||[''])[0];
+  memoryContext.currentMemoryRaceScope=()=>null;
+  vm.runInNewContext(WO017Scope.source(renderer)+fs.readFileSync('desktop/debrief-outcome.js','utf8')+'\n'
+    +outcomeModuleFn+'\n'+reviewBoundFn+'\n'+renderer.slice(memoryStart,memoryEnd),memoryContext);
+  // 振り返りは開始時の本人（実localMemoryOwnerRef）に束縛される。
+  memoryContext.evidenceDebrief.ownerRef=memoryContext.localMemoryOwnerRef();
   const first=memoryContext.autoSaveEvidenceMemory();
   let rows=JSON.parse(store.get('pw_session_evidence')||'[]');
   check('実コードで回答完了時に仮記憶が1件作られる',first&&rows.length===1&&rows[0].confidence==='driver_reported');

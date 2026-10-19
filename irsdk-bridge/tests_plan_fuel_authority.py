@@ -434,7 +434,7 @@ class BridgeWiring(unittest.TestCase):
     def test_strategy_plan_decision_fires_at_target_lap(self):
         # The existing plan-decision path still owns the planned box call.
         self.assertIn("'trigger': 'strategy_plan_decision'", self.bridge)
-        self.assertIn('strategy_options_mod.decide_at_plan_a', self.bridge)
+        self.assertIn('options_mod.decide_at_plan_a', self.bridge)
         self.assertIn('strategy_options_decision_sent', self.bridge)
 
     def test_same_frame_plan_snapshot_before_fuel_authority(self):

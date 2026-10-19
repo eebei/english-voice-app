@@ -221,6 +221,10 @@ function debriefQuestion(race, issue) {
     const fact = `今回はIncidents ${Math.round(incidents)}。`;
     const question = (category === 'conversion' && start !== null && finish !== null)
       ? `スタートP${Math.round(start)}からP${Math.round(finish)}。失ったのは序盤、中盤、終盤のどれ？`
+      // WO-019: a measured 0 incident points does not prove there was no contact (iRacing's
+      // light contact is 0x), so do not ask "the most dangerous contact" as if one happened,
+      // and do not assert "no contact" either: keep the observed count and ask openly.
+      : incidents === 0 ? '一番ヒヤッとした場面、またはペースを落とした場面はどこだった？'
       : '一番危なかった接触は、こちらから行った側？受けた側？';
     return { speak: true, kind: category || 'consistency', line: fact + question };
   }

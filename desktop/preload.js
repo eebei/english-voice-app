@@ -5,6 +5,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('pitwall', {
+  criticalJournalLoad: () => ipcRenderer.sendSync('critical-journal:load'),
+  criticalJournalTransact: operation => ipcRenderer.sendSync('critical-journal:transact', operation),
   // ── メイン窓 → オーバーレイ（会話1件を流す）──
   overlayPush: (line) => ipcRenderer.send('overlay:push', line),
   // ── メイン窓 → main（オーバーレイ窓の制御）──
@@ -20,7 +22,8 @@ contextBridge.exposeInMainWorld('pitwall', {
   settingsGetAll: () => ipcRenderer.sendSync('settings:getAll'),
   settingsSet: (key, value) => ipcRenderer.send('settings:set', key, value),
   // 問題報告用。送信はしない。伏せ字化済みの診断ファイルをDesktopへ作るだけ。
-  exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
+  // WO020: the renderer's bounded observability snapshot; main re-sanitizes it before writing.
+  exportDiagnostics: (observability) => ipcRenderer.invoke('diagnostics:export', observability),
   importPracticeProfile: () => ipcRenderer.invoke('practice-profile:import'),
   // ── main → 窓（設定値の受信。overlay.html / renderer.html 両方が使う）──
   onOverlayConfig: (cb) => ipcRenderer.on('overlay:config', (_e, cfg) => cb(cfg)),

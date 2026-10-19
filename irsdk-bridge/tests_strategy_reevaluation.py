@@ -314,20 +314,22 @@ class BridgeRecalculationExecution(unittest.TestCase):
             inputs=self.live_inputs(**input_overrides),
             srs_mod=self.srs, options_mod=so)
 
-    def test_active_plan_is_actually_updated(self):
+    def test_recommendation_is_rebuilt_without_unapproved_activation(self):
         state = self.srs.init_state()
         self.assertIsNone(state['active_plan'])
         state, verdict = self.run_one(state)
         self.assertTrue(verdict['available'])
-        self.assertEqual(state['active_plan'], verdict['selected_plan'])
-        self.assertIsNotNone(state['active_plan_snapshot'],
-                             'the rebuilt plan must become the active plan')
+        self.assertEqual(state['recommended_plan'], verdict['selected_plan'])
+        self.assertIsNotNone(state['recommended_plan_snapshot'])
+        self.assertIsNone(state['active_plan'])
+        self.assertIsNone(state['active_plan_snapshot'],
+                          'recalculation is a recommendation, not Driver approval')
 
     def test_the_snapshot_stored_is_the_rebuilt_one(self):
         state = self.srs.init_state()
         state, _ = self.run_one(state, recent_fuel_per_lap_l=4.0,
                                 effective_capacity_l=110.0)
-        self.assertEqual(state['active_plan_snapshot']['avg_fuel_per_lap_l'], 4.0)
+        self.assertEqual(state['recommended_plan_snapshot']['avg_fuel_per_lap_l'], 4.0)
 
     def test_a_worse_fuel_number_moves_the_stored_plan(self):
         clean = self.srs.init_state()
@@ -337,8 +339,8 @@ class BridgeRecalculationExecution(unittest.TestCase):
         damaged, _ = self.run_one(damaged, recent_fuel_per_lap_l=4.4,
                                   effective_capacity_l=110.0)
         self.assertLess(
-            damaged['active_plan_snapshot']['plan_a']['target_in_laps'],
-            clean['active_plan_snapshot']['plan_a']['target_in_laps'],
+            damaged['recommended_plan_snapshot']['plan_a']['target_in_laps'],
+            clean['recommended_plan_snapshot']['plan_a']['target_in_laps'],
             'the recalculation must change the plan, not just log it')
 
     def test_recalculation_record_is_written(self):
@@ -366,7 +368,11 @@ class BridgeRecalculationExecution(unittest.TestCase):
     def test_insufficient_inputs_keep_the_previous_active_plan(self):
         state = self.srs.init_state()
         state, _ = self.run_one(state)
+        state = self.srs.register_active_plan(
+            state, plan_id='A', plan_snapshot=state['recommended_plan_snapshot'],
+            snapshot_id=state['recommended_plan_snapshot']['snapshot_id'])
         before = state['active_plan_snapshot']
+        recommendation = state['recommended_plan_snapshot']
         state, verdict = self.bridge.execute_recalculation(
             state, {'reason': 'fuel_deviation', 'dedupe_key': 'k2',
                     'driver_message': None},
@@ -375,6 +381,7 @@ class BridgeRecalculationExecution(unittest.TestCase):
         self.assertFalse(verdict['available'])
         self.assertIs(state['active_plan_snapshot'], before,
                       'a failed rebuild must not wipe the standing plan')
+        self.assertIs(state['recommended_plan_snapshot'], recommendation)
 
     def test_plan_c_needs_every_condition_here_too(self):
         state = self.srs.init_state()
@@ -422,9 +429,6 @@ class RecalculationQueue(unittest.TestCase):
         self.assertEqual(q[0]['driver_message'], 'msg')
         self.assertEqual(q[0]['broadcast_payload'], {'trigger': 'x'})
 
-
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
 
 
 class PlanBUndercutContract(unittest.TestCase):
@@ -531,3 +535,7 @@ class PlanBUndercutContract(unittest.TestCase):
             relative_pace_advantage_s=0.8)
         self.assertEqual(result['selected_plan'], 'B')
         self.assertTrue(result['options']['plan_b']['available'])
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

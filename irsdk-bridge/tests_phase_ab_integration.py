@@ -76,10 +76,10 @@ def test_production_contract():
                 "BROADCAST_HELD = 'HELD'",
                 "BROADCAST_DROPPED = 'DROPPED'")),
         'Final Lap commits broadcast result':
-            '_final_result = broadcast({' in bridge
+            '_final_result = _publish_or_stage({' in bridge
             and 'final_lap.commit_milestone_after_dispatch(' in bridge,
         'fuel commits broadcast result':
-            '_fuel_dispatch_result = broadcast({' in bridge
+            '_fuel_dispatch_result = _publish_or_stage({' in bridge
             and 'fuel_strategy_mod.commit_band_after_dispatch(' in bridge,
         'checker notice commits only DISPATCHED':
             'if _checker_result == BROADCAST_DISPATCHED:' in bridge,

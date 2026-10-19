@@ -54,7 +54,7 @@ def contracts(bridge, renderer, prompts):
         'dispatch_commit': (
             'fuel_strategy_mod.commit_band_after_dispatch(' in bridge),
         'pit_suppression': (
-            "if _fuel_eval.get('should_warn') and not onPit:" in bridge),
+            "if _fuel_eval.get('should_warn') and not onPit and not _plan_gate_reason:" in bridge),
         'old_extra_lap_removed': (
             'avg_fuel_lap * (laps_remaining_est + 1)' not in bridge),
         'old_margin_laps_removed': (

@@ -59,15 +59,13 @@ const renderer = fs.readFileSync(__dirname + '/desktop/renderer.html', 'utf8');
 check('renderer defines the material-change helper',
   renderer.includes('function playbookMaterialSignature(pb)')
   && renderer.includes('function playbookMaterialChanged(prev, next)'));
-check('renderer speaks only on promotion or material change',
-  renderer.includes('const promotedToLive =')
-  && renderer.includes('const materialChange = playbookMaterialChanged(priorPlaybook, updated);')
-  && renderer.includes('if(!promotedToLive && !materialChange){'));
-check('renderer traces silent updates with structured reason',
-  renderer.includes("diagnosticLog('STRATEGY_PLAYBOOK_UPDATE_SILENT'")
-  && renderer.includes("reason:'no_material_change'"));
-check('renderer keys speech dedupe by material signature',
-  renderer.includes("const materialKey=[lastSessionNum, playbookMaterialSignature(updated),")
-  && renderer.includes('strategyPlaybookLiveUpdateKey===materialKey'));
+check('read-only live update does not create local promotion speech',
+  /function updateStrategyPlaybookFromLive\(live\)\{[^]*?return currentStrategyPlaybook\(\);\n\}/.test(renderer)
+  && !renderer.includes('const promotedToLive ='));
+check('canonical announcement binds immutable current record',
+  renderer.includes('const key=JSON.stringify(st.pit_plan.record_ref||st.pit_plan);')
+  && renderer.includes('strategyBinding:binding,precheck:()=>strategyProjection.validBinding(binding)'));
+check('canonical announcement dedupes repeated publication of the same record',
+  renderer.includes('if(strategyPlaybookBriefedKey===key) return;'));
 
 console.log(`✅ strategy playbook material change: ${pass} checks`);

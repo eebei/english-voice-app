@@ -18,11 +18,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build bridge EXE
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install websockets pyinstaller pygame pyaudio
+          pip install websockets pyinstaller pygame pyaudio pyyaml
+
+      - name: Verify Bridge runtime coverage (source import graph)
+        run: python ci/runtime_coverage.py source --require-workflows --out ci-artifacts
+
+      - name: Build bridge EXE
+        run: |
           pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console --hidden-import pygame irsdk-bridge/bridge.py
+
+      - name: Verify Bridge runtime coverage (packaged EXE)
+        run: python ci/runtime_coverage.py packaged --exe dist/OMORAY-PITWALL-Bridge.exe --label bridge-dist --out ci-artifacts
 
       - name: Bundle bridge into desktop app
         run: |
@@ -56,6 +65,25 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist:store
+
+      - name: Verify packaged runtime modules
+        working-directory: desktop
+        run: node scripts/verify-packaged-runtime.js --json ../ci-artifacts/desktop-renderer-runtime.json
+
+      - name: Verify the Bridge bundled inside the Store package
+        run: python ci/runtime_coverage.py packaged --exe desktop/dist/win-unpacked/resources/OMORAY-PITWALL-Bridge.exe --same-as dist/OMORAY-PITWALL-Bridge.exe --label store-resources --out ci-artifacts
+
+      - name: Observability recorder self-check (synthetic fixture)
+        run: node tests-wo020-observability.js --artifact ci-artifacts/observability-selfcheck.json
+
+      - name: Upload runtime coverage results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omoray-pitwall-store-runtime-coverage-${{ github.run_number }}
+          path: ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload private Store submission artifact
         uses: actions/upload-artifact@v4

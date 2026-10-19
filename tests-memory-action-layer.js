@@ -131,13 +131,16 @@ check('memory provenance survives the three-lap live revision',
 const renderer = fs.readFileSync(__dirname + '/desktop/renderer.html', 'utf8');
 check('desktop loads the Memory Action Layer before the strategy engine',
   renderer.indexOf('memory-action-layer.js') < renderer.indexOf('strategy-playbook.js'));
-check('runtime traces all four required action phases',
-  renderer.includes("phase:'history_resolved'")
-  && renderer.includes("phase:'proactive_strategy_briefing'")
-  && renderer.includes("phase:'three_lap_live_revision'")
-  && renderer.includes("phase:'structured_evidence_correction'"));
-check('session transition clears every proactive strategy latch',
-  renderer.includes("strategyPlaybookRefreshKey=''")
-  && renderer.includes('activeStrategyPlaybook=null'));
+// WO011 moved execution ownership out of the memory/playbook action phases.
+// Memory retrieval/reply evidence stays observable; only canonical projection
+// may establish a current Plan. The module tests above retain history merging,
+// live revision and correction behavior without reviving that old owner.
+check('runtime separates memory search/reply evidence from canonical execution',
+  renderer.includes("phase:'search'") && renderer.includes("phase:'reply'")
+  && renderer.includes('const playbook=currentStrategyPlaybook();')
+  && renderer.includes('return strategyProjection.readPlaybook();'));
+check('canonical briefing refuses unavailable or unagreed execution',
+  renderer.includes('if(!st.available||!st.pit_plan) return;')
+  && renderer.includes('strategyBinding:binding,precheck:()=>strategyProjection.validBinding(binding)'));
 
 console.log(`✅ Memory Action Layer: ${pass} checks`);

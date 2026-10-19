@@ -374,21 +374,41 @@ async function init() {
   //   保存するのは構造化した戦略・結果の要約だけで、生音声・会話全文・raw
   //   telemetry は入れない（sanitizeDecisionRecord がサーバー側で強制する）。
   //   owner_key で認証主体を分離し、他人の記録は決して返さない。
+  // WO017：行のidentityは owner_key＋decision_id＋race_key（race_instance_id、旧行は''）。
+  //   同じdecision_idが別raceに出ても別行にする。version はサーバーだけが進める版番号で、
+  //   PUTは「自分が基にした版（server_version）」と一致した時だけ上書きできる（遅れた旧PUTで
+  //   訂正・削除を巻き戻さない）。削除は本文・identity・結果を同じ行で消去し、owner/ID/race/
+  //   version/削除時刻だけの墓標にする（保持期間・件数上限で物理削除）。全削除は本人の
+  //   purge_generation を進め、それより前の世代しか知らない端末のPUTを丸ごと拒否する。
   await pool.query(`
     CREATE TABLE IF NOT EXISTS strategy_decisions (
       owner_key TEXT NOT NULL,
       decision_id TEXT NOT NULL,
+      race_key TEXT NOT NULL DEFAULT '',
       identity JSONB NOT NULL,
       record JSONB NOT NULL,
       outcome TEXT NOT NULL,
       status TEXT NOT NULL,
+      version BIGINT NOT NULL DEFAULT 1,
       deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (owner_key, decision_id)
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // 既存表の互換移行（冪等）：旧PK(owner_key,decision_id)を3列の一意制約へ置き換える。
+  //   旧行は race_key='' の「race不明」行として残り、別raceの行と結合しない。
+  await pool.query(`ALTER TABLE strategy_decisions ADD COLUMN IF NOT EXISTS race_key TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE strategy_decisions ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 1`);
+  await pool.query(`ALTER TABLE strategy_decisions DROP CONSTRAINT IF EXISTS strategy_decisions_pkey`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_decisions_identity ON strategy_decisions (owner_key, decision_id, race_key);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_strategy_decisions_owner ON strategy_decisions (owner_key, updated_at);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS strategy_decision_owners (
+      owner_key TEXT PRIMARY KEY,
+      purge_generation BIGINT NOT NULL DEFAULT 0,
+      purged_at TIMESTAMPTZ
+    );
+  `);
 
   if (BREVO_API_KEY) {
     mailer = 'brevo';
@@ -1934,10 +1954,16 @@ async function getChiefTeamHandoff({ teamCode } = {}) {
 //   - 何を保存してよいかは **サーバーが決める**。client が余計な項目を送っても
 //     ここで落ちる。生音声・会話全文・raw telemetry は保存しない。
 //   - 保持期間を超えた記録は読み書きのたびに物理削除する。
-//   - 削除は物理削除。tombstone を残さない（「消したのに残っている」を作らない）。
+//   - 削除は本文・identity・結果を消去する（「消したのに残っている」を作らない）。
+//     WO017：遅れた旧PUT（ACK欠落で版を持たない端末を含む）での復活を防ぐため、owner/ID/race/
+//     版/削除時刻だけの墓標行を削除から保持期間（90日）残す。墓標は生きた記録の件数上限（200）に
+//     数えず追い出さない。墓標自体が別上限（5000）を超えた時だけ古い墓標を消し、同時に本人の
+//     世代番号を進めて、それ以前の世代しか知らない端末の書込みを丸ごと拒否する。全削除も世代を進める。
 // ══════════════════════════════════════════════════════════════════
 const DECISION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;   // 90日
-const DECISION_MAX_PER_OWNER = 200;
+const DECISION_CLOCK_SKEW_MS = 5 * 60 * 1000;   // 版無し記録の作成時刻が未来側に許される時計ずれ（memory鮮度判定と同じ5分）
+const DECISION_MAX_PER_OWNER = 200;            // 生きた記録の上限（墓標は数えない）
+const DECISION_MAX_TOMBSTONES_PER_OWNER = 5000; // 墓標の上限。超えたら古い墓標を消し世代を進める
 const DECISION_OUTCOMES = new Set(['success', 'traffic_failure', 'fuel_failure',
   'not_executed', 'incident_or_disconnect', 'unknown']);
 const DECISION_STATUSES = new Set(['open', 'closed', 'disputed', 'corrected']);
@@ -1951,7 +1977,9 @@ function decisionOwnerKey({ userId, betaTokenHash } = {}) {
 }
 
 // 保存してよい形の唯一の定義。client を信用しない。
-function sanitizeDecisionRecord(raw) {
+// WO017：race_instance_id／driver_id（iRacing cust id）は、どのraceの・どのDriverの判断かを
+//   取得時に区別するために残す。本人（userId）は client の値を捨て、認証主体からサーバーが付ける。
+function sanitizeDecisionRecord(raw, owner) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const str = (v, max) => typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
   const num = v => typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -1967,8 +1995,14 @@ function sanitizeDecisionRecord(raw) {
   const d = raw.dispute && typeof raw.dispute === 'object' ? raw.dispute : null;
   const outcome = DECISION_OUTCOMES.has(String(raw.outcome)) ? String(raw.outcome) : 'unknown';
   const status = DECISION_STATUSES.has(String(raw.status)) ? String(raw.status) : 'open';
+  const posInt = v => Number.isInteger(v) && v > 0 ? v : null;
+  const ownerUser = owner && owner.userId !== undefined && owner.userId !== null && owner.userId !== ''
+    ? String(owner.userId) : null;
   return {
     decision_id: decisionId,
+    race_instance_id: str(raw.race_instance_id, 120),
+    driver_id: posInt(raw.driver_id), custId: posInt(raw.custId),
+    userId: ownerUser,
     date: str(raw.date, 10),
     recordedAt: str(raw.recordedAt, 40),
     updatedAt: str(raw.updatedAt, 40),
@@ -2011,85 +2045,216 @@ function sanitizeDecisionRecord(raw) {
   };
 }
 
-async function purgeExpiredDecisions(ownerKey) {
-  await pool.query(
+// WO017：本人ごとの書込み（保存・訂正・削除・全削除）と取得を1つの transaction＋本人単位の
+//   advisory lock で直列化する。墓標・版の確認と書込みの間に別の削除や保存が割り込めない。
+async function withDecisionOwnerLock(ownerKey, fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [ownerKey]);
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function purgeExpiredDecisions(db, ownerKey) {
+  await db.query(
     `DELETE FROM strategy_decisions
       WHERE owner_key=$1 AND updated_at < now() - ($2::bigint * interval '1 millisecond')`,
     [ownerKey, DECISION_RETENTION_MS]);
 }
 
-async function saveStrategyDecisions({ userId, betaTokenHash, decisions } = {}) {
+// 墓標が上限を超えた時だけ、古い墓標を消し、同じtransactionで本人の世代を進める。
+//   消えた墓標のIDを知る古い端末（世代が古い）の書込みは、以後すべて拒否される。
+async function enforceDecisionTombstoneBound(db, ownerKey) {
+  const { rows } = await db.query(
+    `WITH gone AS (
+       DELETE FROM strategy_decisions WHERE owner_key=$1 AND (decision_id, race_key) IN (
+         SELECT decision_id, race_key FROM strategy_decisions WHERE owner_key=$1 AND deleted_at IS NOT NULL
+         ORDER BY updated_at DESC OFFSET $2)
+       RETURNING 1)
+     SELECT count(*)::int AS n FROM gone`,
+    [ownerKey, DECISION_MAX_TOMBSTONES_PER_OWNER]);
+  if (!(rows && rows[0] && rows[0].n > 0)) return null;
+  const { rows: gen } = await db.query(
+    `INSERT INTO strategy_decision_owners (owner_key, purge_generation, purged_at) VALUES ($1, 1, now())
+     ON CONFLICT (owner_key) DO UPDATE SET purge_generation=strategy_decision_owners.purge_generation+1, purged_at=now()
+     RETURNING purge_generation`, [ownerKey]);
+  return Number(gen[0].purge_generation);
+}
+
+async function decisionOwnerGeneration(db, ownerKey) {
+  const { rows } = await db.query(
+    `SELECT purge_generation FROM strategy_decision_owners WHERE owner_key=$1`, [ownerKey]);
+  return rows && rows[0] ? Number(rows[0].purge_generation) || 0 : 0;
+}
+
+const decisionRaceKey = v => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : '');
+
+async function saveStrategyDecisions({ userId, betaTokenHash, decisions, ownerGeneration } = {}) {
   if (!ready) throw new Error('auth_not_ready');
   const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
   if (!ownerKey) throw new Error('invalid_decision_identity');
   const input = Array.isArray(decisions) ? decisions.slice(0, 50) : [];
-  const clean = input.map(sanitizeDecisionRecord).filter(Boolean);
-  await purgeExpiredDecisions(ownerKey);
-  for (const record of clean) {
-    await pool.query(
-      `INSERT INTO strategy_decisions
-         (owner_key,decision_id,identity,record,outcome,status,created_at,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,now(),now())
-       ON CONFLICT (owner_key,decision_id) DO UPDATE SET
-         identity=EXCLUDED.identity, record=EXCLUDED.record,
-         outcome=EXCLUDED.outcome, status=EXCLUDED.status,
-         deleted_at=NULL, updated_at=now()`,
-      [ownerKey, record.decision_id,
-        JSON.stringify({ track: record.track, car: record.car, seriesId: record.seriesId,
-          setupFingerprint: record.setupFingerprint, raceFormat: record.raceFormat }),
-        JSON.stringify(record), record.outcome, record.status]);
-  }
-  // 上限超過は古いものから物理削除する。無制限に預からない。
-  await pool.query(
-    `DELETE FROM strategy_decisions WHERE owner_key=$1 AND decision_id IN (
-       SELECT decision_id FROM strategy_decisions WHERE owner_key=$1
-       ORDER BY updated_at DESC OFFSET $2)`,
-    [ownerKey, DECISION_MAX_PER_OWNER]);
-  return { ok: true, stored: clean.length, rejected: input.length - clean.length };
+  return withDecisionOwnerLock(ownerKey, async db => {
+    await purgeExpiredDecisions(db, ownerKey);
+    const generation = await decisionOwnerGeneration(db, ownerKey);
+    const known = Number.isInteger(ownerGeneration) && ownerGeneration >= 0 ? ownerGeneration : 0;
+    // 全削除の世代が今の正本と一致する端末の書込みだけを受ける（古い世代も、正本に無い未来の世代も拒否）。
+    if (known !== generation) {
+      return { ok: false, error: 'stale_owner_generation', ownerGeneration: generation, results: [] };
+    }
+    const results = [];
+    for (const raw of input) {
+      const record = sanitizeDecisionRecord(raw, { userId });
+      if (!record) { results.push({ status: 'rejected' }); continue; }
+      const raceKey = decisionRaceKey(record.race_instance_id);
+      const base = Number.isInteger(raw && raw.server_version) && raw.server_version > 0 ? raw.server_version : null;
+      // WO017：正本に一度も載っていない（版無し）記録は、作成時刻が正本の保持期間内の時だけ新規として受ける。
+      //   削除墓標は削除から90日で物理削除されるため、それより古い版無し記録（ACKを失った旧端末・旧clientの
+      //   再送）を受けると削除内容が復活し得る。作成時刻が無い・読めない・保持期間より古い記録は保存しない。
+      //   作成時刻はclient申告だが、拒否方向にだけ使う（古いと申告された記録を新規として受けない）。
+      //   未来側も同じ契約で閉じる：server時刻より時計ずれ上限（5分）を超えて未来の作成時刻は、
+      //   期限後の再送を「新しい記録」に見せかけ得るので受けない。
+      //   理由は区別して返す：invalid_created_at（欠落・読めない）／expired（保持期間より古い）／
+      //   future_created_at（時計ずれ上限より未来）。
+      if (base === null) {
+        const createdAt = Date.parse(String(record.recordedAt || ''));
+        const now = Date.now();
+        const reason = !Number.isFinite(createdAt) ? 'invalid_created_at'
+          : createdAt < now - DECISION_RETENTION_MS ? 'expired'
+          : createdAt > now + DECISION_CLOCK_SKEW_MS ? 'future_created_at' : null;
+        if (reason) {
+          results.push({ decision_id: record.decision_id, race_instance_id: record.race_instance_id,
+            status: reason, version: null });
+          continue;
+        }
+      }
+      const identity = JSON.stringify({ track: record.track, car: record.car, seriesId: record.seriesId,
+        setupFingerprint: record.setupFingerprint, raceFormat: record.raceFormat,
+        race_instance_id: record.race_instance_id, driver_id: record.driver_id });
+      // 正本の版を基にした書込み（base有り）は、その版のまま残っている生きた行だけを更新する。
+      //   行が無い（削除墓標が件数上限・保持期間で消えた等）なら再挿入しない＝復活させない。
+      // 正本に一度も載っていない記録（base無し）だけが新規挿入でき、同じ行が既にあれば上書きしない。
+      const { rows } = base !== null
+        ? await db.query(
+          `UPDATE strategy_decisions SET
+             identity=$4, record=$5, outcome=$6, status=$7, version=version+1, updated_at=now()
+           WHERE owner_key=$1 AND decision_id=$2 AND race_key=$3
+             AND deleted_at IS NULL AND version=$8
+           RETURNING version`,
+          [ownerKey, record.decision_id, raceKey, identity, JSON.stringify(record), record.outcome, record.status, base])
+        : await db.query(
+          `INSERT INTO strategy_decisions
+             (owner_key,decision_id,race_key,identity,record,outcome,status,version,created_at,updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,1,now(),now())
+           ON CONFLICT (owner_key,decision_id,race_key) DO NOTHING
+           RETURNING version`,
+          [ownerKey, record.decision_id, raceKey, identity, JSON.stringify(record), record.outcome, record.status]);
+      if (rows && rows[0]) {
+        results.push({ decision_id: record.decision_id, race_instance_id: record.race_instance_id,
+          status: 'stored', version: Number(rows[0].version) });
+        continue;
+      }
+      // 上書きしなかった理由：削除済み（墓標）か、より新しい版がある（訂正・別端末）。
+      const { rows: cur } = await db.query(
+        `SELECT version, deleted_at FROM strategy_decisions
+          WHERE owner_key=$1 AND decision_id=$2 AND race_key=$3`, [ownerKey, record.decision_id, raceKey]);
+      const row = cur && cur[0];
+      results.push({ decision_id: record.decision_id, race_instance_id: record.race_instance_id,
+        status: !row ? 'gone' : row.deleted_at ? 'deleted' : 'stale', version: row ? Number(row.version) : null });
+    }
+    // 生きた記録の上限超過は古いものから物理削除する。墓標は数えず、ここでは消さない
+    //   （ACK欠落で版を持たない端末が後から同じIDを送っても、墓標が残る限り作られない）。
+    await db.query(
+      `DELETE FROM strategy_decisions WHERE owner_key=$1 AND (decision_id, race_key) IN (
+         SELECT decision_id, race_key FROM strategy_decisions WHERE owner_key=$1 AND deleted_at IS NULL
+         ORDER BY updated_at DESC OFFSET $2)`,
+      [ownerKey, DECISION_MAX_PER_OWNER]);
+    return { ok: true, ownerGeneration: generation, results,
+      stored: results.filter(r => r.status === 'stored').length,
+      rejected: results.filter(r => r.status === 'rejected').length };
+  });
 }
 
 async function listStrategyDecisions({ userId, betaTokenHash } = {}) {
   if (!ready) throw new Error('auth_not_ready');
   const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
   if (!ownerKey) throw new Error('invalid_decision_identity');
-  await purgeExpiredDecisions(ownerKey);
-  const { rows } = await pool.query(
-    `SELECT record,updated_at FROM strategy_decisions
-      WHERE owner_key=$1 AND deleted_at IS NULL ORDER BY updated_at ASC`, [ownerKey]);
-  return { ok: true, decisions: rows.map(r => r.record).filter(Boolean) };
+  return withDecisionOwnerLock(ownerKey, async db => {
+    await purgeExpiredDecisions(db, ownerKey);
+    const generation = await decisionOwnerGeneration(db, ownerKey);
+    const { rows } = await db.query(
+      `SELECT record, version FROM strategy_decisions
+        WHERE owner_key=$1 AND deleted_at IS NULL ORDER BY updated_at ASC`, [ownerKey]);
+    return { ok: true, ownerGeneration: generation,
+      decisions: rows.filter(r => r && r.record).map(r => Object.assign({}, r.record, { server_version: Number(r.version) })) };
+  });
 }
 
-async function markStrategyDecisionDisputed({ userId, betaTokenHash, decisionId } = {}) {
+async function markStrategyDecisionDisputed({ userId, betaTokenHash, decisionId, raceInstanceId } = {}) {
   if (!ready) throw new Error('auth_not_ready');
   const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
   const id = typeof decisionId === 'string' ? decisionId.slice(0, 160) : '';
   if (!ownerKey || !id) throw new Error('invalid_decision_identity');
-  const { rowCount } = await pool.query(
-    `UPDATE strategy_decisions
-        SET status='disputed', updated_at=now(),
-            record = jsonb_set(record,'{status}','"disputed"'::jsonb)
-      WHERE owner_key=$1 AND decision_id=$2 AND deleted_at IS NULL`, [ownerKey, id]);
-  return { ok: rowCount > 0, disputed: rowCount };
+  return withDecisionOwnerLock(ownerKey, async db => {
+    const { rows } = await db.query(
+      `UPDATE strategy_decisions
+          SET status='disputed', updated_at=now(), version=version+1,
+              record = jsonb_set(record,'{status}','"disputed"'::jsonb)
+        WHERE owner_key=$1 AND decision_id=$2 AND race_key=$3 AND deleted_at IS NULL
+        RETURNING version`, [ownerKey, id, decisionRaceKey(raceInstanceId)]);
+    return { ok: !!(rows && rows[0]), disputed: rows ? rows.length : 0,
+      version: rows && rows[0] ? Number(rows[0].version) : null };
+  });
 }
 
-async function deleteStrategyDecision({ userId, betaTokenHash, decisionId } = {}) {
+async function deleteStrategyDecision({ userId, betaTokenHash, decisionId, raceInstanceId } = {}) {
   if (!ready) throw new Error('auth_not_ready');
   const ownerKey = decisionOwnerKey({ userId, betaTokenHash });
   if (!ownerKey) throw new Error('invalid_decision_identity');
-  if (decisionId === null || decisionId === undefined) {
-    const { rowCount } = await pool.query(
-      `DELETE FROM strategy_decisions WHERE owner_key=$1`, [ownerKey]);
-    return { ok: true, deleted: rowCount, scope: 'all' };
-  }
-  const id = String(decisionId).slice(0, 160);
-  const { rowCount } = await pool.query(
-    `DELETE FROM strategy_decisions WHERE owner_key=$1 AND decision_id=$2`, [ownerKey, id]);
-  return { ok: rowCount > 0, deleted: rowCount, scope: 'one' };
+  return withDecisionOwnerLock(ownerKey, async db => {
+    if (decisionId === null || decisionId === undefined) {
+      // 全削除：全行の本文を消去して墓標化し、本人の世代を進める（未着の古い端末のPUTも拒否）。
+      const { rowCount } = await db.query(
+        `UPDATE strategy_decisions
+            SET identity='{}'::jsonb, record='{}'::jsonb, outcome='unknown', status='open',
+                version=version+1, deleted_at=now(), updated_at=now()
+          WHERE owner_key=$1 AND deleted_at IS NULL`, [ownerKey]);
+      const { rows } = await db.query(
+        `INSERT INTO strategy_decision_owners (owner_key, purge_generation, purged_at) VALUES ($1, 1, now())
+         ON CONFLICT (owner_key) DO UPDATE SET purge_generation=strategy_decision_owners.purge_generation+1, purged_at=now()
+         RETURNING purge_generation`, [ownerKey]);
+      const bumped = await enforceDecisionTombstoneBound(db, ownerKey);
+      return { ok: true, deleted: rowCount, scope: 'all',
+        ownerGeneration: bumped !== null ? bumped : Number(rows[0].purge_generation) };
+    }
+    const id = String(decisionId).slice(0, 160);
+    // 1件削除：本文を消去した墓標にする。まだ届いていないIDでも墓標を置き、後から届いた旧PUTを止める。
+    const { rows } = await db.query(
+      `INSERT INTO strategy_decisions
+         (owner_key,decision_id,race_key,identity,record,outcome,status,version,deleted_at,created_at,updated_at)
+       VALUES ($1,$2,$3,'{}'::jsonb,'{}'::jsonb,'unknown','open',1,now(),now(),now())
+       ON CONFLICT (owner_key,decision_id,race_key) DO UPDATE SET
+         identity='{}'::jsonb, record='{}'::jsonb, outcome='unknown', status='open',
+         version=strategy_decisions.version+1, deleted_at=now(), updated_at=now()
+       RETURNING version`, [ownerKey, id, decisionRaceKey(raceInstanceId)]);
+    const bumped = await enforceDecisionTombstoneBound(db, ownerKey);
+    return { ok: true, deleted: 1, scope: 'one', version: rows && rows[0] ? Number(rows[0].version) : null,
+      ownerGeneration: bumped !== null ? bumped : await decisionOwnerGeneration(db, ownerKey) };
+  });
 }
 
 module.exports = {
   init, isConfigured, isReady: () => ready,
   sanitizeDecisionRecord, decisionOwnerKey, DECISION_RETENTION_MS,
+  DECISION_MAX_PER_OWNER, DECISION_MAX_TOMBSTONES_PER_OWNER, DECISION_CLOCK_SKEW_MS,
   saveStrategyDecisions, listStrategyDecisions,
   markStrategyDecisionDisputed, deleteStrategyDecision,
   requestMagicLink, verifyMagicToken, getUserFromToken,

@@ -4,7 +4,7 @@ source = (Path(__file__).parent / "bridge.py").read_text(encoding="utf-8")
 
 checks = {
     "module imported": "import pit_exit_forecaster as pit_exit_forecaster_mod" in source,
-    "genuine entry edge": "if onPit and prev['onPit'] is False:" in source,
+    "genuine entry edge": "if onPit is True and prev['onPit'] is False:" in source,
     "calibration read": "pit_loss_calibrator.get_summary(" in source,
     "same class fail closed": "car_class_map.get(_pci) != player_class_id" in source,
     "snapshot forecast": "pit_exit_forecaster_mod.forecast_at_pit_entry(" in source,

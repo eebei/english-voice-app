@@ -56,6 +56,9 @@ function handlingSymptomName(text) {
   return 'unspecified';
 }
 
+const RETRO_WHEN = /さっき|先ほど|さきほど|前の(?:ピット|判断|スティント|レース)|前回|この前|先週|earlier|last (?:race|time|session)|previous race/i;
+const RETRO_EVAL = /どうだった|良かった|よかった|正しかった|正解だった|how did|was (?:it|that) (?:right|good)/i;
+
 function classify(text, options = {}) {
   const raw = String(text || '').trim();
   // Japanese STT frequently turns ピット into ビット.  Normalize only when
@@ -65,6 +68,16 @@ function classify(text, options = {}) {
     .replace(/ビット(?=\s*(?:イン|タイミング|戦略|作戦|レーン|ロード|ウインドウ|給油))/g, 'ピット')
     .replace(/次のしゅ(?=\s*(?:ピット|ボックス))/g, '次の周');
   if (!t) return null;
+
+  // WO-019: a sentence evaluating an earlier call ("さっきのピットの判断、どうだった？",
+  // "さっきピット入る判断は正しかった？") is a retrospective consultation for the
+  // conversation path (raceContext carries the pit/declaration facts), never a current pit
+  // card. A separate current question in the same turn is kept and classified alone.
+  const isRetro = s => RETRO_WHEN.test(s) && RETRO_EVAL.test(s);
+  if (isRetro(t)) {
+    const rest = t.split(/(?<=[。．.!！?？])/).filter(s => s.trim() && !isRetro(s)).join('').trim();
+    return rest && rest !== t ? classify(rest, options) : null;
+  }
 
   if (/ピット(?:レーン)?(?:ロス|タイム|時間)|IN.{0,8}OUT|制限ライン.{0,8}(?:秒|時間)|直近.{0,8}ピット.{0,8}(?:秒|時間)|pit loss|pit lane time|in.{0,8}out/i.test(t)) return { topic: TOPIC.PIT_LOSS, confidence: 0.99 };
   if (/ピット(?:作業|サービス)|給油量.*(?:さっき|直近)|停止時間|service time|pit service|fuel added/i.test(t)) return { topic: TOPIC.PIT_SERVICE, confidence: 0.98 };
@@ -313,7 +326,13 @@ function pitPhase(live) {
 }
 
 function fuelPlan(live) {
-  const fs = live && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
+  // ★WO014 round3: `typeof null === 'object'` is true in JS -- the old
+  // `live && typeof live.fuel_strategy === 'object'` guard let a literal
+  // `fuel_strategy: null` (which canonicalizeLiveData now sends for an
+  // invalid/unavailable modern raceContext, not just "field absent") through
+  // as `fs = null`, crashing every `fs.xxx` read below. Guard on
+  // `live.fuel_strategy` itself, not just `live`.
+  const fs = (live && live.fuel_strategy && typeof live.fuel_strategy === 'object') ? live.fuel_strategy : {};
   const current = finite(live && live.fuel);
   let required = finite(fs.required_fuel_l);
   const evaluated = finite(fs.evaluated_fuel_l);
@@ -335,7 +354,13 @@ function fuelPlan(live) {
 }
 
 function hasAuthoritativeFinishTarget(live) {
-  const fs = live && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
+  // ★WO014 round3: `typeof null === 'object'` is true in JS -- the old
+  // `live && typeof live.fuel_strategy === 'object'` guard let a literal
+  // `fuel_strategy: null` (which canonicalizeLiveData now sends for an
+  // invalid/unavailable modern raceContext, not just "field absent") through
+  // as `fs = null`, crashing every `fs.xxx` read below. Guard on
+  // `live.fuel_strategy` itself, not just `live`.
+  const fs = (live && live.fuel_strategy && typeof live.fuel_strategy === 'object') ? live.fuel_strategy : {};
   const sessionType = String(live && (live.session_type || live.sessionType) || '').toLowerCase();
   const manualTarget = fs.authoritative_target_kind === 'driver_stint'
     && Number.isInteger(finite(fs.authoritative_target_laps));
@@ -743,6 +768,24 @@ function buildPlanStatus(live, lang, card = {}) {
     return ja(lang)
       ? `${card.planChoice==='B'?'1周延長案':'燃料タイミング基準案'}は${when}ピット、給油設定${Math.trunc(plan.set_fuel_l)}L。${card.planChoice==='B'?'燃料予測と復帰トラフィックを再確認して切り替える。':'現在の燃料基準案。'}`
       : `${card.planChoice==='B'?'One-lap fuel extension':'Fuel timing baseline'}: pit ${when}, set ${Math.trunc(plan.set_fuel_l)}L.`;
+  }
+  // WO-019: a modern caller (canonical raceContext) states the agreed Plan, and a fuel
+  // REFERENCE (recommendation_not_execution) is never promoted into a box instruction —
+  // execution permission belongs to the Bridge BOX authority alone.
+  const modern = live && Object.prototype.hasOwnProperty.call(live, 'active_plan');
+  const active = modern && live.active_plan && typeof live.active_plan === 'object' ? live.active_plan : null;
+  if (active && finite(active.target_lap) != null) {
+    const lapNow = finite(live.lap), tgt = Math.trunc(active.target_lap);
+    const away = lapNow == null ? null : tgt - Math.trunc(lapNow);
+    const set = finite(active.set_fuel_l);
+    if (ja(lang)) return `合意中はPlan ${active.selected_plan || 'A'}。${tgt}周目にピット予定${away == null ? '' : away > 0 ? `（あと${away}周）` : away === 0 ? '（この周が予定周）' : ''}、給油設定${set == null ? '未確定' : Math.trunc(set) + 'L'}。ボックスの合図はその周に出す。`;
+    return `The agreed plan is Plan ${active.selected_plan || 'A'}: pit on lap ${tgt}${away == null ? '' : away > 0 ? ` (${away} laps away)` : away === 0 ? ' (this lap)' : ''}, set ${set == null ? 'unconfirmed' : Math.trunc(set) + 'L'}. The box call comes on that lap.`;
+  }
+  if (modern && p.action === 'box') {
+    const m = finite((live.fuel_strategy || {}).margin_l);
+    return ja(lang)
+      ? `合意中のPlanは無い。燃料の参考計算では${m == null ? '不足見込み' : `約${Math.abs(m).toFixed(1)}L不足見込み`}。給油の実行指示ではない。`
+      : `There is no agreed plan. The fuel reference shows ${m == null ? 'a shortfall' : `about ${Math.abs(m).toFixed(1)}L short`}; this is not a pit instruction.`;
   }
   if (p.action === 'box') return prefix + (ja(lang) ? `燃料不足でボックス。給油${finite(p.set_fuel_l) == null ? '未確定' : Math.trunc(p.set_fuel_l) + 'L'}。` : `Box for fuel; set ${finite(p.set_fuel_l) == null ? 'unconfirmed' : Math.trunc(p.set_fuel_l) + 'L'}.`);
   if (p.action === 'push') return prefix + (ja(lang) ? 'ステイアウトしてプッシュ。燃料余裕あり。' : 'Stay out and push; fuel margin is positive.');

@@ -46,8 +46,8 @@ const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
   'handleLunaSelfMemoryInput', 'lunaSelfMemoryProposalLine',
   'pendingConfirmationKinds', 'bareConfirmationAnswer', 'confirmationClarification',
   // ★本テスト固有：previous_fuel の入口に必要な実関数
-  'loadRaceHistory', 'saveSessionSummary', 'sanitizeSessionEvidence',
-  'validFinishPosition', 'currentMemoryUserId']
+  'ensureStrategyState', 'loadRaceHistory', 'saveSessionSummary', 'sanitizeSessionEvidence',
+  'validFinishPosition', 'currentMemoryUserId', 'currentStrategyStateAPI', 'currentCanonicalStrategyLive', 'memoryTurnTag', 'localMemoryOwnerRef', 'currentMemoryUserId', 'debriefOutcomeModule', 'stableTextHash', 'deriveUtteranceSource', 'utteranceTrace', 'utteranceTraceFor', 'loadConversationBoxes', 'ensureConversationBox', 'saveConversationBox']
   .map(extract).join('\n');
 
 let pass = 0, fail = 0;
@@ -71,6 +71,7 @@ class FakeDate extends Date {
 const sandbox = {
   console, setTimeout, clearTimeout, Date: FakeDate, JSON, Math, Number, String,
   Array, Object, Set, Map, Boolean, RegExp, Promise, Error, isNaN, parseFloat, parseInt,
+  utteranceTraceLog: [], UTTERANCE_TRACE_MAX:200,
   speakQueue: [], draining: false, isSpeaking: false, speakWatchdog: null,
   ttsAudio: null, currentSpeakPrio: 9, speakGeneration: 0, speakFetchCtrl: null,
   currentSpeakItem: null, voiceOn: true, pwVolume: 1, ttsDisabledUntil: 0,
@@ -142,7 +143,8 @@ sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 sandbox._uttSeq = 0;
 sandbox._convoBox = null;
-sandbox.CONVO_BOX_KEY = 'pw_conversation_box_v1';
+sandbox.CONVO_BOX_KEY = 'pw_conversation_boxes_v2';
+  sandbox.CONVO_BOX_SLOTS=6;
 {
   const _store = {};
   sandbox.localStorage = {
@@ -182,6 +184,16 @@ function loadModule(file) {
 loadModule('desktop/local-intent-router.js');
 loadModule('desktop/conversation-memory-box.js');
 loadModule('desktop/session-memory.js');
+sandbox.performance = {now:()=>fakeNow};
+const CF=require('./tests-canonical-lifecycle');
+const canonical=CF.fixture({race:'fixture-race',session:sandbox.lastSessionNum});
+canonical.continuity.stable_scope={race_instance_id:canonical.race_instance_id,session_num:canonical.session_num,driver_id:sandbox.lastTelemetry.cust_id||1};
+sandbox.canonicalLifecycleCache=CF.initialized(()=>fakeNow,canonical);
+sandbox.strategyProjection=require('./desktop/strategy-state-projection').create({canonical:sandbox.canonicalLifecycleCache,now:()=>fakeNow});
+sandbox.memoryRaceScope=require('./desktop/race-memory-scope').createTracker();
+sandbox.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');
+sandbox.pendingDriverPlanFollowup=null;
+sandbox.localStorage.setItem('pw_auth_user',JSON.stringify({id:'u1'}));
 vm.runInContext(productionCode, sandbox, { filename: 'renderer.html' });
 sandbox.PitwallSessionMemory = sandbox.window.PitwallSessionMemory;
 
@@ -296,7 +308,7 @@ async function finishCurrentUtterance() {
 
   const ovlId = queued && queued.displayEl && queued.displayEl._ovlId;
   const turnId = queued && queued.displayEl && queued.displayEl._turnId;
-  const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
+  const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || '[]').find(b=>b.session_key===sandbox.conversationSessionKey());
   const turnNow = boxNow && (boxNow.turns.find(t => t.turn_id === turnId) || {}).text;
   const ovlNow = sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].text;
 

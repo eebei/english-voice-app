@@ -145,8 +145,12 @@ $buildMatch = [regex]::Match($bridgeSource, 'BUILD_VERSION\s*=\s*"Build\s+(\d+)'
 # buildNumはGitHub run番号ではなく、bridgeと同じ製品Build番号を使う。
 ```
 
-`irsdk-bridge/bridge.py:54` の `BUILD_VERSION` が唯一の真実。GitHub の run 番号ではない。
+`irsdk-bridge/bridge.py` の `BUILD_VERSION`（行番号は変わるので名前で探す）が唯一の真実。GitHub の run 番号ではない。
 ここを上げ忘れると、**中身は新しいのに古い番号で出荷される**。
+WO021以降、tracked `desktop/build-info.json` も同じ番号＋未Build印（`buildTag:"dev"`）を持ち、
+`ci/runtime_coverage.py source` が番号・未Build印・workflowの導出式のずれをREDにする。
+Buildで番号を上げる時は `bridge.py` と `desktop/build-info.json` の `buildNum` を同時に上げる
+（packaged値はCIが上書き、`verify-artifact.sh` は同梱物が `dev` のままならREDにする）。
 
 ---
 

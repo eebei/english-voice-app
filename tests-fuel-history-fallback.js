@@ -275,7 +275,9 @@ function historyRecord(overrides) {
       Number, JSON,
     };
     vm.createContext(sandbox);
-    vm.runInContext(src + '\nvar __id = currentMemoryIdentity();', sandbox, { filename: 'renderer.html#identity' });
+    sandbox.localStorage={getItem:()=>null};sandbox.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');sandbox.globalThis=sandbox;
+    sandbox.memoryRaceScope=sandbox.PitwallRaceMemoryScope.createTracker();
+    vm.runInContext(grab('localMemoryOwnerRef')+'\n'+grab('currentMemoryRaceScope')+'\n'+src + '\nvar __id = currentMemoryIdentity();', sandbox, { filename: 'renderer.html#identity' });
     const id = sandbox.__id;
     check(G, 'seriesId を Bridge 権威から載せる', id.seriesId === 222, JSON.stringify(id));
     check(G, 'sessionType を載せる', id.sessionType === 'RACE', JSON.stringify(id));

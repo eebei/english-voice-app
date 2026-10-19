@@ -167,7 +167,8 @@ const LIVE = { weather: { track_temp_c: 50.6, air_temp_c: 30.7 }, session_type: 
   check('相談turnが実際に記録される（定義だけで終わらない）',
     /markConsultationTurn\(responseIntent\)/.test(renderer));
   check('記録の根拠はサーバの確定intent（推測しない）',
-    /const responseIntent = res\.headers\.get\('X-Pitwall-Intent'\)[\s\S]{0,220}markConsultationTurn\(responseIntent\)/.test(renderer));
+    renderer.includes("const responseIntent = res.headers.get('X-Pitwall-Intent')")
+    && renderer.indexOf('markConsultationTurn(responseIntent)')>renderer.indexOf("const responseIntent = res.headers.get('X-Pitwall-Intent')"));
 }
 
 // ── 7-5. 同一 pit cycle の limiter_off は一回だけ ────────────────

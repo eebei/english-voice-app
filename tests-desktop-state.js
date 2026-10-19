@@ -42,7 +42,11 @@ check('診断ログはアプリ内からDesktopへexportし、認証情報は伏
   main.includes("ipcMain.handle('diagnostics:export'")
   && main.includes("OMORAY-PITWALL-support-")
   && main.includes('function redactDiagnosticText(value)')
-  && preload.includes("exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export')")
+  // WO020: the renderer's bounded observability snapshot rides along; main re-sanitizes it
+  // into an allowlisted section of the same package (no conversation text).
+  && preload.includes("exportDiagnostics: (observability) => ipcRenderer.invoke('diagnostics:export', observability)")
+  && main.includes("require('./observability-trace.js').buildSupportSection({ renderer: observability, bridgeLogText: raw })")
+  && renderer.includes("window.pitwall?.exportDiagnostics?.(typeof observabilitySnapshot==='function'?observabilitySnapshot():null)")
   && renderer.includes('onclick="exportDiagnostics()"')
   && renderer.includes('function exportDiagnostics()'));
 

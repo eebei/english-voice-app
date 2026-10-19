@@ -32,8 +32,24 @@ function verifyPackagedRuntime(options = {}) {
   return { localScripts, packageEntries: packageEntries.length };
 }
 
+// --json FILE: machine-readable result for the CI artifact (written on failure too).
+function writeJsonResult(file, payload) {
+  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(Object.assign({ schema: 'pitwall.renderer_runtime.v1', created_at: new Date().toISOString() }, payload), null, 1));
+}
+
 if (require.main === module) {
-  const result = verifyPackagedRuntime();
+  const jsonAt = process.argv.indexOf('--json');
+  const jsonFile = jsonAt > 0 ? process.argv[jsonAt + 1] : null;
+  const asarAt = process.argv.indexOf('--asar');   // default: dist/win-unpacked/resources/app.asar
+  let result;
+  try {
+    result = verifyPackagedRuntime(asarAt > 0 ? { asarPath: path.resolve(process.argv[asarAt + 1]) } : {});
+  } catch (e) {
+    if (jsonFile) writeJsonResult(jsonFile, { ok: false, error: String(e && e.message || e) });
+    throw e;
+  }
+  if (jsonFile) writeJsonResult(jsonFile, { ok: true, local_scripts: result.localScripts, package_entries: result.packageEntries });
   process.stdout.write(`verified packaged runtime modules: ${result.localScripts.join(', ')}\n`);
 }
 

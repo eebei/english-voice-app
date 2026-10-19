@@ -9,8 +9,15 @@ on:
         type: boolean
         default: false
   push:
+    # The Desktop package bundles the Bridge EXE, so Bridge runtime modules (derived from the
+    # import graph by ci/runtime_coverage.py, which fails if one is not matched) also trigger it.
     paths:
       - 'desktop/**'
+      - 'irsdk-bridge/*.py'
+      - '!irsdk-bridge/tests_*.py'
+      - 'ci/**'
+      - 'tests-wo020-observability.js'
+      - '.github/workflows/build-desktop.yml'
 
 permissions:
   contents: write
@@ -27,11 +34,20 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build bridge EXE
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install websockets pyinstaller pygame pyaudio
+          pip install websockets pyinstaller pygame pyaudio pyyaml
+
+      - name: Verify Bridge runtime coverage (source import graph)
+        run: python ci/runtime_coverage.py source --require-workflows --out ci-artifacts
+
+      - name: Build bridge EXE
+        run: |
           pyinstaller --onefile --name OMORAY-PITWALL-Bridge --console --hidden-import pygame irsdk-bridge/bridge.py
+
+      - name: Verify Bridge runtime coverage (packaged EXE)
+        run: python ci/runtime_coverage.py packaged --exe dist/OMORAY-PITWALL-Bridge.exe --label bridge-dist --out ci-artifacts
 
       - name: Bundle bridge into desktop app
         run: |
@@ -71,7 +87,22 @@ jobs:
 
       - name: Verify packaged runtime modules
         working-directory: desktop
-        run: node scripts/verify-packaged-runtime.js
+        run: node scripts/verify-packaged-runtime.js --json ../ci-artifacts/desktop-renderer-runtime.json
+
+      - name: Verify the Bridge bundled inside the Desktop package
+        run: python ci/runtime_coverage.py packaged --exe desktop/dist/win-unpacked/resources/OMORAY-PITWALL-Bridge.exe --same-as dist/OMORAY-PITWALL-Bridge.exe --label desktop-resources --out ci-artifacts
+
+      - name: Observability recorder self-check (synthetic fixture)
+        run: node tests-wo020-observability.js --artifact ci-artifacts/observability-selfcheck.json
+
+      - name: Upload runtime coverage results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OMORAY-PITWALL-Desktop-runtime-coverage-${{ github.run_number }}
+          path: ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Rename for release
         run: |
@@ -89,6 +120,8 @@ jobs:
           $asar = Get-Item "desktop/dist/win-unpacked/resources/app.asar"
           $bridge = Get-Item "desktop/dist/win-unpacked/resources/OMORAY-PITWALL-Bridge.exe"
           $runtime = node desktop/scripts/verify-packaged-runtime.js
+          $coverageSource = Get-Content -Raw ci-artifacts/runtime-coverage-source.json | ConvertFrom-Json
+          $coverageBundled = Get-Content -Raw ci-artifacts/runtime-coverage-packaged-desktop-resources.json | ConvertFrom-Json
           $manifest = [ordered]@{
             target_sha = '${{ github.sha }}'
             product_build = [int]'${{ steps.product.outputs.BUILD }}'
@@ -97,9 +130,16 @@ jobs:
             app_asar = [ordered]@{ bytes = $asar.Length; sha256 = (Get-FileHash $asar.FullName -Algorithm SHA256).Hash }
             bridge = [ordered]@{ bytes = $bridge.Length; sha256 = (Get-FileHash $bridge.FullName -Algorithm SHA256).Hash }
             renderer_runtime_check = $runtime
+            bridge_runtime_coverage = [ordered]@{
+              source_ok = $coverageSource.ok
+              local_modules = @($coverageSource.inventory.local_modules.PSObject.Properties.Name)
+              bundled_ok = $coverageBundled.ok
+              bundled_missing = @($coverageBundled.check.missing_local_modules)
+              bundled_same_as_dist = $coverageBundled.same_as.equal
+            }
           }
           $manifestPath = "desktop/dist/BUILD-${{ steps.product.outputs.BUILD }}-GATE5-MANIFEST.json"
-          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding utf8
+          $manifest | ConvertTo-Json -Depth 6 | Set-Content -Path $manifestPath -Encoding utf8
           Get-Content $manifestPath
         shell: pwsh
 

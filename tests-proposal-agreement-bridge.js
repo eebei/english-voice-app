@@ -303,7 +303,41 @@ function makeCtx(st, proposal) {
   const ctx = {
     console, globalThis: null, JSON, Number, String, Set, Map, Date,
     PitwallSessionStrategyState: S,
-    ensureStrategyState: () => st,
+    // ★2026-10-08 WO013途中レビュー差戻し：bridgeProposalStillCurrent()は
+    //   ensureStrategyState().availableとcanonicalLifecycleCache.current()
+    //   .lifecycle.awaitingの実canonical shapeを読む（WO011以降の実配線）。
+    //   旧session-strategy-state.js形のst（.availableを持たない）を渡すと
+    //   `!st.available`でfail-closed（not_current_at_receiveでhold）になり、
+    //   このファイルの既存シナリオが一つも進まない。ensureStrategyStateは
+    //   proposePlan等への引数としては（currentStrategyStateAPI側で）無視される
+    //   ので、ここは`bridgeProposalStillCurrent`が読む最小canonical shapeに
+    //   限定して用意する——元のS.pitPlan(st)/S.pendingProposal(st,...)という
+    //   既存assertの対象stはこのctx.ensureStrategyStateの戻り値と無関係
+    //   （各テストブロックが自分のclosureのstを直接見る）。
+    ensureStrategyState: () => ({ available: true }),
+    canonicalLifecycleCache: { current: () => ({
+      lifecycle: { awaiting: [{ decision_id: proposal.decisionId, target_lap: proposal.lap,
+        selected_plan: proposal.plan }] } }) },
+    // ★2026-10-08 WO013途中レビュー差戻し：handleStrategyPlanProposal()は
+    //   WO011以降、currentStrategyStateAPI()/strategyProjection（canonical
+    //   projection）経由でproposePlan/revision/invalidatePendingProposal/
+    //   binding/validBindingを呼ぶよう本番側が移行済みだが、このファイルの
+    //   makeCtx()は旧session-strategy-state.js（S/st）のみを想定しており
+    //   どちらも未定義でcurrentStrategyStateAPI is not definedで即落ちしていた
+    //   （before既知、本WOの変更が原因ではない）。元assertは全てS.pitPlan(st)/
+    //   S.pendingProposal(st,...)という**旧S直接観測**のままなので、それらを
+    //   弱めず・削除せず、本番が呼ぶcanonical-shaped呼出しをこの同じ旧st/Sへ
+    //   そのまま転送するbridgeだけを足す（revision/binding判定の実動作は
+    //   本物のS.revision()が担うので、ここのbinding/validBindingは常にvalidな
+    //   不透明トークンでよい——このファイルの対象はPW_JUDGE遷移と提案登録配線
+    //   そのものであり、canonical binding鮮度判定自体はWO011側テストの対象）。
+    currentStrategyStateAPI: () => ({
+      proposePlan: (_ignoredSt, opts) => S.proposePlan(st, opts),
+      revision: (_ignoredSt) => S.revision(st),
+      invalidatePendingProposal: (_ignoredSt, opts) => S.invalidatePendingProposal(st, opts),
+    }),
+    strategyProjection: { binding: () => ({ __opaque_test_binding: true }), validBinding: () => true },
+    performance: { now: () => Date.now() },
     selMode: 'race', lastSessionNum: 1,
     // 配信直前のprecheckは**最新telemetry**の権威と照合する（MD#9 P1-2）。
     //   提案と同じsnapshot・同じ選択Plan・同じ数値をここへ置く＝「根拠は動いていない」状態。
@@ -333,6 +367,12 @@ function makeCtx(st, proposal) {
     isJapaneseEngineer: () => true,
     strategyPlaybookDecisionKeys: new Set(),
     SPEAK_PRIO: { P2_CRITICAL: 2 },
+    // ★WO015反例修復：handleStrategyPlanProposalはspeak()呼出し直前に
+    //   nextUtteranceId()/stableTextHash()で配送報告へ運ぶutterance_id/
+    //   text_hashを採番するようになった。speak()自体はこのファイルの対象外
+    //   （上のctx.speakで意図的にfake）なのでIDの一意性は検証対象でないが、
+    //   呼出し自体は未定義だと即落ちするため最小stubを用意する。
+    nextUtteranceId: () => 'u', stableTextHash: () => 'h',
   };
   ctx.globalThis = ctx;
   ctx.window = ctx;   // renderer.html は window.PitwallStrategyPlaybook 等を直接参照する
@@ -399,6 +439,15 @@ function makeJudgeCtx(st) {
     console, globalThis: null,
     PitwallSessionStrategyState: S,
     ensureStrategyState: () => st,
+    // ★2026-10-08 WO013途中レビュー差戻し：applyProposalJudgeTag()は
+    //   currentStrategyStateAPI().applyProposalClassification(st,...)を呼ぶ
+    //   （WO011以降の配線）。ここはensureStrategyStateが既に正しい旧st
+    //   そのものを返すので、Sそのもの（session-strategy-state.jsの実API、
+    //   applyProposalClassification(st,input)の署名が一致）をそのまま渡せる
+    //   ——別途ラップする必要はない。judgmentBindingは本テストの既存呼出
+    //   （1〜2引数）では常にundefinedなので、strategyProjection.validBinding
+    //   側の分岐は到達しない（本番側のshort-circuitで未定義のままでよい）。
+    currentStrategyStateAPI: () => S,
     diagnosticLog: () => {},
     sendStrategyDecisionResponse: () => {},
     // same_topicの配送確認先。テストが直接セットして動作を制御する
@@ -667,12 +716,17 @@ function makeJudgeCtx(st) {
     const fallbackDefIdx = html.indexOf('const _fallbackOnce = (where, detail)=>{');
     const staleIdxCloud = html.indexOf('stale_precondition_pre_play', audioAssignIdx >= 0 ? audioAssignIdx : 0);
     const staleIdxFallback = html.indexOf('stale_precondition_pre_play', fallbackDefIdx >= 0 ? fallbackDefIdx : 0);
+    // WO015：_fallbackOnce 先頭に「開始済み(spoken)なら audible_interrupted」ガードを
+    // 追加した（開始後の失敗を別エンジンで再生し直さないため）。stale_precondition_pre_play
+    // 自体の位置関係は変えていないので、境界を固定文字数ではなく次の意味的な地点
+    // （エンジン選択ロジック=emergencyFallback判定）より前、という関係で検査する。
+    const engineSelectIdx = html.indexOf('const emergencyFallback', fallbackDefIdx >= 0 ? fallbackDefIdx : 0);
     check(G, '残存P1 audio.play()直前にもprecheckを再照合する（cloud経路）',
       audioAssignIdx >= 0 && audioPlayIdx > audioAssignIdx
       && staleIdxCloud > audioAssignIdx && staleIdxCloud < audioPlayIdx);
     check(G, '残存P1 フォールバック（WebSpeech）経路でも再照合する',
       fallbackDefIdx >= 0 && staleIdxFallback > fallbackDefIdx
-      && staleIdxFallback < fallbackDefIdx + 400);
+      && engineSelectIdx > staleIdxFallback && staleIdxFallback < fallbackDefIdx + 1200);
   }
 }
 
@@ -1005,11 +1059,27 @@ function makeJudgeCtx(st) {
     check(G, 'callAPI()が送信直前にpending_proposalのbase_revisionを捕獲する',
       /const _judgeRequestRevision=_judgePendingAtRequest \? _judgePendingAtRequest\.base_revision : null;/.test(html));
     check(G, 'applyProposalJudgeTagがrequest_revisionを引数に取る',
-      /function applyProposalJudgeTag\(judgment, requestRevision\)/.test(html));
+      /function applyProposalJudgeTag\(judgment, requestRevision, deliveryItem, judgmentBinding\)/.test(html));
+    check(G, 'applyProposalJudgeTagはdoApply実行の瞬間にjudgmentBindingを再照合する（計算時点だけでなく適用時点）',
+      /if\(judgmentBinding!==undefined[\s\S]{0,160}!strategyProjection\.validBinding\(judgmentBinding\)\)\{/.test(html));
     check(G, 'applyProposalJudgeTagがrequest_revisionをapplyProposalClassificationへ渡す',
       /request_revision:\(requestRevision===undefined\?null:requestRevision\)/.test(html));
-    check(G, 'callAPI()内でapplyProposalJudgeTagへ_judgeRequestRevisionを渡す',
-      /applyProposalJudgeTag\(_judged\.judgment, _judgeRequestRevision\)/.test(html));
+    // ★2026-10-08 WO013 R5 + 途中レビュー差戻し：judgeTransport:'v1'導入により、
+    //   callAPI()はopt-in時は本文(_judged.judgment)ではなく独立の構造化
+    //   judgment frame (_structuredJudgment)を権威にする（詳細はtests-wo001-
+    //   road-atlanta-fixture.jsのF02縦断とdesktop/renderer.htmlのコメント参照）。
+    //   same_topicの配送確認先もこのreply固有の_replyDeliveryItemを明示で渡す
+    //   （globalなlastQueuedSpeakItemへの暗黙依存をcallAPI()呼出側で断つ）。
+    check(G, 'callAPI()内でapplyProposalJudgeTagへ_judgeRequestRevision/固有_replyDeliveryItem/適用時binding再照合用の_judgeProposalBindingAtRequestを渡す',
+      /applyProposalJudgeTag\(_finalJudgment, _judgeRequestRevision, _replyDeliveryItem, _judgeProposalBindingAtRequest\)/.test(html));
+    // ★2026-10-08 WO013 r2差戻し：本文tag（_judged.judgment）は除去専用に固定し、
+    //   negotiated構造化frame以外ではjudgment権威を一切作らない（legacy fallback廃止）。
+    check(G, 'callAPI()は本文tagではなく独立judgment frameだけをjudgment権威にする（legacy fallback廃止）',
+      /const _finalJudgment = _structuredJudgment;/.test(html));
+    check(G, 'callAPI()はspeak\\(\\)/speakReplyChunk\\(\\)呼出の直後に同期的に_ownReplyItemを更新する（globalの事後読みではない）',
+      /_ownReplyItem=lastQueuedSpeakItem;/.test(html));
+    check(G, 'callAPI()はこのreply固有の_ownReplyItemを配送item判定へ渡す（flushSentences後にglobalを読み直さない）',
+      /const _replyDeliveryItem = _ownReplyItem;/.test(html));
   }
 }
 

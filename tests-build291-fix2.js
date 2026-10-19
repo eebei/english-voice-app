@@ -121,7 +121,7 @@ console.log('══ ③ 「その数値は確認できない」を標準応答�
   };
   const box = { console, JSON, Number, String, Math, RegExp, Object, Array,
     fmtDuration: () => '', lastWeekendAuthority: {} };
-  vm.createContext(box);
+  require('./tests-renderer-canonical-context').install(box);
   vm.runInContext(grab('telemetryTruthFallback'), box);
   const blind = { session_num: 2 };
   // 専用分岐が既に対象を名指しできる質問は、その文言で足りる。

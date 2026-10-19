@@ -9,6 +9,7 @@ const path = require('path');
 const strategyGuard = require('./strategy-guard');
 const engineerCard = require('./engineer-card');
 const { buildSystem } = require('./prompts');
+const raceContextBuilder = require('./desktop/race-context-builder');
 const auth = require('./auth');
 
 const app = express();
@@ -613,8 +614,10 @@ function decisionOwner(req) {
 }
 app.put('/api/memory/decisions', decisionMemoryLimiter, express.json({ limit: '256kb' }), requirePitwallEntitlement, async (req, res) => {
   try {
+    // WO017：本人の世代（全削除の版）を添えたPUTだけを受ける。本人の識別はbodyから取らない。
     const result = await auth.saveStrategyDecisions({
-      ...decisionOwner(req), decisions: req.body && req.body.decisions });
+      ...decisionOwner(req), decisions: req.body && req.body.decisions,
+      ownerGeneration: req.body && req.body.ownerGeneration });
     res.json(result);
   } catch (err) {
     console.error('[decision-memory] save failed:', err.message);
@@ -632,7 +635,8 @@ app.get('/api/memory/decisions', decisionMemoryLimiter, requirePitwallEntitlemen
 app.post('/api/memory/decisions/dispute', decisionMemoryLimiter, express.json(), requirePitwallEntitlement, async (req, res) => {
   try {
     res.json(await auth.markStrategyDecisionDisputed({
-      ...decisionOwner(req), decisionId: req.body && req.body.decisionId }));
+      ...decisionOwner(req), decisionId: req.body && req.body.decisionId,
+      raceInstanceId: req.body && req.body.raceInstanceId }));
   } catch (err) {
     res.status(400).json({ ok: false, error: 'invalid_decision_dispute' });
   }
@@ -644,7 +648,9 @@ app.delete('/api/memory/decisions', decisionMemoryLimiter, express.json(), requi
     const decisionId = (body.all === true) ? null
       : (typeof body.decisionId === 'string' && body.decisionId ? body.decisionId : undefined);
     if (decisionId === undefined) return res.status(400).json({ ok: false, error: 'decision_id_required' });
-    res.json(await auth.deleteStrategyDecision({ ...decisionOwner(req), decisionId }));
+    // WO017：1件削除はrace付きで対象行を特定する（同じdecision_idの別raceを巻き添えにしない）。
+    res.json(await auth.deleteStrategyDecision({ ...decisionOwner(req), decisionId,
+      raceInstanceId: typeof body.raceInstanceId === 'string' ? body.raceInstanceId : null }));
   } catch (err) {
     res.status(400).json({ ok: false, error: 'invalid_decision_delete' });
   }
@@ -882,6 +888,130 @@ function buildPitCalibrationReply(forecast, lang) {
 }
 
 // These answers are facts from the current live payload, never LLM inference.
+// WO014 round2: deterministic guards (direct pit reply/race plan reply/
+// engineer card route/fuel authority reply) used to consume req.body.liveData
+// raw, ahead of (and independent from) the raceContext schema-validation that
+// protects buildSystem()/prompts.js. A modern caller's canonical-owned fields
+// (fuel/lap/on_pit_road/on_track/finish) could therefore reach a deterministic
+// reply completely unvalidated, even while the SAME request's raceContext was
+// rejected as malformed/stale for the LLM path. canonicalizeLiveData() applies
+// the identical validated raceContext to every guard before any guard runs.
+// Legacy callers (no `raceContext` key sent at all, not merely a falsy one)
+// keep the original raw-liveData compatibility path untouched.
+function canonicalizeLiveData(liveData, raceContext, isModernCaller) {
+  const live = liveData && typeof liveData === 'object' ? liveData : {};
+  if (!isModernCaller) return live;
+  const facts = raceContext && raceContext.current_facts && raceContext.current_facts.available
+    ? raceContext.current_facts : null;
+  // WO014 round3: fuel_strategy is a REFERENCE calculation, not a current_
+  // facts field, but buildFuelAuthorityReply() still read raw
+  // liveData.fuel_strategy unconditionally -- the exact bypass the parent
+  // reproduced over real HTTP (modern raceContext:null + raw
+  // fuel_strategy.avg=13.37 -> 200 "average 13.37L/lap"). Normalize it from
+  // the SAME calculation_references.fuel_strategy every other current-race
+  // caller already reads (prompts.js rcFuelRef), so an invalid/unavailable
+  // raceContext fails this guard closed exactly like fuel/lap already do.
+  const fuelRef = raceContext && raceContext.calculation_references && raceContext.calculation_references.fuel_strategy;
+  // WO014 round4 residual ("reference role/age"): fuelRef.source_valid only
+  // proves the calculation_source's own frame/scope refs are internally
+  // consistent -- it does NOT bound how OLD that calculation is. A
+  // fuel-per-lap reference computed many minutes ago (telemetry stall,
+  // recompute stuck) would still read source_valid:true and flow straight
+  // through to engineerCard/buildFuelAuthorityReply as if it were current.
+  // Age/role already travel on fuelRef (race-context-builder.js
+  // calculationReference()) for the LLM path (prompts.js rcFuelRef/
+  // fsAgeNote already labels it "a reference, not current/execution
+  // authority") but canonicalizeLiveData silently dropped them here,
+  // letting a stale reference reach a deterministic guard's output with NO
+  // visible age at all. A bounded age bites only a genuinely stuck
+  // calculation; a normal lap-by-lap recompute never approaches it.
+  const FUEL_REF_MAX_AGE_S = 300;
+  const fuelRefFresh = !!(fuelRef && fuelRef.source_valid
+    && typeof fuelRef.age_s === 'number' && fuelRef.age_s >= 0 && fuelRef.age_s <= FUEL_REF_MAX_AGE_S);
+  // WO014 round4 (audit-corrected): last_pit_service (lane_total_s/stall_s/
+  // fuel_added_l) is NOT position/GAP-style aux telemetry -- a frame-arrival
+  // ref match does not prove the SAMPLE itself belongs to the current race/
+  // session (a prior-session leftover can still carry a current-looking
+  // frame tag). Pit service follows the SAME "canonical is the sole
+  // authority" rule as fuel/lap/pit: only surface a value already bound to
+  // the canonical immutable pit_ledger event's own identity (raceContext.
+  // last_pit_event.service, round4-added in strategy-state-projection.js,
+  // cross-checked there against that event's own race_instance_id/
+  // session_num). No event -> no service -> unknown, never a raw read.
+  const lastPitService = raceContext && raceContext.last_pit_event ? raceContext.last_pit_event.service : null;
+  return {
+    ...live,
+    fuel: facts ? facts.fuel_level_l : null,
+    lap: facts ? facts.current_lap : null,
+    on_pit_road: facts ? facts.on_pit_road : null,
+    on_track: facts ? facts.on_track : null,
+    finish_crossings_authority: (facts && facts.finish && facts.finish.available) ? facts.finish.remaining_sf_crossings : null,
+    fuel_strategy: fuelRefFresh ? fuelRef.value : null,
+    // WO014 round4 residual ("reference role/age"), audit-corrected: even a
+    // FRESH (age 0) reference is still a REFERENCE, not canonical current
+    // authority -- source_valid/age-bound alone do not license promoting it
+    // into a current required-fuel/execution instruction. This marker is
+    // the signal buildFuelAuthorityReply/the FUEL_PLAN dispatch (below) use
+    // to switch to a short, explicitly-labeled reference-only reply instead
+    // of engineerCard's normal "box/set" framing. Legacy callers never get
+    // this field (canonicalizeLiveData returns `live` untouched above),
+    // so their fixture-compatible behaviour is unchanged.
+    fuel_strategy_age_s: fuelRefFresh ? fuelRef.age_s : null,
+    last_pit_service: lastPitService || null,
+    // WO-019: the canonical active Plan (validated raceContext) is the only plan a
+    // deterministic plan-status reply may describe; a fuel REFERENCE never stands in for it.
+    active_plan: raceContext && raceContext.active_plan && raceContext.active_plan.phase === 'active'
+      ? raceContext.active_plan : null,
+  };
+}
+
+// WO014 round4 residual ("reference role/age"), audit-corrected: a modern
+// caller's fuel_strategy is ALWAYS a reference calculation (never a
+// canonical active_plan's own agreed add_fuel_l/set_fuel_l -- that travels
+// through a separate live.strategy_plan/"owned" path buildPitDecision
+// already respects). engineerCard.build(FUEL_PLAN)/buildFuelPlan's "box
+// this lap, set XL" framing reads as a CURRENT execution instruction, which
+// is exactly what this reference must never become. This is a SEPARATE,
+// deliberately short consumer: current fuel + reference avg/required/
+// margin + explicit age + an explicit "not current/execution authority"
+// label, never a box/push call or a "set XL" directive. Only reached when
+// canonicalizeLiveData's fuel_strategy_age_s marker is present (modern
+// caller, fresh reference) -- legacy callers and canonical-Plan-owned
+// replies elsewhere are untouched.
+function buildFuelReferenceReply(liveData, lang) {
+  const live = liveData && typeof liveData === 'object' ? liveData : {};
+  const fs = live.fuel_strategy && typeof live.fuel_strategy === 'object' ? live.fuel_strategy : {};
+  const ageS = live.fuel_strategy_age_s;
+  const current = numOrNaN(live.fuel);
+  const avg = Number(fs.avg_fuel_per_lap);
+  const required = Number(fs.required_fuel_l);
+  const margin = Number(fs.margin_l);
+  if (lang === 'ja') {
+    const parts = [];
+    if (Number.isFinite(current)) parts.push(`現在${current.toFixed(1)}L`);
+    if (Number.isFinite(avg)) parts.push(`平均${avg.toFixed(2)}L/周`);
+    if (Number.isFinite(required)) {
+      const marginTxt = Number.isFinite(margin)
+        ? (margin >= 0 ? `（${margin.toFixed(1)}L余裕見込み）` : `（約${Math.abs(margin).toFixed(1)}L不足見込み）`) : '';
+      parts.push(`ゴールまで参考必要量約${required.toFixed(1)}L${marginTxt}`);
+    }
+    const ageTxt = typeof ageS === 'number' ? `（計算根拠${ageS.toFixed(1)}秒前）` : '';
+    return (parts.length ? parts.join('、') + '。' : '燃料の参考計算がまだ整っていない。')
+      + `${ageTxt}参考計算であり、現在の給油量・実行指示ではない。`;
+  }
+  const parts = [];
+  if (Number.isFinite(current)) parts.push(`Current ${current.toFixed(1)}L`);
+  if (Number.isFinite(avg)) parts.push(`avg ${avg.toFixed(2)}L/lap`);
+  if (Number.isFinite(required)) {
+    const marginTxt = Number.isFinite(margin)
+      ? (margin >= 0 ? ` (~${margin.toFixed(1)}L margin)` : ` (~${Math.abs(margin).toFixed(1)}L short)`) : '';
+    parts.push(`reference requirement to the finish ~${required.toFixed(1)}L${marginTxt}`);
+  }
+  const ageTxt = typeof ageS === 'number' ? ` (calc basis ${ageS.toFixed(1)}s old)` : '';
+  return (parts.length ? parts.join(', ') + '.' : 'The fuel reference calculation is not ready yet.')
+    + `${ageTxt} This is a reference calculation, not a current fuel amount or execution instruction.`;
+}
+
 function buildDirectPitReply(command, liveData, lang) {
   const live = liveData && typeof liveData === 'object' ? liveData : {};
   if (command.topic === strategyGuard.TOPIC.PIT_THIS_LAP) {
@@ -927,15 +1057,26 @@ function isAccountChangeRequest(text) {
 
 // Fuel arithmetic and account entitlement are server-owned facts.  Do not
 // let conversational text improvise either one during a race.
+// WO014 round2: Number(null) is 0 (finite), not NaN -- a canonicalized
+// unavailable fuel reading (explicitly null, never raw-fallback) must never
+// be coerced into a fake "0.0L" display indistinguishable from a real
+// reading. null/undefined -> NaN (suppressed), everything else -> Number(v).
+const numOrNaN = v => (v === null || v === undefined) ? NaN : Number(v);
+
 function buildFuelAuthorityReply(liveData, lang) {
   const live = liveData && typeof liveData === 'object' ? liveData : {};
+  // WO014 round4 residual ("reference role/age"): a modern caller's fresh
+  // reference must get the short, explicitly-labeled reference-only reply
+  // (above), never engineerCard's "box this lap, set XL" current-execution
+  // framing. Legacy callers (no fuel_strategy_age_s marker) are untouched.
+  if (typeof live.fuel_strategy_age_s === 'number') return buildFuelReferenceReply(live, lang);
   const cardReply = engineerCard.build(
     { topic: engineerCard.TOPIC.FUEL_PLAN }, live, lang);
   if (cardReply) return cardReply;
   const fs = live.fuel_strategy && typeof live.fuel_strategy === 'object'
     ? live.fuel_strategy : {};
   if (!engineerCard.hasAuthoritativeFinishTarget(live)) {
-    const current = Number(live.fuel);
+    const current = numOrNaN(live.fuel);
     const average = Number(fs.avg_fuel_per_lap);
     return lang === 'ja'
       ? `${Number.isFinite(current) ? `現在${current.toFixed(1)}L。` : ''}${Number.isFinite(average) ? `平均${average.toFixed(2)}L/周。` : ''}完走目標が確定していないため、必要燃料・給油量・ピット周は出さない。`
@@ -945,7 +1086,7 @@ function buildFuelAuthorityReply(liveData, lang) {
   const margin = Number(fs.margin_l);
   const exact = Number(fs.estimated_crossings_to_finish);
   const provisional = Number(fs.provisional_laps_to_time_expiry);
-  const current = Number(live.fuel);
+  const current = numOrNaN(live.fuel);
   const add = Number(fs.add_fuel_l);
   const setFuel = Number.isFinite(add) && add > 0
     ? (lang === 'ja' ? `、${add.toFixed(1)}L追加。${Math.ceil(add)}Lセット` : `, add ${add.toFixed(1)}L; set ${Math.ceil(add)}L`)
@@ -1079,6 +1220,22 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     //   構造化された理由から正直な返答をコード側で組む。
     //   ※分類は狭い（ピットに入る意図×順位を問う の両方が揃った時だけ）。
     //     通常会話を禁止語で置換するようなことはしない。
+    // ── WO014 round2: validate raceContext BEFORE any guard consumes liveData ──
+    // Server has no canonical cache of its own; it cannot re-derive truth, only
+    // reject a malformed/wrong-version payload. Modern/legacy is decided by
+    // whether the caller sent the `raceContext` KEY at all (property
+    // existence), never by the value's truthiness -- a modern caller that
+    // explicitly sent `raceContext: null` (context currently unavailable)
+    // must still be treated as modern (fail closed, no raw fallback), not
+    // silently reclassified as a legacy caller.
+    const _raceContextModern = Object.prototype.hasOwnProperty.call(req.body, 'raceContext');
+    const _rawRaceContext = req.body.raceContext;
+    const _raceContext = (_rawRaceContext && raceContextBuilder.validate(_rawRaceContext, Date.now())) ? _rawRaceContext : null;
+    if (_raceContextModern && _rawRaceContext && !_raceContext) {
+      console.log('[race_context] rejected: schema_validation_failed');
+    }
+    const _canonicalLiveData = canonicalizeLiveData(req.body.liveData, _raceContext, _raceContextModern);
+
     let _strategyQ = null;
     let _directPitCommand = null;
     try {
@@ -1099,7 +1256,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         return sendGuardReply(req, res, buildAccountChangeReply(_lang), 100);
       }
       if (mode === 'race' && _directPitCommand) {
-        const _directReply = buildDirectPitReply(_directPitCommand, req.body.liveData, _lang);
+        const _directReply = buildDirectPitReply(_directPitCommand, _canonicalLiveData, _lang);
         if (_directReply) {
           console.log(`[INTENT_ROUTE] intent=${_directPitCommand.topic} confidence=1 handler=fired`);
           return sendGuardReply(req, res, _directReply, 100, 'deterministic', _directPitCommand.topic);
@@ -1107,15 +1264,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       }
       if (mode === 'race' && isRaceRuleQuestion(_lastText)) {
         console.log('[INTENT_ROUTE] intent=race_distance confidence=1 handler=fired');
-        return sendGuardReply(req, res, buildRacePlanReply(req.body.liveData, _lang), 110,
+        return sendGuardReply(req, res, buildRacePlanReply(_canonicalLiveData, _lang), 110,
           'deterministic', engineerCard.TOPIC.RACE_DISTANCE);
       }
       const _recentUserText = _msgs.slice(0, -1).reverse()
         .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
       const _engineerLive = {
-        ...(req.body.liveData && typeof req.body.liveData === 'object' ? req.body.liveData : {}),
-        session_type: req.body.sessionType
-          || (req.body.liveData && req.body.liveData.session_type),
+        ..._canonicalLiveData,
+        session_type: req.body.sessionType || _canonicalLiveData.session_type,
       };
       // ★八木さん実走ログ 7-1 / 7-2（2026-08-11・Barcelona Practice）：
       //   セットアップ相談は本来 Practice で起きる。race mode でしかカードを引かないと、
@@ -1139,6 +1295,20 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       if (_engineerRoute && !(_engineerRoute.card.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
         const _intent = _engineerRoute.card.topic;
         console.log(`[INTENT_ROUTE] intent=${_intent} confidence=${_engineerRoute.card.confidence ?? 0} handler=${_engineerRoute.status}`);
+        // WO014 round4 residual ("reference role/age"), audit-corrected:
+        // engineerCard.route() classifies this message as FUEL_PLAN and its
+        // buildFuelPlan() reply ALWAYS answers from the fuel_strategy
+        // reference calc (never from a canonical active_plan's own agreed
+        // add_fuel_l/set_fuel_l -- that travels through the separate
+        // live.strategy_plan "owned" path buildPitDecision respects), so its
+        // "box this lap, set XL" framing would read as a current execution
+        // instruction for what is still only a reference. A modern caller's
+        // fresh reference (fuel_strategy_age_s marker) gets the short,
+        // explicitly-labeled reference-only reply instead; legacy callers
+        // and every other topic are unaffected.
+        if (_intent === engineerCard.TOPIC.FUEL_PLAN && typeof _engineerLive.fuel_strategy_age_s === 'number') {
+          return sendGuardReply(req, res, buildFuelReferenceReply(_engineerLive, _lang), 180, 'deterministic', _intent);
+        }
         return sendGuardReply(req, res, _engineerRoute.reply, 180, 'deterministic', _intent);
       }
       if (mode === 'race' && isFuelQuestion(_lastText)) {
@@ -1151,7 +1321,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // 例外fallbackでもRace以外にピット無線を漏らさない。
     if (mode === 'race' && _directPitCommand) {
       const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
-      const _reply = buildDirectPitReply(_directPitCommand, req.body.liveData, _lang);
+      const _reply = buildDirectPitReply(_directPitCommand, _canonicalLiveData, _lang);
       if (_reply) {
         console.log(`[strategy_guard] direct=${_directPitCommand.topic} -> authoritative reply`);
         return sendGuardReply(req, res, _reply, 100);
@@ -1164,7 +1334,15 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       try {
         // sessionTypeはトップレベルで送られる（liveData配下ではない・P1-5修正）
         const _sessionType = req.body.sessionType;
-        const _forecast = req.body.liveData && req.body.liveData.pit_exit_forecast;
+        // WO014 round3: route through the SAME normalized _canonicalLiveData
+        // object every other guard uses (consistency), not a second raw read
+        // of req.body.liveData. pit_exit_forecast is deliberately NOT gated
+        // on raceContext availability -- it is a DIFFERENT authority (the
+        // Bridge rejoin/pit-cycle calculator, with its own
+        // available/unavailable_reason contract enforced right below by
+        // strategyGuard.evaluateAvailability), not a canonical-lifecycle
+        // field raceContext carries or could normalize it against.
+        const _forecast = _canonicalLiveData.pit_exit_forecast;
         const _avail = strategyGuard.evaluateAvailability(_strategyQ.topic, {
           hasRejoinCalculator: !!(_forecast && _forecast.available),
           isRaceSession: _sessionType ? /race/i.test(String(_sessionType)) : undefined,
@@ -1224,7 +1402,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 
     if (character && (req.body.useServerPrompt || !system)) {
       console.log(`[buildSystem] char=${character}, mode=${req.body.mode}, liveData=${req.body.liveData ? JSON.stringify(req.body.liveData).substring(0,100) : 'null'}`);
-      const built = buildSystem(req.body);
+      // _raceContext/_raceContextModern were already validated at the top of
+      // this handler (ahead of every deterministic guard) -- reuse the same
+      // values here so buildSystem() and the guards never disagree about
+      // whether this request's raceContext was accepted.
+      const built = buildSystem({ ...req.body, raceContext: _raceContext, raceContextModern: _raceContextModern });
       if (built) {
         system = [
           { type: 'text', text: built.prefix, cache_control: { type: 'ephemeral' } }
@@ -1282,12 +1464,51 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('X-Accel-Buffering', 'no');  // プロキシのバッファリング無効化（即時flush）
+      // ★2026-10-08 WO013 R5/F02: versioned opt-in structured transport.
+      //   emitCompleteSentences() below drops any unterminated final tail
+      //   on purpose (a genuinely truncated sentence must not leak a
+      //   half-word to TTS) — but that same heuristic was also silently
+      //   eating the <<PW_JUDGE ...>> machine line, which never ends in
+      //   sentence punctuation. Rather than special-case that one marker
+      //   inside emitCompleteSentences (which legacy plain clients still
+      //   rely on byte-for-byte), callers that actually have a pending
+      //   proposal awaiting judgment opt in with judgeTransport:'v1' and a
+      //   minimal decision_id, and get a newline-delimited JSON stream
+      //   (text / judgment / end) instead. Legacy callers are unaffected:
+      //   no opt-in field means no pendingJudgment, means this stays false
+      //   and the stream below is byte-identical to before.
+      // ★2026-10-08 WO013途中レビュー差戻し：decision_idだけでは請求元request/
+      //   generationを縛れない。request_id（callAPI()呼出ごとの一意トークン）も
+      //   必須にし、judgment frameへそのまま返すことでRendererが「このfetchが
+      //   聞いたのと同じrequestの判定か」を照合できるようにする。欠落/不正形式は
+      //   不完全なopt-inとして丸ごとlegacy平文経路へ落とす（fail-closed）。
+      const _judgeTransportV1 = req.body.judgeTransport === 'v1'
+        && req.body.pendingJudgment && typeof req.body.pendingJudgment === 'object'
+        && typeof req.body.pendingJudgment.decision_id === 'string'
+        && req.body.pendingJudgment.decision_id.length > 0
+        && req.body.pendingJudgment.decision_id.length <= 128
+        && typeof req.body.pendingJudgment.request_id === 'string'
+        && req.body.pendingJudgment.request_id.length > 0
+        && req.body.pendingJudgment.request_id.length <= 128;
+      const _expectedJudgeDecisionId = _judgeTransportV1 ? req.body.pendingJudgment.decision_id : null;
+      const _expectedJudgeRequestId = _judgeTransportV1 ? req.body.pendingJudgment.request_id : null;
+      if (_judgeTransportV1) res.setHeader('X-Pitwall-Judge-Transport', 'v1');
       let streamUsage = null;
       let pendingText = '';
       let emittedText = '';
       let outputClosed = false;
+      // ★WO016：Renderer側のturn取消（fetch abort）でclient接続が閉じたら、provider生成も
+      //   SDKのsignal契約で取り消す。'close'は正常終了後にも来るため、未完了時だけを切断と扱う。
+      //   切断後はwrite・judgment/end frameを出さず、stream ERRORとも区別して記録する。
+      const providerAbort = new AbortController();
+      let clientClosed = false;
+      res.on('close', () => {
+        if (res.writableFinished) return;
+        clientClosed = true;
+        try { providerAbort.abort(); } catch (e) {}
+      });
       const emitCompleteSentences = (final = false) => {
-        if (outputClosed) return;
+        if (outputClosed || clientClosed) return;
         while (pendingText) {
           const boundary = pendingText.search(/[。．！？!?\n]/);
           if (boundary < 0 && !final) return;
@@ -1325,6 +1546,132 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           }
         }
       };
+      // ── judgeTransport:'v1' structured emission (independent re-extraction) ──
+      // Same-generation text and the trailing judge tag are separated here,
+      // server-side, before either ever reaches emitCompleteSentences()'s
+      // sentence/punctuation gate. The tag is strictly re-validated against
+      // JT_TAG_RE and the exact decision_id the client asked about — an
+      // unknown/malformed/mid-stream-truncated tag, or one that does not
+      // match, is dropped and NEVER forwarded as a judgment frame.
+      let jtPending = '';            // raw deltas not yet classified as safe-text vs tag-region
+      let jtSentencePending = '';    // confirmed-safe text awaiting sentence-boundary emission
+      let jtEmitted = '';
+      let jtTextClosed = false;   // text char-budget exhausted — gates TEXT frames only
+      let jtJudgment = null;
+      let jtStopReason = null;
+      let jtSawMessageStop = false;
+      const JT_TAG_START = '<<PW_JUDGE';
+      const JT_TAG_RE = /^<<PW_JUDGE\s+decision_id="([^"]*)"\s+classification="(confirm|decline|same_topic|unrelated)"\s*>>$/;
+      const jtWriteFrame = (obj) => {
+        if (clientClosed) return;
+        try {
+          res.write(JSON.stringify(obj) + '\n');
+          if (typeof res.flush === 'function') res.flush();
+        } catch (e) { /* client disconnected mid-write; loop/res.end() below handles it */ }
+      };
+      // ★2026-10-08 WO013 r2差戻し：生deltaをそのまま文字数で切ると、同じ最終
+      //   本文でもchunk境界次第で尻切れ位置が変わる（emitCompleteSentences が
+      //   既に守っている「完成文単位」をjudgeTransport側だけ破っていた）。
+      //   ここは emitCompleteSentences と**同じアルゴリズム**（文境界優先、
+      //   未完tailはemittedText存在時に丸ごと破棄）をjtSentencePending側で
+      //   再現し、single-chunk/multi-chunk(1文字ずつ)で同じ最終本文になることを
+      //   保証する。maxChars予算はこの関数だけが見る——tag領域の収集・検証
+      //   （emitJudgeTransport/jtValidateAndCapture）とは独立のまま。
+      const jtEmitSentences = (sentenceFinal) => {
+        if (jtTextClosed) { jtSentencePending = ''; return; }
+        while (jtSentencePending) {
+          const boundary = jtSentencePending.search(/[。．！？!?\n]/);
+          if (boundary < 0 && !sentenceFinal) return;
+          if (boundary < 0 && sentenceFinal && jtEmitted) {
+            jtSentencePending = ''; jtTextClosed = true; return;
+          }
+          const take = boundary >= 0 ? boundary + 1 : jtSentencePending.length;
+          const sentence = jtSentencePending.slice(0, take).trim();
+          jtSentencePending = jtSentencePending.slice(take);
+          if (!sentence) continue;
+          const remaining = safeMaxChars - unicodeLength(jtEmitted);
+          if (remaining <= 0) { jtTextClosed = true; return; }
+          if (jtEmitted && unicodeLength(sentence) > remaining) { jtTextClosed = true; return; }
+          const limited = limitReplyText(sentence, remaining);
+          if (limited) { jtWriteFrame({ text: limited }); jtEmitted += limited; }
+          if (unicodeLength(sentence) > remaining || unicodeLength(jtEmitted) >= safeMaxChars) {
+            jtTextClosed = true; return;
+          }
+        }
+      };
+      // ★2026-10-08 WO013 r3差戻し（親independent repro）：「引用形式これ:
+      //   <<PW_JUDGE ...>>」のように、タグ自体は完全一致していても手前に
+      //   同じ行で地の文（引用の紹介句等）が続いていると、それはPromptが
+      //   求める「これだけを最後の行に、他の文字を混ぜずに書く」という
+      //   契約を満たしていない——タグが**自分の行の先頭**（直前が改行、
+      //   または生成の最初そのもの）から始まることも、タグ自体の
+      //   ^...$完全一致と同じくらい必須の条件にする。jtLastEmittedChar は
+      //   安全textとして確定消費した最後の1文字をchunk境界をまたいで
+      //   保持し、1文字ずつの配信でも同じ判定になるようにする。
+      let jtLastEmittedChar = '';
+      const jtValidateAndCapture = (tagRegionText, precedingChar) => {
+        const m = JT_TAG_RE.exec(tagRegionText);
+        if (!m) {
+          console.log('[judge_transport] malformed/trailing/multiple content in judge-tag region, dropped: '
+            + JSON.stringify(tagRegionText));
+          return;
+        }
+        if (precedingChar !== '' && precedingChar !== '\n') {
+          console.log('[judge_transport] tag does not start its own line (preceded by '
+            + JSON.stringify(precedingChar) + ' instead of newline/start-of-generation), dropped: '
+            + JSON.stringify(tagRegionText));
+          return;
+        }
+        const candidate = { decision_id: m[1], classification: m[2] };
+        if (candidate.decision_id !== _expectedJudgeDecisionId) {
+          console.log('[judge_transport] tag decision_id mismatch, ignoring: got=' + candidate.decision_id
+            + ' expected=' + _expectedJudgeDecisionId);
+          return;
+        }
+        jtJudgment = { decision_id: candidate.decision_id, classification: candidate.classification,
+          request_id: _expectedJudgeRequestId };
+      };
+      const emitJudgeTransport = (final = false) => {
+        const idx = jtPending.indexOf(JT_TAG_START);
+        if (idx < 0) {
+          let emitUpTo = jtPending.length;
+          if (!final) {
+            // Hold back a suffix that could be an in-progress prefix of the
+            // marker (mirrors the renderer's own stripProposalJudgeTag
+            // prefix guard) so a marker split across two stream chunks
+            // never leaks a fragment into a text frame.
+            const maxCheck = Math.min(JT_TAG_START.length - 1, jtPending.length);
+            for (let k = maxCheck; k >= 1; k--) {
+              if (jtPending.slice(jtPending.length - k) === JT_TAG_START.slice(0, k)) {
+                emitUpTo = jtPending.length - k;
+                break;
+              }
+            }
+          }
+          if (emitUpTo > 0) jtLastEmittedChar = jtPending[emitUpTo - 1];
+          jtSentencePending += jtPending.slice(0, emitUpTo);
+          jtPending = jtPending.slice(emitUpTo);
+          jtEmitSentences(final);
+          return;
+        }
+        // Marker start found: everything before it is definitively complete
+        // text (nothing more will ever arrive for the text channel from this
+        // point on), so finalize sentence emission for it right away —
+        // independent of whether the overall generation (final) has ended.
+        // Capture the character immediately preceding the marker (from this
+        // same buffer if present, otherwise the persisted cross-chunk
+        // tracker) BEFORE slicing it away, for the own-line check above.
+        const precedingChar = idx > 0 ? jtPending[idx - 1] : jtLastEmittedChar;
+        if (idx > 0) {
+          jtLastEmittedChar = jtPending[idx - 1];
+          jtSentencePending += jtPending.slice(0, idx);
+          jtPending = jtPending.slice(idx);
+        }
+        jtEmitSentences(true);
+        if (!final) return;  // only ever judge the tag region once it is complete, as a whole
+        jtValidateAndCapture(jtPending, precedingChar);
+        jtPending = '';
+      };
       // ★2026-09-05 Codex 第6回P1：クライアントが内部管理項目を混ぜても
       //   Anthropic の messages schema へ渡さない。role/content だけへ絞る。
       //   （クライアント側でも絞っているが、古い版・別実装からの流入を防ぐ）
@@ -1333,23 +1680,68 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       try {
         const stream = await client.messages.create({
           model, max_tokens: safeMaxTokens, system, messages: safeMessages, stream: true,
-        });
+        }, { signal: providerAbort.signal });
         for await (const event of stream) {
+          if (clientClosed) break;
           if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta') {
-            if (!outputClosed) {
+            if (_judgeTransportV1) {
+              jtPending += event.delta.text;
+              emitJudgeTransport(false);
+            } else if (!outputClosed) {
               pendingText += event.delta.text;
               emitCompleteSentences(false);
             }
           } else if (event.type === 'message_start') {
             streamUsage = { ...event.message.usage };
-          } else if (event.type === 'message_delta' && event.usage) {
-            streamUsage = { ...streamUsage, output_tokens: event.usage.output_tokens };
+          } else if (event.type === 'message_delta') {
+            if (event.usage) streamUsage = { ...streamUsage, output_tokens: event.usage.output_tokens };
+            // ★2026-10-08 WO013途中レビュー差戻しP1：stop_reasonを捕まえる。
+            //   'max_tokens'（打ち切り）は正常completionではない——合意を作らない。
+            if (_judgeTransportV1 && event.delta && typeof event.delta.stop_reason === 'string') {
+              jtStopReason = event.delta.stop_reason;
+            }
+          } else if (event.type === 'message_stop') {
+            if (_judgeTransportV1) jtSawMessageStop = true;
           }
         }
-        emitCompleteSentences(true);
+        if (clientClosed) {
+          // 既存のusage記録は維持（input tokensは実測。途中取消のoutput tokensは過少の可能性＝未測定）。
+          console.log('[/api/chat stream ABORTED] reason=client_closed');
+          logUsage(streamUsage);
+          return;
+        }
+        if (_judgeTransportV1) {
+          emitJudgeTransport(true);
+          // Agreement requires a provable NORMAL completion: an explicit
+          // SDK message_stop event AND a stop_reason that means the model
+          // actually finished on its own (end_turn/stop_sequence) — not a
+          // thrown error, not a dropped connection, and not max_tokens
+          // truncation (which could cut the tag off mid-write and still
+          // "parse" as something if we were not strict about this).
+          // Abnormal completion withholds BOTH the judgment and the end
+          // frame itself, so the renderer's own completion gate (which
+          // requires an explicit end frame before trusting any judgment)
+          // fails closed even if it were ever relaxed independently.
+          const _judgeNormalCompletion = jtSawMessageStop
+            && (jtStopReason === 'end_turn' || jtStopReason === 'stop_sequence');
+          if (_judgeNormalCompletion) {
+            if (jtJudgment) jtWriteFrame({ judgment: jtJudgment });
+            jtWriteFrame({ end: true });
+          } else {
+            console.log('[judge_transport] abnormal completion (stop_reason=' + jtStopReason
+              + ' sawMessageStop=' + jtSawMessageStop + '); withholding judgment/end frame');
+          }
+        } else {
+          emitCompleteSentences(true);
+        }
         logUsage(streamUsage);
         res.end();
       } catch (streamErr) {
+        if (clientClosed) {
+          console.log('[/api/chat stream ABORTED] reason=client_closed error=' + (streamErr && streamErr.name));
+          logUsage(streamUsage);
+          return;
+        }
         console.error('[/api/chat stream ERROR]', streamErr.message);
         // 既にヘッダ送出済みなら本文を終えるだけ（クライアントは受信済み分で処理）
         try { res.end(); } catch (e) {}

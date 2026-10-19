@@ -18,6 +18,7 @@
 //   3. 途中チャンクでは入らない（空吹き出し／部分文が保存されない）
 
 const fs = require('fs');
+const WO017Scope = require('./tests-wo017-memory-scope-harness');
 const path = require('path');
 const vm = require('vm');
 const box = require('./desktop/conversation-memory-box.js');
@@ -127,6 +128,55 @@ function makeContext(chunks, options = {}) {
     // 提案state（session-strategy-state.js）はこのテストの関心事ではない。
     // stripProposalJudgeTag は純粋関数なので実体を使うが、適用側はno-opにする。
     applyProposalJudgeTag: () => {},
+    // ★2026-10-08 WO013途中レビュー差戻し：callAPI()はWO012以降、送信直前に
+    //   無条件で`currentStrategyStateAPI()`を呼ぶ（judgeTransport機能の有無に
+    //   関わらず、提案があるかどうかを確認するため）。このテストは提案state
+    //   そのものを関心事としないので、ensureStrategyStateのtypeof guardと
+    //   同じ「無ければ無いと返す」契約のまま——nullを返せば
+    //   `_judgeS&&_judgeSt&&...`が自然に偽になりjudgeTransport機能全体が
+    //   既存どおりoptin0のまま動く（applyProposalJudgeTagのno-op化は不変）。
+    currentStrategyStateAPI: () => null,
+    // 同じ理由でcurrentPlanReplyDependsOnも無関心（plan/fuelキーワードが
+    // 無い通常会話という正直な代表値としてfalseを返す——隠蔽のためではない）。
+    currentPlanReplyDependsOn: () => false,
+    // ★WO014 round3修復：callAPI()は現在どの分岐でも
+    // strategyProjection.binding('facts')を無条件に呼ぶ（raceContext reply
+    // fenceの一般化）。このテストは実canonical cacheを一切構築しないので、
+    // binding()がnullを返す（＝canonical unavailable）のが正直な表現であり、
+    // 「fenceがかかっていないふり」をするための偽装ではない。
+    strategyProjection: { binding: () => null, validBinding: () => true, bindAll: () => null },
+    // ★WO015：_replyBindingFor()は本文が燃料/周回の具体的数値を主張する時
+    //   だけ既存strategyNumericFactBinding()を追加で呼ぶ（この関数自体は
+    //   renderer.html本体にあるが、このテストはcallAPIだけを抽出するため
+    //   未定義になる）。このテストの関心事（stream/memory）は数値domain
+    //   bindingと無関係なので、上のcurrentPlanReplyDependsOnと同じ「無関心」
+    //   契約でnullを返す（隠蔽ではない——binding()自体も常にnullのこのテストでは
+    //   そもそもfence自体が有効化されない）。
+    strategyNumericFactBinding: () => null,
+    // ★WO015残条件「verifiedaux GAP/position」：callAPI()は送信前に
+    //   captureVerifiedAuxBinding(buildCurrentRaceContext())を無条件に
+    //   captureし、本文がGAP/position数値を主張する時だけ
+    //   strategyReplyBindingValid()で追加fail-closedする（上の
+    //   strategyNumericFactBindingと同じ「このテストの関心事はstream/
+    //   memoryでdomain bindingと無関係」契約）。どちらもrenderer.html本体の
+    //   トップレベル関数だが、このテストはcallAPIだけを抽出するため未定義に
+    //   なる——captureVerifiedAuxBindingはcapture行自体がReferenceErrorに
+    //   なるのを防ぐためnullを返し、strategyReplyBindingValidは既存
+    //   strategyProjection.validBinding:()=>trueと同じ「fence常時無効」を
+    //   保つ。
+    captureVerifiedAuxBinding: () => null,
+    strategyReplyBindingValid: () => true,
+    currentCanonicalStrategyLive: (live) => live,
+    // WO014: raceContext builder is out of scope for this memory-focused test;
+    // prompts.js already treats a null raceContext as "no additional authority"
+    // (falls back to liveData), so a no-op stub keeps this test's concern narrow.
+    buildCurrentRaceContext: () => null,
+    // ★2026-10-08 WO013 r2：flushSentences()が自分のreply専用item捕捉のため
+    //   bareでlastQueuedSpeakItemを読む（本物のspeak()が更新する先と同じ変数）。
+    //   このテストのspeak/speakReplyChunkスタブは更新しないため初期値のまま
+    //   でよい（judgment適用はcurrentStrategyStateAPI=null側で既にno-op化済み
+    //   なので、ここは単に参照エラーを防ぐだけで挙動に影響しない）。
+    lastQueuedSpeakItem: null,
     // ★2026-09-05 第6回P1：内部IDが**実際に付いた履歴**を送信させないと反証にならない。
     //   本番と同じく非列挙で `_mid` を付ける。
     _msgSeq: 0,
@@ -167,9 +217,9 @@ const FULL = CHUNKS.join('');
 
 let ranOk = false;
 const ctx = makeContext(CHUNKS);
-vm.createContext(ctx);
+WO017Scope.install(ctx); vm.createContext(ctx);
 try {
-  vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + memSrc.join('\n') + '\n' + callApiSrc
+  vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + WO017Scope.source(renderer) + memSrc.join('\n') + '\n' + callApiSrc
     + '\nthis.callAPI = callAPI; this.ensureConversationBox = ensureConversationBox;', ctx);
   ranOk = true;
 } catch (e) {
@@ -198,7 +248,7 @@ if (ranOk) {
     check('kind が streamed_reply（定型応答と区別できる）',
       lunaTurns[0] && lunaTurns[0].kind === 'streamed_reply', lunaTurns[0] && lunaTurns[0].kind);
     check('箱が localStorage へ永続化される',
-      typeof ctx._store['pw_conversation_box_v1'] === 'string', Object.keys(ctx._store));
+      typeof ctx._store['pw_conversation_boxes_v2'] === 'string', Object.keys(ctx._store));
 
     // ★本題：この文脈で次ターンの訂正が成立するか
     const hit = det.detect('後ろ2.0 だね。ギャップ。', {
@@ -230,8 +280,8 @@ if (ranOk) {
     {
       const errCtx = makeContext([]);
       errCtx.fetch = async () => { throw new Error('network down'); };
-      vm.createContext(errCtx);
-      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + memSrc.join('\n') + '\n' + callApiSrc
+      WO017Scope.install(errCtx); vm.createContext(errCtx);
+      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + WO017Scope.source(renderer) + memSrc.join('\n') + '\n' + callApiSrc
         + '\nthis.callAPI = callAPI; this.ensureConversationBox = ensureConversationBox;', errCtx);
       await errCtx.callAPI('typed');
       const eb = errCtx.ensureConversationBox();
@@ -248,8 +298,8 @@ if (ranOk) {
       const brainPrompt='\n\n━━ LUNA MEMORY BRAIN ━━\n{"memory_ids":["race|88462769|315555"],"positions_gained":2}';
       const reply='危険を避けながらP10からP8、1xで50を持ち帰った。判断は正しかった。';
       const brainCtx=makeContext([reply.slice(0,18),reply.slice(18)],{brainPrompt,brainRecord:{memory_id:'evaluation|1'}});
-      vm.createContext(brainCtx);
-      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + memSrc.join('\n') + '\n' + callApiSrc+'\nthis.callAPI=callAPI;',brainCtx);
+      WO017Scope.install(brainCtx); vm.createContext(brainCtx);
+      vm.runInContext(decls + '\n' + judgeConstDecl + '\n' + judgeTagSrc + '\n' + WO017Scope.source(renderer) + memSrc.join('\n') + '\n' + callApiSrc+'\nthis.callAPI=callAPI;',brainCtx);
       await brainCtx.callAPI('typed');
       check('Memory Brain検索結果が実callAPI requestへ注入される',
         brainCtx._requests[0]&&brainCtx._requests[0].profileNote.includes('race|88462769|315555'));
@@ -296,18 +346,25 @@ if (ranOk) {
       //   （ハーネスの pushMsg は模造なので、それを見ても製品の契約にならない）
       const _pushSrc = (fs.readFileSync(path.join(__dirname,'desktop','renderer.html'),'utf8')
         .match(/function pushMsg\(m\)\{[\s\S]*?\n\}/) || [''])[0];
-      const _probeCtx = { messages: [], MAX_CLIENT_MESSAGES: 40, _msgSeq: 0, Object };
+      const _probeCtx = { messages: [], MAX_CLIENT_MESSAGES: 40, _msgSeq: 0, Object,
+        currentMemoryUserId: () => 'Yuji', localStorage: { getItem: () => null }, diagnosticLog: () => {} };
       _probeCtx.globalThis = _probeCtx;
-      vm.createContext(_probeCtx);
-      vm.runInContext(_pushSrc + '\nthis.pushMsg = pushMsg;', _probeCtx);
+      WO017Scope.install(_probeCtx); vm.createContext(_probeCtx);
+      // WO017：pushMsgは実memoryTurnTag（本人・race）で積んだturnにtagを付ける。
+      vm.runInContext(WO017Scope.source(rsrc) + _pushSrc + '\nthis.pushMsg = pushMsg;', _probeCtx);
       const probe = { role:'user', content:'x' };
       _probeCtx.pushMsg(probe);
       const desc = Object.getOwnPropertyDescriptor(probe, '_mid');
+      const raceDesc = Object.getOwnPropertyDescriptor(probe, '_race');
+      check('層A（WO017）：本人・raceのtagも非列挙で、外部payloadへ出ない',
+        !!raceDesc && raceDesc.enumerable === false && raceDesc.value.ownerRef === 'user:Yuji'
+        && !JSON.stringify(probe).includes('_race'), raceDesc && raceDesc.value);
       check('層A：内部IDは非列挙プロパティ', !!desc && desc.enumerable === false,
         JSON.stringify(desc));
       // 層B：送信境界が role/content だけへ絞る
       check('層B：送信境界に明示のホワイトリストがある',
-        /const outboundMessages = \(Array\.isArray\(messages\)\?messages:\[\]\)\s*\n\s*\.map\(m => \(\{ role:m\.role, content:m\.content \}\)\);/.test(rsrc)
+        // WO017：送る履歴は現在の本人・raceの会話だけ（currentRaceConversation、fallback無し）。形の絞り込みは不変。
+        /const outboundMessages = currentRaceConversation\(\)\s*\n\s*\.map\(m => \(\{ role:m\.role, content:m\.content \}\)\);/.test(rsrc)
         && /messages: outboundMessages,/.test(rsrc));
       // 層C：サーバー側も同じ契約で絞る
       const ssrc = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');

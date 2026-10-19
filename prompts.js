@@ -665,6 +665,30 @@ function buildSystem(p) {
     return m > 0 ? (m + ':' + s.toFixed(3).padStart(6, '0')) : s.toFixed(3);
   };
   const live = (p.liveData && typeof p.liveData === 'object') ? p.liveData : null; // ライブテレメトリ実値
+  // ★WO014: 単一canonical race-context builder（desktop/race-context-builder.js）の出力。
+  //   server.jsがschema/version検証済み（未検証・無しはnull＝fail closed）。current_facts/
+  //   active_plan/calculation_referencesはこちらを優先し、live.*への直接依存を減らす。
+  const raceContext = (p.raceContext && typeof p.raceContext === 'object') ? p.raceContext : null;
+  // raceContextModern distinguishes "this caller is a WO014 current-race
+  // caller but its context failed Server schema validation / reported
+  // unavailable" from "this caller never sent raceContext at all" (a truly
+  // legacy/unmigrated caller). Only the latter may still fall back to the
+  // legacy live.* raw fields below -- a modern caller with an
+  // invalid/unavailable context must get an explicit unknown, never a raw
+  // value smuggled in through live.* (the exact "modern invalid -> raw
+  // fallback" defect WO014 closes).
+  const raceContextModern = !!p.raceContextModern;
+  const rcUnavailableNoFallback = raceContext || raceContextModern;
+  const rcFacts = (raceContext && raceContext.current_facts && raceContext.current_facts.available)
+    ? raceContext.current_facts : null;
+  const rcFuelRef = raceContext && raceContext.calculation_references && raceContext.calculation_references.fuel_strategy;
+  // rcAux is the SAME-ref-correlated position/GAP whitelist (race-context-
+  // builder only populates it when the Bridge project_telemetry ref tagged
+  // on the arrival-time wire message matches the CURRENT canonical snapshot
+  // exactly). paceCheck/judgeCall used to read their own raw pos/gap_ahead/
+  // gap_behind aliases straight off the client payload instead of this
+  // whitelist -- a mismatched/stale tag there never fell back to unknown.
+  const rcAux = (raceContext && raceContext.auxiliary_observations) ? raceContext.auxiliary_observations : null;
   const sessionType = typeof p.sessionType === 'string' ? p.sessionType : ''; // iRacing実際のセッション種別(Practice/Qualify/Race)
   const driverState = p.driverState || null; // 'track' | 'pit' | 'garage'
   const profileNote = typeof p.profileNote === 'string' ? p.profileNote : '';
@@ -781,8 +805,8 @@ function buildSystem(p) {
     // 一貫性・合意作戦の維持」を明示していなかったのが原因。全キャラのレースモードに共通で差し込む。
     if (mode === 'race') {
       modeNote += isJ
-        ? '\n\n━━ 燃料・ピット戦略の鉄則（レース中・厳守）━━\n【ライブ数値だけで話せ】燃料・ピットの話は必ず【現在のライブテレメトリ】の燃料データ（平均消費・残り走行可能周・to-フィニッシュの余裕/不足・給油要否）から答えろ。届いていない項目は「そのデータは来てない」と言い切れ（「確認する」は禁止。後で折り返す仕組みが無いため嘘になる）。推測で燃料や周回の数字を作るな。\n【自分と矛盾するな】一度ピット目標周やプランを口にしたら、データが変わらん限りブレるな。直前の自分の燃料コールと食い違う数字を出すな（例：「18周目に給油」と言った直後に「20周以降」は厳禁）。\n【合意した作戦は生きている】レース前に決めた作戦（アンダーカット／セーブ／◯周目ピット等）は継続中だ。会話履歴のその作戦を自分から参照し、実行に移せ。忘れて漂流するな。ドライバーに作戦を催促させたら、お前の負けだ。'
-        : '\n\n━━ FUEL & PIT STRATEGY — IRON RULES (during race) ━━\n[LIVE NUMBERS ONLY] Answer fuel/pit questions ONLY from the fuel data in [CURRENT LIVE TELEMETRY] (avg use, laps of fuel left, to-finish margin, whether a stop is needed). For anything not provided, say plainly that you do not have it. Never say "let me check" — there is no mechanism to come back to them, so it would be a lie. Never invent fuel or lap numbers.\n[DO NOT CONTRADICT YOURSELF] Once you state a pit-lap target or a plan, do not drift unless the data changes. Never give a number that conflicts with your own last fuel call (e.g. "pit lap 18" then "after lap 20" is forbidden).\n[THE AGREED PLAN STANDS] Any strategy agreed before the race (undercut / save / pit around lap X) is still in force. Reference it from the conversation yourself and execute it. Do not forget or drift. If the driver has to remind you of the plan, you have failed.';
+        ? '\n\n━━ 燃料・ピット戦略の鉄則（レース中・厳守）━━\n【ライブ数値だけで話せ】燃料・ピットの話は必ず【現在のライブテレメトリ】の燃料データ（平均消費・残り走行可能周・to-フィニッシュの余裕/不足・給油要否）から答えろ。届いていない項目は「そのデータは来てない」と言い切れ（「確認する」は禁止。後で折り返す仕組みが無いため嘘になる）。推測で燃料や周回の数字を作るな。\n【自分と矛盾するな】一度ピット目標周やプランを口にしたら、データが変わらん限りブレるな。直前の自分の燃料コールと食い違う数字を出すな（例：「18周目に給油」と言った直後に「20周以降」は厳禁）。\n【合意した作戦はcanonicalが保持している限り生きている】レース前に決めた作戦（アンダーカット／セーブ／◯周目ピット等）は、canonical（raceContext.active_plan）がその作戦を今も保持している時だけ継続中だ。会話履歴だけを根拠に自分から実行を宣言するな——現在のactive_planと一致する時だけ、その作戦を思い出させて一貫性を保て。canonicalのactive_planが無い・食い違う時は、作戦が今も有効か推測せず、ドライバーに確認せよ。忘れて漂流するのも、canonicalと無関係に実行を宣言するのも、どちらもお前の負けだ。'
+        : '\n\n━━ FUEL & PIT STRATEGY — IRON RULES (during race) ━━\n[LIVE NUMBERS ONLY] Answer fuel/pit questions ONLY from the fuel data in [CURRENT LIVE TELEMETRY] (avg use, laps of fuel left, to-finish margin, whether a stop is needed). For anything not provided, say plainly that you do not have it. Never say "let me check" — there is no mechanism to come back to them, so it would be a lie. Never invent fuel or lap numbers.\n[DO NOT CONTRADICT YOURSELF] Once you state a pit-lap target or a plan, do not drift unless the data changes. Never give a number that conflicts with your own last fuel call (e.g. "pit lap 18" then "after lap 20" is forbidden).\n[THE AGREED PLAN STANDS — ONLY WHILE CANONICAL AGREES] Any strategy agreed before the race (undercut / save / pit around lap X) stays in force only while the canonical active plan (raceContext.active_plan) still holds it. Do not declare execution from conversation history alone — when it matches the canonical active plan, recall it for consistency. When canonical has no active plan or disagrees, do not guess whether the old plan still stands; ask the driver. Forgetting it is a failure, but so is declaring execution that canonical does not confirm.';
       modeNote += isJ
         ? '\n\n━━ GT Sprint／IMSA Fixed 戦略ドクトリン（最優先）━━\n・短時間で基本一給油・タイヤ無交換のレースは、Plan A/Bを主軸にする。Aは通常〜遅めの給油、Bは燃料ウィンドウが開いた時の早めのアンダーカット。1周差だけのA/B/Cを同じ重みで羅列するな。C（オーバーカット）は長い耐久か、燃料セーブと同一クラスのペースが実測で成立する場合だけ補助候補にする。\n・予選／再スタートが中団で、前方に同一クラスの集団があり、自車のクリーンペースが速く、早く入ってもクリアに復帰できるなら、Bを明確に推す。「燃料ウィンドウが開いた。今入れば前の集団が反応する前に抜けられる見込み。私はこの判断を推す」のように、ピット周・給油量・復帰条件をライブ値で一つにまとめる。\n・アンダーカット成功は、ピット前の順位、ピット周、給油量、レーンロス、直後の復帰順位、前方集団がピット後に入った後のサイクル順位を保存して判定する。ライバルのピット時刻が取れていない時は、成功を断定せず「直後のP○、因果確認はライバルのピット時刻待ち」と言う。\n・前回の成功／失敗（渋滞に捕まった、クリアに抜けた）を次回の同一コース・車両・形式で参照し、成功例だけでなく失敗例も根拠にする。\n・【燃料ウィンドウの定義】＝「今入れば、フィニッシュまで走り切る燃料を積める」状態。ここが開いた瞬間からアンダーカットが成立可能になる。「あと何周でウィンドウが開く？」には必ず周回数で答えろ。残り時間や「確認中」は回答ではない。まだ足りないなら「今は◯周分足りない、あと◯周でウィンドウ」と不足を周回で言え。\n・【中団発進】前の4〜6台の集団に頭を抑えられると、自分のペースが速い分だけ燃料が無駄に減る。ウィンドウが開いたら先に入り、集団がピットして復帰する前にその前でブレンドできれば成功。失敗は(1)復帰先で後方集団に引っ掛かる(2)本来のペースで走れていなかった(3)ペースが想像より上がらなかった、の3つ。搭載燃料は基本半分なので満タン復帰でもロスは限定的——これを理由に早入りを過度に恐れるな。\n・【上位発進(P1-2)】王道は燃料を空に近くまで減らしてから入る。後方集団に混ざらず、空タンク＋少量給油で速く復帰できるからだ。ただし直後のライバルと同時に入っても順位は入れ替わらない。1周ずらすと状況次第で入れ替えが生まれる——ここは心理戦だと明示していい。\n・【ドライバーの決定を覆すな】前の集団の動きが見えているのはドライバーだ。「ボックス」「この周で入る」と決めたら従え。懸念があるなら入れながら一言添えろ。決定に「ステイアウト」を返し続けるのは最悪の対応だ。'
         : '\n\n━━ GT SPRINT / IMSA FIXED STRATEGY DOCTRINE (HIGHEST PRIORITY) ━━\n- For short races with one fuel stop and usually no tyre change, make Plan A/B primary: A is normal/late service, B is an early undercut when the fuel window opens. Do not give three equally weighted plans separated by one lap. Keep C (overcut) as a secondary option only for endurance or verified fuel saving.\n- If the driver starts mid-pack, a same-class pack is ahead, measured clean pace is faster, and a clear rejoin is verified, recommend B decisively with live pit lap, fuel amount, and rejoin condition.\n- Judge an undercut from pre-pit position, pit lap, fuel added, lane loss, immediate exit position, post-cycle position after the pack stops, and rival pit timestamps. If rival pit times are unavailable, do not claim causality or success.\n- Reuse both successful and failed prior outcomes for the same track/car/format; never retain only success stories.\n- [FUEL WINDOW, DEFINED] The window is open once stopping now would let you take on enough fuel to reach the finish. From that moment an undercut is possible. Answer \"how many laps until the window opens?\" in LAPS. Time remaining, or \"let me check\", is not an answer. If it is not open yet, say how far short you are in laps.\n- [STARTING MID-PACK] Held up behind a pack of four to six, a faster car burns fuel for nothing. Stop as soon as the window opens; if you blend ahead of that pack before they cycle through, the undercut worked. It fails when (1) you rejoin into the pack behind, (2) the clean pace was never really there, or (3) the pace did not come up as expected. These grids run roughly half tanks, so a full-fuel rejoin costs little - do not over-fear stopping early on that basis.\n- [STARTING P1-P2] The orthodox play is to run the tank nearly dry before stopping: no traffic to rejoin into, and a light car on a splash of fuel is quick. Stopping on the same lap as the rival directly behind changes nothing; going a lap earlier can flip the order depending on the situation. Name it as the mind game it is.\n- [DO NOT OVERRIDE THE DRIVER] The driver is the one who can see what the pack ahead is doing. When they call \"box\" or \"coming in this lap\", follow it. Voice a concern while they come in if you have one. Repeating \"stay out\" against their decision is the worst possible answer.';
@@ -845,10 +869,19 @@ function buildSystem(p) {
   if (isRacing && live) {
     const jp = [];
     const en = [];
-    if (live.class_pos != null) { jp.push('クラス順位 ' + live.class_pos + '番手'); en.push('Class position P' + live.class_pos); }
-    if (live.pos != null)        { jp.push('総合 ' + live.pos + '番手'); en.push('Overall P' + live.pos); }
-    if (live.fuel != null)       { jp.push('燃料 ' + live.fuel + 'L'); en.push('Fuel ' + live.fuel + ' L'); }
-    if (live.lap != null)        { jp.push('周回 ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + live.lap + (live.laps_total ? '/' + live.laps_total : '')); }
+    // ★WO014 round3修復：live.class_pos/live.posは以前raceContextModernでも
+    //   無条件に生値を読んでいた(round1/2の対象外のまま残った別alias)。
+    //   modern callerはraceContext.auxiliary_observationsの同ref検証済み
+    //   position/class_positionだけを使い、snapshotに無ければunknown
+    //   （旧値を現在authorityへ復活させない）。legacyは旧経路を維持。
+    const authClassPos = rcUnavailableNoFallback ? (rcAux ? rcAux.class_position : null) : live.class_pos;
+    const authPos = rcUnavailableNoFallback ? (rcAux ? rcAux.position : null) : live.pos;
+    if (authClassPos != null) { jp.push('クラス順位 ' + authClassPos + '番手'); en.push('Class position P' + authClassPos); }
+    if (authPos != null)        { jp.push('総合 ' + authPos + '番手'); en.push('Overall P' + authPos); }
+    const authFuel = rcFacts ? rcFacts.fuel_level_l : (rcUnavailableNoFallback ? null : live.fuel);
+    const authLap = rcFacts ? rcFacts.current_lap : (rcUnavailableNoFallback ? null : live.lap);
+    if (authFuel != null)       { jp.push('燃料 ' + authFuel + 'L'); en.push('Fuel ' + authFuel + ' L'); }
+    if (authLap != null)        { jp.push('周回 ' + authLap + (live.laps_total ? '/' + live.laps_total : '')); en.push('Lap ' + authLap + (live.laps_total ? '/' + live.laps_total : '')); }
     if (live.session_time_remaining_s != null) {
       const jpTime = formatDurationForPrompt(live.session_time_remaining_s, true);
       const enTime = formatDurationForPrompt(live.session_time_remaining_s, false);
@@ -862,13 +895,28 @@ function buildSystem(p) {
         en.push('Race rule: ' + Math.round(duration / 60) + '-minute timed race (SessionInfo authority)');
       }
     }
-    if (live.finish_crossings_authority != null) { jp.push('チェッカーまでの自車S/F通過 ' + live.finish_crossings_authority + '回'); en.push('Authoritative driver S/F crossings to finish ' + live.finish_crossings_authority); }
+    const authFinishCrossings = (rcFacts && rcFacts.finish && rcFacts.finish.available)
+      ? rcFacts.finish.remaining_sf_crossings : (rcUnavailableNoFallback ? null : live.finish_crossings_authority);
+    if (authFinishCrossings != null) { jp.push('チェッカーまでの自車S/F通過 ' + authFinishCrossings + '回'); en.push('Authoritative driver S/F crossings to finish ' + authFinishCrossings); }
     else if (live.finish_crossings_status) { jp.push('残り周回権威=取得不能（理由:' + live.finish_crossings_status + '）'); en.push('Finish-crossing authority unavailable (reason: ' + live.finish_crossings_status + ')'); }
     if (live.best != null)       { const b = fmtLap(live.best); jp.push('自己ベスト ' + b); en.push('Best ' + b); }
     if (live.last != null)       { const l = fmtLap(live.last); jp.push('直近ラップ ' + l); en.push('Last ' + l); }
     const gapFacts = live.gap_authority && typeof live.gap_authority === 'object'
       ? live.gap_authority : {};
+    // ★WO014 round4修復：class_pos/pos/standings_gapsはround3でmodern caller
+    //   をrcAux（Bridge project_telemetry refがCURRENT canonical snapshotと
+    //   同ref一致した時だけ）に切ったが、gap_ahead/behindだけは生のlive.
+    //   gap_authority（client報告のraw table、同ref検証なし）を無条件に
+    //   読み続ける旧aliasのまま残っていた。pos等と同じゲートで閉じる：
+    //   modern callerはrcAux.gap_ahead/gap_behind（同ref検証済みの数値だけ、
+    //   未検証のclass/carIdx/source_kind詳細は持たない）しか使わない。
     const addGapFact = (direction, labelJP, labelEN) => {
+      if (rcUnavailableNoFallback) {
+        const gapS = rcAux ? (direction === 'ahead' ? rcAux.gap_ahead : rcAux.gap_behind) : null;
+        if (gapS == null) return;
+        jp.push(`${labelJP} ${gapS}秒`); en.push(`${labelEN} ${gapS}s`);
+        return;
+      }
       const rec = gapFacts[direction];
       if (!rec || rec.gap_s == null || rec.target_car_idx == null) return;
       const cls = rec.target_class ? String(rec.target_class) : 'same class';
@@ -883,8 +931,12 @@ function buildSystem(p) {
     addGapFact('behind', '後ろとのギャップ', 'Gap behind');
     // クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）。
     // gap_ahead/behindは直前直後の車限定だったが、これで離れた順位も実値で答えられる。
-    if (live.standings_gaps) {
-      const sg = live.standings_gaps;
+    // ★WO014 round3修復：standings_gapsもclass_pos/pos同様、以前はmodern
+    //   callerでも生のlive.standings_gapsを無条件に読んでいた。verified
+    //   rcAux.standings_gapsが無ければ出さない（旧値を復活させない）。
+    const authStandingsGaps = rcUnavailableNoFallback ? (rcAux ? rcAux.standings_gaps : null) : live.standings_gaps;
+    if (authStandingsGaps) {
+      const sg = authStandingsGaps;
       const rows = Object.keys(sg).map(p => parseInt(p, 10)).sort((a, b) => a - b).map(p => {
         const g = sg[String(p)];
         const dir = g < 0 ? (isJ ? '前' : 'ahead') : (isJ ? '後ろ' : 'behind');
@@ -895,16 +947,21 @@ function buildSystem(p) {
         en.push('Gap to each class position: ' + rows.join(' / '));
       }
     }
-    if (live.on_pit_road === true) { jp.push('OnPitRoad=true（現在ピットレーン内）'); en.push('OnPitRoad=true (currently in pit lane)'); }
-    else if (live.on_pit_road === false) { jp.push('OnPitRoad=false（現在ピットレーン外）'); en.push('OnPitRoad=false (currently outside pit lane)'); }
-    if (live.on_track === false && live.on_pit_road !== true) { jp.push('IsOnTrack=false（コース上とは断定できない）'); en.push('IsOnTrack=false (do not claim the car is on track)'); }
-    if (live.leaders && live.leaders.overall) {
-      const o=live.leaders.overall;
+    const authOnPitRoad = rcFacts ? rcFacts.on_pit_road : (rcUnavailableNoFallback ? null : live.on_pit_road);
+    const authOnTrack = rcFacts ? rcFacts.on_track : (rcUnavailableNoFallback ? null : live.on_track);
+    if (authOnPitRoad === true) { jp.push('OnPitRoad=true（現在ピットレーン内）'); en.push('OnPitRoad=true (currently in pit lane)'); }
+    else if (authOnPitRoad === false) { jp.push('OnPitRoad=false（現在ピットレーン外）'); en.push('OnPitRoad=false (currently outside pit lane)'); }
+    if (authOnTrack === false && authOnPitRoad !== true) { jp.push('IsOnTrack=false（コース上とは断定できない）'); en.push('IsOnTrack=false (do not claim the car is on track)'); }
+    // ★WO014 round3修復：leadersも同様。verified rcAux.leadersが無ければ
+    //   出さない（旧live.leadersの生値へ復帰しない）。
+    const authLeaders = rcUnavailableNoFallback ? (rcAux ? rcAux.leaders : null) : live.leaders;
+    if (authLeaders && authLeaders.overall) {
+      const o=authLeaders.overall;
       jp.push('総合首位: ' + (o.name||('car #'+(o.car_number||'?'))) + ' / class=' + (o.class_name||'unknown') + ' / CarIdx=' + o.car_idx);
       en.push('Overall leader: ' + (o.name||('car #'+(o.car_number||'?'))) + ' / class=' + (o.class_name||'unknown') + ' / CarIdx=' + o.car_idx);
     }
-    if (live.leaders && live.leaders.player_class) {
-      const c=live.leaders.player_class;
+    if (authLeaders && authLeaders.player_class) {
+      const c=authLeaders.player_class;
       jp.push('自クラス首位: ' + (c.name||('car #'+(c.car_number||'?'))) + ' / GAP=' + Math.abs(Number(c.gap_s||0)).toFixed(1) + '秒');
       en.push('Player-class leader: ' + (c.name||('car #'+(c.car_number||'?'))) + ' / gap=' + Math.abs(Number(c.gap_s||0)).toFixed(1) + 's');
     }
@@ -914,7 +971,14 @@ function buildSystem(p) {
     // 燃料戦略（bridgeが直近クリーンラップの実消費量から計算済み・Claudeは計算せず転記するだけ）
     // ①消費量＋あと何周走れるかは、クリーンラップ1本からでも届く（短いレース/序盤でも把握できる）。
     // ②Final Lap Unitの残りS/F通過回数が確定した時だけ、L単位のto-finish判定が付く。
-    const fs = live.fuel_strategy;
+    // ★WO014修復：以前はこの参考計算(fuel_strategy)が無条件に「PIT REQUIRED/給油必須」の
+    //   確定文言へ昇格していた。raceContext経由ではrole/age/source_validを保持し、
+    //   「現在の必要量・実行指示」ではなく元計算の参考値として提示する。
+    const fs = rcFuelRef ? (rcFuelRef.source_valid ? rcFuelRef.value : null) : (rcUnavailableNoFallback ? null : live.fuel_strategy);
+    const fsAgeNote = (rcFuelRef && rcFuelRef.source_valid && fs)
+      ? (isJ ? `（計算根拠${rcFuelRef.age_s != null ? rcFuelRef.age_s.toFixed(1) : '?'}秒前・参考値であり現在の必要量/実行許可ではない）`
+             : ` (calculation reference ${rcFuelRef.age_s != null ? rcFuelRef.age_s.toFixed(1) : '?'}s old — a reference, not a current requirement or execution authority)`)
+      : '';
     if (fs && fs.avg_fuel_per_lap != null) {
       const conf = fs.clean_laps_sampled ? '（' + fs.clean_laps_sampled + '周の実測）' : '';
       const confEn = fs.clean_laps_sampled ? ' (from ' + fs.clean_laps_sampled + ' clean lap' + (fs.clean_laps_sampled>1?'s':'') + ')' : '';
@@ -923,7 +987,7 @@ function buildSystem(p) {
       if (fs.margin_l != null) {
         const marginTxt = fs.margin_l >= 0
           ? fs.margin_l + 'Lの余裕'
-          : Math.abs(fs.margin_l) + 'L不足（給油必須）';
+          : Math.abs(fs.margin_l) + 'L不足（参考計算上。給油の実行判断はcanonical plan/ドライバーの合意に従う）';
         // 時間制は総合首位の予測チェッカー時刻と自車のS/F到達時刻を比較した権威値。
         // 旧own-pace/lap差フォールバックは使わない。
         const basisJp = { overall_leader_clock: '総合首位のチェッカー時刻基準', time_to_zero_plus_final_lap: '時間切れまで＋最終周1周の保守的暫定値', laps_total: null };
@@ -941,8 +1005,10 @@ function buildSystem(p) {
         en.push('To finish: ' + crossingsEn
           + (be ? ' (' + be + ')' : '') + ', required ' + fs.required_fuel_l
           + 'L, margin ' + fs.margin_l + 'L, band ' + fs.fuel_band
-          + (fs.pit_required ? ' (PIT REQUIRED)' : ''));
+          + (fs.pit_required ? ' (reference calculation suggests a stop; execution follows the canonical plan/driver agreement)' : ''));
       }
+      if (jp.length) jp[jp.length - 1] += fsAgeNote;
+      if (en.length) en[en.length - 1] += fsAgeNote;
     }
     const timedRaceTruthJP = '\n【時間制レースの絶対規則】残り周回は「チェッカーまでの自車S/F通過」がある時だけその回数を答えろ。無い時はレース残り時間だけを答え、SessionLapsRemain、会話履歴、現在Lap、燃料から残り周回を作るな。「18周」「19周」のような推測は禁止。総合首位・自クラス首位・直前車は別の対象だ。質問対象の値が無ければ別対象のGAPで代用するな。';
     const timedRaceTruthEN = '\n[TIMED-RACE ABSOLUTE RULE] State laps remaining only when authoritative driver S/F crossings to finish is present. Otherwise state only race time remaining. Never derive laps remaining from SessionLapsRemain, conversation history, current lap, or fuel. Overall leader, player-class leader, and nearest car are distinct targets; never substitute one target gap for another.';
@@ -1056,10 +1122,18 @@ function buildSystem(p) {
   if (isRacing && paceCheck && Array.isArray(paceCheck.recent_deltas) && paceCheck.recent_deltas.length) {
     const deltas = paceCheck.recent_deltas.map(d => (d >= 0 ? '+' : '') + d).join(', ');
     const ctxParts = [];
-    if (paceCheck.pos != null) ctxParts.push((isJ ? '順位 P' : 'Position P') + paceCheck.pos);
-    if (paceCheck.gap_ahead != null) ctxParts.push((isJ ? '前とのギャップ ' : 'Gap ahead ') + paceCheck.gap_ahead + 's');
-    if (paceCheck.gap_behind != null) ctxParts.push((isJ ? '後ろとのギャップ ' : 'Gap behind ') + paceCheck.gap_behind + 's');
-    if (paceCheck.fuel_strategy) ctxParts.push((isJ ? '残り推定' : '~') + paceCheck.fuel_strategy.laps_remaining_est + (isJ ? '周' : ' laps remaining'));
+    // ★WO014 round2修復：以前はpaceCheck.pos/gap_ahead/gap_behindという
+    //   別payloadの生値を直読していた（他の全current-race callerと不統一で、
+    //   ref不一致/失効時にunknownへ落ちる保護が無かった）。他の値と同じ
+    //   raceContext.auxiliary_observations（同ref一致でのみ生成される）を使う。
+    if (rcAux && rcAux.position != null) ctxParts.push((isJ ? '順位 P' : 'Position P') + rcAux.position);
+    if (rcAux && rcAux.gap_ahead != null) ctxParts.push((isJ ? '前とのギャップ ' : 'Gap ahead ') + rcAux.gap_ahead + 's');
+    if (rcAux && rcAux.gap_behind != null) ctxParts.push((isJ ? '後ろとのギャップ ' : 'Gap behind ') + rcAux.gap_behind + 's');
+    // ★WO014修復：以前はpaceCheck.fuel_strategyという別payloadで迂回していた
+    //   （他4callerと不統一・raw値がそのまま昇格）。他の全callerと同じ
+    //   raceContext.calculation_references経由の値を使う（参考値のまま）。
+    const _pcFuel = rcFuelRef && rcFuelRef.source_valid ? rcFuelRef.value : null;
+    if (_pcFuel && _pcFuel.laps_of_fuel_left != null) ctxParts.push((isJ ? '残り推定' : '~') + _pcFuel.laps_of_fuel_left + (isJ ? '周（参考計算）' : ' laps remaining (reference calculation)'));
     const ctx = ctxParts.join(' / ');
     const improving = paceCheck.direction === 'improving';
     paceCheckNote = isJ
@@ -1082,9 +1156,18 @@ function buildSystem(p) {
   if (judgeCall && (isRacing || _anyModeKinds.includes(judgeCall.kind))
       && ['catchup', 'defend', 'battle', 'multiclass', 'danger', 'best_lap', 'time_loss'].includes(judgeCall.kind)) {
     const j = judgeCall;
-    const carTag = j.car_number ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
+    // ★WO014 round3修復：round2はdanger kindのgapだけrcAuxへ切り替えた
+    //   （HTTP/queue往復中にgapが動く問題）。battle/catchup/defendは同じ
+    //   問題を抱えたまま生のj.gapを読んでいた——同じ修復を一般化する。
+    //   car_numberにも検証済みsourceが無いため、modern callerは全kindで
+    //   常に質的表現に倒す（raw識別子をcanonical authorityへ昇格しない）。
+    const _judgeDirBehind = j.kind === 'battle' || j.kind === 'defend';   // catchup以外は後方
+    const rcDirGap = rcAux ? (_judgeDirBehind ? rcAux.gap_behind : rcAux.gap_ahead) : null;
+    const carTag = (!raceContextModern && j.car_number) ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)
                                 : (isJ ? '同クラスの車' : 'a same-class car');
-    const gapTxt = (j.gap != null) ? (isJ ? j.gap + '秒' : j.gap + 's') : (isJ ? '接近中' : 'close');
+    const gapTxt = raceContextModern
+      ? ((rcDirGap != null) ? (isJ ? rcDirGap + '秒' : rcDirGap + 's') : (isJ ? '接近中' : 'close'))
+      : ((j.gap != null) ? (isJ ? j.gap + '秒' : j.gap + 's') : (isJ ? '接近中' : 'close'));
     // 直近で自分が言ったコールの要約（連呼撲滅の要）。renderが直近リングバッファから渡す。
     const recent = Array.isArray(j.recent) && j.recent.length ? j.recent.join(' / ') : (isJ ? '（直近の発話なし）' : '(nothing recent)');
     let eventJ, eventE;
@@ -1127,8 +1210,19 @@ function buildSystem(p) {
       // ★命令調（「気をつけろ」）をやめ、LLMがその場に効く言い方を選ぶ。
       const dirJ = j.behind ? '直後（後ろ）' : '直前（前）';
       const dirE = j.behind ? 'right behind you' : 'right ahead of you';
-      eventJ = dirJ + 'の' + (j.car_number ? j.car_number + '号車' : '車') + 'は荒れた記録の持ち主（' + (j.reason || '') + '）。ギャップ' + (j.gap != null ? j.gap + '秒' : '接近中') + '。';
-      eventE = 'The car ' + dirE + (j.car_number ? ' (#' + j.car_number + ')' : '') + ' has a rough record (' + (j.reason || '') + '). Gap ' + (j.gap != null ? j.gap + 's' : 'closing') + '.';
+      // ★WO014 round2修復：以前はBridgeが危険イベント発火時点でスナップした
+      //   生のj.gapをそのまま読んでいた。LLM到達までのqueue/judge gate/HTTP
+      //   往復の間にgapは動きうる——他のcurrent quantityと同じく、同ref一致
+      //   で検証済みの最新raceContext.auxiliary_observationsを優先し、
+      //   不一致/未検証ならj.gapへ戻さず質的表現（接近中/closing）に倒す。
+      const dangerGap = rcAux ? (j.behind ? rcAux.gap_behind : rcAux.gap_ahead) : null;
+      // ★WO014 round3修復：gapは既にround2でrcAux化済みだが、car_numberは
+      //   同じ生judgeCall payload由来のまま残っていた。modern callerでは
+      //   他のkindと同じく質的表現（番号を出さない）に倒す。
+      const dangerCarJ = (!raceContextModern && j.car_number) ? j.car_number + '号車' : '車';
+      const dangerCarE = (!raceContextModern && j.car_number) ? ' (#' + j.car_number + ')' : '';
+      eventJ = dirJ + 'の' + dangerCarJ + 'は荒れた記録の持ち主（' + (j.reason || '') + '）。ギャップ' + (dangerGap != null ? dangerGap + '秒' : '接近中') + '。';
+      eventE = 'The car ' + dirE + dangerCarE + ' has a rough record (' + (j.reason || '') + '). Gap ' + (dangerGap != null ? dangerGap + 's' : 'closing') + '.';
       judgeCallNote = isJ
         ? '\n\n【レースイベント（内部トリガー・これはドライバーの発言ではない）】' + eventJ
           + '\n君は今レース中だ。直近で君はこう言った：' + recent + '。\n【判断】これは"命令"でなく"共有"だ。'
@@ -1380,7 +1474,148 @@ function buildSystem(p) {
     speechFixNote += '\n【一人称】君は女性だ。**「俺」は絶対に使うな。**「わたし」を使え（多用はしない）。';
   }
 
-  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote + speechFixNote + NO_DATA_RULE;
+  // ★2026-10-08 WO013 R5: この指示自体が、提案→合意の意味判定で実際に
+  //   モデルへ渡っていた唯一の欠落だった（<<PW_JUDGE ...>>を要求する指示が
+  //   prompts.js/buildSystemのどこにも存在せず、Rendererのパーサーは常に
+  //   fixture由来の文字列しか見ていなかった）。Rendererが提案の判定待ち
+  //   (decision_id)を持ち、かつ構造化transportへopt-inした時だけ、必要最小限
+  //   のdecision_idをここで渡す——提案全文やPlan詳細は渡さない。このnoteは
+  //   「書け」と頼むだけで、書かれた行に権威を与えるのはServer側の独立抽出・
+  //   厳密検証（server.js jtValidateAndCapture）とRenderer側のdecision_id/
+  //   completion照合であり、ここは入口に過ぎない。
+  let proposalJudgeNote = '';
+  if (p.judgeTransport === 'v1' && p.pendingJudgment && typeof p.pendingJudgment === 'object'
+      && typeof p.pendingJudgment.decision_id === 'string' && p.pendingJudgment.decision_id) {
+    const did = p.pendingJudgment.decision_id;
+    proposalJudgeNote = isJ
+      ? '\n\n【内部判定・必須】ドライバーの直前の発話が、判定待ちの提案(decision_id="' + did + '")への'
+        + '返事として何を意味するかを判定し、返答の**最後**に機械行を一度だけ追加せよ。'
+        + '\n・賛成/承諾 → classification="confirm"'
+        + '\n・拒否/別案を求める → classification="decline"'
+        + '\n・その提案についてまだ話している（質問・言い換え・条件の確認等） → classification="same_topic"'
+        + '\n・全く別の話題で、提案への返事ではない → classification="unrelated"'
+        + '\n機械行の形式（これだけを最後の行に、他の文字を混ぜずに書く）：'
+        + '\n<<PW_JUDGE decision_id="' + did + '" classification="confirm|decline|same_topic|unrelated">>'
+        + '\nこの行はドライバーには読まれない内部データだ。ドライバー向けの返答本文の中では話題にするな。'
+      : '\n\n[INTERNAL JUDGMENT — REQUIRED] Decide what the driver\'s last message means as a reply to the '
+        + 'proposal awaiting judgment (decision_id="' + did + '"), and append exactly one machine line at the '
+        + 'very END of your reply.'
+        + '\n- Agrees/accepts -> classification="confirm"'
+        + '\n- Rejects/wants something else -> classification="decline"'
+        + '\n- Still discussing that same proposal (question, rephrase, asking about conditions, etc.) -> classification="same_topic"'
+        + '\n- A genuinely unrelated topic, not a reply to the proposal -> classification="unrelated"'
+        + '\nExact format (this line only, nothing else on it, at the very end):'
+        + '\n<<PW_JUDGE decision_id="' + did + '" classification="confirm|decline|same_topic|unrelated">>'
+        + '\nThe driver never sees this line — do not mention it in the reply text itself.';
+  }
+
+  // ★WO014修復：race-context-builder.jsが作るactive_plan/pending_proposal/
+  //   penalty_state/last_pit_event/allowed_actions/unknownsは、以前は
+  //   current_facts/fuel_strategyだけ消費され、ここへ一度も直列化されて
+  //   いなかった（promptconsumer未接続）。各値は自分の権威語
+  //   （合意状態／保留中／実行許可／観測履歴／不明）を明示して渡す——
+  //   会話や推測でcanonical executionやpenalty事実を作らせない。
+  let canonicalStateNote = '';
+  if (raceContext) {
+    const rc = raceContext;
+    const L = [];
+    if (!rc.freshness.available) {
+      L.push(isJ
+        ? `現在の作戦authorityは利用不能（理由:${rc.freshness.reason || 'unknown'}）。燃料・周回・Plan・ピット・実行許可は「不明」と答え、会話や履歴から復元しない。`
+        : `Current strategy authority is unavailable (reason: ${rc.freshness.reason || 'unknown'}). Answer fuel/lap/plan/pit/execution as unknown; do not reconstruct it from conversation or history.`);
+    } else {
+      const a = rc.active_plan;
+      L.push(a
+        ? (isJ
+            ? `現在の合意Plan: Plan ${a.selected_plan}（decision ${a.decision_id} rev${a.revision}）、target lap ${a.target_lap ?? '不明'}。これは合意状態であり、それ自体が実行許可ではない。`
+            : `Current agreed plan: Plan ${a.selected_plan} (decision ${a.decision_id} rev${a.revision}), target lap ${a.target_lap ?? 'unknown'}. This is the agreed state, not execution permission by itself.`)
+        : (isJ ? '現在合意済みのPlanは無い。' : 'No plan is currently agreed.'));
+      // ★WO014 round2修復：Planのadd_fuel_l/set_fuel_lはbuilderが運んでいたが
+      //   ここで一度も直列化されていなかった（「給油はいくつだっけ」に答えられない）。
+      if (a && (a.add_fuel_l != null || a.set_fuel_l != null)) {
+        L.push(isJ
+          ? `合意Planの燃料（参考、実行許可ではない）: 追加${a.add_fuel_l ?? '不明'}L、セット${a.set_fuel_l ?? '不明'}L。`
+          : `Agreed plan fuel (reference, not execution permission): add ${a.add_fuel_l ?? 'unknown'}L, set ${a.set_fuel_l ?? 'unknown'}L.`);
+      }
+      const pp = rc.pending_proposal;
+      if (pp && pp.canonical_awaiting) {
+        L.push(isJ
+          ? `Driverの応答待ちの提案が${pp.canonical_awaiting_records.length}件ある。応答はcanonicalのACK/readbackを待つ——会話だけで合意済みにしない。`
+          : `${pp.canonical_awaiting_records.length} proposal(s) await the driver's response. Wait for the canonical ACK/readback — the conversation alone is not agreement.`);
+      }
+      const aa = rc.allowed_actions;
+      L.push(aa.execution_allowed
+        ? (isJ ? '実行許可: あり。' : 'Execution: allowed.')
+        : (isJ ? `実行許可: 無し（理由:${aa.execution_hold_reason || '不明'}）。これはPlanの有無とは別の判断。`
+               : `Execution: held (reason: ${aa.execution_hold_reason || 'unknown'}). This is separate from whether a plan exists.`));
+      // ★WO014 round2修復：allowed_actions.constraint/proofはbuilderが運ぶ
+      //   実行ゲートの生根拠だったが未消費だった（なぜ保留か／実行許可が
+      //   どのproof/attemptに紐づくかをLLMが説明できない）。
+      if (!aa.execution_allowed && aa.constraint) {
+        const c = aa.constraint;
+        const reasonsJ = [c.scope_closed ? 'スコープ終了' : null, c.collision ? '他要求と競合' : null, c.visit_open ? 'ピット滞在中' : null, c.gate_reason].filter(Boolean);
+        const reasonsE = [c.scope_closed ? 'scope closed' : null, c.collision ? 'request collision' : null, c.visit_open ? 'pit visit open' : null, c.gate_reason].filter(Boolean);
+        if (reasonsJ.length) L.push(isJ ? `実行保留の根拠: ${reasonsJ.join('、')}。` : `Execution-hold evidence: ${reasonsE.join(', ')}.`);
+      } else if (aa.execution_allowed && aa.proof) {
+        L.push(isJ
+          ? `実行許可はproof ${aa.proof.allowed_proof_id ?? '不明'}に紐づく（有効期限 session time ${aa.proof.valid_until_session_s ?? '不明'}秒まで）。`
+          : `Execution permission is bound to proof ${aa.proof.allowed_proof_id ?? 'unknown'} (valid until session time ${aa.proof.valid_until_session_s ?? 'unknown'}s).`);
+      }
+      const bf = rc.penalty_state.black_flag;
+      if (bf.state === 'true') L.push(isJ ? 'ブラックフラグ: 出ている（SDK確定）。' : 'Black flag: raised (confirmed by the SDK).');
+      else if (bf.state === 'unknown') L.push(isJ ? 'ブラックフラグ: 未確定。出ていないと決めつけない。' : 'Black flag: unconfirmed. Do not assume it is not raised.');
+      const lpe = rc.last_pit_event;
+      if (lpe) {
+        const rel = lpe.execution_relation;
+        // ★WO014 round2修復：lap/pit_event_idはbuilderが運んでいたが
+        //   execution_relationだけが直列化され、「何周目の」「どのpitイベント」かが
+        //   LLMから見えなかった（pitlap-eventref未接続）。
+        const refJ = (lpe.lap != null ? `${lpe.lap}周目` : '周不明') + (lpe.pit_event_id ? `（event ${lpe.pit_event_id}）` : '');
+        const refE = (lpe.lap != null ? `lap ${lpe.lap}` : 'lap unknown') + (lpe.pit_event_id ? ` (event ${lpe.pit_event_id})` : '');
+        L.push(isJ
+          ? `直近のピット退出を確認：${refJ}（区分:${rel}）。${rel === 'penalty' ? 'ペナルティ区分であり通常作戦の実行ではない。' : rel === 'unresolved' ? '区分は未確定、完走燃料等を断定しない。' : ''}`
+          : `Most recent pit exit observed: ${refE} (relation: ${rel}).${rel === 'penalty' ? ' This is a penalty exit, not normal-strategy execution.' : rel === 'unresolved' ? ' The relation is unresolved; do not assert finish-fuel or similar guarantees from it.' : ''}`);
+      }
+      // ★WO014 round2修復：last_driver_actionはbuilderが運んでいたが
+      //   一度も直列化されていなかった（直近のDriverコマンドの可否が
+      //   「本人が入力した」申告頼みになっていた）。
+      const lda = rc.last_driver_action;
+      if (lda) {
+        L.push(isJ
+          ? `直近のDriverコマンド結果: ${lda.outcome || '不明'}${lda.reason ? `（理由:${lda.reason}）` : ''}。`
+          : `Most recent driver command outcome: ${lda.outcome || 'unknown'}${lda.reason ? ` (reason: ${lda.reason})` : ''}.`);
+      }
+      // ★WO014 round2修復：strategy_optionsの計算参考値はbuilderが運んでいたが
+      //   消費者が一つも無かった（source-age-deadlineの枠組みはfuelにしか無く、
+      //   strategy_optionsは常に無視されていた）。fuelと同じ「参考値・年齢付き」で渡す。
+      const optRef = rc.calculation_references && rc.calculation_references.strategy_options;
+      if (optRef && optRef.source_valid) {
+        L.push(isJ
+          ? `参考計算: strategy_options（${optRef.age_s != null ? optRef.age_s.toFixed(1) + '秒前' : '経過不明'}）。現在の実行指示ではない。`
+          : `Reference calculation: strategy_options (${optRef.age_s != null ? optRef.age_s.toFixed(1) + 's old' : 'age unknown'}). Not a current execution directive.`);
+      }
+      // ★WO014 round2修復：historical_relevant_memory（canonical観測済み過去決定）は
+      //   builderが運んでいたが未消費だった。単なる全JSON追加を避け、直近2件だけを
+      //   短く要約して渡す（bounded——古い決定を「現在の事実」と誤認させない明示付き）。
+      const hist = rc.historical_relevant_memory;
+      if (Array.isArray(hist) && hist.length) {
+        const recentItems = hist.slice(-2);
+        const descJ = recentItems.map(h => `${h.decision_id}:${h.phase}${h.selected_plan ? '/Plan ' + h.selected_plan : ''}${h.target_lap != null ? ' ' + h.target_lap + '周目' : ''}`).join('、');
+        const descE = recentItems.map(h => `${h.decision_id}:${h.phase}${h.selected_plan ? '/Plan ' + h.selected_plan : ''}${h.target_lap != null ? ' lap ' + h.target_lap : ''}`).join(', ');
+        L.push(isJ
+          ? `canonical観測済み過去決定（直近${recentItems.length}件、現在の事実ではない）: ${descJ}。`
+          : `Canonical observed past decisions (most recent ${recentItems.length}, not a current fact): ${descE}.`);
+      }
+    }
+    if (rc.unknowns && rc.unknowns.length) {
+      L.push(isJ
+        ? `未確定/未取得: ${rc.unknowns.join(', ')}。質問されたら「不明」と答え、推測や過去値で埋めない。`
+        : `Unavailable/unknown: ${rc.unknowns.join(', ')}. If asked, say unknown — do not guess or reuse an old value.`);
+    }
+    if (L.length) canonicalStateNote = '\n\n[CANONICAL RACE STATE]\n' + L.join('\n');
+  }
+
+  const suffix = teleNote + sectorNote + liveNote + stateNote + historyNote + paceCheckNote + judgeCallNote + seriesNote + driverInsightNote + speechFixNote + proposalJudgeNote + canonicalStateNote + NO_DATA_RULE;
   return { prefix: prefix, suffix: suffix };
 }
 

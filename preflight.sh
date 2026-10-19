@@ -6,14 +6,15 @@
 #   予選が丸ごと無駄になった。機械が一瞬で見つけられる種類のミスだった。
 #   ビルド前に必ず通す。ここを通らないものは出荷しない。
 # ═══════════════════════════════════════════════════════════════
-set -u
+set -uo pipefail
 fail=0
 
 echo "── Python: 未定義変数・構文（pyflakes）"
-if python3 -m pyflakes irsdk-bridge/bridge.py irsdk-bridge/dump_all_vars.py irsdk-bridge/log_strategy_timeseries.py irsdk-bridge/irsdk_mem.py irsdk-bridge/race_lifecycle.py irsdk-bridge/class_map.py irsdk-bridge/f2time_contract.py irsdk-bridge/driver_activity.py irsdk-bridge/final_lap.py irsdk-bridge/fuel_strategy.py irsdk-bridge/endurance_fuel.py irsdk-bridge/strategy_options.py irsdk-bridge/session_authority.py irsdk-bridge/pit_loss_calibrator.py irsdk-bridge/pit_exit_forecaster.py irsdk-bridge/pit_cycle_tracker.py 2>&1 | grep -E "undefined name|invalid syntax|syntax error"; then
-  echo "   ❌ 致命的な問題あり"; fail=1
+# Required checker failure must not disappear through grep's exit status.
+if out=$(python3 ci/preflight_static.py 2>&1); then
+  echo "   ✅ 未定義変数・構文エラーなし"
 else
-  echo "   ✅ 未定義変数なし"
+  echo "   ❌ checker未実行または致命的な問題あり"; echo "$out"; fail=1
 fi
 
 echo "── JavaScript: 構文"
@@ -22,12 +23,24 @@ for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js de
 done
 
 echo "── renderer.html 内のスクリプト構文"
-python3 - <<'PY' > /tmp/_r.js
+PREFLIGHT_WORK="$(mktemp -d "${TMPDIR:-/tmp}/pitwall-preflight.XXXXXX")" || exit 2
+trap 'rm -rf "$PREFLIGHT_WORK"' EXIT
+if python3 - <<'PYCODE' > "$PREFLIGHT_WORK/renderer.js"
 import re
 html=open('desktop/renderer.html').read()
-print(max(re.findall(r'<script[^>]*>(.*?)</script>', html, re.S), key=len))
-PY
-if node --check /tmp/_r.js >/dev/null 2>&1; then echo "   ✅ renderer"; else echo "   ❌ renderer 構文エラー"; node --check /tmp/_r.js 2>&1|head -3; fail=1; fi
+scripts=re.findall(r'<script[^>]*>(.*?)</script>', html, re.S)
+inline=[s for s in scripts if s.strip()]
+if not inline: raise ValueError('renderer inline script missing')
+print('\n;\n'.join(inline))
+PYCODE
+then
+  if node --check "$PREFLIGHT_WORK/renderer.js"; then echo "   ✅ renderer"; else echo "   ❌ renderer 構文エラー"; fail=1; fi
+else
+  echo "   ❌ renderer script抽出失敗"; fail=1
+fi
+
+echo "── preflight検査器の正負対照（checker欠落・構文不正の偽GREEN防止）"
+if python3 ci/tests_preflight_gates.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
 
 echo "── 発話ディレクターの競合テスト"
 if node tests-speak-priority.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-speak-priority.js 2>&1|tail -5; fail=1; fi
@@ -260,7 +273,7 @@ echo "── G2 GAP鮮度：再生直前の照合（14秒の旧数値を再生�
 if node tests-gap-freshness.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-gap-freshness.js 2>&1|grep "❌"|head -8; fail=1; fi
 
 echo "── Gate 5道具：artifact検査が落ちるべき時に落ちるか（2026-08-26）"
-if node tests-artifact-verification.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-artifact-verification.js 2>&1|grep "❌"|head -8; fail=1; fi
+if node tests-artifact-verification.js >/dev/null 2>&1 && python3 ci/tests_artifact_gate.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-artifact-verification.js 2>&1|grep "❌"|head -8; python3 ci/tests_artifact_gate.py; fail=1; fi
 
 echo "── Gate 6受け皿：起動時module診断が全runtime moduleを見ているか（2026-08-26）"
 if node tests-runtime-module-status.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-runtime-module-status.js 2>&1|grep "❌"|head -8; fail=1; fi
@@ -346,6 +359,36 @@ if out=$(node tests-fuel-history-fallback.js 2>&1); then echo "   ✅ $(echo "$o
 echo "▶ 残り周回のdriver訂正保留：fixture e09（申告 vs SDK を区別し条件付きで答える・2026-09-14）"
 if out=$(node tests-laps-dispute-hold.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
 
+# WO-019: Road Atlanta one-consultation product E2E (real Bridge poll/handler + whole renderer
+# VM + real server; IO doubles only). Machine connection only — not a field/LLM/audio gate.
+# Guard cuts (--cuts, ~30 min) are run per release candidate, not here.
+echo "── terminal readbackのnative record binding（frame進行・失効・scope/epoch/TTL）"
+if node tests-terminal-readback-binding.js; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
+
+echo "▶ WO019 Road Atlanta一本の相談 E2E（実Bridge×全Renderer×実server、IOのみ模擬）"
+if out=$(python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格（exit2=HARNESS_ERROR）"; echo "$out"|grep -E "❌|HARNESS"|head -20; fail=1; fi
+echo "▶ WO019 guard cut anchor到達性（全cut anchorが現sourceで一意）"
+if out=$(python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py --anchors 2>&1); then echo "   ✅ anchors一意"; else echo "   ❌ anchor drift"; echo "$out"|grep "❌"; fail=1; fi
+echo "▶ WO019 post-stop Plan／宣言有効期間／意図pair"
+if python3 irsdk-bridge/tests_wo019_post_stop_plan.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_wo019_declaration_window.py >/dev/null 2>&1 && node tests-wo019-intent-pairs.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_wo019_post_stop_plan.py 2>&1|tail -5; python3 irsdk-bridge/tests_wo019_declaration_window.py 2>&1|tail -5; node tests-wo019-intent-pairs.js; fail=1; fi
+# WO-020: trace / queue metrics / Support export (E2E W01-W06 run inside the WO019 E2E above)
+# and the runtime coverage contract shared by all three Windows build workflows. Source and
+# synthetic/asar evidence only — a real PyInstaller/Windows artifact is checked in CI.
+echo "▶ WO020 観測recorder／Bridge trace unit（時計異常・上限・allowlist・重複・境界）"
+if node tests-wo020-observability.js >/dev/null 2>&1 && python3 irsdk-bridge/tests_wo020_bridge_trace.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-wo020-observability.js 2>&1|grep "❌"; python3 irsdk-bridge/tests_wo020_bridge_trace.py 2>&1|grep "❌"; fail=1; fi
+echo "▶ WO020 runtime coverage（Bridge import graph・renderer script・3 workflow契約、故意欠落RED）"
+out2=''
+if out=$(python3 ci/runtime_coverage.py source --require-workflows 2>&1) && out2=$(python3 ci/tests_runtime_coverage.py 2>&1); then echo "   ✅ $(echo "$out"|head -1|cut -c1-140)"; echo "   ✅ $(echo "$out2"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|head -8; echo "$out2"|grep "❌"|head -10; fail=1; fi
+# WO-021: Build identity (bridge.py Build = tracked build-info.json, marked unbuilt; one reader for
+# title/Support/badge/usage) and the retired Node bridge. The source/workflow drift checks run in
+# the WO020 runtime coverage step above; E2E I01 runs inside the WO019 E2E.
+echo "▶ WO021 Build identity reader（実main.js label・packaged同一性・未Build印・欠損）"
+if out=$(node tests-wo021-build-identity.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ WO001 Road Atlanta fixture（現契約regression、characterization廃止）"
+if out=$(node tests-wo001-road-atlanta-fixture.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep -E "❌|HARNESS"|head -10; fail=1; fi
+echo "▶ WO018 debrief outcome（after＋guard cut、旧treeは不在なら比較不能として数えない）"
+if out=$(node tests-wo018-debrief-outcome.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+
 echo ""
-if [ "$fail" -eq 0 ]; then echo "✅ 出荷可"; else echo "❌ 出荷不可（上記を直すこと）"; fi
+if [ "$fail" -eq 0 ]; then echo "✅ source preflight合格（artifact・Windows・実走は別ゲート）"; else echo "❌ 出荷不可（上記を直すこと）"; fi
 exit $fail

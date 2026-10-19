@@ -1,86 +1,34 @@
 #!/usr/bin/env node
 'use strict';
-
-// Build 272: execute the production endurance announcement function with no
-// network, TTS or browser.  This proves generation, dedupe and driver wording
-// rather than merely checking that strings exist in renderer.html.
-
-const fs = require('fs');
-const vm = require('vm');
-
-const renderer = fs.readFileSync(__dirname + '/desktop/renderer.html', 'utf8');
-const bridge = fs.readFileSync(__dirname + '/irsdk-bridge/bridge.py', 'utf8');
-const start = renderer.indexOf('function maybeAnnounceEnduranceFuelForecast(');
-const end = renderer.indexOf('\nfunction captureConfirmedFuelCapacity(', start);
-if (start < 0 || end < 0) throw new Error('production endurance radio function not found');
-const fnSource = renderer.slice(start, end);
-
-let checks = 0;
-function check(name, condition, detail = '') {
-  if (!condition) throw new Error(`${name}: ${detail}`);
-  checks++;
+// The WO011 execution contract deliberately treats multi-stop endurance as a
+// dated reference, never as a BOX/service instruction. Exercise the real cache,
+// projection and announcement caller; no core policy stub or paid provider IO.
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const H=require('./tests-renderer-canonical-context');
+const bridge=fs.readFileSync(__dirname+'/irsdk-bridge/bridge.py','utf8');
+let checks=0;const check=(label,ok)=>{assert(ok,label);checks++;};
+const plan={available:true,multi_stop:true,next_fuel_stop_in_laps:1,future_stop_count:4,
+ splash_forecast:{available:true,splash_candidate:true,projected_final_service_l:8.4,avoid_splash_save_l_per_lap:.14,avoid_splash_feasible:true}};
+function harness(value,source={source_frame_sequence:10,session_time_s:100},cut=false){
+ const spoken=[],traces=[];const context={lastSessionType:'Race',lastSessionNum:4,enduranceForecastAnnouncedKey:'',isSessionEndingLifecycle:()=>false,isJapaneseEngineer:()=>true,addMsg:()=>{},pushMsg:()=>{},speak:(text,meta)=>spoken.push({text,meta}),diagnosticLog:(...a)=>traces.push(a),SPEAK_PRIO:{P3_STRATEGY:3}};
+ H.install(context,{session_num:4,lap:20},{fuel_strategy:{value:{endurance_plan:value},calculation_source:source}});
+ let src=H.extract('maybeAnnounceEnduranceFuelForecast');
+ if(cut){const m=src.replace('rec?.source_valid?rec.value?.endurance_plan:null','rec?.value?.endurance_plan');check('source validity cut anchor matched',m!==src);src=m;}
+ vm.runInContext(src,context);return {context,spoken,traces};
 }
-
-function harness() {
-  const spoken = [];
-  const traces = [];
-  const context = {
-    lastSessionType: 'Race',
-    lastSessionNum: 4,
-    enduranceForecastAnnouncedKey: '',
-    enduranceFuelWindowAnnouncedKey: '',
-    isSessionEndingLifecycle: () => false,
-    isJapaneseEngineer: () => true,
-    addMsg: () => {},
-    pushMsg: () => {},
-    speak: (text, meta) => spoken.push({ text, meta }),
-    diagnosticLog: (kind, detail) => traces.push({ kind, detail }),
-    SPEAK_PRIO: { P2_CRITICAL: 2, P3_STRATEGY: 3 },
-    Number, String, Math, JSON,
-  };
-  vm.createContext(context);
-  vm.runInContext(fnSource, context);
-  return { context, spoken, traces };
-}
-
-const early = harness();
-early.context.maybeAnnounceEnduranceFuelForecast({
-  session_type: 'Race', lap: 5,
-  endurance_fuel_plan: { available: true, multi_stop: true,
-    next_fuel_stop_in_laps: 22, future_stop_count: 4,
-    splash_forecast: { available: false } },
-});
-check('12h early stint stays silent', early.spoken.length === 0, JSON.stringify(early.spoken));
-
-const window = harness();
-const t1 = { session_type: 'Race', lap: 20,
-  endurance_fuel_plan: { available: true, multi_stop: true,
-    next_fuel_stop_in_laps: 1, future_stop_count: 4,
-    splash_forecast: { available: false } } };
-window.context.maybeAnnounceEnduranceFuelForecast(t1);
-window.context.maybeAnnounceEnduranceFuelForecast(t1);
-check('fuel window T-1 speaks once', window.spoken.length === 1, JSON.stringify(window.spoken));
-check('fuel window call is concise', window.spoken[0].text === '次周ボックス。通常給油。', window.spoken[0].text);
-check('fuel window uses critical priority', window.spoken[0].meta.prio === 2, JSON.stringify(window.spoken[0]));
-
-const splash = harness();
-const secondHalf = { session_type: 'Race', lap: 80,
-  endurance_fuel_plan: { available: true, multi_stop: true,
-    next_fuel_stop_in_laps: 8, future_stop_count: 2,
-    splash_forecast: { available: true, splash_candidate: true,
-      projected_final_service_l: 8.4,
-      avoid_splash_save_l_per_lap: 0.14,
-      avoid_splash_feasible: true } } };
-splash.context.maybeAnnounceEnduranceFuelForecast(secondHalf);
-splash.context.maybeAnnounceEnduranceFuelForecast(secondHalf);
-check('second-half splash forecast speaks once', splash.spoken.length === 1, JSON.stringify(splash.spoken));
-check('splash forecast gives service and per-lap target',
-  splash.spoken[0].text === '終盤スプラッシュ約8.4L見込み。回避には毎周0.14Lセーブ。', splash.spoken[0].text);
-
-check('Bridge imports endurance fuel authority', bridge.includes('import endurance_fuel as endurance_fuel_mod'));
-check('Bridge passes current-stint verdict into P0 authority', bridge.includes('endurance_plan=_endurance_plan'));
-check('Bridge telemetry exposes endurance plan', bridge.includes("'endurance_fuel_plan': ("));
-check('Bridge radio never uses whole-race total for requested stop',
-  bridge.includes("_warning_requested_add = max(") && bridge.includes("session_effective_fuel_capacity_l or 0.0"));
-
-console.log(`✅ endurance radio and bridge wiring: ${checks} checks`);
+const valid=harness(plan);valid.context.maybeAnnounceEnduranceFuelForecast({});valid.context.maybeAnnounceEnduranceFuelForecast({});
+check('same canonical calculation is announced once',valid.spoken.length===1);
+check('multi-stop stays an explicit dated reference',/0\.0秒前の参考計算/.test(valid.spoken[0].text));
+check('no unsupported pit/fuel instruction is established',/ピットや給油指示は確定しない/.test(valid.spoken[0].text)&&!/次周ボックス|毎周0\.14Lセーブ/.test(valid.spoken[0].text));
+check('reference uses strategy priority',valid.spoken[0].meta.prio===3);
+check('reference carries the real recommendation binding',valid.spoken[0].meta.strategyBinding.kind==='recommendation'&&valid.spoken[0].meta.precheck());
+const early=harness({...plan,next_fuel_stop_in_laps:22});early.context.maybeAnnounceEnduranceFuelForecast({});check('early stint does not create an immediate service command',early.spoken.length===1&&!/次周ボックス/.test(early.spoken[0].text));
+const single=harness({...plan,multi_stop:false});single.context.maybeAnnounceEnduranceFuelForecast({});check('single-stop plan does not enter multi-stop reference',single.spoken.length===0);
+const missing=harness(plan,null);missing.context.maybeAnnounceEnduranceFuelForecast({endurance_fuel_plan:plan});check('raw endurance echo cannot bypass missing calculation provenance',missing.spoken.length===0);
+const future=harness(plan,{source_frame_sequence:11,session_time_s:101});future.context.maybeAnnounceEnduranceFuelForecast({});check('future calculation fails closed',future.spoken.length===0);
+const mutant=harness(plan,{source_frame_sequence:11,session_time_s:101},true);mutant.context.maybeAnnounceEnduranceFuelForecast({});check('same future-source case goes RED when source_valid gate is removed',mutant.spoken.length===1);
+check('Bridge imports endurance calculation module',bridge.includes('import endurance_fuel as endurance_fuel_mod'));
+check('Bridge passes current-stint verdict to fuel calculation',bridge.includes('endurance_plan=_endurance_plan'));
+check('Bridge exposes reference plan',bridge.includes("'endurance_fuel_plan': ("));
+check('requested stop does not use whole-race total',bridge.includes('_warning_requested_add = max(')&&bridge.includes('session_effective_fuel_capacity_l or 0.0'));
+console.log('✅ endurance reference/caller contract: '+checks+' checks');

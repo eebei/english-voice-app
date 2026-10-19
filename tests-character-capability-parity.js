@@ -21,6 +21,9 @@ const context={sel:'James',lastSessionType:'Race',usageBuild:'240',Date,Math,
   usageCount:()=>{},loadEvidenceRecords:()=>[],
   validFinishPosition:v=>Number.isInteger(Number(v))&&Number(v)>0?Number(v):null};
 vm.createContext(context);
+// WO018：この区間にはdebrief outcome helperも入る。実module（desktop/debrief-outcome.js）をwindowへ載せる。
+context.window=context;
+vm.runInContext(fs.readFileSync('desktop/debrief-outcome.js','utf8'),context);
 vm.runInContext(source,context);
 
 const characters={

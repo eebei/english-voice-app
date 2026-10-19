@@ -1,0 +1,212 @@
+[
+  {
+    "id": "WO014-M1",
+    "why": "modern invalid/unavailable raceContextでもauthFuelがlive.fuelへ生rawfallbackする旧欠陥を復元",
+    "file": "prompts.js",
+    "from": "const authFuel = rcFacts ? rcFacts.fuel_level_l : (rcUnavailableNoFallback ? null : live.fuel);",
+    "to": "const authFuel = rcFacts ? rcFacts.fuel_level_l : live.fuel;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M2",
+    "why": "active_plan/penalty/pit/allowed_actions/unknownsのprompt直列化(canonicalStateNote)を無効化",
+    "file": "prompts.js",
+    "from": "if (raceContext) {",
+    "to": "if (false) {",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M3",
+    "why": "schema strict化: available:true時のrace_identity必須チェックを外す（親repro: race_identity:null受理）",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (!object(ri) || !boundedStr(ri.race_instance_id)) return false;",
+    "to": "if (false) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M5",
+    "why": "auxiliary_observationsのsource_frame sequence一致検査を外す（別frameのaux raw読みがverifiedへ昇格）",
+    "file": "desktop/race-context-builder.js",
+    "from": "&& integer(auxRef.source_frame_sequence) && auxRef.source_frame_sequence === snapshot.source_frame.sequence);",
+    "to": "&& integer(auxRef.source_frame_sequence));",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M6",
+    "why": "fuel_level_lの上限boundsを外す（毒raw fuel 777.25がschemaを通過）",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (!(f.fuel_level_l === null || (nonNegFinite(f.fuel_level_l) && f.fuel_level_l <= MAX_FUEL_L))) return false;",
+    "to": "if (!(f.fuel_level_l === null || nonNegFinite(f.fuel_level_l))) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M7",
+    "why": "contextのdeadline(20秒)検査を外す（古いgenerated_atのcontextを新鮮と誤認）",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (ctx.generated_at > nowMs + 2000 || nowMs - ctx.generated_at > CONTEXT_DEADLINE_MS) return false;",
+    "to": "if (ctx.generated_at > nowMs + 2000) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M8",
+    "why": "round2: active_plan.record_refの本人race/session/decision/revision一致検査を外す（別raceのrecord_refが合格する）",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (!recordRefMatches(a.record_ref, ri, a.decision_id, a.revision)) return false;",
+    "to": "if (!object(a.record_ref)) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M9",
+    "why": "round2: calculation_referencesのsource_valid:true時のage_s/calculation_source必須を外す（null同伴のsource_valid:trueが合格する）",
+    "file": "desktop/race-context-builder.js",
+    "from": "  if (r.source_valid) {\n    if (!(nonNegFinite(r.age_s) && r.age_s <= MAX_CALC_AGE_S)) return false;\n    if (!object(r.calculation_source)) return false;\n  } else if (r.age_s !== null && !nonNegFinite(r.age_s)) return false;",
+    "to": "  if (r.source_valid) {\n  } else if (r.age_s !== null && !nonNegFinite(r.age_s)) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M10",
+    "why": "round2: checkPaceJudgment()のstale-binding fenceを外す（session変化後もpace replyが喋られる）",
+    "file": "desktop/renderer.html",
+    "from": "    if(paceBinding && !strategyProjection.validBinding(paceBinding)){\n      diagnosticLog('PACE_CHECK_SUPPRESSED','reason=stale_binding_discarded direction='+direction);\n      return;\n    }\n    addMsg('ai',reply);",
+    "to": "    addMsg('ai',reply);",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M11",
+    "why": "round2: runJudgeCall()のstale-binding fenceを外す（session変化後もjudge replyが喋られる）",
+    "file": "desktop/renderer.html",
+    "from": "  if(judgeBinding && !strategyProjection.validBinding(judgeBinding)){\n    diagnosticLog('JUDGE_CALL_SUPPRESSED','reason=stale_binding_discarded kind='+data.kind);\n    return;\n  }\n  addMsg('ai',speech);",
+    "to": "  addMsg('ai',speech);",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M12",
+    "why": "round3: liveNoteのclass_pos/pos modern-gateを外す（生live.class_posがprompt直読に戻る）",
+    "file": "prompts.js",
+    "from": "const authClassPos = rcUnavailableNoFallback ? (rcAux ? rcAux.class_position : null) : live.class_pos;",
+    "to": "const authClassPos = live.class_pos;",
+    "expect_red": [
+      "tests-wo014-actual-vertical.js"
+    ]
+  },
+  {
+    "id": "WO014-M13",
+    "why": "round3: liveNoteのstandings_gaps modern-gateを外す（生live.standings_gapsがprompt直読に戻る）",
+    "file": "prompts.js",
+    "from": "const authStandingsGaps = rcUnavailableNoFallback ? (rcAux ? rcAux.standings_gaps : null) : live.standings_gaps;",
+    "to": "const authStandingsGaps = live.standings_gaps;",
+    "expect_red": [
+      "tests-wo014-actual-vertical.js"
+    ]
+  },
+  {
+    "id": "WO014-M14",
+    "why": "round3: liveNoteのleaders modern-gateを外す（生live.leadersがprompt直読に戻る）",
+    "file": "prompts.js",
+    "from": "const authLeaders = rcUnavailableNoFallback ? (rcAux ? rcAux.leaders : null) : live.leaders;",
+    "to": "const authLeaders = live.leaders;",
+    "expect_red": [
+      "tests-wo014-actual-vertical.js"
+    ]
+  },
+  {
+    "id": "WO014-M15",
+    "why": "round3: judgeCallNote carTagのmodern-gateを外す（battle/catchup/defendで生j.car_numberに戻る）",
+    "file": "prompts.js",
+    "from": "const carTag = (!raceContextModern && j.car_number) ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)",
+    "to": "const carTag = (j.car_number) ? (isJ ? j.car_number + '号車' : 'car #' + j.car_number)",
+    "expect_red": [
+      "tests-wo014-actual-vertical.js"
+    ]
+  },
+  {
+    "id": "WO014-M16",
+    "why": "round3: judgeCallNote gapTxtのmodern-gateを外す（battle/catchup/defendで生j.gapに戻る）",
+    "file": "prompts.js",
+    "from": "const gapTxt = raceContextModern",
+    "to": "const gapTxt = false",
+    "expect_red": [
+      "tests-wo014-actual-vertical.js"
+    ]
+  },
+  {
+    "id": "WO014-M17",
+    "why": "round3: canonicalizeLiveDataのfuel_strategy正規化を外す（親が実HTTPで再現した生raw fuel_strategy復活）",
+    "file": "server.js",
+    "from": "fuel_strategy: (fuelRef && fuelRef.source_valid) ? fuelRef.value : null,",
+    "to": "fuel_strategy: live.fuel_strategy,",
+    "expect_red": [
+      "tests-chat-http.js"
+    ]
+  },
+  {
+    "id": "WO014-M18",
+    "why": "round3: raceIdentity.bridge_process_epoch===nullでのrecord_ref epoch照合bypassを復元",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (raceIdentity.bridge_process_epoch === null || ref.bridge_process_epoch !== raceIdentity.bridge_process_epoch) return false;",
+    "to": "if (raceIdentity.bridge_process_epoch !== null && ref.bridge_process_epoch !== raceIdentity.bridge_process_epoch) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M19",
+    "why": "round3: aux.source_refの現在ref一致検査を外す（objectであればverifiedへ昇格）",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (sr.race_instance_id !== ctx.race_identity.race_instance_id) return false;",
+    "to": "if (false) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M20",
+    "why": "round3: historical_relevant_memory itemのsession_num本人scope検査を外す（別sessionの履歴が合格する）",
+    "file": "desktop/race-context-builder.js",
+    "from": "if (ref.session_num !== ctx.race_identity.session_num) return false;",
+    "to": "if (false) return false;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M21",
+    "why": "round3: 主callAPI()の無条件raceContext reply fence(critical_context)を外す（戦略/燃料話題以外はfenceが一切無かった旧欠陥を復元）",
+    "file": "desktop/renderer.html",
+    "from": "):strategyProjection.binding('critical_context');",
+    "to": "):null;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  },
+  {
+    "id": "WO014-M22",
+    "why": "round3: deliverOperationalFollowUp()のraceContext reply fenceを外す（5callerのうち唯一fenceが無かった旧欠陥を復元）",
+    "file": "desktop/renderer.html",
+    "from": "const _followUpBinding=strategyProjection.binding('critical_context');",
+    "to": "const _followUpBinding=null;",
+    "expect_red": [
+      "tests-race-context-builder.js"
+    ]
+  }
+]

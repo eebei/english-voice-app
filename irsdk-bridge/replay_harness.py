@@ -88,6 +88,7 @@ DEFAULT_ARRAYS = {
 
 SESSION_INFO = """
 WeekendInfo:
+ SubSessionID: 101000
  TrackName: monza
  TrackDisplayName: Autodromo Nazionale Monza
  TrackLength: 5.793 km
@@ -107,6 +108,7 @@ DriverInfo:
  DriverCarMaxFuelPct: 1.000
  Drivers:
  - CarIdx: 0
+   UserID: 10101
    UserName: Test Driver
    CarNumber: "1"
    CarScreenName: Mercedes-AMG GT3 2020
@@ -153,7 +155,7 @@ class FakeReader:
     per iteration at the top of the loop, so that is where the cursor moves.
     """
 
-    def __init__(self, frames, session_info=SESSION_INFO):
+    def __init__(self, frames, session_info=SESSION_INFO, on_frame_ready=None):
         self.frames = list(frames)
         self.session_info = session_info
         self.cursor = -1
@@ -162,6 +164,13 @@ class FakeReader:
         # 本番 reader が持つキャッシュ。poll ループが毎フレーム clear() する。
         self.var_cache = {}
         self._last_si_len = len(session_info or '')
+        # ★WO-005 REVISE 1 R1/R2：`replay()`の`on_frame_ready`フックを保持する。
+        #   `poll_iracing()`本体は一切変更せず、外界境界（reader）だけを
+        #   差し替える既存方針のまま、このフレームの本番処理が始まる
+        #   直前（＝直前フレームまでのbroadcast/logが確定した時点）に
+        #   任意のセットアップ（`bridge._queue_strategy_decision_response()`等、
+        #   本番websocketハンドラが呼ぶのと同じ関数）を差し込めるようにする。
+        self.on_frame_ready = on_frame_ready
 
     # ── connection ────────────────────────────────────────────────────
     def is_open(self):
@@ -179,6 +188,15 @@ class FakeReader:
         if self.cursor >= len(self.frames):
             raise ReplayComplete()
         self.frames_served += 1
+        if self.on_frame_ready is not None:
+            self.on_frame_ready(self.cursor, self.frame)
+        # ★WO-002：フレームに `_inactive: True` を立てておくと、この frame は
+        #   「SDKはactiveだが一時的にActive=Falseを返す」を再現する
+        #   （reconnect/sustained-disconnect の境界だけを差し替える。断中の
+        #   telemetry値は本番も読まないので他フィールドは無視してよい）。
+        #   通常フレームには存在しないキーなので既存fixtureの挙動は不変。
+        if self.frame.get('_inactive'):
+            return False
         return True
 
     # ── data ──────────────────────────────────────────────────────────
@@ -204,13 +222,13 @@ class FakeReader:
 
     def read_float(self, name):
         value = self.frame.get(name)
-        return float(value) if isinstance(value, (int, float)) else None
+        return value if isinstance(value,bool) else (float(value) if isinstance(value, (int, float)) else None)
 
     read_double = read_float
 
     def read_int(self, name):
         value = self.frame.get(name)
-        return int(value) if isinstance(value, (int, float)) else None
+        return value if isinstance(value,bool) else (int(value) if isinstance(value, (int, float)) else None)
 
     def read_bool(self, name):
         value = self.frame.get(name)
@@ -273,33 +291,63 @@ class ReplayResult:
 
 
 def replay(frames, *, session_info=SESSION_INFO, dispatch_result=None,
-           seconds_per_frame=1.0):
+           seconds_per_frame=1.0, on_frame_ready=None, recovery_path=None):
     """Run the REAL `bridge.poll_iracing()` over saved frames.
 
     Returns a `ReplayResult` with every broadcast and log line the production
     loop produced.  Nothing here reimplements bridge logic.
+
+    `on_frame_ready(cursor, frame, result)`, if given, runs immediately
+    before frame `cursor` is handed to the real production loop — i.e. after
+    every broadcast/log up through frame `cursor - 1` is already in `result`,
+    and before this frame's own processing starts. This is the seam WO-005
+    REVISE 1 R1/R2 use to inject a production-shaped inbound message (calling
+    `bridge._queue_strategy_decision_response()` / `bridge.
+    _queue_strategy_delivery_report()` — the SAME functions the real
+    websocket handler calls for the `strategy_decision_response` /
+    `strategy_decision_delivery` commands) at an exact point in the replay,
+    without reimplementing or hand-calling any Lifecycle/decision logic.
+
+    `result.live_frames` is the reader's own frame list. An `on_frame_ready`
+    hook may splice reader-boundary frames (e.g. `make_frame(_inactive=True)`
+    blocks) in at index `cursor` so they are served next — WO-005 R2B uses
+    this to put a same-identity inactive/reconnect gap right after a runtime-
+    observed broadcast without guessing its frame index in advance.
     """
     import bridge
 
     result = ReplayResult()
-    fake = FakeReader(frames, session_info=session_info)
+    fake = FakeReader(
+        frames, session_info=session_info,
+        on_frame_ready=((lambda cursor, frame: on_frame_ready(cursor, frame, result))
+                        if on_frame_ready is not None else None))
+    result.live_frames = fake.frames
 
     original = {
         'reader': bridge.reader,
         'broadcast': bridge.broadcast,
         'log': bridge.log,
         'time': bridge.time,
+        'pit_loss_path': bridge.PIT_LOSS_PATH,
+        'recovery_path':bridge.RECOVERY_PATH,
     }
     dispatched = (dispatch_result if dispatch_result is not None
                   else getattr(bridge, 'BROADCAST_DISPATCHED', True))
 
     def capture_broadcast(event):
         result.broadcasts.append(dict(event) if isinstance(event, dict) else event)
-        return dispatched
+        return dispatched(event) if callable(dispatched) else dispatched
 
     def capture_log(msg):
         result.logs.append(str(msg))
 
+    import tempfile, shutil, os
+    calibration_tmp = tempfile.TemporaryDirectory(prefix="pitwall-replay-")
+    calibration_path = os.path.join(calibration_tmp.name, "pit_loss_calibration.json")
+    if os.path.isfile(original["pit_loss_path"]):
+        shutil.copyfile(original["pit_loss_path"], calibration_path)
+    bridge.PIT_LOSS_PATH = calibration_path
+    bridge.RECOVERY_PATH = recovery_path or os.path.join(calibration_tmp.name,"strategy_recovery_v1.json")
     bridge.reader = fake
     bridge.broadcast = capture_broadcast
     bridge.log = capture_log
@@ -316,5 +364,8 @@ def replay(frames, *, session_info=SESSION_INFO, dispatch_result=None,
         bridge.broadcast = original['broadcast']
         bridge.log = original['log']
         bridge.time = original['time']
+        bridge.PIT_LOSS_PATH = original['pit_loss_path']
+        bridge.RECOVERY_PATH = original['recovery_path']
+        calibration_tmp.cleanup()
     result.frames_served = fake.frames_served
     return result

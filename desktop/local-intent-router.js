@@ -173,6 +173,30 @@
   };
 
   function fuelWindowStatus(live, lang) {
+    if(live?.strategy_projection){
+      const ref=live.strategy_options_reference,plan=ref?.value?.plan_b;
+      if(!ref?.source_valid||!plan)return {state:'measuring',reply:isJP(lang)?'燃料ウィンドウの計算根拠を確認できない。':'The fuel-window calculation is unavailable.'};
+      // A countdown and open flag describe the original calculation, not a
+      // later frame. Never promote that reference into a current BOX permission.
+      const sameFrame=ref.calculation_source?.source_frame_sequence===live.canonical_lifecycle?.source_frame?.sequence;
+      const age=Number(ref.age_s).toFixed(1);
+      if(!sameFrame){
+        // WO-019: answer the question with what that calculation said (window lap, never a
+        // countdown or "pit now") plus the current canonical agreement, keeping its age.
+        const jp=isJP(lang),openLap=integer(plan.target_lap),active=live.canonical_lifecycle?.lifecycle?.active||null;
+        const windowLine=openLap===null?'':plan.fuel_window_open===true
+          ?(jp?`その計算では${openLap}周目から窓が開いている。`:`It had the window open from lap ${openLap}. `)
+          :plan.fuel_window_open===false||plan.reason==='fuel_window_not_open'
+            ?(jp?`その計算では${openLap}周目から開く見込み。`:`It expected the window to open on lap ${openLap}. `):'';
+        const activeLine=active?(jp?`合意中はPlan ${active.selected_plan}${integer(active.target_lap)===null?'、ピット周未確認':`、${active.target_lap}周目ピット`}。`
+          :`The agreed plan is ${active.selected_plan}${integer(active.target_lap)===null?', with an unknown target':', pit lap '+active.target_lap}. `)
+          :(jp?'合意中のPlanは無い。':'There is no agreed plan. ');
+        return {state:'reference',reply:jp?`燃料ウィンドウは${age}秒前の比較計算。${windowLine}${activeLine}現在の成立条件は再確認が必要。`
+          :`The fuel-window comparison was calculated ${age} seconds ago. ${windowLine}${activeLine}Current conditions require confirmation.`};
+      }
+      if(plan.available===true&&plan.fuel_window_open===true)return {state:'open',reply:isJP(lang)?'燃料ウィンドウの比較条件は成立。ピット実行は現在合意中のPlanで確認する。':'The fuel-window comparison conditions hold. Check execution against the current agreed plan.'};
+      return {state:'waiting',reply:isJP(lang)?'燃料ウィンドウの比較条件はまだ成立していない。':'The fuel-window comparison conditions do not currently hold.'};
+    }
     const options = live && live.strategy_options && typeof live.strategy_options === 'object'
       ? live.strategy_options : {};
     const planB = options.plan_b && typeof options.plan_b === 'object' ? options.plan_b : {};
@@ -203,6 +227,64 @@
     return null;
   };
 
+  // WO-019: "前回のピット" is the previous-REFUEL lookup only with a quantity word.
+  // "前回のピットはどうだった？" asks how it went and continues to the conversation path,
+  // whose context carries the saved Bridge-confirmed outcome of that race.
+  const PREVIOUS_FUEL_RE=/(?:前回|前の|この前).{0,10}(?:給油|ガソリン|フューエル|fuel)|(?:前回|前の|この前).{0,10}ピット.{0,12}(?:給油|何リットル|リットル|リッター|量)|last.*fuel|prev.*refuel/i;
+
+  // One semantic decision is shared by the public command API and sendMsg.
+  function classifyDriverIntent(raw) {
+    const text=normalizeSttText(String(raw||'').trim());
+    const windowTopic=/(?:ウ[ィイ]?ンド(?:ウ)?|ウインド(?:ウ)?|window)/i.test(text);
+    const pit=/(?:ピット|ボックス|box|pit|プラン|plan|先に入る|早めに入る)/i.test(text);
+    const historical=/(?:前回|先週|昨日|前のレース|この前|以前|さっき.{0,12}(?:言った|言って)|って言った|と言った|と言って|と発言|とは言って|ってどういう意味|という意味|[「『“]|last time|previously|said|quoted)/i.test(text);
+    // A separate tyre clause must not negate an explicit pit cancellation:
+    // "ピット中止、タイヤ交換はしない". Keep unknown clauses and every
+    // pit/plan clause conservative; only an explicitly separate tyre topic is
+    // outside this operation's negation scope. History/condition/question
+    // checks below still apply to the complete utterance.
+    const negationText=text.split(/[、。;,；]/).filter(clause=>
+      !/(?:タイヤ|tyres?|tires?)/i.test(clause)
+      ||/(?:ピット|ボックス|box|pit|プラン|plan|キャンセル|取消|中止|cancel)/i.test(clause)).join('、');
+    const negated=/(?:^\s*(?:not|no)\s+(?:box|pit)|言ってない|言っていない|入らない|入んない|行かない|行かん|しない|つもりはない|やめないで|取り消さない|キャンセルしない|ではない|じゃない|入るな|行くな|don't|do not|won't|will not|not going)/i.test(negationText);
+    const conditional=/(?:もし|仮に|だったら|ならば|なら|if\b|would\b)/i.test(text);
+    const question=/[?？]|(?:入って|行って|して)いい|入れる|入るべき|どう|べき|いいの|入るかな|入ろうか|合ってる|合っている|だよね|だった|should|can (?:we|i)|may i|could|whether/i.test(text);
+    const penalty=/(?:黒旗|ブラックフラッグ|ペナルティ|ドライブスルー|ストップ.{0,2}ゴー|black flag|penalty|drive.?through|stop.?go)/i.test(text);
+    if(windowTopic){
+      // Remove only the window clause, then reuse the same operation parser.
+      // A future window condition scopes the whole instruction.
+      if(!historical&&!conditional&&!/(?:開いたら|開けば|オープンしたら|when.{0,20}window|if.{0,20}window)/i.test(text)){
+        const operationText=text.replace(/[^、。]*(?:ウ[ィイ]?ンド(?:ウ)?|ウインド(?:ウ)?|window)[^、。]*?(?:だけど|けど|だから|でも|but|so)\s*/i,'');
+        if(operationText!==text){const out=classifyDriverIntent(operationText);if(out.kind==='command'||out.kind==='ambiguous'||out.kind==='penalty')return {...out,reasonText:out.kind==='command'&&/(?:から|because)/i.test(text)?text:out.reasonText};}
+      }
+      if(historical)return {kind:'historical',topic:'window'};
+      if(/(?:コール|watch|call).{0,12}(?:やめないで|取り消さない|取消しない|キャンセルしない)|don't.{0,10}cancel/i.test(text))return {kind:'negated',topic:'window'};
+      if(/(?:教えないで|言わないで|コール.{0,5}(?:取消|取り消|やめ|中止)|(?:watch|call|notify|notification).{0,8}cancel|cancel.{0,8}(?:watch|call)|don't.{0,16}(?:tell|call|notify))/i.test(text))return {kind:'window_cancel',priority:true};
+      if(/(?:(?:開)?いたら|開けば|オープンしたら|open).{0,30}(?:教えて|言って|コール|知らせ|notify|よろしく)|(?:tell|call|let me know|notify).{0,24}window.{0,10}open/i.test(text))return {kind:'window_watch',priority:true};
+      if(conditional||/(?:開いたら|開けば|オープンしたら|if.*window)/i.test(text))return {kind:'conditional',topic:'window'};
+      return {kind:'window_status',priority:true};
+    }
+    if(!pit&&!penalty&&/(?:から|ので|ため|because|reason)/i.test(text)&&/(?:前|遅い|詰ま|traffic|slow|because)/i.test(text))return {kind:'reason_followup',priority:true};
+    if(!pit&&!penalty&&!/(?:やっぱり|変更|訂正).{0,12}[0-9０-９]+周|cancel.{0,8}plan/i.test(text))return {kind:'other'};
+    if(historical)return {kind:'historical',topic:'pit'};
+    if(penalty)return {kind:'penalty',priority:true};
+    if(negated)return {kind:'negated',topic:'pit'};
+    if(conditional)return {kind:'conditional',topic:'pit'};
+    if(question)return {kind:'consultation',topic:'pit',executionQuestion:/(?:合ってる|合っている|だよね|だった)|(?:入る|入って|入れる|行って|pit|box).{0,12}(?:いい|べき|can|should)|(?:can|should|may|could).{0,12}(?:pit|box)|この周|今周/i.test(text)};
+    const targets=[...text.matchAll(/([0-9０-９]{1,3})\s*周(?:目)?/g)].map(m=>Number(m[1].replace(/[０-９]/g,d=>'０１２３４５６７８９'.indexOf(d))));
+    const cancel=/(?:やめる|やめとく|止める|取り消|キャンセル|中止|cancel)/i.test(text);
+    const early=/(?:先に|早めに)入る|(?:今周|この周|今の周|この\s*周|今の\s*周).{0,8}(?:入る|ピット|ボックス)|(?:ピット|ボックス).{0,8}(?:入る|行く|する)|(?:box|pit)\s+(?:this lap|now)\b/i.test(text);
+    if(/(?:今周|この周|this lap|now).{0,24}(?:次周|次の周|next lap)|(?:次周|次の周|next lap).{0,24}(?:今周|この周|this lap|now)/i.test(text)||new Set(targets).size>1||(cancel&&early)||(targets.length&&/(?:今周|この周|this lap|next lap|次周)/i.test(text)))return {kind:'ambiguous',priority:true};
+    if(cancel)return {kind:'command',operation:'cancel',requestedTargetLap:null,priority:true};
+    if(targets.length&&!/(?:変更|変え|訂正|じゃなくて|やっぱり|ピット.{0,12}(?:入る|行く)|box|pit|move|change)/i.test(text))return {kind:'consultation',topic:'pit',executionQuestion:true};
+    if(targets.length)return {kind:'command',operation:'amend',requestedTargetLap:targets[0],reasonText:/(?:から|ので|ため|because)/i.test(text)?text:null,priority:true};
+    if(/次(?:の)?周|next lap/i.test(text))return {kind:'command',operation:'amend',nextLap:true,priority:true};
+    const reason=/(?:から|ので|ため|because|due to|traffic|slow)/i.test(text);
+    if(early)return {kind:'command',operation:'early_pit',requestedTargetLap:null,reasonText:reason?text:null,explanationContinuation:reason&&!/(?:今周|この周|今の周|now|this lap)/i.test(text),priority:true};
+    return {kind:'consultation',topic:'pit'};
+  }
+  const driverPlanCommand=text=>{const semantic=classifyDriverIntent(text);return semantic.kind==='command'?semantic:null;};
+
   function strategyCallAnswer(input, live, text, lang) {
     const requested = strategyCallKind(text);
     if (!requested) return null;
@@ -212,6 +294,30 @@
     const playbook = wiring && wiring.playbook;
     if (!engine || typeof engine.evaluateStrategies !== 'function' || !playbook) return null;
     const snapshot = engine.evaluateStrategies(playbook, live);
+    if(snapshot?.source==='bridge_canonical'){
+      const rec=snapshot.recommendations?.strategy_options,opts=rec?.value;
+      const active=snapshot.active;
+      if(!opts?.available||rec?.source_valid!==true)return answer('strategy_consultation_unavailable',isJP(lang)?'現在の戦略候補の計算根拠を確認できない。':'Current strategy comparison evidence is unavailable.',{sourceRef:snapshot.publication_ref});
+      const id=requested==='recommendation'?opts.selected_plan:requested;
+      const candidate=opts['plan_'+String(id).toLowerCase()];
+      const age=rec.age_s;
+      const name='Plan '+id;
+      const target=integer(candidate?.target_lap);
+      const ev=opts.decision_evidence?.['plan_'+String(id).toLowerCase()+'_evidence']||opts['plan_'+String(id).toLowerCase()+'_evidence']||{};
+      const required=Array.isArray(candidate?.conditions_required)?candidate.conditions_required:[];
+      const failed=Array.isArray(ev.conditions_failed)?ev.conditions_failed:required.filter(k=>ev.conditions_met?.[k]!==true);
+      const labels={fuel_window_open:['燃料窓','fuel window'],relative_pace_advantage:['前走車に対する実測ペース優位','measured pace advantage over the car ahead'],rejoin_clear:['復帰先のクリアな状況','clear rejoin'],rival_pitted_first:['前走車の先ピット','the rival pitting first'],clean_air:['クリーンエア','clean air'],fuel_save_on_target:['燃費目標達成','fuel-saving target'],rejoin_not_worse:['復帰位置が悪化しないこと','rejoin not getting worse']};
+      const reasonText={no_undercut_room:['早入りできる余地がない','there is no room to undercut'],fuel_window_not_open:['燃料窓がまだ開いていない','the fuel window is not open'],conditions_unproven:['成立条件をまだ確認できていない','the required conditions are not proven'],no_room_to_extend:['延長できる余地がない','there is no room to extend'],fuel_save_target_unreachable:['必要な燃費目標に届かない','the fuel-saving target is unreachable'],fuel_save_target_unrealistic:['必要な燃費節約が現実的な範囲を超えている','the required fuel saving is beyond the supported range'],effective_capacity_insufficient:['タンク容量が不足する','fuel capacity is insufficient']};
+      const jp=isJP(lang),available=candidate?.available===true;
+      const reason=reasonText[candidate?.reason||ev.reason]?.[jp?0:1]||(jp?'必要な根拠が未成立または不足している':'required evidence is unmet or unavailable');
+      const evidence=failed.map(k=>labels[k]?.[jp?0:1]||(jp?'未確認の成立条件':'an unconfirmed required condition')).join(jp?'・':', ');
+      const targetLine=target===null?'':jp?`、${target}周目ピット案`:` for lap ${target}`;
+      const result=available?(jp?`${name}の比較条件は成立${targetLine}。`:`${name} comparison conditions are met${targetLine}. `)
+        :(jp?`${name}は今は選べない。${reason}。${evidence?'確認が必要なのは'+evidence+'。':''}`:`${name} is held: ${reason}. ${evidence?'Still needed: '+evidence+'. ':''}`);
+      const activeLine=active?(jp?`合意中はPlan ${active.selected_plan}${integer(active.target_lap)===null?'、ピット周未確認':`、${active.target_lap}周目`}。`:`The agreed plan is ${active.selected_plan}${integer(active.target_lap)===null?', with an unknown target':', lap '+active.target_lap}. `):(jp?'まだ合意していない。':'There is no agreed plan. ');
+      const msg=result+activeLine+(jp?`計算は${age.toFixed(1)}秒前。候補の成立と実行指示は分けて確認する。`:`The calculation is ${age.toFixed(1)} seconds old. Candidate conditions are separate from execution permission.`);
+      return answer('strategy_consultation',msg,{role:'recommendation_not_execution',candidateAvailable:available,candidateReason:candidate?.reason||ev.reason||'evidence_unavailable',calculationSource:rec.calculation_source,calculationAgeS:age},{strategySnapshot:snapshot});
+    }
     const meta = {
       type:'strategy_consultation', requestedPlan:requested,
       selectedPlan:snapshot && snapshot.recommendation
@@ -432,10 +538,35 @@
       || (typeof globalThis !== 'undefined' ? globalThis.PitwallSessionStrategyState : null)
       || null;
     if (!text || !live) return { handled:false };
+    const semantic=input.driverIntent||classifyDriverIntent(text);
+    const reasonTarget=input.pendingDriverPlanCommand;
+    if(semantic.kind==='reason_followup')return reasonTarget&&reasonTarget.operation==='early_pit'?{handled:true,intent:'pit_execution_reason',reply:'',source:'local_authority',confidence:'requested',action:{type:'driver_plan_reason',reasonText:text}}:{handled:false};
+    if(semantic.kind==='command'){
+      if(semantic.explanationContinuation&&reasonTarget&&reasonTarget.operation==='early_pit')return {handled:true,intent:'pit_execution_reason',reply:'',source:'local_authority',confidence:'requested',action:{type:'driver_plan_reason',reasonText:text}};
+      return {handled:true,intent:semantic.operation==='early_pit'?'pit_execution_declaration':semantic.operation==='amend'?'pit_plan_amend_request':'pit_plan_cancel_request',reply:'',source:'local_authority',confidence:'requested',action:{type:'driver_plan_command',operation:semantic.operation,requestedTargetLap:semantic.nextLap?(integer(live.lap)===null?null:integer(live.lap)+1):semantic.requestedTargetLap,reasonText:semantic.reasonText||null}};
+    }
+    if(semantic.kind==='ambiguous')return answer('pit_command_clarification',isJP(lang)?'ピット指示が複数ある。変更する周回か取消か、一つに確認して。':'There are conflicting pit instructions. Confirm one target lap or cancellation.');
+    if(semantic.kind==='penalty'){
+      const event=strategyState?.available?strategyState.pitEvents?.at(-1):null;
+      const official=event?.execution_relation==='penalty'&&stratCan(strategyModule,'answerPitDecision')?strategyModule.answerPitDecision(strategyState,{lang}).reply:null;
+      const flag=strategyState?.available?strategyState.black_flag:null;
+      const jp=isJP(lang);
+      const status=flag?.available&&flag.state==='true'?(jp?'現在のSDK黒旗はON。処罰内容と消化済みかはこのbitだけでは分からない。':'The current SDK black flag is ON; this bit does not establish the penalty requirement or completion.')
+        :flag?.available&&flag.state==='false'?(jp?'現在のSDK黒旗はOFF。処罰なしや消化済みとは断定しない。':'The current SDK black flag is OFF; this does not establish no penalty or completion.')
+        :(jp?'現在の黒旗状態は確認できない。':'The current black-flag state is unavailable.');
+      return answer('penalty_consultation',(official?official+' ':jp?'ペナルティ対応の申告として受けた。':'I received a penalty report. ')+status+(jp?' 通常のピット変更は送っていない。':' No ordinary pit change was sent.'));
+
+    }
+    if(semantic.kind==='window_cancel')return answer('fuel_window_cancel',isJP(lang)?'了解。ウィンドウのコールを取り消した。':'Copy. The window notification is cancelled.',{type:'cancel_fuel_window_watch'});
+    if(semantic.kind==='window_watch')return answer('fuel_window_watch',isJP(lang)?'了解。ウィンドウが開いたら短くコールする。':'Copy. I will call when the window opens.',{type:'arm_fuel_window_watch'});
+    if(semantic.kind==='window_status')return answer('fuel_window_status',fuelWindowStatus(live,lang).reply);
+    // These turns continue through the existing conversation/LLM path. No
+    // later legacy pattern may reinterpret them as a current pit operation.
+    if((['negated','conditional'].includes(semantic.kind)||semantic.kind==='historical'&&!PREVIOUS_FUEL_RE.test(text)||semantic.kind==='consultation'&&semantic.executionQuestion)&&semantic.topic)return {handled:false,driverIntent:semantic};
 
     // ★Phase 3：過去レース記録への質問（「前回給油は？」等）
     // session-memory.answerPreviousFuel() へ delegate。raceHistory + currentUserId で照合。
-    if (/(?:前回|前の|この前).{0,10}(?:給油|ガソリン|ピット|フューエル|fuel)|last.*fuel|prev.*refuel/i.test(text)) {
+    if (PREVIOUS_FUEL_RE.test(text)) {
       const sessionMem = input && input.sessionMemory && typeof input.sessionMemory === 'object'
         ? input.sessionMemory : null;
       const history = Array.isArray(input.raceHistory) ? input.raceHistory : [];
@@ -485,9 +616,9 @@
           //   だったかどうかはrenderer側が追跡し、該当する時だけ
           //   `strategy_decision_response`を送り返す——ここ（純粋な意思決定層）は
           //   I/Oを持たず、結果を返すだけ。
-          return answer('plan_confirmed', isJP(lang)
-            ? `了解、${resolved.plan.lap}周目でボックス。合意した。`
-            : `Copy. Box on lap ${resolved.plan.lap}, agreed.`,
+          return answer(strategyState.readonly_projection?'plan_confirmation_requested':'plan_confirmed', isJP(lang)
+            ? (strategyState.readonly_projection?`了解、${resolved.plan.lap}周目案への承認を送る。反映を確認中。`:`了解、${resolved.plan.lap}周目でボックス。合意した。`)
+            : (strategyState.readonly_projection?`Copy. Sending approval for lap ${resolved.plan.lap}; awaiting Bridge confirmation.`:`Copy. Box on lap ${resolved.plan.lap}, agreed.`),
           { planId: resolved.proposal.plan_id || null },
           { resolvedProposal: { decisionId: resolved.proposal.decision_id || null, accepted: true } });
         }
@@ -502,34 +633,33 @@
           { accepted: false, at: Date.now() });
         if (declined && declined.accepted === false) {
           return answer('plan_declined', isJP(lang)
-            ? '了解、今回は見送り。基準プランを継続。'
-            : 'Copy, holding off. Continuing the baseline plan.', null,
+            ? (strategyState.readonly_projection?'了解、見送りの意思を送る。現在の合意プランはBridgeで確認する。':'了解、今回は見送り。基準プランを継続。')
+            : (strategyState.readonly_projection?'Copy, sending your decline. The current agreed plan remains with Bridge.':'Copy, holding off. Continuing the baseline plan.'), null,
           { resolvedProposal: {
               decisionId: (declined.proposal && declined.proposal.decision_id) || null,
               accepted: false } });
         }
       }
     }
-    // A future fuel-window instruction is a monitor command, not a request
-    // for the current generic fuel total.  Build 279 sent this through
-    // fuelReply(), then lost the promised follow-up entirely.  Arm a local
-    // one-shot monitor; renderer delivers it from the authoritative Plan B
-    // window without an LLM or Railway round trip.
-    if (/(?:フューエル|燃料|給油).{0,10}(?:ウ[ィイ]?ンドウ|ウインド|window).{0,14}(?:(?:開)?いたら|開けば|オープンしたら).{0,14}(?:教えて|言って|コール|入る|入ろう|よろしく)|(?:tell|call|let me know).{0,16}(?:fuel )?window.{0,8}(?:open|opens)/i.test(text)) {
-      return answer('fuel_window_watch', isJP(lang)
-        ? '了解。ウィンドウが開いたら短くコールする。'
-        : 'Copy. I will call it briefly when the fuel window opens.',
-      { type:'arm_fuel_window_watch' });
-    }
-    if (/(?:フューエル|燃料|給油).{0,10}(?:ウ[ィイ]?ンドウ|ウインド|window)|(?:fuel )?window/i.test(text)) {
-      const status = fuelWindowStatus(live, lang);
-      return answer('fuel_window_status', status.reply);
-    }
     // Driver strategy calls consume the same A/B/C snapshot as proactive
     // radio.  The LLM must not independently recalculate or rename the plan.
     const strategyCall = strategyCallAnswer(input, live, text, lang);
     if (strategyCall) return strategyCall;
     if (/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
+      if(strategyState?.readonly_projection){
+        const a=strategyModule.answerFuel(strategyState,{lang});
+        const history=a.fuel_basis==='unavailable'?historyFuelEvidence(input,live,sessionAuthority,currentUserId):null;
+        const rate=history?finite(history.avgFuelPerLap):null;
+        let reply=a.reply;
+        if(rate!==null&&rate>0){
+          const warnings=Array.isArray(history.warnings)?history.warnings:[];
+          const differences=[];
+          if(warnings.includes('setup_mismatch'))differences.push(isJP(lang)?'セットアップが違う':'different setup');
+          if(warnings.includes('track_temp_delta'))differences.push(isJP(lang)?'路温が違う':'different track temperature');
+          reply+=isJP(lang)?` 同条件の本人履歴では1周${rate.toFixed(2)}L（過去参考値）。現在の実測燃費ではなく、完走やピット指示は確定できない。${differences.length?'前回とは'+differences.join('・')+'。':''}`:` Your scoped previous record used ${rate.toFixed(2)} L per lap (historical reference). This is not current measured fuel burn and does not establish finish or pit instructions.${differences.length?' '+differences.join(', ')+'.':''}`;
+        }
+        return answer('fuel_status',reply,null,{confidence:rate!==null?'estimate':a.fuel_basis==='unavailable'?'unavailable':'estimate',strategyBinding:a.binding,basis:rate!==null?'historical_reference':'bridge_calculation_reference',evidence_date:history?.recordDate||null});
+      }
       // ★Codex P1-1：`fuelReply()` は `pit_timing_authority`（pit前の全レース距離を
       //   前提にした旧権威）から「◯L不足」「Plan A継続」を作る。実走 18:44:53 は
       //   ピット済み・残り約2周で足りているのに「完走まで8.3L不足。Plan Aを継続」と言った。
@@ -683,7 +813,7 @@
         || /pit.{0,10}(?:which lap|what lap|when)|when.{0,10}pit/i.test(text)) {
       if (strategyModule && strategyState && stratCan(strategyModule, 'answerPitDecision')) {
         const a = strategyModule.answerPitDecision(strategyState,
-          { at: Date.now(), laps_remaining: integer(live.finish_crossings_authority) });
+          { at: Date.now(), lang, laps_remaining: integer(live.finish_crossings_authority) });
         return answer('pit_plan_question', a && a.reply);
       }
       return answer('pit_plan_question', isJP(lang)
@@ -1077,7 +1207,7 @@
   //   曖昧な質問文のまま片方だけを答えて終わらせない。
   const STRATEGY_TOPIC_INTENTS = new Set([
     'pit_plan_question', 'pit_plan_amend', 'pit_plan_cancel', 'pit_this_lap',
-    'fuel_status', 'fuel_window_watch', 'fuel_window_status', 'race_format',
+    'fuel_status', 'fuel_window_watch', 'fuel_window_cancel', 'fuel_window_status', 'penalty_consultation', 'race_format',
     'strategy_recommendation', 'strategy_normal', 'strategy_undercut', 'strategy_overcut',
     'strategy_consultation_held', 'strategy_consultation_unavailable',
   ]);
@@ -1114,7 +1244,7 @@
   //   渡す実際の判定結果だけ。判定が届かなければ従来どおり90秒TTLで自然に失効する。
   //   handled:true で許可リスト外の意図（天気・ベストラップ等、ローカルで確定的に
   //   別トピックと分かる場合）は引き続き即時無効化する——ここは変えない。
-  function route(input) {
+  function routeLegacy(input) {
     const strategy = input && input.strategy && typeof input.strategy === 'object' ? input.strategy : null;
     const strategyState = strategy && strategy.state ? strategy.state : null;
     const strategyModule = (strategy && strategy.api)
@@ -1144,5 +1274,15 @@
 
   // normalizeLapWords を公開するのは検査のため。route() 経由だけでは
   // 「来週」を壊しても intent が変わらず**変異が検出できなかった**（2026-09-06）。
-  return { route, formatDuration, formatLapTime, fuelWindowStatus, normalizeLapWords };
+  function route(input){
+    const out=routeLegacy(input);
+    if(input?.strategy?.state?.readonly_projection&&out?.handled&&/(?:pit|plan|fuel|strategy)/.test(String(out.intent||''))){
+      out.strategyBinding=out.strategyBinding||input.strategy.binding||null;
+      out.canonicalSource=input.strategy.state.publication_ref||null;
+    }
+    return out;
+  }
+
+  return { route, formatDuration, formatLapTime, fuelWindowStatus, normalizeLapWords,
+    driverPlanCommand, classifyDriverIntent };
 }));

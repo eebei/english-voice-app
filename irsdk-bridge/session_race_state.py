@@ -78,6 +78,27 @@ def register_active_plan(state, *, plan_id, plan_snapshot, snapshot_id, revision
     }
 
 
+def clear_active_plan(state, *, expected_plan_id=None):
+    """Remove only the compatibility projection of the canonical active plan.
+
+    WO-006 calls this after a successful Lifecycle transition.  A supplied
+    expected id makes a stale caller fail closed instead of clearing a newer
+    projection.  Recommended/calculated plan data remains separate.
+    """
+    if not isinstance(state, dict):
+        return state
+    current = state.get('active_plan')
+    if expected_plan_id is not None and current != expected_plan_id:
+        return state
+    return {
+        **state,
+        'active_plan': None,
+        'active_plan_snapshot': None,
+        'plan_snapshot_id': None,
+        'plan_revision': (state.get('plan_revision') or 0) + 1,
+    }
+
+
 def register_recommended_plan(state, *, plan_id, plan_snapshot, snapshot_id):
     """Record the LATEST calculated recommendation — never Driver-confirmed.
 

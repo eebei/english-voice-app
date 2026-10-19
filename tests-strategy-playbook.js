@@ -164,10 +164,9 @@ const renderer=fs.readFileSync(__dirname+'/desktop/renderer.html','utf8');
 check('renderer builds playbook from SessionInfo and exact stored evidence',
   renderer.includes('refreshStrategyPlaybook({announce:true})')
   && renderer.includes('matchingHistoricalAverageLap()'));
-check('a new driver can build the first playbook from three live laps',
-  renderer.includes("const becameAvailable=!activeStrategyPlaybook?.available")
-  && renderer.includes('driver_pace_sample_count)>=3')
-  && renderer.includes('refreshStrategyPlaybook({announce:false})'));
+check('runtime playbook is a canonical projection rather than a local state owner',
+  renderer.includes('function currentStrategyPlaybook(){ return strategyProjection.readPlaybook(); }')
+  && !renderer.includes('let activeStrategyPlaybook'));
 check('renderer updates after live clean laps before evaluating a switch',
   renderer.indexOf('updateStrategyPlaybookFromLive(lastTelemetry)')
     < renderer.indexOf('evaluateLiveStrategySwitch(lastTelemetry)'));
@@ -179,7 +178,7 @@ check('renderer updates after live clean laps before evaluating a switch',
 //   `liveStrategyValidation` へ保存されるだけである。
 //   （実行による証明は tests-bridge-strategy-proposal-roundtrip.js ⑧ が担当する。）
 check('live evaluation feeds the delivery precheck, not a second speech path',
-  renderer.includes('liveStrategyValidation={')
+  renderer.includes('const evaluation=strategyProjection.strategyEvaluation();')
   && !renderer.includes("kind:'strategy_playbook_switch'"));
 check('playbook switch refuses to speak before bridge strategy authority exists',
   fs.readFileSync(__dirname+'/desktop/strategy-playbook.js','utf8').includes('authority.available !== true'));

@@ -106,9 +106,10 @@ result = router.route({ text:'アンダーカットする？', lang:'ja', live:w
 check('missing strategy wiring fails closed to the existing conversation route', !result.handled);
 
 const renderer = fs.readFileSync('./desktop/renderer.html', 'utf8');
-check('product route injects the active playbook and tested strategy engine',
-  /strategyEvaluation:\(typeof activeStrategyPlaybook!==['"]undefined['"][\s\S]{0,160}\{playbook:activeStrategyPlaybook,api:window\.PitwallStrategyPlaybook\}/.test(renderer));
-check('proactive radio consumes evaluateStrategies instead of deciding independently',
-  /function evaluateLiveStrategySwitch[\s\S]{0,350}engine\.evaluateStrategies/.test(renderer));
+check('product route injects read-only canonical evaluation and projection',
+  renderer.includes('playbook:currentStrategyPlaybook(),api:{evaluateStrategies:()=>strategyProjection.strategyEvaluation()}')
+  && renderer.includes('live:currentCanonicalStrategyLive({...lastTelemetry,'));
+check('proactive evaluation consumes Bridge canonical recommendations without a local decision owner',
+  /function evaluateLiveStrategySwitch[\s\S]{0,350}strategyProjection\.strategyEvaluation/.test(renderer));
 
 console.log(`✅ Strategy Call Routing: ${pass} checks`);

@@ -25,7 +25,9 @@ checks = {
     "conditional pit-cycle is excluded by comparator unit":
         "pit_cycle_position_used" in Path(__file__).with_name("strategy_options.py").read_text(encoding="utf-8"),
     "Plan B has a mandatory next-lap box trigger":
-        "'trigger': 'strategy_plan_box_call'" in SOURCE,
+        'box_authority_delivery_mod.advance(' in SOURCE
+        and "'trigger':'strategy_plan_box_call'" in Path(__file__).with_name('box_authority_delivery.py').read_text()
+        and "inputs['current_lap']!=record.target_lap" in Path(__file__).with_name('box_authority_delivery.py').read_text(),
     # ★スライス2（2026-08-25）：リテラル一致から性質検査へ。
     #   守りたいのは「決定が id で追える」ことで、その id を保持する変数名ではない。
     #   さらに、broadcast した id と後段（pit exit / blend / session終了）へ
@@ -39,10 +41,15 @@ checks = {
     #   `plan_actionable_signature()`と同じ6要素からdecision_idを導出する
     #   （`record['decision_id'] = ... % (..., _sig_hash)`）——内容が変われば必ず
     #   別IDになる。
+    # ★WO-005：`active_decision_id`はもう`_decision_plan['decision_id']`を
+    #   直接代入しない——`plan_lifecycle`へ登録/reuse/置換した後のcanonical
+    #   active recordから`active_decision_id = _commit_active_record.decision_id`
+    #   として読む（Lifecycleがreuseした場合はこのdecision_idが`_decision_plan`の
+    #   ものと異なり得る——これはbug ではなく意図：Lifecycleが唯一のowner）。
     "Plan A/B decision is traced by decision id":
         "record['decision_id'] = " in SOURCE
         and "plan_actionable_signature(dict(record, selected_plan=selected))" in SOURCE
-        and "active_decision_id = _decision_plan['decision_id']" in SOURCE,
+        and "active_decision_id = _commit_active_record.decision_id" in SOURCE,
     "decision id is carried to the outcome stages":
         SOURCE.count("'decision_id': active_decision_id") >= 2
         and SOURCE.count("'active_decision_id': active_decision_id") >= 2,

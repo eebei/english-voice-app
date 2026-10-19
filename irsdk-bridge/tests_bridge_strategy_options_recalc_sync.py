@@ -350,11 +350,14 @@ class DecisionLockDoesNotDiscardPlanC(unittest.TestCase):
         ★MD#4 P1-3：box call gateは`strategy_options`（変わり続ける推薦）ではなく
         合意済みで凍結された`active_decision_plan`を読むよう変更した——この点も
         併せて確認する。"""
-        src_path = os.path.join(HERE, 'bridge.py')
-        with open(src_path, 'r', encoding='utf-8') as fh:
-            src = fh.read()
-        gate = src.index("active_decision_plan.get('selected_plan') in ('A', 'B', 'C')")
-        self.assertGreater(gate, 0)
+        from tests_wo008_fixed_target import DeliveryLedger
+        from dataclasses import replace
+        import box_authority_delivery as delivery
+        case=DeliveryLedger();ledger,record,inputs,candidate=case.setup_attempt()
+        for selected in ('A','B','C'):
+            _,_,box=delivery.advance(delivery.new_ledger(),replace(record,selected_plan=selected),inputs,on_track=True)
+            self.assertEqual(selected,box['selected_plan'])
+
 
 
 class PlanCFreshnessReverification(unittest.TestCase):
@@ -942,6 +945,62 @@ class ProposalDeliveryLifecycle(unittest.TestCase):
         self.assertEqual(state, 'audible')
         self.assertTrue(sent)
         self.assertIsNotNone(pending)
+
+    def test_audible_completed_after_audible_persists_as_its_own_state(self):
+        """WO015残条件群#3：completedは確証的な追加事実で、pending/sentを
+        変えないが、delivery_state自体は'audible'から区別できる
+        'audible_completed'へ進む——以前はdelivery_stateを不変で返していたため、
+        ACKされた瞬間にこの事実がどこからも読み返せなくなっていた。"""
+        pending_in = self._pending()
+        pending, sent, state, outcome = bridge.apply_proposal_delivery(
+            pending_in, True, 'audible',
+            {'decision_id': 'x', 'session_num': 1, 'dispatch_id': 'x#1', 'outcome': 'audible_completed'})
+        self.assertEqual(outcome, 'audible_completed')
+        self.assertEqual(state, 'audible_completed')
+        self.assertTrue(sent)
+        self.assertIs(pending, pending_in, 'completedはpendingを再武装も取り消しもしない')
+
+    def test_audible_completed_before_audible_is_stale_fail_closed(self):
+        """同dispatchの'audible'をまだ確認していない状態でcompletedが来るのは
+        再送の入れ替わり等の順序不整合——新たな確定事実として記録しない
+        （fail-closedでstale、delivery_stateは不変）。"""
+        pending_in = self._pending()
+        pending, sent, state, outcome = bridge.apply_proposal_delivery(
+            pending_in, True, 'inflight',
+            {'decision_id': 'x', 'session_num': 1, 'dispatch_id': 'x#1', 'outcome': 'audible_completed'})
+        self.assertEqual(outcome, 'stale')
+        self.assertEqual(state, 'inflight')
+        self.assertIs(pending, pending_in)
+        self.assertTrue(sent)
+
+    def test_audible_completed_retransmission_is_idempotent(self):
+        """Desktopのoutboxはackが返るまで再送する。二度目のcompleted報告も
+        同じ'audible_completed'状態のまま——strayな'stale'にもpending破壊にも
+        ならない。"""
+        pending_in = self._pending()
+        pending, sent, state, outcome = bridge.apply_proposal_delivery(
+            pending_in, True, 'audible_completed',
+            {'decision_id': 'x', 'session_num': 1, 'dispatch_id': 'x#1', 'outcome': 'audible_completed'})
+        self.assertEqual(outcome, 'audible_completed')
+        self.assertEqual(state, 'audible_completed')
+        self.assertIs(pending, pending_in)
+        self.assertTrue(sent)
+
+    def test_late_duplicate_audible_after_completed_does_not_regress_delivery_state(self):
+        """独立反証「owner同dispatch順序」：'audible'のack自体が切断等で失われて
+        いる間に'audible_completed'の方が先に（正しい順序で）確定していると、
+        Desktopのoutboxは'audible'をackが返るまで再送し続ける。その遅延/重複
+        'audible'をそのまま適用すると、確定していたdelivery_stateが
+        'audible_completed'から'audible'へ後退する（Codex実測反例そのもの）。
+        delivery_stateは単調——このdispatchでは絶対に後退しない。"""
+        pending_in = self._pending()
+        pending, sent, state, outcome = bridge.apply_proposal_delivery(
+            pending_in, True, 'audible_completed',
+            {'decision_id': 'x', 'session_num': 1, 'dispatch_id': 'x#1', 'outcome': 'audible'})
+        self.assertEqual(outcome, 'audible', '遅延audibleも通常のackは受け取る（outboxが無限再送しないよう）')
+        self.assertEqual(state, 'audible_completed', 'completed確定後にaudibleへ後退してはならない')
+        self.assertIs(pending, pending_in)
+        self.assertTrue(sent)
 
     def test_dropped_before_audible_rearms_so_it_can_be_proposed_again(self):
         """Codexの反例そのもの：Desktopが発話前にdropした時、Bridgeが

@@ -41,15 +41,15 @@ const productionCode = [
   'handleStrategyPlanProposal', 'sendStrategyDecisionResponse', 'applyProposalJudgeTag',
   'bridgeProposalStillCurrent', 'sendStrategyDecisionDelivery', 'handleStrategyDecisionAck',
   'evaluateLiveStrategySwitch',
-  'flushStrategyResponseOutbox', 'strategyResponseKey',
+  'flushStrategyResponseOutbox', 'currentProposalResponseBinding', 'strategyResponseKey',
   'strategyOptionsSupportProposal', 'strategyDeliveryKey',
   'planConditionsFromOptions', 'sameProposalConditions',
-  'flushStrategyDeliveryOutbox', 'handleStrategyDeliveryAck',
+  'flushStrategyDeliveryOutbox', 'handleStrategyDeliveryAck', 'strategyProposalAudibleCompletedAt',
   'ensureStrategyState', 'conversationSessionKey',
   'speak', 'speechMayStart', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone',
   'playWebSpeech', 'nextUtteranceId', 'finalizeUtterance', 'discardQueuedUtterances',
   'pushMsg', 'addMsg', 'convoLog', 'recordLunaTurn', 'amendLunaTurnById', 'dropLunaTurnById',
-].map(extract).join('\n');
+  'currentStrategyStateAPI', 'currentCanonicalStrategyLive', 'memoryTurnTag', 'localMemoryOwnerRef', 'currentMemoryUserId', 'debriefOutcomeModule', 'stableTextHash', 'deriveUtteranceSource', 'utteranceTrace', 'utteranceTraceFor', 'loadConversationBoxes', 'ensureConversationBox', 'saveConversationBox'].map(extract).join('\n');
 
 let pass = 0, fail = 0;
 function check(label, ok, detail) {
@@ -73,7 +73,8 @@ function freshSandbox() {
   const sandbox = {
     console, setTimeout, clearTimeout, Date: FakeDate, JSON, Math, Number, String,
     Array, Object, Set, Map, Boolean, RegExp, Promise, Error, isNaN, parseFloat, parseInt,
-    speakQueue: [], draining: false, isSpeaking: false, speakWatchdog: null,
+    utteranceTraceLog: [], UTTERANCE_TRACE_MAX:200,
+  speakQueue: [], draining: false, isSpeaking: false, speakWatchdog: null,
     ttsAudio: null, currentSpeakPrio: 9, speakGeneration: 0, speakFetchCtrl: null,
     currentSpeakItem: null, voiceOn: true, pwVolume: 1, ttsDisabledUntil: 0,
     autoMicActive: false, autoMicRec: null, jamesAutoMicEnabled: false, jamesMuted: false,
@@ -96,7 +97,7 @@ function freshSandbox() {
     strategyPlaybookDecisionKeys: new Set(),
     bridgeStrategyDecisions: new Map(),
     strategyResponseOutbox: new Map(),
-    strategyDeliveryOutbox: new Map(),
+    strategyDeliveryOutbox: new Map(), strategyDeliveryReceipts:new Map(),
     liveStrategyValidation: null,
     _strategyStateBox: null, _strategyStateKey: '',
     document: { getElementById: () => ({ value: '', style: {} }) },
@@ -129,7 +130,8 @@ function freshSandbox() {
   sandbox.globalThis = sandbox;
   sandbox._uttSeq = 0;
   sandbox._convoBox = null;
-  sandbox.CONVO_BOX_KEY = 'pw_conversation_box_v1';
+  sandbox.CONVO_BOX_KEY = 'pw_conversation_boxes_v2';
+  sandbox.CONVO_BOX_SLOTS=6;
   const _store = {};
   sandbox.localStorage = {
     getItem: k => (k in _store ? _store[k] : null),
@@ -151,8 +153,28 @@ function freshSandbox() {
     vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), sandbox, { filename: file });
   }
   loadModule('desktop/session-strategy-state.js');
+  const CF=require('./tests-canonical-lifecycle');
+  let canonical=CF.fixture({race:'fixture-race',session:1,lap:7,decision:'active-a',proof:null,attempt:null});
+  canonical.continuity.stable_scope={race_instance_id:'fixture-race',session_num:1,driver_id:1};
+  canonical.lifecycle.awaiting=[{...canonical.lifecycle.active,decision_id:DECISION_ID,phase:'awaiting_driver',selected_plan:'B',target_lap:7,add_fuel_l:10,set_fuel_l:24,
+    record_ref:{...canonical.lifecycle.active.record_ref,decision_id:DECISION_ID}}];
+  sandbox.performance={now:()=>fakeNow};
+  sandbox.canonicalLifecycleCache=CF.initialized(()=>fakeNow,canonical);
+  sandbox.strategyProjection=require('./desktop/strategy-state-projection').create({canonical:sandbox.canonicalLifecycleCache,now:()=>fakeNow});
+  sandbox.memoryRaceScope=require('./desktop/race-memory-scope').createTracker();
+  sandbox.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');
+  sandbox.publishCanonical=(mutate)=>{
+    canonical=JSON.parse(JSON.stringify(canonical));canonical.snapshot_sequence++;canonical.snapshot_id=canonical.bridge_process_epoch+':'+canonical.snapshot_sequence;
+    mutate(canonical);if(!sandbox.canonicalLifecycleCache.receive(canonical))throw Error('invalid canonical fixture');
+  };
   vm.runInContext(productionCode, sandbox, { filename: 'renderer.html' });
   return sandbox;
+}
+
+function deliveryAck(sandbox, fields) {
+  const key=sandbox.strategyDeliveryKey(fields.session_num,fields.dispatch_id,fields.outcome);
+  const e=sandbox.strategyDeliveryOutbox.get(key)||sandbox.strategyDeliveryReceipts.get(key);
+  sandbox.handleStrategyDeliveryAck({...fields,utterance_id:e?.utteranceId??null,text_hash:e?.textHash??null});
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -226,13 +248,13 @@ const bridgeProposal = (over) => Object.assign({
 
     const st = sandbox.ensureStrategyState();
     check('①発話成立前はproposePlanが呼ばれていない（pending_proposalはまだ無い）',
-      st.pending_proposal === null, JSON.stringify(st.pending_proposal));
+      sandbox.ensureStrategyState().pending_proposal === null, JSON.stringify(sandbox.ensureStrategyState().pending_proposal));
 
     await finishCurrentUtterance(sandbox);
 
     check('①onSpokenでproposePlanが呼ばれ、pending_proposalが立つ',
-      st.pending_proposal !== null && st.pending_proposal.decision_id === bridgeProposal().decision_id,
-      JSON.stringify(st.pending_proposal));
+      sandbox.ensureStrategyState().pending_proposal !== null && sandbox.ensureStrategyState().pending_proposal.decision_id === bridgeProposal().decision_id,
+      JSON.stringify(sandbox.ensureStrategyState().pending_proposal));
     check('①bridgeStrategyDecisionsへ記録された（Bridgeへ応答を送り返す対象として）',
       sandbox.bridgeStrategyDecisions.has(bridgeProposal().decision_id),
       JSON.stringify([...sandbox.bridgeStrategyDecisions.keys()]));
@@ -241,7 +263,7 @@ const bridgeProposal = (over) => Object.assign({
     // local-intent-router.js は既に134件のテストで別途固定済みなので、
     // ここではresolvePendingProposal自体（本番session-strategy-state.js）を
     // routerと同じ呼び方で直接使い、rendererのresolvedProposal配線だけを検証する。
-    const S = sandbox.PitwallSessionStrategyState;
+    const S = sandbox.currentStrategyStateAPI();
     // ★注意：ここは外側(Node実時間)のDate.now()ではなくfakeNow（sandbox内FakeDateと
     //   同じ時計）を使う——実時間を使うとproposePlan時のat(fakeNow)との差がTTLを
     //   超え、無関係にstale判定されてしまう（このテストを書く過程で実際に踏んだ）。
@@ -268,13 +290,13 @@ const bridgeProposal = (over) => Object.assign({
     sandbox.sendStrategyDecisionResponse(resolved.proposal.decision_id, true);
     check('①同じdecisionの二重確定でも送信は1回のまま',
       wsSent.filter(m => m.cmd === 'strategy_decision_response').length === 1, JSON.stringify(wsSent));
-    sandbox.handleStrategyDecisionAck({ type: 'strategy_decision_ack',
+    sandbox.handleStrategyDecisionAck({ bridge_process_epoch:'epoch-a', type: 'strategy_decision_ack',
       decision_id: resolved.proposal.decision_id, session_num: 1,
       dispatch_id: DECISION_ID + '#1', outcome: 'accepted' });
     check('①ack受領でoutboxと追跡Mapの両方から消える',
       sandbox.strategyResponseOutbox.size === 0
       && !sandbox.bridgeStrategyDecisions.has(bridgeProposal().decision_id));
-    sandbox.handleStrategyDecisionAck({ type: 'strategy_decision_ack',
+    sandbox.handleStrategyDecisionAck({ bridge_process_epoch:'epoch-a', type: 'strategy_decision_ack',
       decision_id: resolved.proposal.decision_id, session_num: 1,
       dispatch_id: DECISION_ID + '#1', outcome: 'accepted' });
     check('①重複ackを受けても壊れない（冪等）', sandbox.strategyResponseOutbox.size === 0);
@@ -301,8 +323,8 @@ const bridgeProposal = (over) => Object.assign({
     }
     const st = sandbox.ensureStrategyState();
     check('②冒頭が実際に聞こえた時点でpending_proposalが立つ（spoken確定点）',
-      st.pending_proposal !== null && st.pending_proposal.decision_id === decisionId,
-      JSON.stringify(st.pending_proposal));
+      sandbox.ensureStrategyState().pending_proposal !== null && sandbox.ensureStrategyState().pending_proposal.decision_id === decisionId,
+      JSON.stringify(sandbox.ensureStrategyState().pending_proposal));
     check('②同時にbridgeStrategyDecisionsへ登録される',
       sandbox.bridgeStrategyDecisions.has(decisionId));
     const audibleMsgs = wsSent.filter(m => m.cmd === 'strategy_decision_delivery' && m.outcome === 'audible');
@@ -315,7 +337,7 @@ const bridgeProposal = (over) => Object.assign({
     await sleep(5);
 
     check('②中断でlocal pending_proposalが取り消される',
-      st.pending_proposal === null, JSON.stringify(st.pending_proposal));
+      sandbox.ensureStrategyState().pending_proposal === null, JSON.stringify(sandbox.ensureStrategyState().pending_proposal));
     const interruptedMsgs = wsSent.filter(m => m.cmd === 'strategy_decision_delivery'
       && m.outcome === 'audible_interrupted');
     check('②中断がBridgeへ通知される（Bridgeはpending/sentを解除して再武装できる）',
@@ -348,7 +370,7 @@ const bridgeProposal = (over) => Object.assign({
     await finishCurrentUtterance(sandbox);
     const decisionId = bridgeProposal().decision_id;
 
-    sandbox.applyProposalJudgeTag({ classification: 'confirm', decision_id: decisionId }, undefined);
+    sandbox.applyProposalJudgeTag({ classification: 'confirm', decision_id: decisionId }, sandbox.currentStrategyStateAPI().revision(sandbox.ensureStrategyState()));
     const responseMsgs3 = wsSent.filter(m => m.cmd === 'strategy_decision_response');
     check('③LLM judgeのconfirmでBridgeへ応答送信',
       responseMsgs3.length === 1 && responseMsgs3[0].accepted === true && responseMsgs3[0].decision_id === decisionId,
@@ -379,9 +401,9 @@ const bridgeProposal = (over) => Object.assign({
     const decisionId = bridgeProposal().decision_id;
     sandbox.handleStrategyPlanProposal(bridgeProposal());
     await sleep(5);
-    const S = sandbox.PitwallSessionStrategyState;
+    const S = sandbox.currentStrategyStateAPI();
     const st = sandbox.ensureStrategyState();
-    S.agreePitPlan(st, { lap: 12, at: fakeNow, source: 'driver' });   // revisionが動く
+    sandbox.publishCanonical(s=>{s.lifecycle.awaiting=[];s.lifecycle.active.target_lap=12;});   // revisionが動く
     if (ttsResolve) {
       ttsResolve.res({ status: 200, ok: true, json: async () => ({ audioContent: 'A-stale' }) });
       ttsResolve = null;
@@ -393,7 +415,7 @@ const bridgeProposal = (over) => Object.assign({
       && m.outcome === 'dropped_before_audible');
     check('⑤-a 未配送がBridgeへ通知される（Bridgeは再武装できる）',
       dropMsgs.length === 1 && dropMsgs[0].decision_id === decisionId, JSON.stringify(wsSent));
-    check('⑤-a 未配送ではpending_proposalが立たない', st.pending_proposal === null);
+    check('⑤-a 未配送ではpending_proposalが立たない', sandbox.ensureStrategyState().pending_proposal === null);
     check('⑤-a dedupe Set・追跡Mapが掃除される（同一IDを再配送できる）',
       !sandbox.strategyPlaybookDecisionKeys.has(bridgeProposal().dispatch_id)
       && !sandbox.bridgeStrategyDecisions.has(decisionId));
@@ -442,7 +464,7 @@ const bridgeProposal = (over) => Object.assign({
     await sleep(5);
     await finishCurrentUtterance(sandbox);
     const st = sandbox.ensureStrategyState();
-    const S = sandbox.PitwallSessionStrategyState;
+    const S = sandbox.currentStrategyStateAPI();
     const resolved = S.resolvePendingProposal(st, { accepted: true, at: fakeNow });
     check('⑥前提：合意が状態機械で成立している', resolved && resolved.accepted === true);
 
@@ -465,7 +487,7 @@ const bridgeProposal = (over) => Object.assign({
     check('⑥ack前はoutboxに残り続ける（送信成功では捨てない）',
       sandbox.strategyResponseOutbox.size === 1);
 
-    sandbox.handleStrategyDecisionAck({ decision_id: decisionId, session_num: 1,
+    sandbox.handleStrategyDecisionAck({ bridge_process_epoch:'epoch-a', decision_id: decisionId, session_num: 1,
       dispatch_id: DECISION_ID + '#1', outcome: 'accepted' });
     check('⑥ackで初めてoutboxから消える', sandbox.strategyResponseOutbox.size === 0);
   }
@@ -478,7 +500,7 @@ const bridgeProposal = (over) => Object.assign({
     await sleep(5);
     await finishCurrentUtterance(sandbox);
     const st = sandbox.ensureStrategyState();
-    const S = sandbox.PitwallSessionStrategyState;
+    const S = sandbox.currentStrategyStateAPI();
     S.resolvePendingProposal(st, { accepted: false, at: fakeNow });
     let shouldThrow = true;
     sandbox.irBridge.send = (raw) => {
@@ -552,7 +574,7 @@ const bridgeProposal = (over) => Object.assign({
     check('⑦-f 崩れた根拠のまま再生しない', !played.some(x => String(x) === 'A-drift'),
       JSON.stringify(played));
     const st = sandbox.ensureStrategyState();
-    check('⑦-f 再生していないのでpending_proposalも立たない', st.pending_proposal === null);
+    check('⑦-f 再生していないのでpending_proposalも立たない', sandbox.ensureStrategyState().pending_proposal === null);
     check('⑦-f 未配送としてBridgeへ返る',
       wsSent.filter(m => m.cmd === 'strategy_decision_delivery'
         && m.outcome === 'dropped_before_audible').length === 1, JSON.stringify(wsSent));
@@ -583,10 +605,10 @@ const bridgeProposal = (over) => Object.assign({
       && delivered[0].outcome === 'dropped_before_audible' && delivered[0].session_num === 1,
       JSON.stringify(wsSent));
     check('⑦-g ack前はoutboxに残り続ける', sandbox.strategyDeliveryOutbox.size === 1);
-    sandbox.handleStrategyDeliveryAck({ decision_id: decisionId, session_num: 1,
+    deliveryAck(sandbox, { decision_id: decisionId, session_num: 1,
       dispatch_id: DECISION_ID + '#1', outcome: 'dropped_before_audible', applied: 'released' });
     check('⑦-g ackで初めてoutboxから消える', sandbox.strategyDeliveryOutbox.size === 0);
-    sandbox.handleStrategyDeliveryAck({ decision_id: decisionId, session_num: 1,
+    deliveryAck(sandbox, { decision_id: decisionId, session_num: 1,
       dispatch_id: DECISION_ID + '#1', outcome: 'dropped_before_audible', applied: 'released' });
     check('⑦-g 重複ackでも壊れない', sandbox.strategyDeliveryOutbox.size === 0);
   }
@@ -622,29 +644,21 @@ const bridgeProposal = (over) => Object.assign({
   {
     wsSent.length = 0; audioInstances.length = 0;
     const sandbox = freshSandbox();
-    sandbox.activeStrategyPlaybook = { available: true, plans: { B: { available: true, first_pit_lap: 7 } } };
-    sandbox.activeRaceFacts = { sessionKey: '1' };
-    // JS側エンジンが「B成立」と判定した状況を本番関数へ通す。
-    sandbox.window.PitwallStrategyPlaybook = {
-      evaluateStrategies: () => ({
-        available: true, reason: 'ok', lap: 7, snapshot_id: 'js-snap-1',
-        candidates: { A: { available: true }, B: { available: true }, C: { available: false } },
-        recommendation: { selected_plan: 'B', decision_id: 'playbook:1:7:B', reason: 'js_engine',
-          evidence: { gap_ahead_s: 1.2, player_pace_advantage_s: 0.8, physical_rejoin_position: 6 } },
-      }),
-    };
+    // Canonical read projection replaced the retired second JS decision engine.
+    // A local evaluator cannot establish a new proposal or execution owner.
     sandbox.evaluateLiveStrategySwitch({ lap: 7, session_type: 'Race', on_track: true });
     await sleep(5);
     check('⑧JS評価は自前の発話を作らない（競合する第二の決定エンジンを停止）',
       sandbox.speakQueue.length === 0 && !sandbox.currentSpeakItem,
       JSON.stringify(sandbox.speakQueue.map(q => q.kind)));
     const stJs = sandbox.ensureStrategyState();
-    check('⑧JS評価は自前のpending_proposalを作らない', stJs.pending_proposal === null);
+    check('⑧JS評価は自前のpending_proposalを作らない', sandbox.ensureStrategyState().pending_proposal === null);
     check('⑧JS評価は自前のdecision IDを応答対象にしない',
       sandbox.bridgeStrategyDecisions.size === 0);
-    check('⑧JS評価は配信precheck用の検証結果として保存される',
-      !!sandbox.liveStrategyValidation && sandbox.liveStrategyValidation.candidates.B.available === true,
-      JSON.stringify(sandbox.liveStrategyValidation));
+    check('⑧評価は実canonical projectionの参照値だけを返す',
+      sandbox.evaluateLiveStrategySwitch({}).source==='bridge_canonical'
+      && sandbox.evaluateLiveStrategySwitch({}).active.decision_id==='active-a'
+      && sandbox.liveStrategyValidation===null);
 
     // 同じBをBridgeも検出して提案してきた：発話・pending・応答IDは一つだけ。
     sandbox.handleStrategyPlanProposal(bridgeProposal());
@@ -654,26 +668,19 @@ const bridgeProposal = (over) => Object.assign({
     check('⑧Bridge／JSが同じBを検出しても発話は一つだけ', queuedAll === 1, String(queuedAll));
     await finishCurrentUtterance(sandbox);
     check('⑧成立したpendingはBridgeのcanonical IDただ一つ',
-      stJs.pending_proposal !== null
-      && stJs.pending_proposal.decision_id === bridgeProposal().decision_id
-      && sandbox.bridgeStrategyDecisions.size === 1, JSON.stringify(stJs.pending_proposal));
+      sandbox.ensureStrategyState().pending_proposal !== null
+      && sandbox.ensureStrategyState().pending_proposal.decision_id === bridgeProposal().decision_id
+      && sandbox.bridgeStrategyDecisions.size === 1, JSON.stringify(sandbox.ensureStrategyState().pending_proposal));
   }
   {
     // ⑧-b JS評価が「今は成立しない」と言っている時、Bridge提案をholdする。
     wsSent.length = 0; audioInstances.length = 0;
     const sandbox = freshSandbox();
-    sandbox.activeStrategyPlaybook = { available: true, plans: { B: { available: true, first_pit_lap: 7 } } };
-    sandbox.window.PitwallStrategyPlaybook = {
-      evaluateStrategies: () => ({
-        available: true, reason: 'ok', lap: 7, snapshot_id: 'js-snap-2',
-        candidates: { A: { available: true }, B: { available: false }, C: { available: false } },
-        recommendation: null,
-      }),
-    };
+    sandbox.publishCanonical(s=>{s.lifecycle.awaiting=[];});
     sandbox.evaluateLiveStrategySwitch({ lap: 7, session_type: 'Race', on_track: true });
     sandbox.handleStrategyPlanProposal(bridgeProposal());
     await sleep(5);
-    check('⑧-b 現在frame評価が不成立ならBridge提案をholdする（発話しない）',
+    check('⑧-b 現在canonicalの提案が失効したらholdする（発話しない）',
       sandbox.speakQueue.length === 0 && !sandbox.currentSpeakItem,
       JSON.stringify(sandbox.speakQueue.map(q => q.kind)));
     check('⑧-b holdもBridgeへ返す',
@@ -749,20 +756,20 @@ const bridgeProposal = (over) => Object.assign({
     await sleep(5);
     await finishCurrentUtterance(sandbox);
     const st = sandbox.ensureStrategyState();
-    check('⑩2回目は成立する（pending_proposalが立つ）', st.pending_proposal !== null);
+    check('⑩2回目は成立する（pending_proposalが立つ）', sandbox.ensureStrategyState().pending_proposal !== null);
     const audible2 = wsSent.filter(m => m.cmd === 'strategy_decision_delivery' && m.outcome === 'audible');
     check('⑩2回目のaudible通知は#2のdispatch_idで送られる',
-      audible2.length === 1 && audible2[0].dispatch_id === DECISION_ID + '#2'
+      audible2.length >= 1 && audible2.every(m=>m.dispatch_id===DECISION_ID+'#2' && m.utterance_id===audible2[0].utterance_id) && audible2[0].dispatch_id === DECISION_ID + '#2'
       && audible2[0].decision_id === decisionId, JSON.stringify(wsSent));
     // 1回目は再生開始前に切られたので dropped_before_audible。滞留分は#1のまま届く
     // ——Bridgeは`dispatch_id`不一致で弾けるので、聞こえている#2を解除しない。
     const stale1 = wsSent.filter(m => m.cmd === 'strategy_decision_delivery'
       && m.outcome === 'dropped_before_audible');
     check('⑩滞留していた1回目の失敗通知は#1のまま送られる（Bridgeが試行で弾ける）',
-      stale1.length === 1 && stale1[0].dispatch_id === DECISION_ID + '#1', JSON.stringify(wsSent));
+      stale1.length >= 1 && stale1.every(m=>m.dispatch_id===DECISION_ID+'#1' && m.utterance_id===stale1[0].utterance_id) && stale1[0].dispatch_id === DECISION_ID + '#1', JSON.stringify(wsSent));
 
     // 合意も#2の試行として送られる。
-    const S = sandbox.PitwallSessionStrategyState;
+    const S = sandbox.currentStrategyStateAPI();
     const resolved = S.resolvePendingProposal(st, { accepted: true, at: fakeNow });
     sandbox.sendStrategyDecisionResponse(resolved.proposal.decision_id, true);
     const responses = wsSent.filter(m => m.cmd === 'strategy_decision_response');
@@ -805,13 +812,15 @@ const bridgeProposal = (over) => Object.assign({
     sandbox.handleStrategyPlanProposal(bridgeProposal());
     await sleep(5);
     await finishCurrentUtterance(sandbox);
+    sandbox.currentStrategyStateAPI().resolvePendingProposal(sandbox.ensureStrategyState(),{accepted:true,at:fakeNow});
+    sandbox.sendStrategyDecisionResponse(bridgeProposal().decision_id,true);
     // #1が今まさに追跡されている状態で、#1より前の（もう存在しない）試行への
     // ackが遅れて届いたと仮定する。
-    sandbox.handleStrategyDecisionAck({ decision_id: bridgeProposal().decision_id,
+    sandbox.handleStrategyDecisionAck({ bridge_process_epoch:'epoch-a', decision_id: bridgeProposal().decision_id,
       session_num: 1, dispatch_id: DECISION_ID + '#0', outcome: 'accepted' });
     check('⑪-c 一致しないdispatch_idのackは現在の追跡を消さない',
       sandbox.bridgeStrategyDecisions.has(bridgeProposal().decision_id));
-    sandbox.handleStrategyDecisionAck({ decision_id: bridgeProposal().decision_id,
+    sandbox.handleStrategyDecisionAck({ bridge_process_epoch:'epoch-a', decision_id: bridgeProposal().decision_id,
       session_num: 1, dispatch_id: DECISION_ID + '#1', outcome: 'accepted' });
     check('⑪-c 一致するdispatch_idのackは追跡を消す',
       !sandbox.bridgeStrategyDecisions.has(bridgeProposal().decision_id));

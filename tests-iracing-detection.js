@@ -12,7 +12,7 @@ function check(label, ok){
 }
 
 check('共有メモリopen時に検出済みイベントを送る',
-  bridge.includes("broadcast({'type': 'iracing_detected', 'telemetry_active': False})"));
+  bridge.includes("_publish_or_stage({'type': 'iracing_detected', 'telemetry_active': False})"));
 check('Browser後着でも検出・Active状態を副作用なしsnapshot同期',
   bridge.includes("await websocket.send(json.dumps({'type': 'iracing_status'")
   && bridge.includes("'detected': bool(_iracing_mem_detected)")
@@ -25,8 +25,10 @@ check('Active late joinも新鮮なsnapshot確認前は緑バーにしない',
 check('SDK非Activeを10秒周期でstatus/tick診断',
   bridge.includes('now_diag - inactive_diag_at >= 10.0')
   && bridge.includes('IRSDK WAIT: memory_open=1 status=%s tick=%s telemetry_active=0'));
-check('瞬断復帰で内部Active状態を復元',
-  /if active:\s+#[^\n]*\n\s+_iracing_telemetry_active = True\s+inactive_since = None/.test(bridge));
+const activeBlock=(bridge.match(/^        if active:\n(?: {12,}[^\n]*\n|\n)*/m)||[''])[0];
+const activeRestored=b=>b.includes('_iracing_telemetry_active = True') && b.includes('inactive_since = None');
+check('瞬断復帰で内部Active状態を実if active branch内で復元',activeRestored(activeBlock));
+check('他branchの代入が残っていてもactive branch削除はRED',!activeRestored(activeBlock.replace('_iracing_telemetry_active = True','')));
 check('rendererにiRacing検出済みの独立状態がある',
   renderer.includes('bridgeConnected = false, iracingDetected = false, iracingLive = false')
   && renderer.includes("if(data.type==='iracing_detected')"));

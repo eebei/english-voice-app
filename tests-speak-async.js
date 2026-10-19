@@ -25,7 +25,14 @@ function extract(name, kind) {
   return rest.slice(0, end > 0 ? end : rest.length);
 }
 
-const parts = ['speak', 'speechMayStart', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech']
+// ★独立root audit「tests-speak-async.js: deriveUtteranceSource undefined」
+// 修復：speak()は'generated'/'suppressed' traceのために
+// deriveUtteranceSource()/stableTextHash()/utteranceTrace()を無条件
+// （typeof guard無し）で呼ぶ。drainQueue()はspeechLatencyTrace()を
+// typeof guard付きで呼ぶため厳密には必須ではないが、他fixtureと同じ
+// 契約で実体を揃える（noop/固定値stubで欠落記号を隠さない）。
+const parts = ['speak', 'speechMayStart', 'drainQueue', 'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech',
+    'deriveUtteranceSource', 'stableTextHash', 'utteranceTrace', 'utteranceTraceFor', 'speechLatencyTrace']
   .map(n => extract(n, n === 'drainQueue' ? 'async' : 'fn')).join('\n');
 
 // ── テスト用のスタブ環境 ──
@@ -47,6 +54,10 @@ const sandbox = {
   jamesAutoMicEnabled: false, jamesMuted: false, startAutoMic: ()=>{},
   MAX_RADIO_QUEUE: 2,
   speakWindowOk: true, speakGateActive: false,
+  // ★独立root audit修復：実utteranceTrace()/speechLatencyTrace()が参照する
+  // module変数。欠落していたためderiveUtteranceSource等の抽出不足と同時に
+  // ReferenceErrorを招いていた。
+  utteranceTraceLog: [], UTTERANCE_TRACE_MAX: 200,
   IMMEDIATE_PIT_KINDS: new Set(['pit_entry','limiter_off','pit_box_here','pit_box_countdown']),
   // Build 265 fix E: defer displaced deferable items on interrupt (bounded).
   currentSpeakItem: null,

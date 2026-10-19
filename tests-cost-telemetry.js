@@ -40,8 +40,8 @@ check('queueを20セッションに制限',/q\.slice\(-20\)/.test(renderer));
 check('重複flushを単一in-flightへ合流',/if\(usageFlushInFlight\) return usageFlushInFlight/.test(renderer));
 check('429で再送ループを即時中断',/if\(r\.status===429\) return/.test(renderer));
 check('接続直後にdriver_activityを強制通知',
-  /broadcast\(\{'type': 'iracing_connected'\}\)[\s\S]*?_force_driver_activity_broadcast = True/.test(bridge)
-  && /if _force_driver_activity_broadcast:[\s\S]*?broadcast\(\{'type': 'driver_activity'/.test(bridge));
+  /_publish_or_stage\(\{'type': 'iracing_connected'\}\)[\s\S]*?_force_driver_activity_broadcast = True/.test(bridge)
+  && /if _force_driver_activity_broadcast:[\s\S]*?_publish_or_stage\(\{'type': 'driver_activity'/.test(bridge));
 check('PTTとtypedを別カウント',/usageCount\(inputSource==='ptt'\?'ptt':'typed'\)/.test(renderer));
 check('judge/pace/briefing/insightを個別カウント',
   ['auto_judge','auto_pace','briefing','insight'].every(k=>renderer.includes(`usageCount('${k}')`)));

@@ -19,7 +19,10 @@ import time
 import math
 import random
 import uuid
+import dataclasses
 import hashlib
+import canonical_lifecycle_snapshot as canonical_mod
+import durable_recovery as recovery_mod
 from datetime import datetime
 import threading
 import websockets
@@ -56,9 +59,18 @@ import endurance_fuel as endurance_fuel_mod
 import practice_profile
 import gap_call_policy as gap_call_policy_mod
 import driving_style as driving_style_mod
+import authoritative_race_facts as race_facts_mod
+import driver_pit_event as driver_pit_event_mod
+import plan_lifecycle as plan_lifecycle_mod
+import bridge_plan_lifecycle_adapter as plan_lifecycle_adapter
+import debrief_outcomes as debrief_outcomes_mod
+import driver_plan_command as driver_plan_command_mod
+import fixed_target_authority as fixed_target_authority_mod
+import box_authority_delivery as box_authority_delivery_mod
+import observability_trace as observability_trace_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 302 (strategy proposal agreement, delivery lifecycle, race-scoped decision IDs)"
+BUILD_VERSION = "Build 303 (strategy proposal agreement, delivery lifecycle, race-scoped decision IDs)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -83,6 +95,7 @@ PTT_CONFIG_PATH = os.path.join(_config_dir, "ptt_config.json")
 VOL_CONFIG_PATH = os.path.join(_config_dir, "vol_config.json")
 MIC_CONFIG_PATH = os.path.join(_config_dir, "mic_config.json")
 PIT_LOSS_PATH = os.path.join(_config_dir, "pit_loss_calibration.json")
+RECOVERY_PATH = os.path.join(_config_dir, "strategy_recovery_v1.json")
 
 # ── PTT（プッシュ・トゥ・トーク）状態 ──
 ptt_binding = None        # {"joy": int, "button": int, "name": str}
@@ -216,6 +229,10 @@ def log(msg):
     except Exception:
         pass
 
+# WO020: bounded allowlisted trace of canonical lifecycle transitions and staged event/ACK
+# dispatch results. Observation only (nothing reads it back); lines go through log().
+BRIDGE_TRACE = observability_trace_mod.BridgeTrace(emit=lambda line: log(line))
+
 # ── マイク入力（PTT用・ネイティブキャプチャ）──
 # pyaudioでマイクから直接音声をキャプチャ（フルスクリーン背後でも動作）
 ptt_audio = None
@@ -338,17 +355,63 @@ def _rms_level(data):
     except Exception:
         return 0
 
+# ★WO016：PTTテイクの識別子。物理down edgeで録音開始と同時に採番し、down/up broadcastと
+#   そのテイクの全終端（ptt_audio/ptt_diagnostic/ptt_error/mic_error）へ同じ値を載せる。
+#   Desktopは到着順（FIFO）ではなくこの値でテイクを同定する。process epochを含むため、
+#   Bridge再起動を跨いだ旧テイクは別物として識別できる。
+ptt_capture_seq = 0
+ptt_current_capture_id = None
+
+def _ptt_capture_fields(capture_id):
+    return {'capture_id': capture_id, 'bridge_process_epoch': canonical_mod.PROCESS_EPOCH}
+
 def start_ptt_record():
-    global ptt_recording, ptt_discard_recording
+    global ptt_recording, ptt_discard_recording, ptt_capture_seq, ptt_current_capture_id
     if not ptt_audio:
         return False
     if ptt_recording:
         log("PTT: duplicate start ignored")
         return False
+    ptt_capture_seq += 1
+    ptt_current_capture_id = '%s:ptt:%d' % (canonical_mod.PROCESS_EPOCH, ptt_capture_seq)
     ptt_discard_recording = False
     ptt_recording = True
-    log("PTT: recording started (native pyaudio)")
+    log("PTT: recording started (native pyaudio) capture_id=%s" % ptt_current_capture_id)
     return True
+
+def _ptt_physical_edge(pressed):
+    """物理PTTの立ち上がり/立ち下がりエッジ。録音の開始/停止を先に行い、その後で
+    同じテイクのcapture_id/epoch付きでdown/upをbroadcastする（★WO016）。"""
+    if pressed:
+        start_ptt_record()
+        event = dict({'type': 'ptt', 'state': 'down'}, **_ptt_capture_fields(ptt_current_capture_id))
+    else:
+        stop_ptt_record()
+        event = dict({'type': 'ptt', 'state': 'up'}, **_ptt_capture_fields(ptt_current_capture_id))
+    broadcast(event)
+    return event
+
+def _ptt_renderer_start(capture_id):
+    """Rendererのptt_start CMD。capture_idがあれば、それは物理edgeで既に開始済みのテイクの
+    確認にすぎない——一致すれば何もしない、不一致（遅延した旧テイクの確認）は無視する。
+    どちらの場合も新しいテイクを開始しない。capture_id無し（旧Renderer）は従来どおり開始する。"""
+    if capture_id is None:
+        return start_ptt_record()
+    if capture_id == ptt_current_capture_id and ptt_recording:
+        return False
+    log("PTT: renderer ptt_start for non-current take ignored capture_id=%s current=%s recording=%s"
+        % (capture_id, ptt_current_capture_id, ptt_recording))
+    return False
+
+def _ptt_renderer_stop(capture_id):
+    """Rendererのptt_stop CMD。capture_idがあれば、そのテイクが今も録音中の時だけ止める。"""
+    if capture_id is None:
+        return stop_ptt_record()
+    if capture_id == ptt_current_capture_id and ptt_recording:
+        return stop_ptt_record()
+    log("PTT: renderer ptt_stop for non-current take ignored capture_id=%s current=%s"
+        % (capture_id, ptt_current_capture_id))
+    return False
 
 def stop_ptt_record():
     global ptt_recording
@@ -376,107 +439,161 @@ def record_ptt_audio():
     if not ptt_audio:
         log("PTT record: pyaudio not initialized, skipping")
         return
-    import pyaudio, base64, wave
+    import pyaudio
     CHUNK = 1024
     FORMAT = pyaudio.paInt16   # LINEAR16 = Google STT互換（Float32ではない）
-    CHANNELS = 1
-    RATE = 16000
     while True:
         if not (ptt_recording or ptt_test_active):
             time.sleep(0.03)
             continue
-        dev_idx = selected_mic_index   # このキャプチャで使うデバイス（切替を都度反映）
-        try:
-            stream = ptt_audio.open(format=FORMAT, channels=CHANNELS, rate=RATE,
-                                    input=True, frames_per_buffer=CHUNK,
-                                    input_device_index=dev_idx)
-        except Exception as e:
-            log("PTT: mic open failed (device=%s): %s" % (str(dev_idx), str(e)))
-            broadcast({'type': 'mic_error', 'message': str(e)})
-            ptt_recording = False
-            ptt_test_active = False
+        if _ptt_record_one_stream(FORMAT, CHUNK) == 'open_failed':
             time.sleep(0.3)
-            continue
-        log("PTT: mic stream open (device=%s)" % str(dev_idx))
-        frames = []
-        was_recording = False
-        _tick = 0
-        try:
-            while ptt_recording or ptt_test_active:
-                try:
-                    data = stream.read(CHUNK, exception_on_overflow=False)
-                except Exception as e:
-                    log("PTT read error: " + str(e))
-                    break
-                if ptt_recording:
-                    frames.append(data)
-                    was_recording = True
-                _tick += 1
-                if _tick % 2 == 0:   # 約8回/秒でレベル送信（メーター用・軽量）
-                    broadcast({'type': 'mic_level', 'level': _rms_level(data)})
-        finally:
+
+
+def _ptt_record_one_stream(fmt, chunk):
+    """★WO016：1回のstream open〜closeを、open前に固定したテイクへ帰属させる。
+    open待ちの間にup→次のdownが起きても、失敗・frame・終端を新しいテイクへ付け替えない。"""
+    global ptt_recording, ptt_test_active
+    dev_idx = selected_mic_index   # このキャプチャで使うデバイス（切替を都度反映）
+    take_at_open = ptt_current_capture_id if ptt_recording else None
+    try:
+        stream = ptt_audio.open(format=fmt, channels=PTT_CHANNELS, rate=PTT_RATE,
+                                input=True, frames_per_buffer=chunk,
+                                input_device_index=dev_idx)
+    except Exception as e:
+        log("PTT: mic open failed (device=%s): %s" % (str(dev_idx), str(e)))
+        # 失敗はopen前に固定したテイクの終端。open中に始まった別テイクへは付けない。
+        err = {'type': 'mic_error', 'message': str(e)}
+        if take_at_open and take_at_open not in _ptt_terminated_captures:
+            _ptt_terminated_captures.add(take_at_open)
+            err.update(_ptt_capture_fields(take_at_open))
+        broadcast(err)
+        # 録音を止めるのは、失敗したテイク自身がまだ現行の時だけ（新しいテイクは次のopenで続行）。
+        if not (ptt_recording and ptt_current_capture_id != take_at_open):
+            ptt_recording = False
+        ptt_test_active = False
+        return 'open_failed'
+    log("PTT: mic stream open (device=%s)" % str(dev_idx))
+    frames = []
+    cap_id = take_at_open   # open前に録音中なら、そのテイク。マイクテスト中なら最初の録音frameで確定
+    _tick = 0
+    try:
+        while ptt_recording or ptt_test_active:
+            if cap_id is not None and ptt_current_capture_id != cap_id:
+                # 固定したテイクは終わり、次のテイクが始まった。2テイクを1つに混ぜない。
+                break
             try:
-                stream.stop_stream(); stream.close()
-            except Exception:
-                pass
-        broadcast({'type': 'mic_level', 'level': 0})   # メーターを戻す
-        if ptt_discard_recording:
-            ptt_discard_recording = False
-            log("PTT: discarded aborted recording")
-            continue
-        if was_recording and frames:
-            # WAVファイルはWindows対応パスに（/tmpはWindows未対応）
-            wav_file = os.path.join(_base, "ptt_audio.wav")
-            raw = b''.join(frames)
-            # ── マイク自動ゲイン（2026-07-17 Yuji方針）──
-            # 静かなマイクでもSTTが通るよう、ピーク音量を目標まで自動で底上げする。3人中2人が
-            # マイク音量問題を踏んだため、Windowsをいじらせずアプリ側で吸収する。無音は増幅しない
-            # （ノイズを大きくしないため）。クリップは飽和処理。audioop不可の環境では黙ってスキップ。
-            peak = 0
-            try:
-                import audioop
-                peak = audioop.max(raw, 2)          # 2バイト=16bit
-                TARGET = 22000                       # int16(32767)の約2/3。歪ませず十分な音量
-                if 200 < peak < TARGET:              # 無音(<200)は触らない／既に十分なら触らない
-                    gain = min(8.0, TARGET / float(peak))
-                    raw = audioop.mul(raw, 2, gain)  # クリップは内部で飽和
-                    log("PTT: auto-gain x%.1f (peak %d -> ~%d)" % (gain, peak, int(peak * gain)))
-            except Exception as _ge:
-                log("PTT auto-gain skipped: " + str(_ge))
-            try:
-                sample_width = ptt_audio.get_sample_size(FORMAT)
-                # rawはLINEAR16のraw PCM(gain調整後)なので、byte数から正確な秒数を逆算できる
-                # （WEBM_OPUS等の圧縮音声と違い、ここは推測不要の実測値）。
-                duration_seconds = len(raw) / float(RATE * CHANNELS * sample_width)
-                if duration_seconds < 0.35:
-                    log("PTT DIAG: too_short duration=%.2fs peak=%s device=%s" % (
-                        duration_seconds, str(peak), str(dev_idx)))
-                    broadcast({'type': 'ptt_diagnostic', 'reason': 'too_short',
-                               'duration': round(duration_seconds, 2)})
-                    continue
-                if peak < 200:
-                    log("PTT DIAG: no_signal duration=%.2fs peak=%s device=%s" % (
-                        duration_seconds, str(peak), str(dev_idx)))
-                    broadcast({'type': 'ptt_diagnostic', 'reason': 'no_signal',
-                               'duration': round(duration_seconds, 2)})
-                    continue
-                with wave.open(wav_file, 'wb') as wf:
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(sample_width)
-                    wf.setframerate(RATE)
-                    wf.writeframes(raw)
-                with open(wav_file, 'rb') as f:
-                    b64 = base64.b64encode(f.read()).decode()
-                log("PTT: wav saved (%d bytes, %.2fs), sending to STT" % (len(b64), duration_seconds))
-                # Python/urllibだけWindows DNS(getaddrinfo)に失敗し、同じPCのElectron側HTTPSは
-                # 正常という実機事例が発生。STTもchat/TTSと同じElectron通信経路へ統一する。
-                broadcast({'type': 'ptt_audio', 'audio': b64,
-                           'encoding': 'LINEAR16', 'sampleRateHertz': RATE,
-                           'languageCode': ptt_lang,
-                           'audioDurationSeconds': duration_seconds,
-                           'usageSessionId': usage_session_id})
+                data = stream.read(chunk, exception_on_overflow=False)
             except Exception as e:
-                log("PTT wav/stt error: " + str(e))
+                log("PTT read error: " + str(e))
+                break
+            if ptt_recording:
+                if cap_id is None:
+                    cap_id = ptt_current_capture_id
+                elif ptt_current_capture_id != cap_id:
+                    break
+                frames.append(data)
+            _tick += 1
+            if _tick % 2 == 0:   # 約8回/秒でレベル送信（メーター用・軽量）
+                broadcast({'type': 'mic_level', 'level': _rms_level(data)})
+    finally:
+        try:
+            stream.stop_stream(); stream.close()
+        except Exception:
+            pass
+    broadcast({'type': 'mic_level', 'level': 0})   # メーターを戻す
+    if cap_id is None and ptt_current_capture_id and not ptt_recording \
+            and ptt_current_capture_id not in _ptt_terminated_captures:
+        # 録音が1frameも取れないまま止まったテイクも、無言にせず終端を返す。
+        cap_id = ptt_current_capture_id
+    if cap_id is None:
+        return 'test_only'   # マイクテストのみ（テイクなし）
+    _finish_ptt_capture(cap_id, frames, dev_idx, ptt_audio.get_sample_size(fmt))
+    return 'finished'
+
+
+PTT_RATE = 16000
+PTT_CHANNELS = 1
+_ptt_terminated_captures = set()   # 終端broadcast済みのcapture_id（1テイク1終端）
+
+
+def _finish_ptt_capture(capture_id, frames, dev_idx, sample_width, wav_dir=None):
+    """★WO016：1テイクにつき終端を必ず1件だけ、元のcapture_id付きでbroadcastする。
+    ptt_audio / ptt_diagnostic(aborted/no_frames/too_short/no_signal) / ptt_error(wav_error)。
+    戻り値は送った終端event（試験用）。"""
+    global ptt_discard_recording
+    import base64, wave
+    if capture_id in _ptt_terminated_captures:
+        log("PTT: duplicate terminal suppressed capture_id=%s" % capture_id)
+        return None
+    _ptt_terminated_captures.add(capture_id)
+    if len(_ptt_terminated_captures) > 200:
+        _ptt_terminated_captures.clear()
+        _ptt_terminated_captures.add(capture_id)
+    fields = _ptt_capture_fields(capture_id)
+
+    def emit(event):
+        event.update(fields)
+        broadcast(event)
+        return event
+    if ptt_discard_recording:
+        ptt_discard_recording = False
+        log("PTT: discarded aborted recording capture_id=%s" % capture_id)
+        return emit({'type': 'ptt_diagnostic', 'reason': 'aborted'})
+    if not frames:
+        log("PTT DIAG: no_frames capture_id=%s device=%s" % (capture_id, str(dev_idx)))
+        return emit({'type': 'ptt_diagnostic', 'reason': 'no_frames', 'duration': 0})
+    # WAVファイルはWindows対応パスに（/tmpはWindows未対応）
+    wav_file = os.path.join(wav_dir or _base, "ptt_audio.wav")
+    raw = b''.join(frames)
+    # ── マイク自動ゲイン（2026-07-17 Yuji方針）──
+    # 静かなマイクでもSTTが通るよう、ピーク音量を目標まで自動で底上げする。3人中2人が
+    # マイク音量問題を踏んだため、Windowsをいじらせずアプリ側で吸収する。無音は増幅しない
+    # （ノイズを大きくしないため）。クリップは飽和処理。audioop不可の環境では黙ってスキップ。
+    peak = 0
+    try:
+        import audioop
+        peak = audioop.max(raw, 2)          # 2バイト=16bit
+        TARGET = 22000                       # int16(32767)の約2/3。歪ませず十分な音量
+        if 200 < peak < TARGET:              # 無音(<200)は触らない／既に十分なら触らない
+            gain = min(8.0, TARGET / float(peak))
+            raw = audioop.mul(raw, 2, gain)  # クリップは内部で飽和
+            log("PTT: auto-gain x%.1f (peak %d -> ~%d)" % (gain, peak, int(peak * gain)))
+    except Exception as _ge:
+        log("PTT auto-gain skipped: " + str(_ge))
+    try:
+        # rawはLINEAR16のraw PCM(gain調整後)なので、byte数から正確な秒数を逆算できる
+        # （WEBM_OPUS等の圧縮音声と違い、ここは推測不要の実測値）。
+        duration_seconds = len(raw) / float(PTT_RATE * PTT_CHANNELS * sample_width)
+        if duration_seconds < 0.35:
+            log("PTT DIAG: too_short duration=%.2fs peak=%s device=%s" % (
+                duration_seconds, str(peak), str(dev_idx)))
+            return emit({'type': 'ptt_diagnostic', 'reason': 'too_short',
+                         'duration': round(duration_seconds, 2)})
+        if peak < 200:
+            log("PTT DIAG: no_signal duration=%.2fs peak=%s device=%s" % (
+                duration_seconds, str(peak), str(dev_idx)))
+            return emit({'type': 'ptt_diagnostic', 'reason': 'no_signal',
+                         'duration': round(duration_seconds, 2)})
+        with wave.open(wav_file, 'wb') as wf:
+            wf.setnchannels(PTT_CHANNELS)
+            wf.setsampwidth(sample_width)
+            wf.setframerate(PTT_RATE)
+            wf.writeframes(raw)
+        with open(wav_file, 'rb') as f:
+            b64 = base64.b64encode(f.read()).decode()
+        log("PTT: wav saved (%d bytes, %.2fs), sending to STT capture_id=%s" % (len(b64), duration_seconds, capture_id))
+        # Python/urllibだけWindows DNS(getaddrinfo)に失敗し、同じPCのElectron側HTTPSは
+        # 正常という実機事例が発生。STTもchat/TTSと同じElectron通信経路へ統一する。
+        return emit({'type': 'ptt_audio', 'audio': b64,
+                     'encoding': 'LINEAR16', 'sampleRateHertz': PTT_RATE,
+                     'languageCode': ptt_lang,
+                     'audioDurationSeconds': duration_seconds,
+                     'usageSessionId': usage_session_id})
+    except Exception as e:
+        log("PTT wav/stt error: " + str(e))
+        # 旧実装はここで無言だった。Desktopのテイクを待たせず明示的に閉じる。
+        return emit({'type': 'ptt_error', 'reason': 'wav_error'})
 
 # ══════════════════════════════════════════════════════════════════════════
 # ★★2026-07-20 無線ディレクター（発話アーキテクチャの全面再設計）★★
@@ -850,6 +967,90 @@ def sync_desktop_strategy_options(*, verdict, strategy_options, active_decision_
             pending_strategy_proposal, strategy_options_proposal_sent)
 
 
+def early_pit_declaration_outstanding(declaration, *, state, race_instance_id, session_num,
+                                      driver_pit_sequence, current_lap):
+    """WO-019: the Plan record a Driver early-pit declaration invalidated, while that
+    declaration still describes the next pit visit; otherwise ``None``.
+
+    A declaration ("pit this lap") is outstanding only for the same race/session, before
+    any further pit visit completed, from the declared lap through the next lap (pit entry
+    may fall on either side of the S/F line), and while the record is still the
+    ``driver_early_pit_declared`` terminal with no pit bound to it and no newer active Plan.
+    """
+    if not isinstance(declaration, dict) or state is None:
+        return None
+    if (declaration.get('race_instance_id'), declaration.get('session_num')) != (
+            race_instance_id, session_num):
+        return None
+    if declaration.get('driver_pit_sequence') != driver_pit_sequence:
+        return None
+    declared_lap = declaration.get('lap')
+    if (not isinstance(current_lap, int) or isinstance(current_lap, bool)
+            or not isinstance(declared_lap, int) or isinstance(declared_lap, bool)
+            or not declared_lap <= current_lap <= declared_lap + 1):
+        return None
+    record = state.plan_records.get(declaration.get('decision_id'))
+    if (record is None or record.phase != 'invalidated'
+            or record.invalidated_reason != 'driver_early_pit_declared'
+            or record.terminal_pit_event_id is not None):
+        return None
+    if plan_lifecycle_mod.active_plan_view(state) is not None:
+        return None
+    return record
+
+
+def align_post_service_target(strategy_options, authority_inputs, *, current_lap,
+                              snapshot_prefix='recalc:post_service:'):
+    """WO-019: a Plan A recomputed after a refuelling stop (``recalc:post_service``) is
+    committed only at a lap the BOX execution authority can reach from the SAME fresh frame.
+    WO-020 P0: the opening registration passes ``snapshot_prefix='initial:'`` so the
+    automatically generated opening Plan A follows the same contract before it is registered
+    and announced; otherwise a no-pit race latches a target/set the authority rejects on every
+    lap (BOX never issued). The decision-commit call stays post-service only, so a registered
+    opening Plan is never re-targeted later.
+
+    `strategy_options` counts fuel to the start of the target lap; `fixed_target_authority`
+    requires completing it before pit entry, and judges the frozen set amount against the total
+    need. For these automatic candidates only, take the latest lap at or before the candidate the
+    authority accepts WITH its own frozen set amount, and that add/set (total need from the
+    current tank). Never reuses a pre-stop target or amount; no safety check is relaxed.
+    Other recalculations, B/C and driver-requested targets are not touched here.
+    Returns ``(options, detail_or_None)``; unchanged when the candidate already passes as-is
+    (target and frozen set) or nothing is provable.
+    """
+    if not isinstance(strategy_options, dict) or not str(
+            strategy_options.get('snapshot_id') or '').startswith(snapshot_prefix):
+        return strategy_options, None
+    plan_a = strategy_options.get('plan_a') or {}
+    target = plan_a.get('target_lap')
+    if not isinstance(target, int) or not isinstance(current_lap, int) or authority_inputs is None:
+        return strategy_options, None
+    for candidate in range(target, current_lap, -1):
+        check = fixed_target_authority_mod.evaluate(authority_inputs, candidate)
+        # The amount is frozen into the Plan, so the authority must also accept it frozen.
+        if not (check.get('available') and fixed_target_authority_mod.evaluate(
+                authority_inputs, candidate, frozen_set=check['set_fuel_l']).get('available')):
+            continue
+        if candidate == target and plan_a.get('set_fuel_l') == check['set_fuel_l'] \
+                and fixed_target_authority_mod.evaluate(authority_inputs, target,
+                                                        frozen_set=plan_a.get('set_fuel_l')).get('available'):
+            return strategy_options, None
+        aligned = dict(strategy_options)
+        aligned['plan_a'] = dict(plan_a, target_lap=candidate,
+                                 target_in_laps=candidate - current_lap,
+                                 add_fuel_l=round(check['add_fuel_l'], 3),
+                                 set_fuel_l=check['set_fuel_l'],
+                                 fuel_at_stop_l=round(check['entry_fuel_lower_bound_l'], 3),
+                                 authority_aligned_from_target_lap=target,
+                                 authority_aligned_from_set_fuel_l=plan_a.get('set_fuel_l'))
+        return aligned, {'snapshot_id': strategy_options.get('snapshot_id'), 'from_target_lap': target,
+                         'from_set_fuel_l': plan_a.get('set_fuel_l'),
+                         'target_lap': candidate, 'add_fuel_l': aligned['plan_a']['add_fuel_l'],
+                         'set_fuel_l': check['set_fuel_l'],
+                         'source_frame_sequence': authority_inputs.get('source_frame_sequence')}
+    return strategy_options, None
+
+
 def decide_plan_at_target(strategy_options, *, current_lap, current_fuel_l,
                           avg_fuel_per_lap_l, pit_now_forecast, pit_next_lap_forecast,
                           relative_pace_advantage_s, options_mod,
@@ -1034,7 +1235,7 @@ def build_strategy_decision(strategy_options, option_decision, *, lap, class_pos
     #   レース内で同じ内容の再提案は引き続き同じdecision_id（dispatch_idが試行を
     #   区別する）。
     record['decision_id'] = '%s:%s:decision-lap:%s:sig-%s' % (
-        race_instance_id, evidence_snapshot_id, lap, _sig_hash)
+        race_instance_id, str(evidence_snapshot_id)+':origin-'+canonical_mod.PROCESS_EPOCH, lap, _sig_hash)
     return {'mode': 'commit' if selected == 'A' else 'propose', 'plan': record}
 
 
@@ -1131,7 +1332,7 @@ def resolve_race_instance_id(info, fallback_id=None):
 
 
 PROPOSAL_DELIVERY_OUTCOMES = frozenset({
-    'audible', 'dropped_before_audible', 'audible_interrupted', 'suppressed_by_user'})
+    'audible', 'audible_completed', 'dropped_before_audible', 'audible_interrupted', 'suppressed_by_user'})
 
 
 def apply_proposal_delivery(pending_strategy_proposal, strategy_options_proposal_sent,
@@ -1152,6 +1353,21 @@ def apply_proposal_delivery(pending_strategy_proposal, strategy_options_proposal
 
     - `audible`：実際にDriverの耳へ届いた。pendingを維持し、状態だけ'audible'へ。
       ここで初めて「提示済み」が確定する（それ以前はinflight＝送っただけ）。
+      delivery_stateは`None/'inflight' → 'audible' → 'audible_completed'`の
+      単調（後退しない）前進——既に'audible_completed'まで進んだ後に届く
+      この同dispatchの'audible'遅延再送（outboxがackを受け取れなかった）は、
+      ACKのみ返す冪等no-opで、確定済みのdelivery_stateを後退させない
+      （Codex独立反証「owner同dispatch順序」）。
+    - `audible_completed`（WO015）：'audible'の後に最後まで正常に鳴り終えた確証的な
+      追加事実。ACK・Driver合意・Plan実行のいずれでもない——pending/sentは一切
+      変更しない（再武装しない）。delivery_state自体は`'audible_completed'`へ進む
+      ——以前はここでdelivery_stateを不変で返していたため、ACKした瞬間に確定
+      事実が捨てられ、同じprocessのどこからも読み返せなかった（残条件群#3）。
+      この同dispatchの`'audible'`をまだ確認していない状態（None/'inflight'）で
+      `audible_completed`が来た場合は、再接続中の再送が入れ替わった等の順序
+      不整合であり新たな確定事実ではない——fail-closedで`'stale'`とし、
+      delivery_stateは書き換えない（Desktopのoutboxは'audible'もackまで再送
+      し続けるため、正しい順序の報告は後から必ず届く）。
     - `dropped_before_audible` / `audible_interrupted` / `suppressed_by_user`：
       届かなかった、または最後まで聞けていない。pendingとsentを**解除（再武装）**し、
       条件が現在も有効なら次のdecision-lockが同じ内容を再提案できるようにする。
@@ -1160,8 +1376,9 @@ def apply_proposal_delivery(pending_strategy_proposal, strategy_options_proposal
     session＋decision IDの一致は`resolve_strategy_proposal()`と同じfail-closed規律で
     要求する——確認できない配送結果で現在の保留提案を壊さない。
 
-    Returns `(pending, sent, delivery_state, outcome)` where `outcome` is
-    'audible' | 'released' | 'stale' | 'no_match'.
+    Returns `(pending, sent, delivery_state, outcome)` where `delivery_state`
+    is `None` | `'inflight'` | `'audible'` | `'audible_completed'`, and
+    `outcome` is 'audible' | 'audible_completed' | 'released' | 'stale' | 'no_match'.
     """
     if not isinstance(pending_strategy_proposal, dict) or not pending_strategy_proposal.get('decision_id'):
         return (pending_strategy_proposal, strategy_options_proposal_sent,
@@ -1193,7 +1410,32 @@ def apply_proposal_delivery(pending_strategy_proposal, strategy_options_proposal
         return (pending_strategy_proposal, strategy_options_proposal_sent,
                 proposal_delivery_state, 'stale')
     if _outcome == 'audible':
+        # ★WO015（独立反証「owner同dispatch順序」修復）：Desktopのoutboxはackが
+        # 返るまで報告を再送する。'audible'のackが切断等で失われている間に
+        # 'audible_completed'の方が先に（正しい順序で）届いて確定していると、
+        # その後届く'audible'の遅延再送をそのまま適用するとdelivery_stateが
+        # 'audible_completed'から'audible'へ後退する（Codex実測反例）。
+        # delivery_stateはこのdispatchの中で単調——一度completedへ進んだら
+        # 'audible'の再送はACKのみ返す冪等no-opで、state自体は後退させない。
+        if proposal_delivery_state == 'audible_completed':
+            return pending_strategy_proposal, True, 'audible_completed', 'audible'
         return pending_strategy_proposal, True, 'audible', 'audible'
+    if _outcome == 'audible_completed':
+        # ★WO015（残条件群#3「proposal completed owner receipt未接続」修復）：
+        #   completed証拠がこの同dispatchの'audible'より前に来るのは、再接続中の
+        #   再送が入れ替わった等の順序不整合であり、新たな確定事実ではない
+        #   （Desktopのoutboxは'audible'もackまで再送し続けるため、正しい順序の
+        #   報告は後から必ず届く）——fail-closedでstaleとし、ここではdelivery_state
+        #   を書き換えない。
+        if proposal_delivery_state not in ('audible', 'audible_completed'):
+            return (pending_strategy_proposal, strategy_options_proposal_sent,
+                    proposal_delivery_state, 'stale')
+        # 確証的な追加事実のみ；既に提示済みのpendingを再武装も取り消しもしない
+        # （ACK・Driver合意・Plan実行のいずれでもない）。以前はdelivery_stateを
+        # 不変で返していたため、この確定事実はACKされた瞬間に捨てられ、同じ
+        # processのどこからも読み返せなかった。'audible_completed'という区別
+        # できる値として保持し、ACKだけで完成にしない。
+        return pending_strategy_proposal, strategy_options_proposal_sent, 'audible_completed', 'audible_completed'
     # 届かなかった／最後まで聞けなかった：再武装する。
     return None, False, None, 'released'
 
@@ -1250,6 +1492,249 @@ def resolve_strategy_proposal(pending_strategy_proposal, response):
 
 _pending_strategy_decision_responses = []
 
+# WO-006: Desktop requests are only transport input.  The poll thread is the
+# single consumer and the only place allowed to touch canonical Plan state.
+_pending_historical_settlements = []
+
+def _queue_historical_settlement(value):
+    if isinstance(value,dict):_pending_historical_settlements.append(copy.deepcopy(value))
+
+_pending_box_delivery_reports = []
+
+def _queue_box_delivery_report(report):
+    if isinstance(report, dict):
+        _pending_box_delivery_reports.append(dict(report))
+
+def _consume_box_delivery_reports():
+    result = list(_pending_box_delivery_reports)
+    _pending_box_delivery_reports.clear()
+    return result
+
+_pending_driver_plan_commands = []
+
+
+def _queue_driver_plan_command(command):
+    global _pending_driver_plan_commands
+    if isinstance(command, dict):
+        _pending_driver_plan_commands.append(dict(command))
+
+
+def _consume_driver_plan_commands():
+    global _pending_driver_plan_commands
+    value = _pending_driver_plan_commands
+    _pending_driver_plan_commands = []
+    return value
+
+
+_last_committed_canonical=None
+_canonical_publications={}
+def _remember_canonical_publication(snapshot):
+    global _last_committed_canonical
+    _last_committed_canonical=copy.deepcopy(snapshot)
+    _canonical_publications[snapshot['snapshot_id']]=snapshot
+    while len(_canonical_publications)>128:_canonical_publications.pop(next(iter(_canonical_publications)))
+
+def _canonical_ref_error(command):
+    if not isinstance(command,dict):return 'malformed_canonical_reference'
+    epoch=command.get('bridge_process_epoch');sid=command.get('canonical_snapshot_id');seq=command.get('canonical_snapshot_sequence')
+    if not isinstance(epoch,str) or not epoch or not isinstance(sid,str) or not sid or not isinstance(seq,int) or isinstance(seq,bool) or seq<1:return 'malformed_canonical_reference'
+    return None
+
+def _command_canonical_error(command):
+    malformed=_canonical_ref_error(command)
+    if malformed:return malformed
+    if command.get('bridge_process_epoch')!=canonical_mod.PROCESS_EPOCH:return 'bridge_process_epoch_mismatch'
+    s=_canonical_publications.get(command.get('canonical_snapshot_id'))
+    if s is None or command.get('canonical_snapshot_sequence')!=s['snapshot_sequence']:return 'canonical_snapshot_unavailable'
+    if command.get('race_instance_id')!=s['race_instance_id'] or command.get('session_num')!=s['session_num']:return 'scope_mismatch'
+    active=s['lifecycle']['active']
+    if not s['telemetry_available'] or active is None:return 'canonical_authority_unavailable'
+    if command.get('expected_decision_id')!=active['decision_id'] or command.get('expected_revision')!=active['revision']:return 'canonical_active_mismatch'
+    return None
+
+def apply_driver_plan_command(state, ledger, command, *, race_facts_snapshot,
+                              current_lap=None, laps_total=None,
+                          authority_inputs=None, execution_gate=None, canonical_required=False):
+    """Pure production command consumer used by ``poll_iracing`` and replay.
+
+    Returns ``(state, ledger, ack, recalculate)``.  Only a first successful
+    transition asks the caller to queue recalculation.
+    """
+    if canonical_required:
+        error=_canonical_ref_error(command)
+        if not error:error='bridge_process_epoch_mismatch' if command.get('bridge_process_epoch')!=canonical_mod.PROCESS_EPOCH else None
+        if not error:
+            if command.get('_reason_only') and (not isinstance(command.get('command_id'),str) or not command.get('command_id') or not isinstance(command.get('reason_event_id'),str) or not command.get('reason_event_id')):
+                error='malformed_reason_reference'
+            elif command.get('_reason_only'):
+                prior=driver_plan_command_mod.prior_ack(ledger,command.get('command_id'))
+                error=None if prior and all(command.get(k)==prior.get(k) for k in ('bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence')) else 'canonical_reason_reference_mismatch'
+            else:
+                _,delivery,_=driver_plan_command_mod.classify_delivery(ledger,command)
+                if delivery not in ('retry','collision'):error=_command_canonical_error(command)
+        if error:
+            ack={'type':'driver_plan_command_ack','command_id':command.get('command_id'),
+                 'intent':'reason' if command.get('_reason_only') else command.get('intent'),'race_instance_id':command.get('race_instance_id'),
+                 'session_num':command.get('session_num'),'decision_id':command.get('expected_decision_id'),
+                 'expected_revision':command.get('expected_revision'),'outcome':'scope_mismatch' if error=='scope_mismatch' else 'rejected',
+                 'result_revision':None,'lifecycle_phase':None,'reason':error}
+            if command.get('_reason_only'):ack['reason_event_id']=command.get('reason_event_id')
+            return state,ledger,ack,False
+    race_id = (race_facts_snapshot or {}).get('race_instance_id')
+    session_num = (race_facts_snapshot or {}).get('session_num')
+    ledger = driver_plan_command_mod.ensure_scope(ledger, race_id, session_num)
+
+    if isinstance(command, dict) and command.get('_reason_only') is True:
+        command_id = command.get('command_id')
+        decision_id = command.get('expected_decision_id')
+        ledger, outcome = driver_plan_command_mod.link_reason(
+            ledger, command_id=command_id, race_instance_id=command.get('race_instance_id'),
+            session_num=command.get('session_num'), decision_id=decision_id,
+            expected_revision=command.get('expected_revision'),
+            reason_event_id=command.get('reason_event_id'),
+            reason_text=command.get('reason_text'))
+        # WO-019: echo the reason event id — Desktop retires exactly that outbox entry with it.
+        ack = {'type': 'driver_plan_command_ack', 'command_id': command_id,
+               'intent': 'reason', 'race_instance_id': command.get('race_instance_id'),
+               'session_num': command.get('session_num'), 'decision_id': decision_id,
+               'expected_revision': command.get('expected_revision'),
+               'reason_event_id': command.get('reason_event_id'),
+               'result_revision': None, 'outcome': outcome,
+               'lifecycle_phase': None, 'reason': outcome}
+        return state, ledger, ack, False
+
+    normalized, delivery, content = driver_plan_command_mod.classify_delivery(ledger, command)
+    base = command if isinstance(command, dict) else {}
+    if normalized is None:
+        ack = {'type': 'driver_plan_command_ack', 'command_id': base.get('command_id'),
+               'intent': base.get('intent'), 'race_instance_id': base.get('race_instance_id'),
+               'session_num': base.get('session_num'),
+               'decision_id': base.get('expected_decision_id'),
+               'expected_revision': base.get('expected_revision'),
+               'result_revision': None, 'outcome': 'rejected',
+               'lifecycle_phase': None, 'reason': delivery}
+        return state, ledger, ack, False
+    if delivery == 'collision':
+        ack = {'type': 'driver_plan_command_ack', 'command_id': normalized['command_id'],
+               'intent': normalized['intent'], 'race_instance_id': normalized['race_instance_id'],
+               'session_num': normalized['session_num'],
+               'decision_id': normalized['expected_decision_id'],
+               'expected_revision': normalized['expected_revision'],
+               'result_revision': None, 'outcome': 'collision',
+               'lifecycle_phase': None, 'reason': 'command_id_collision'}
+        return state, ledger, ack, False
+    if delivery == 'retry':
+        ack = driver_plan_command_mod.prior_ack(ledger, normalized['command_id'])
+        if ack is None:
+            ack = {'type': 'driver_plan_command_ack', 'command_id': normalized['command_id'],
+                   'intent': normalized['intent'], 'outcome': 'rejected',
+                   'reason': 'retry_without_ack'}
+        elif ack.get('outcome') in ('applied', 'retry_no_op'):
+            ack['outcome'] = 'retry_no_op'
+            ack['reason'] = 'same_content'
+        return state, ledger, ack, False
+
+    source = (race_facts_snapshot or {}).get('source_frame') or {}
+    current_source_frame = source.get('sequence')
+    reject_reason = None
+    if (normalized['race_instance_id'] != race_id
+            or normalized['session_num'] != session_num):
+        reject_reason = 'scope_mismatch'
+    elif (not isinstance(current_source_frame, int)
+          or normalized['source_frame_sequence'] > current_source_frame):
+        reject_reason = 'stale_source_frame'
+    elif normalized['intent'] == 'amend':
+        target = normalized['requested_target_lap']
+        if not isinstance(current_lap, int) or target <= current_lap:
+            reject_reason = 'invalid_requested_target_lap'
+        elif isinstance(laps_total, int) and 0 < laps_total < 3000 and target > laps_total:
+            reject_reason = 'requested_target_lap_out_of_race'
+        else:
+            if authority_inputs is None:
+                reject_reason = 'amend_constraint_not_supported'
+            elif execution_gate:
+                reject_reason = 'execution_held:' + execution_gate
+            elif normalized['driver_pit_sequence'] != (race_facts_snapshot or {}).get('driver_pit_sequence'):
+                reject_reason = 'stale_driver_pit_sequence'
+            else:
+                _amend_calculation = fixed_target_authority_mod.evaluate(authority_inputs, target)
+                if not _amend_calculation.get('available'):
+                    reject_reason = _amend_calculation.get('reason')
+
+
+    if reject_reason is None and state is None:
+        reject_reason = 'no_active_plan'
+    if reject_reason is not None:
+        ack = {'type': 'driver_plan_command_ack', 'command_id': normalized['command_id'],
+               'intent': normalized['intent'], 'race_instance_id': normalized['race_instance_id'],
+               'session_num': normalized['session_num'],
+               'decision_id': normalized['expected_decision_id'],
+               'expected_revision': normalized['expected_revision'],
+               'result_revision': None, 'outcome': (
+                   'scope_mismatch' if reject_reason == 'scope_mismatch' else 'rejected'),
+               'lifecycle_phase': None, 'reason': reject_reason}
+    else:
+        intent = plan_lifecycle_mod.DriverPlanIntent(
+            command_id=normalized['command_id'], operation=normalized['intent'],
+            race_instance_id=normalized['race_instance_id'],
+            session_num=normalized['session_num'],
+            target_decision_id=normalized['expected_decision_id'],
+            expected_revision=normalized['expected_revision'],
+            expected_activation_source_frame_sequence=(
+                normalized['expected_activation_source_frame_sequence']),
+            received_source_frame_sequence=normalized['source_frame_sequence'],
+            driver_pit_sequence=normalized['driver_pit_sequence'],
+            utterance_id=normalized['utterance_id'],
+            requested_target_lap=normalized['requested_target_lap'],
+            reason_text=normalized['reason_text'])
+        if normalized['intent'] == 'amend':
+            state, outcome = plan_lifecycle_mod.amend_active_plan(
+                state, intent, calculation=_amend_calculation, authority_inputs=authority_inputs,
+                decision_generation=canonical_mod.PROCESS_EPOCH if canonical_required else None)
+        else:
+            state, outcome = plan_lifecycle_mod.apply_driver_plan_intent(state, intent)
+        resulting = state.plan_records.get(normalized['expected_decision_id'])
+        mapped = outcome.status
+        if outcome.reason in ('stale_decision', 'stale_revision',
+                              'stale_activation_source_frame',
+                              'stale_driver_pit_sequence', 'stale_source_frame'):
+            mapped = 'stale'
+        elif outcome.reason == 'scope_mismatch':
+            mapped = 'scope_mismatch'
+        elif outcome.reason == 'no_active_plan':
+            mapped = 'no_active_plan'
+        elif outcome.status != 'applied':
+            mapped = 'rejected'
+        ack = {'type': 'driver_plan_command_ack', 'command_id': normalized['command_id'],
+               'intent': normalized['intent'], 'race_instance_id': normalized['race_instance_id'],
+               'session_num': normalized['session_num'],
+               'decision_id': normalized['expected_decision_id'],
+               'expected_revision': normalized['expected_revision'],
+               'result_revision': resulting.revision if resulting is not None and mapped == 'applied' else None,
+               'outcome': mapped,
+               'lifecycle_phase': resulting.phase if resulting is not None and mapped == 'applied' else None,
+               'reason': outcome.reason}
+    if normalized['intent'] == 'amend' and ack.get('outcome') == 'applied':
+        successor = plan_lifecycle_mod.active_plan_view(state)
+        authority_snapshot = dict(authority_inputs)
+        authority_snapshot.update(successor_decision_id=successor.decision_id,
+            successor_revision=successor.revision,
+            successor_activation_frame=successor.activated_source_frame_sequence,
+            target_lap=successor.target_lap,add_fuel_l=successor.add_fuel_l,set_fuel_l=successor.set_fuel_l,
+            constraint_id=outcome.detail['constraint_id'])
+        ack.update(successor_decision_id=successor.decision_id,successor_revision=successor.revision,
+            successor_activation_frame=successor.activated_source_frame_sequence,
+            successor_target_lap=successor.target_lap,successor_add_fuel_l=successor.add_fuel_l,
+            successor_set_fuel_l=successor.set_fuel_l,constraint_id=outcome.detail['constraint_id'],
+            authority_snapshot=authority_snapshot)
+    # An old-race command must not reserve its command_id inside the new
+    # race's ledger.  It still receives a scope_mismatch ACK so Desktop can
+    # retire the old outbox entry.
+    ack.update({k:command.get(k) for k in ('bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence') if k in command})
+    if ack.get('outcome') != 'scope_mismatch':
+        ledger = driver_plan_command_mod.record_ack(ledger, normalized, content, ack)
+    return state, ledger, ack, ack.get('outcome') == 'applied' and normalized['intent'] != 'amend'
+
 
 def _queue_strategy_decision_response(decision_id, accepted, session_num=None,
                                       dispatch_id=None):
@@ -1276,19 +1761,26 @@ _pending_strategy_delivery_reports = []
 
 
 def _queue_strategy_delivery_report(decision_id, outcome, session_num=None,
-                                    dispatch_id=None):
+                                    dispatch_id=None, utterance_id=None, text_hash=None):
     """WebSocket cmd 'strategy_decision_delivery' 受信時に呼ぶ。
 
     ★2026-09-17 Codex MD#8差戻し（P1）：Desktopが実際に発話できたか
     （audible）／届かなかったか（dropped_before_audible・audible_interrupted・
     suppressed_by_user）をBridgeへ返す経路。`apply_proposal_delivery()`が
     これを適用する。
+
+    ★WO015反例修復：utterance_id/text_hashはDesktop側が実際にspeak()へ
+    渡した凍結本文の識別子（出力からsourceへ逆追跡するためのもの）。apply_
+    proposal_delivery()の受理判定には使わず、そのままack（下のpublish）へ
+    転記するだけ——scalarなoutcome一致だけでは「同じ本文のACKか」を
+    Desktop側が確認できなかった（独立反証「scalarACK completionが
+    sameIDreceiptでない」）。
     """
     global _pending_strategy_delivery_reports
     if isinstance(decision_id, str) and decision_id:
         _pending_strategy_delivery_reports.append(
             {'decision_id': decision_id, 'outcome': outcome, 'session_num': session_num,
-             'dispatch_id': dispatch_id})
+             'dispatch_id': dispatch_id, 'utterance_id': utterance_id, 'text_hash': text_hash})
 
 
 def _consume_strategy_delivery_reports():
@@ -1318,7 +1810,8 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     # ★2026-09-17 Codex MD#8差戻し（P1）：Driver応答の受領ack。Desktopはackが
     #   返るまでoutboxに保持して再送するため、非搭乗ゲートで落とすと永久に
     #   再送し続ける。音声イベントではない。
-    'strategy_decision_ack', 'strategy_delivery_ack',
+    'strategy_decision_ack', 'strategy_delivery_ack', 'driver_plan_command_ack',
+    'box_authority_snapshot', 'box_delivery_ack', 'canonical_lifecycle_snapshot',
     # ACTIVE -> DRIVER_HANDOFF の遷移後に生成される耐久引き継ぎパケット。
     # 通常 radio にすると非搭乗ゲートで破棄されるため、データイベントとして届け、
     # renderer が一度だけ本人向け無線へ変換する。
@@ -1436,8 +1929,9 @@ def _session_scoped_reset_values():
         #   （前セッションの未合意提案を次セッションへ持ち越さない）。
         'pending_strategy_proposal': None,
         'strategy_options_proposal_sent': False,
-        # ★2026-09-17 Codex MD#8差戻し（P1）：配送状態（None／'inflight'／'audible'）も
-        #   セッション境界で捨てる。前セッションの「提示済み」を持ち越さない。
+        # ★2026-09-17 Codex MD#8差戻し（P1）：配送状態（None／'inflight'／'audible'／
+        #   'audible_completed'<WO015>）もセッション境界で捨てる。前セッションの
+        #   「提示済み」を持ち越さない。
         'strategy_proposal_delivery_state': None,
         # ★2026-09-17 MD#9チェック差戻し（P1-1）：配送試行の連番。decision_idは
         #   再提案で同一になるため、試行の区別にはこれが要る。
@@ -3108,7 +3602,7 @@ def poll_iracing():
     _driver_activity_local = driver_activity_mod.ACTIVE
     _driver_activity_handoff_start = None
     _force_driver_activity_broadcast = False
-    # ★v3 Codex P0-4：summary pending 状態。broadcast() が dispatch 失敗した場合、
+    # ★v3 Codex P0-4：summary pending 状態。_publish_or_stage() が dispatch 失敗した場合、
     #   payload をここに保持し、通常ポーリング位置で毎フレーム再試行する。
     #   trigger 条件が満たされた瞬間だけでなく、以降のフレームでも送信可能に。
     #   SessionNum 変更で破棄（次セッションへ持ち越さない）。summary_sent=True 後は None。
@@ -3202,6 +3696,67 @@ def poll_iracing():
     # ★2026-09-17 MD#9再々差戻し：初期値も_session_scoped_reset_values()と同じ発行元から
     #   取る（起動直後、まだ一度もリセットが走っていない間のフォールバック）。
     race_instance_fallback_id = _session_scoped_reset_values()['race_instance_fallback_id']
+    # ★WO-002：resolve_race_instance_id(info, ...) はセッション情報を初めて受信する
+    #   前のframeでも呼ばれ得る（権威snapshotの毎frame組み立て）。yaml未着でも
+    #   NameErrorにしない安全な初期値。session_infoを一度受け取れば通常のdict内容へ
+    #   置き換わる（既存のinfo代入経路は不変）。
+    info = {}
+    # ★WO-002：Bridge内で正常受理したpoll frameの単調増加連番。プロセス内で
+    #   一貫して増え続ける——reconnect・session/race変更だけでは0へ戻さない
+    #   （復元・永続化はWO-009/010の範囲）。
+    _source_frame_sequence = 0
+    # ★WO-002：直近poll iterationで組み立てた権威snapshot（読取専用）。
+    #   consumerは中身を書き換えず、必要ならcopyしてprojectionを作る。
+    _race_facts_snapshot = None
+    # ★WO-002：確定したOnPitRoad true->false pit exitの回数。race_instance_id／
+    #   SessionNum変更でだけ0へ戻る（reset_pit_sequence_if_identity_changed、
+    #   毎poll iterationで前frameの値と比較）。
+    driver_pit_sequence = 0
+    _pit_seq_prev_race_instance_id = None
+    _pit_seq_prev_session_num = None
+    # ★WO-003：immutable DriverPitEventの正本store（pit_event_id -> DriverPitEvent）。
+    #   実際のrace_instance_id/session_num変更でだけresetする（driver_pit_sequenceと
+    #   同じ識別、同じ場所で）。reconnectだけでは失われない。
+    _driver_pit_event_store = {}
+    # ★WO-003：pit entry〜exitの訪問中だけ生存する作業状態。entry検出で作り、
+    #   exit確定でfinalize_driver_pit_event()へ渡した後にNoneへ戻す。
+    _pit_visit_entry_fact = None
+    _pit_visit_plan_reference = None
+    _pit_visit_penalty_state = None
+    _pit_visit_entry_race_instance_id = None
+    _pit_visit_entry_session_num = None
+    # ★WO-005：Plan phaseの唯一のcanonical owner。race_instance_id/session_numが
+    #   実際に変わったframeでだけ`close_scope()`後に新規生成する
+    #   （`_race_identity_changed_this_frame`、driver_pit_sequenceと同じ識別）。
+    #   `active_decision_id`/`active_decision_plan`/`pending_strategy_proposal`は
+    #   これのread-only projectionであり、以後この変数以外へ直接代入しない。
+    _race_strategy_state = None
+    _plan_scope_close_applied = None
+    _box_delivery_ledger = box_authority_delivery_mod.new_ledger()
+    _plan_collision_scope = None  # race/session/failed authoritative pit sequence
+    _plan_closed_identity = None  # WO-007: only genuine identity change opens a scope
+    _driver_plan_command_ledger = driver_plan_command_mod.new_ledger()
+    _declared_early_pit = None  # WO-019: last applied Driver early-pit declaration
+    _recovery_store=recovery_mod.Store(RECOVERY_PATH)
+    _recovery_scope=None
+    _recovery_status='restore_pending'
+    _recovery_error=_recovery_store.error
+    _recovery_loaded_scope=None
+    _recovery_restore_consumed=False
+    _recovery_last_observed_time=None
+    _recovery_gap_held_ids=set()
+    _recovery_in_gap=False
+    _recovery_archives={}
+    _recovery_scope_archives={}
+    _recovery_origins={'records':{},'events':{},'origin_epoch':canonical_mod.PROCESS_EPOCH}
+    _recovery_restored=False
+    _recovery_gap=False
+    _recovery_constraint=None
+    _recovery_constraint_record=None
+    _recovery_checkpoint_id=None
+    _recovery_last_save_time=None
+    _recovery_fingerprint=None
+    _recovery_committed=True
     active_decision_plan = None      # 同上。提案時点の Plan 根拠（採点の相手）
     # ★2026-09-16 Codex MD#4差戻し（P1-2）：B/Cは合意されるまでactive_decision_id/planへ
     #   昇格しない。Driver応答待ちの間、この提案自体をここへ保持する（Aは変更を伴わない
@@ -3357,27 +3912,108 @@ def poll_iracing():
         '_sess_t': None,   # ピット滞在時間の積算用（SessionTime の前フレーム値）
     }
 
+    _canonical_staged = []
+    _canonical_telemetry = None
+    _canonical_last_facts = None
+    _canonical_last_inputs = None
+    _recommendation_sources = {}
+    _options_projection_provenance = {}
+    _last_driver_action = None
+    _canonical_critical = frozenset(('initial_strategy_plans','strategy_plan_decision',
+        'strategy_plan_proposal','fuel_strategy_warning','fuel_strategy_safe','fuel_margin_hold','fuel_warning'))
+    def _publish_or_stage(event):
+        nonlocal _canonical_telemetry
+        event_type=event.get('type')
+        if event_type=='telemetry_live':
+            _canonical_telemetry=copy.deepcopy(event)
+            return 'STAGED'
+        if (event_type in ('session_info','driver_plan_command_ack','box_delivery_ack',
+                           'strategy_decision_ack','strategy_delivery_ack')
+                or event_type=='radio' and event.get('trigger') in _canonical_critical):
+            item=copy.deepcopy(event)
+            # ★WO015反例修復：driver_plan_command_ack/box_delivery_ack/
+            #   strategy_decision_ack/strategy_delivery_ackはそれぞれ自分の
+            #   decision_idを持つ、提案固有のreceiptである。以前はここで常に
+            #   「現在active」なPlanのrecordを読んでいたため、ackの対象がまだ
+            #   awaiting（提案中）や既に非activeになったrecordの時、無関係な
+            #   別Planのorigin_record_refが付いていた（実探査が検出した
+            #   「incidental active Plan」欠陥）。decision_idがある時は必ず
+            #   そのrecord自身を引く——存在しなければorigin_record_refを
+            #   省略する（fail closed、別recordを代用しない）。
+            if event_type in ('driver_plan_command_ack','box_delivery_ack',
+                              'strategy_decision_ack','strategy_delivery_ack') and event.get('decision_id'):
+                record=_race_strategy_state.plan_records.get(event['decision_id']) if _race_strategy_state else None
+            else:
+                record=plan_lifecycle_mod.active_plan_view(_race_strategy_state) if _race_strategy_state else None
+            origin=canonical_mod.record_view(record)
+            if event.get('trigger')=='strategy_plan_proposal':
+                origin=canonical_mod.record_view(plan_lifecycle_adapter.current_awaiting_record(_race_strategy_state))
+            if origin:item['origin_record_ref']=origin['record_ref']
+            _canonical_staged.append(item)
+            return 'STAGED'
+        return broadcast(event)
+
+    def _recovery_continuity():
+        return {'restored':_recovery_restored,'prior_history_available':_recovery_restored,'resume_old_plan_allowed':False,
+          'pit_sequence_origin':'checkpoint_observed' if _recovery_restored else 'process_observed',
+          'state_origin_epoch':canonical_mod.PROCESS_EPOCH,'recovery_status':_recovery_status,'gap_unknown':_recovery_gap,
+          'checkpoint_id':_recovery_checkpoint_id,'checkpoint_revision':_recovery_store.revision or None,
+          'durable_commit':_recovery_committed,'error':_recovery_error,
+          'stable_scope':copy.deepcopy(_recovery_scope),
+          'isolated_scope_archive_count':len(_recovery_scope_archives),
+          'origin_epoch':_recovery_origins['origin_epoch'] if _recovery_restored else None,
+          'metrics':copy.deepcopy(_recovery_store.metrics),
+          'constraint_status':'pending_fresh_supported_calculation' if _recovery_constraint is not None else None}
+    def _recovery_domains(boundary):
+        for rid,r in _race_strategy_state.plan_records.items():_recovery_origins['records'].setdefault(rid,{'bridge_process_epoch':canonical_mod.PROCESS_EPOCH,'revision':r.revision})
+        for eid in _driver_pit_event_store:_recovery_origins['events'].setdefault(eid,canonical_mod.PROCESS_EPOCH)
+        return {'state':_race_strategy_state,'pit_store':dict(_driver_pit_event_store),'pit_sequence':driver_pit_sequence,
+          'closed':list(_plan_closed_identity) if _plan_closed_identity else None,'collision':list(_plan_collision_scope) if _plan_collision_scope else None,
+          'constraint':canonical_mod.clean(_recovery_constraint),'commands':_driver_plan_command_ledger,'box':_box_delivery_ledger,
+          'visit':{'entry':_pit_visit_entry_fact,'plan_reference':_pit_visit_plan_reference,'penalty':copy.deepcopy(_pit_visit_penalty_state),
+                   'race_instance_id':_pit_visit_entry_race_instance_id,'session_num':_pit_visit_entry_session_num},
+          'boundary':boundary,'origins':copy.deepcopy(_recovery_origins),'archives':dict(_recovery_archives),'scope_archives':dict(_recovery_scope_archives)}
+
     while True:
+        _canonical_staged=[]
+        _canonical_telemetry=None
+        _map_unavailable=False
         if not reader.is_open():
             if reader.open():
                 log("iRacing memory map opened (attached to iRacing)")
                 _iracing_mem_detected = True
                 _iracing_telemetry_active = False
                 inactive_diag_at = 0.0
-                broadcast({'type': 'iracing_detected', 'telemetry_active': False})
+                _publish_or_stage({'type': 'iracing_detected', 'telemetry_active': False})
             else:
                 _iracing_mem_detected = False
                 _iracing_telemetry_active = False
-                time.sleep(2)
-                continue
+                _map_unavailable=True
 
-        active = reader.is_active()
+        active = False if _map_unavailable else reader.is_active()
+        if not active:
+            if _recovery_loaded_scope is not None:
+                _recovery_gap=True
+                _recovery_gap_held_ids.update(r.decision_id for r in _race_strategy_state.plan_records.values() if r.phase in plan_lifecycle_mod.NON_TERMINAL_PHASES)
+                _recovery_committed=False
+            if not _recovery_in_gap and _pit_visit_penalty_state is not None:
+                _pit_visit_penalty_state=driver_pit_event_mod.observe_black_flag_frame(
+                    _pit_visit_penalty_state,driver_pit_event_mod.reconnect_gap_black_flag_evidence())
+            _recovery_in_gap=True
+            _inactive_snapshot=canonical_mod.build(state=_race_strategy_state,
+                facts=_canonical_last_facts,inputs=_canonical_last_inputs,pit_store=_driver_pit_event_store,
+                box_ledger=_box_delivery_ledger,box_projection={},gate_reason='telemetry_unavailable',
+                telemetry_available=False,on_pit_road=None,on_track=None,
+                recommendations={},last_driver_action=_last_driver_action,
+                scope_closed=_plan_closed_identity is not None,collision=_plan_collision_scope is not None,visit_open=_pit_visit_entry_fact is not None,continuity=_recovery_continuity(),origins=_recovery_origins)
+            broadcast(_inactive_snapshot.serialize())
+            _remember_canonical_publication(_inactive_snapshot.serialize())
 
         if active and not ir_was_connected:
             log(">>> iRacing CONNECTED - telemetry flowing")
             session_info_sent = False
             reader.var_cache.clear()
-            broadcast({'type': 'iracing_connected'})
+            _publish_or_stage({'type': 'iracing_connected'})
             # rendererの初期値ACTIVEを引きずらせず、このloopで評価した現状態を必ず続けて通知する。
             _force_driver_activity_broadcast = True
             ir_was_connected = True
@@ -3400,6 +4036,7 @@ def poll_iracing():
             leader_lap_time_hist.clear()
             lap_delta_hist.clear()
         if active:
+            _recovery_in_gap=False
             # 15秒未満のSDK瞬断から復帰した場合も内部スナップショットをActiveへ戻す。
             _iracing_telemetry_active = True
             inactive_since = None
@@ -3411,7 +4048,18 @@ def poll_iracing():
                 inactive_since = time.time()
             elif time.time() - inactive_since >= 15.0:
                 log("<<< iRacing DISCONNECTED (sustained 15s)")
-                broadcast({'type': 'iracing_disconnected'})
+                _publish_or_stage({'type': 'iracing_disconnected'})
+                # ★WO-003 REVISE 1 P1-3：pit visit trackerが生存中（訪問中）に
+                #   sustained reconnectが起きた場合、この通信断のgap区間は
+                #   権威black_flagを一切観測できていない。entry/reconnect後の
+                #   frameがどちらもknown falseでも、gap中にblack flagが出て
+                #   いた可能性を否定できないため、falseへ縮退させず一度だけ
+                #   unknownとして畳み込む（trueが既に確定していれば
+                #   observe_black_flag_frame()がno-opにする＝penalty優先は不変）。
+                if _pit_visit_penalty_state is not None and not _recovery_in_gap:
+                    _pit_visit_penalty_state = driver_pit_event_mod.observe_black_flag_frame(
+                        _pit_visit_penalty_state,
+                        driver_pit_event_mod.reconnect_gap_black_flag_evidence())
                 ir_was_connected = False
                 _iracing_mem_detected = False
                 _iracing_telemetry_active = False
@@ -3499,12 +4147,12 @@ def poll_iracing():
                             and last_session_sig is not None
                             and sig[:2] == last_session_sig[:2]
                             and _authority_session_num == last_session_num):
-                        broadcast({'type': 'session_info', 'data': info})
+                        _publish_or_stage({'type': 'session_info', 'data': info})
                         log("Session authority transition sent without duplicate reset: "
                             + str(last_session_sig) + " -> " + str(sig))
                         last_session_sig = sig
                     if sig != last_session_sig:
-                        broadcast({'type': 'session_info', 'data': info})
+                        _publish_or_stage({'type': 'session_info', 'data': info})
                         log("Session info sent: " + str(info.get('event_type')) + " SOF:" + str(info.get('sof'))
                             + " class:" + str(info.get('player_car_class')) + " drivers:" + str(info.get('num_drivers'))
                             + " car:" + str(info.get('player_car_model'))
@@ -3566,16 +4214,33 @@ def poll_iracing():
                         checkered_pending = _sig_reset['checkered_pending']
                         session_racing_started = _sig_reset['session_racing_started']
                         session_laps = _sig_reset['session_laps']
-                        pit_events = _sig_reset['pit_events']
+                        # ★WO-002：driver_pit_sequenceはここでは touch しない。この分岐は
+                        #   reconnectでも(last_session_sigが強制Noneにされて)通ることがあり、
+                        #   その時race_instance_idがSubSessionID等の権威で不変なら pit sequence
+                        #   も維持しなければならない。resetは下の毎frame処理で「実際に
+                        #   race_instance_id/session_numが変わった時」だけ行う
+                        #   （reset_pit_sequence_if_identity_changed）。
+                        # ★WO-003 REVISE 1 P1-2：pit_eventsも同じ理由で`_sig_reset['pit_events']`
+                        #   （常に[]）を無条件採用しない。canonical storeが実identity不変なら
+                        #   reconnectでも保持されているので、その時点のstoreからlegacy viewを
+                        #   再構成する——同一identityのreconnectでreconnect前のpitを消さない。
+                        #   実際にidentity/SessionNumが変わっていれば、下の毎frame処理
+                        #   （_race_identity_changed_this_frame）がstoreとこのviewを揃えてresetする。
+                        pit_events = driver_pit_event_mod.legacy_pit_events_view(
+                            _driver_pit_event_store)
                         race_start_class_pos = _sig_reset['race_start_class_pos']
                         active_decision_id = _sig_reset['active_decision_id']
                         active_decision_plan = _sig_reset['active_decision_plan']
-                        pending_strategy_proposal = _sig_reset['pending_strategy_proposal']
-                        strategy_options_proposal_sent = _sig_reset['strategy_options_proposal_sent']
-                        strategy_proposal_delivery_state = _sig_reset['strategy_proposal_delivery_state']
-                        strategy_proposal_dispatch_seq = _sig_reset['strategy_proposal_dispatch_seq']
+                        # ★WO-005 REVISE 1 R1：sig変更（reconnectでもlast_session_sigが強制
+                        #   Noneにされて通り得る）だけでは、`pending_strategy_proposal`の
+                        #   dispatch_id・`strategy_options_proposal_sent`・
+                        #   `strategy_proposal_delivery_state`・`strategy_proposal_dispatch_seq`・
+                        #   `declined_plan_signatures`をもう無条件で捨てない——これらは
+                        #   decision ID／dispatch IDへ紐付くkeyed effectであり、race_instance_id/
+                        #   session_numが実際に変わった時だけ破棄する（下の毎frame処理
+                        #   `_race_identity_changed_this_frame`が唯一のowner）。同一identityの
+                        #   reconnectではここで一切代入せず、reconnect前の値をそのまま維持する。
                         race_instance_fallback_id = _sig_reset['race_instance_fallback_id']
-                        declined_plan_signatures = _sig_reset['declined_plan_signatures']
                         gap_authority_records = _sig_reset['gap_authority_records']
                         session_setup_fingerprint = _sig_reset['session_setup_fingerprint']
                         session_series_id = _sig_reset['session_series_id']
@@ -3591,7 +4256,7 @@ def poll_iracing():
                         # ★2026-07-26 Unit E0：Driver Handoff 状態もsig変更で捨てる
                         _driver_activity_local = _sig_reset['_driver_activity_local']
                         _driver_activity_handoff_start = _sig_reset['_driver_activity_handoff_start']
-                        broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+                        _publish_or_stage({'type': 'driver_activity', 'state': _driver_activity_local})
                         # ★v3 Codex P0-4：pending summary もsig変更で破棄
                         _pending_summary = _sig_reset['_pending_summary']
                         _pending_non_race_summary = _sig_reset['_pending_non_race_summary']
@@ -3654,7 +4319,12 @@ def poll_iracing():
         currentLap  = reader.read_float('LapCurrentLapTime')
         fuel        = reader.read_float('FuelLevel')
         lap         = reader.read_int('Lap')
+        _wo008_raw_lap = lap
+        if not fixed_target_authority_mod.finite(lap):
+            lap = 0
         lapsTot     = reader.read_int('SessionLapsTotal')
+        if not fixed_target_authority_mod.finite(lapsTot):
+            lapsTot = 0
         timeRemain  = reader.read_float('SessionTimeRemain')  # 時間制セッション用(秒)。周回制では巨大値/無関係
         # 診断（2026-07-20・1回だけ）：SessionTimeRemain の宣言型を実機で確定させる。
         #   型を見て読むよう直したが、「doubleだったはず」を推測で終わらせず実測で残す。
@@ -3668,6 +4338,8 @@ def poll_iracing():
             _str_type_logged = True
         onPit       = reader.read_bool('OnPitRoad')
         onTrack     = reader.read_bool('IsOnTrack')
+        onPit = onPit if isinstance(onPit,bool) else None
+        onTrack = onTrack if isinstance(onTrack,bool) else None
         player_track_surface = reader.read_int('PlayerTrackSurface')
         pit_service_status = reader.read_int('PlayerCarPitSvStatus')
         incidents   = reader.read_int('PlayerCarMyIncidentCount')
@@ -3721,6 +4393,11 @@ def poll_iracing():
                 if _old_times:
                     _old_summary = {
                         'type': 'session_summary',
+                        # ★WO017：このsummaryを生んだ（終わった）sessionの発生identity。
+                        #   reset前の前frame値であり、到着時のDesktop現在scopeで置き換えさせない。
+                        'race_instance_id': _pit_seq_prev_race_instance_id,
+                        'session_num': _pit_seq_prev_session_num,
+                        'bridge_process_epoch': canonical_mod.PROCESS_EPOCH,
                         'track': session_track,
                         'car_class': session_car_class,
                         'car_model': session_car_model,
@@ -3739,6 +4416,9 @@ def poll_iracing():
                         'incidents': prev_incidents if isinstance(prev_incidents, int) else None,
                         'laps': list(session_laps),
                         'pit_events': list(pit_events),
+                        # ★WO018：同じrace/sessionのLifecycleがPlanをどう終えたか（debriefの旧Plan失効・再計算結果）。
+                        'plan_outcomes': debrief_outcomes_mod.plan_outcomes(
+                            _race_strategy_state, _pit_seq_prev_race_instance_id, _pit_seq_prev_session_num),
                         # ★スライス1：同一条件の検索キーと、その日の実測条件。
                         'setup_fingerprint': session_setup_fingerprint or None,
                         'series_id': session_series_id,
@@ -3785,16 +4465,25 @@ def poll_iracing():
             checkered_pending = _reset['checkered_pending']
             session_racing_started = _reset['session_racing_started']
             session_laps = _reset['session_laps']
-            pit_events = _reset['pit_events']
+            # ★WO-002：driver_pit_sequenceはここでは触らない（上のsig経路と同じ理由）。
+            # ★WO-003 REVISE 1 P1-2：pit_eventsも上のsig経路と同じ理由で
+            #   `_reset['pit_events']`（常に[]）を無条件採用しない。canonical
+            #   storeからlegacy viewを再構成する——実際のidentity/SessionNum変更は
+            #   下の毎frame処理がstoreとこのviewを揃えてresetする。
+            pit_events = driver_pit_event_mod.legacy_pit_events_view(
+                _driver_pit_event_store)
             race_start_class_pos = _reset['race_start_class_pos']
             active_decision_id = _reset['active_decision_id']
             active_decision_plan = _reset['active_decision_plan']
-            pending_strategy_proposal = _reset['pending_strategy_proposal']
-            strategy_options_proposal_sent = _reset['strategy_options_proposal_sent']
-            strategy_proposal_delivery_state = _reset['strategy_proposal_delivery_state']
-            strategy_proposal_dispatch_seq = _reset['strategy_proposal_dispatch_seq']
+            # ★WO-005 REVISE 1 R1：この`_changed`（SessionNum変更）ブロックは、下の毎frame処理の
+            #   `_race_identity_changed_this_frame`と常に同じフレームで一致して発火する
+            #   （session_numそのものが権威identityの一部）——`pending_strategy_proposal`の
+            #   dispatch_id・`strategy_options_proposal_sent`・`strategy_proposal_delivery_state`・
+            #   `strategy_proposal_dispatch_seq`・`declined_plan_signatures`・
+            #   `strategy_options_decision_sent`・`strategy_options_box_call_sent`のkeyed effect
+            #   resetは、唯一のowner（`_race_identity_changed_this_frame`ブロック）へ集約し、
+            #   ここでは重複して代入しない。
             race_instance_fallback_id = _reset['race_instance_fallback_id']
-            declined_plan_signatures = _reset['declined_plan_signatures']
             gap_authority_records = _reset['gap_authority_records']
             session_setup_fingerprint = _reset['session_setup_fingerprint']
             session_series_id = _reset['session_series_id']
@@ -3807,7 +4496,7 @@ def poll_iracing():
             # ★2026-07-26 Unit E0：Driver Handoff 状態もSessionNum変更で捨てる
             _driver_activity_local = _reset['_driver_activity_local']
             _driver_activity_handoff_start = _reset['_driver_activity_handoff_start']
-            broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+            _publish_or_stage({'type': 'driver_activity', 'state': _driver_activity_local})
             _force_driver_activity_broadcast = False
             pit_cycle_tracker = pit_cycle_tracker_mod.PitCycleTracker()
             last_pit_cycle_outcome = None
@@ -3816,14 +4505,11 @@ def poll_iracing():
             strategy_plan_revision = 0
             strategy_options = None
             strategy_options_dispatch = None
-            strategy_options_decision_sent = False
-            strategy_options_box_call_sent = False
-            pending_strategy_proposal = None
-            strategy_options_proposal_sent = False
-            strategy_proposal_delivery_state = None
-            strategy_proposal_dispatch_seq = 0
+            # ★WO-005 REVISE 1 R1：keyed effect（decision/BOX delivery effect・proposal
+            #   dispatch/delivery state・dispatch sequence・declined signature）の再設定は
+            #   ここでは行わない——`_race_identity_changed_this_frame`ブロックへ集約済み
+            #   （このSessionNum変更ブロックと同一フレームで必ず一致して発火する）。
             race_instance_fallback_id = uuid.uuid4().hex[:12]
-            declined_plan_signatures = []
             latest_endurance_plan = None
             pit_enter_lap = None
             # ★P0-1：checker_fuel_freeze も SessionNum 変更で破棄（次セッション誤認防止・単一の真実源から取得）
@@ -3858,6 +4544,294 @@ def poll_iracing():
                     % _transition_summary.get('total_laps', 0))
         if cur_snum is not None:
             last_session_num = cur_snum
+
+        # ★WO-002：この1poll iteration分の権威snapshotを一度だけ組み立てる。
+        #   SessionFlags/SessionTimeはここで1回読み、以後この frame を扱う
+        #   consumer（現状はpit exitのblack flag evidence投影）はここから
+        #   再読込せずに使う——同じframeの根拠であることを保証するため。
+        _source_frame_sequence += 1
+        _this_frame_race_instance_id = resolve_race_instance_id(info, race_instance_fallback_id)
+        # ★WO-002：driver_pit_sequenceは「race_instance_id/session_numが実際に
+        #   変わったか」だけを見てresetする。上の複数リセット経路の"どれが今回
+        #   発火したか"には依存しない——reconnectでlast_session_sigが強制的に
+        #   Noneにされてsig経路を通っても、SubSessionID等でrace_instance_idが
+        #   不変なら維持する（WO-002契約：reconnectだけで0に戻さない）。
+        # ★WO-003：canonical DriverPitEvent storeと進行中のvisit trackerも、
+        #   driver_pit_sequenceと全く同じ条件（実際のidentity変化）だけでresetする。
+        #   reconnect起因の他の汎用reset経路（_sig_reset/_reset）には依存しない。
+        _race_identity_changed_this_frame = (
+            _pit_seq_prev_race_instance_id is not None
+            and (_this_frame_race_instance_id != _pit_seq_prev_race_instance_id
+                 or cur_snum != _pit_seq_prev_session_num))
+        driver_pit_sequence = race_facts_mod.reset_pit_sequence_if_identity_changed(
+            driver_pit_sequence,
+            race_instance_id=_this_frame_race_instance_id, session_num=cur_snum,
+            prev_race_instance_id=_pit_seq_prev_race_instance_id,
+            prev_session_num=_pit_seq_prev_session_num)
+        _pit_seq_prev_race_instance_id = _this_frame_race_instance_id
+        _pit_seq_prev_session_num = cur_snum
+        if _race_identity_changed_this_frame:
+            _last_driver_action=None
+            _recommendation_sources={}
+            _options_projection_provenance={}
+            _driver_pit_event_store = {}
+            # ★WO-003 REVISE 1 P1-2：storeと同じ条件でpit_events互換viewも
+            #   一緒にresetする——identity変更ではstore/viewとも新scopeになる
+            #   （_sig_reset/_reset経路が同じframeでstoreから再構成した古い
+            #   identityのviewを、ここで確実に上書きする）。
+            pit_events = []
+            _pit_visit_entry_fact = None
+            _pit_visit_plan_reference = None
+            _pit_visit_penalty_state = None
+            _pit_visit_entry_race_instance_id = None
+            _pit_visit_entry_session_num = None
+            # ★WO-005 REVISE 1 R1：`pending_strategy_proposal`のdispatch_id・
+            #   `strategy_options_proposal_sent`・`strategy_proposal_delivery_state`・
+            #   `strategy_proposal_dispatch_seq`・`declined_plan_signatures`・
+            #   `strategy_options_decision_sent`・`strategy_options_box_call_sent`——
+            #   現在decision IDへ紐付くkeyed effect全体——は、`_race_identity_changed_
+            #   this_frame`が唯一のowner。同一identityのsig refresh/reconnect
+            #   （_sig_reset/_reset経路）ではこれらへ一切触れない。実際にrace_instance_id/
+            #   session_numが変わった、このframeでだけ破棄する。
+            pending_strategy_proposal = None
+            strategy_options_proposal_sent = False
+            strategy_proposal_delivery_state = None
+            strategy_proposal_dispatch_seq = 0
+            declined_plan_signatures = []
+            strategy_options_decision_sent = False
+            strategy_options_box_call_sent = False
+        # ★WO-005 §4.1：Plan phaseの唯一のcanonical owner。driver_pit_sequence/
+        #   storeと全く同じ識別（実際のidentity変化）だけでscopeを切り替える。
+        #   reconnectだけでは同じobjectを保持する——same-identity reconnectで
+        #   awaiting/active recordとhistoryを失わない（§4.7）。
+        if _race_strategy_state is None:
+            _race_strategy_state = plan_lifecycle_mod.new_race_strategy_state(
+                _this_frame_race_instance_id, cur_snum)
+            if _race_strategy_state is None:
+                log('PLAN LIFECYCLE SCOPE INIT ERROR: race_instance_id=%r session_num=%r'
+                    % (_this_frame_race_instance_id, cur_snum))
+        elif _race_identity_changed_this_frame:
+            _race_strategy_state, _lifecycle_close_outcome = plan_lifecycle_mod.close_scope(
+                _race_strategy_state, reason='race_identity_changed')
+            log('PLAN LIFECYCLE SCOPE CLOSED: reason=race_identity_changed status=%s'
+                % _lifecycle_close_outcome.status)
+            _race_strategy_state = plan_lifecycle_mod.new_race_strategy_state(
+                _this_frame_race_instance_id, cur_snum)
+            if _race_strategy_state is None:
+                log('PLAN LIFECYCLE SCOPE INIT ERROR: race_instance_id=%r session_num=%r'
+                    % (_this_frame_race_instance_id, cur_snum))
+        # WO010: raw identity fence before any Plan/pit consumer; whole decode
+        # and all cross-reference validation precede this atomic owner swap.
+        _fresh_recovery_scope=recovery_mod.stable_scope(info,_this_frame_race_instance_id,cur_snum)
+        if _fresh_recovery_scope is None:
+            _recovery_status='identity_unsupported';_recovery_scope=None
+        elif _recovery_loaded_scope!=_fresh_recovery_scope:
+            _scope_switch=_recovery_loaded_scope is not None
+            if _scope_switch:
+                _archive_bundle=_recovery_store.loaded
+                if _archive_bundle and _archive_bundle['scope']==_recovery_loaded_scope:
+                    _archive_domains=dict(_archive_bundle['decoded']);_archive_domains.pop('scope_archives')
+                    _archive_key=recovery_mod.scope_archive_key(_recovery_loaded_scope,_archive_bundle['process_epoch'],_archive_bundle['revision'])
+                    _recovery_scope_archives[_archive_key]={'scope':copy.deepcopy(_recovery_loaded_scope),'process_epoch':_archive_bundle['process_epoch'],'revision':_archive_bundle['revision'],'domains':_archive_domains}
+                # Driver identity is part of custody even when race/session
+                # SDK fields stay equal. Do not re-use another driver's state.
+                _race_strategy_state=plan_lifecycle_mod.new_race_strategy_state(_this_frame_race_instance_id,cur_snum)
+                _driver_pit_event_store={};driver_pit_sequence=0;pit_events=[]
+                _driver_plan_command_ledger=driver_plan_command_mod.new_ledger(_this_frame_race_instance_id,cur_snum)
+                _declared_early_pit=None
+                _box_delivery_ledger=box_authority_delivery_mod.new_ledger()
+                _plan_closed_identity=None;_plan_collision_scope=None
+                _pit_visit_entry_fact=None;_pit_visit_plan_reference=None;_pit_visit_penalty_state=None
+                _pit_visit_entry_race_instance_id=None;_pit_visit_entry_session_num=None
+                _last_driver_action=None;prev['onPit']=None
+                pending_strategy_proposal=None;strategy_options=None
+                fuel_per_lap_hist=[];clean_fuel_per_lap_hist=[];clean_lap_time_hist=[]
+                fuel_at_lap_start=None;last_lap_time=None;lap_time_hist=[];prev_current_lap=None
+                strategy_options_proposal_sent=False;strategy_options_decision_sent=False;strategy_options_box_call_sent=False
+                _recommendation_sources={};_options_projection_provenance={}
+                _recovery_last_observed_time=None
+                _recovery_gap_held_ids=set()
+            _recovery_scope=_fresh_recovery_scope
+            _recovery_loaded_scope=copy.deepcopy(_fresh_recovery_scope)
+            if _recovery_store.error:
+                _recovery_status='restore_failed';_recovery_error=_recovery_store.error
+            elif not _recovery_restore_consumed and _recovery_store.loaded and _recovery_store.loaded['scope']==_fresh_recovery_scope:
+                _bundle=_recovery_store.loaded;_domains=_bundle['decoded']
+                _recovery_scope_archives=dict(_domains['scope_archives'])
+                _old_state=_domains['state']
+                _recovery_constraint_record=next((r for r in _old_state.plan_records.values() if r.phase=='active' and fixed_target_authority_mod.constraint(r)),None)
+                _recovery_constraint=fixed_target_authority_mod.constraint(_recovery_constraint_record)
+                # A pending Driver target outlives the invalidated old active
+                # record. Repeated restarts must consume the same saved target.
+                if _domains['constraint'] is not None:
+                    _recovery_constraint=_domains['constraint']
+                    _recovery_constraint_record=next(r for r in _old_state.plan_records.values()
+                        if fixed_target_authority_mod.constraint(r)==_recovery_constraint)
+                _race_strategy_state=recovery_mod.invalidate_restored(_old_state)
+                _driver_pit_event_store=dict(_domains['pit_store']);driver_pit_sequence=_domains['pit_sequence']
+                _plan_closed_identity=tuple(_domains['closed']) if _domains['closed'] else None
+                _plan_collision_scope=tuple(_domains['collision']) if _domains['collision'] else None
+                _recovery_archives=copy.copy(_domains['archives'])
+                _recovery_archives[_bundle['process_epoch']]={'commands':_domains['commands'],'box':recovery_mod.restore_box(_domains['box'])}
+                _driver_plan_command_ledger=driver_plan_command_mod.new_ledger(_this_frame_race_instance_id,cur_snum)
+                _declared_early_pit=None
+                _box_delivery_ledger=box_authority_delivery_mod.new_ledger()
+                _box_delivery_ledger=dataclasses.replace(_box_delivery_ledger,sequence=_domains['box'].sequence)
+                _recovery_origins=copy.deepcopy(_domains['origins'])
+                _visit=_domains['visit'];_pit_visit_entry_fact=_visit['entry'];_pit_visit_plan_reference=_visit['plan_reference']
+                _pit_visit_entry_race_instance_id=_visit['race_instance_id'];_pit_visit_entry_session_num=_visit['session_num']
+                _pit_visit_penalty_state=_visit['penalty']
+                if _pit_visit_entry_fact is not None:
+                    _pit_visit_penalty_state=driver_pit_event_mod.observe_black_flag_frame(_pit_visit_penalty_state,driver_pit_event_mod.reconnect_gap_black_flag_evidence())
+                    pit_enter_time=_pit_visit_entry_fact.session_time_s;pit_enter_lap=_pit_visit_entry_fact.lap
+                    pit_enter_fuel=_pit_visit_entry_fact.fuel_l;pit_enter_pct=_pit_visit_entry_fact.lap_dist_pct;pit_enter_pos=_pit_visit_entry_fact.class_position
+                prev['onPit']=_domains['boundary']['on_pit_road']
+                if _pit_visit_entry_fact is not None:prev['onPit']=True
+                _pit_seq_prev_race_instance_id=_this_frame_race_instance_id;_pit_seq_prev_session_num=cur_snum
+                pit_events=driver_pit_event_mod.legacy_pit_events_view(_driver_pit_event_store)
+                _recovery_restored=True;_recovery_gap=True;_recovery_status='restored'
+                _recovery_checkpoint_id=_bundle['checkpoint_id']
+                _recovery_last_observed_time=_domains['boundary']['session_time_s']
+                log('RECOVERY RESTORED: checkpoint=%s old_plan_resume=false gap_unknown=true'%_recovery_checkpoint_id)
+            else:
+                _recovery_status='archive_scope' if _recovery_store.loaded else 'fresh'
+                if not _recovery_restore_consumed and _recovery_store.loaded:
+                    _bundle=_recovery_store.loaded;_archive_domains=dict(_bundle['decoded']);_archive_domains.pop('scope_archives')
+                    _recovery_scope_archives=dict(_bundle['decoded']['scope_archives'])
+                    _archive_key=recovery_mod.scope_archive_key(_bundle['scope'],_bundle['process_epoch'],_bundle['revision'])
+                    _recovery_scope_archives[_archive_key]={'scope':copy.deepcopy(_bundle['scope']),'process_epoch':_bundle['process_epoch'],'revision':_bundle['revision'],'domains':_archive_domains}
+                _recovery_archives={};_recovery_origins={'records':{},'events':{},'origin_epoch':canonical_mod.PROCESS_EPOCH}
+                _recovery_restored=False;_recovery_gap=False;_recovery_constraint=None;_recovery_constraint_record=None
+            _recovery_fingerprint=None
+            _recovery_restore_consumed=True
+        else:
+            _recovery_scope=_fresh_recovery_scope
+            if _recovery_status=='identity_unsupported':_recovery_status='restored' if _recovery_restored else 'fresh'
+        # ★WO-005 §4.6/§4.7：`active_decision_id`/`active_decision_plan`/
+        #   `pending_strategy_proposal`はLifecycleのread-only projectionへ
+        #   統一する。汎用reset経路（_sig_reset/_reset）がこのframenの
+        #   早い時点でこれらをNoneへ既に書き換えていても——同一identityの
+        #   reconnectではLifecycle自体は保持されている——ここで
+        #   `_race_strategy_state`（保持済みまたは新scope）から必ず
+        #   再投影し、この frame の最初のconsumer（pit entry freeze等）より
+        #   前に正しいcontentへ戻す。以後この2変数への直接代入は、Lifecycle
+        #   遷移が成功した直後の同じ再投影パターンだけで行う——他の代入経路は
+        #   作らない。
+        _active_plan_record_this_frame = (
+            plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+            if _race_strategy_state is not None else None)
+        if _active_plan_record_this_frame is not None:
+            active_decision_id = _active_plan_record_this_frame.decision_id
+            active_decision_plan = plan_lifecycle_adapter.legacy_decision_projection(
+                _active_plan_record_this_frame)
+            _session_race_state = session_race_state_mod.register_active_plan(
+                _session_race_state, plan_id=_active_plan_record_this_frame.selected_plan,
+                plan_snapshot=plan_lifecycle_adapter.legacy_strategy_options_projection(
+                    _active_plan_record_this_frame),
+                snapshot_id=_active_plan_record_this_frame.evidence_snapshot_id)
+        else:
+            active_decision_id = None
+            active_decision_plan = None
+        _awaiting_plan_record_this_frame = (
+            plan_lifecycle_adapter.current_awaiting_record(_race_strategy_state)
+            if _race_strategy_state is not None else None)
+        if _awaiting_plan_record_this_frame is not None:
+            # ★WO-005 REVISE 1 R1（§4.7）：`_sig_reset`（:3634-3649）と`_reset`
+            #   （:3865-3899）はどちらも`pending_strategy_proposal`の
+            #   `dispatch_id`／`strategy_proposal_delivery_state`／
+            #   `strategy_proposal_dispatch_seq`／`declined_plan_signatures`
+            #   ／`strategy_options_decision_sent`／`strategy_options_box_
+            #   call_sent`へ一切触れない——同一identityのreconnect（sig再発行・
+            #   SessionNum系の汎用reset経路がこのframeで発火しても）では、
+            #   これらのkeyed effectは前frameの値をそのまま持ち越す。唯一の
+            #   resetはこの`elif _race_identity_changed_this_frame:`ブロック
+            #   （:3972-3986）で、実際に race_instance_id/session_num が
+            #   変わったframeだけが対象。よってここで読む
+            #   `pending_strategy_proposal.get('dispatch_id')`は「失われた値を
+            #   救出する」のではなく、reconnectで一度も破棄されていない現在値を
+            #   そのまま次のcontent projectionへ引き継いでいるだけである
+            #   （contentだけは毎frame Lifecycle awaiting recordから再投影し、
+            #   dispatch_idはbridge-local transport stateとして別管理する）。
+            #   `dispatch_id`がNoneになるのは、identity変更で本当に新しい
+            #   scopeが始まった時と、プロセス起動後まだ一度もdispatchして
+            #   いない最初のawaiting recordの時だけであり、どちらも次の
+            #   decision-lockが新しいdispatch_idを発行して正しく再送する。
+            pending_strategy_proposal = plan_lifecycle_adapter.legacy_decision_projection(
+                _awaiting_plan_record_this_frame,
+                dispatch_id=(pending_strategy_proposal.get('dispatch_id')
+                             if isinstance(pending_strategy_proposal, dict) else None))
+        else:
+            pending_strategy_proposal = None
+        _race_facts_snapshot = race_facts_mod.build_snapshot(
+            race_instance_id=_this_frame_race_instance_id,
+            session_num=cur_snum,
+            source_frame_sequence=_source_frame_sequence,
+            session_time_s=reader.read_double('SessionTime'),
+            raw_session_flags=reader.read_int('SessionFlags'),
+            driver_pit_sequence=driver_pit_sequence)
+        _observed_time=_race_facts_snapshot['source_frame']['session_time_s']
+        if recovery_mod.finite(_observed_time):
+            if _recovery_last_observed_time is not None and _observed_time<_recovery_last_observed_time:
+                _recovery_gap=True
+                log('RECOVERY CONTINUITY: raw_session_time_rollback')
+                _gap_record=plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+                if _gap_record and fixed_target_authority_mod.constraint(_gap_record):
+                    _recovery_constraint_record=_gap_record;_recovery_constraint=fixed_target_authority_mod.constraint(_gap_record)
+                _race_strategy_state=recovery_mod.invalidate_restored(_race_strategy_state,reason='raw_session_time_rollback')
+                _declared_early_pit=None  # WO-019: continuity lost; never bind a later visit to it
+                active_decision_id=None;active_decision_plan=None;pending_strategy_proposal=None
+                strategy_options=None;_recommendation_sources={};clean_fuel_per_lap_hist=[]
+                if _pit_visit_penalty_state is not None:
+                    _pit_visit_penalty_state=driver_pit_event_mod.observe_black_flag_frame(_pit_visit_penalty_state,driver_pit_event_mod.reconnect_gap_black_flag_evidence())
+            _recovery_last_observed_time=_observed_time
+        # WO-007: freeze entry BEFORE any command, then stage commands until
+        # actual exit and finish close. Intermediate consumers are held.
+        _staged_driver_plan_commands = _consume_driver_plan_commands()
+        _pit_exit_finalized_this_frame = False
+        _frame_entry_plan = copy.deepcopy(active_decision_plan)
+        # WO-019: a Driver "pit this lap" applied on an earlier frame left no active Plan.
+        # The visit it announced still belongs to the Plan it invalidated (same as when the
+        # declaration lands on the entry frame itself), so entry freezes that record.
+        _declared_early_pit_record = early_pit_declaration_outstanding(
+            _declared_early_pit, state=_race_strategy_state,
+            race_instance_id=_this_frame_race_instance_id, session_num=cur_snum,
+            driver_pit_sequence=driver_pit_sequence, current_lap=lap)
+        if _frame_entry_plan is None and _declared_early_pit_record is not None:
+            _frame_entry_plan = plan_lifecycle_adapter.legacy_decision_projection(
+                _declared_early_pit_record)
+        _plan_identity = (_this_frame_race_instance_id, cur_snum)
+        if _race_identity_changed_this_frame:
+            _plan_closed_identity = None
+            _plan_collision_scope = None
+        _plan_exit_pending = prev['onPit'] is True and onPit is False and onTrack is True
+        _plan_gate_reason = (
+            _recovery_error if _recovery_error else
+            'identity_unsupported' if _recovery_status=='identity_unsupported' else
+            'sdk_gap_execution_unverified' if active_decision_id in _recovery_gap_held_ids else
+            'restart_constraint_pending' if _recovery_constraint is not None else
+            'scope_closed' if _plan_closed_identity == _plan_identity else
+            'pit_event_collision' if _plan_collision_scope and _plan_collision_scope[:2] == _plan_identity else
+            'black_flag_' + _race_facts_snapshot['black_flag']['state']
+            if _race_facts_snapshot['black_flag']['state'] != 'false' else
+            'raw_pit_unavailable' if onPit is None else
+            'raw_track_unavailable' if onTrack is None else
+            'visit_open' if onPit is True or _pit_visit_entry_fact is not None else
+            'pit_exit_pending' if _plan_exit_pending else
+            'command_pending' if _staged_driver_plan_commands else
+            'driver_early_pit_declared' if _declared_early_pit_record is not None else None)
+        if _plan_gate_reason:
+            log('PLAN EXECUTION HOLD: frame=%s identity=%s reason=%s'
+                % (_source_frame_sequence, _plan_identity, _plan_gate_reason))
+        _driver_target_constraint = fixed_target_authority_mod.constraint(
+            plan_lifecycle_mod.active_plan_view(_race_strategy_state))
+        # ★WO-003：訪問中(entry〜exit)の各dwell frameの権威black_flagを畳み込む。
+        #   entry frame自身の初回畳み込みはpit entryブロックが行い（この時点では
+        #   まだ_pit_visit_penalty_stateが未初期化のためここではスキップされる）、
+        #   exit frame自身の畳み込みはpit exitブロックが明示的に行う——ここは
+        #   その間の中間frameだけを拾う。
+        if onPit and _pit_visit_penalty_state is not None:
+            _pit_visit_penalty_state = driver_pit_event_mod.observe_black_flag_frame(
+                _pit_visit_penalty_state, _race_facts_snapshot['black_flag'])
 
         # Always classify the current session before any first-frame snapshot.
         # Do not put this inside lap_time_changed: telemetry_live is emitted
@@ -3917,6 +4891,10 @@ def poll_iracing():
         lifecycle_state = race_lifecycle_fsm.update(
             session_state=cur_ss, lap_last_lap_time=lapTime, telemetry_active=active,
             driver_state=driver_state, car_idx_lap_completed=_car_idx_lap_completed)
+        if (is_race_session and lifecycle_state in (
+                race_lifecycle.PLAYER_FINISHED, race_lifecycle.DEBRIEF)):
+            _plan_closed_identity = _plan_identity
+            _plan_gate_reason = 'scope_closed'
         _lifecycle_state = lifecycle_state  # ★P0：director_gate（module-level）から参照できるようにする
         # ★P0-1：プレイヤー完走時にチェッカー時点の fuel を一度だけ freeze（純粋関数・単体テスト可能）
         _prev_checker_fuel_freeze = checker_fuel_freeze
@@ -3968,7 +4946,7 @@ def poll_iracing():
             _driver_activity_local = _new_activity
             # Cost Telemetry とUIが「チーム車が走行中」と「本人が搭乗中」を混同しないための
             # 非音声メタデータ。E0の権威状態をそのままrendererへ渡す。
-            broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+            _publish_or_stage({'type': 'driver_activity', 'state': _driver_activity_local})
             if endurance_handoff_mod.should_emit(
                     chief_engineer_config,
                     previous_activity=_activity_before,
@@ -3984,7 +4962,7 @@ def poll_iracing():
                     current_index=chief_engineer_config.get('current_index', 0),
                     tire_report=last_tire_report,
                     endurance_plan=latest_endurance_plan)
-                broadcast({'type': 'chief_engineer_handoff',
+                _publish_or_stage({'type': 'chief_engineer_handoff',
                            'packet': _handoff_packet})
                 log('CHIEF ENGINEER HANDOFF: %s' % json.dumps(
                     _handoff_packet, ensure_ascii=False, separators=(',', ':')))
@@ -4023,12 +5001,12 @@ def poll_iracing():
                 stopped_warned.clear()
                 log("DRIVER ACTIVITY: new active stint — driver-scoped call state reset")
         if _force_driver_activity_broadcast:
-            broadcast({'type': 'driver_activity', 'state': _driver_activity_local})
+            _publish_or_stage({'type': 'driver_activity', 'state': _driver_activity_local})
             _force_driver_activity_broadcast = False
         _set_driver_activity(_driver_activity_local)
 
         if _pending_non_race_summary is not None:
-            _non_race_result = broadcast(_pending_non_race_summary)
+            _non_race_result = _publish_or_stage(_pending_non_race_summary)
             if _non_race_result == BROADCAST_DISPATCHED:
                 log("Non-race summary dispatched from transition pending: %d laps"
                     % _pending_non_race_summary.get('total_laps', 0))
@@ -4042,7 +5020,7 @@ def poll_iracing():
                 and lifecycle_state in (
                     race_lifecycle.CHECKER_OUT,
                     race_lifecycle.PLAYER_FINISHED)):
-            _checker_result = broadcast(_pending_checker_notice)
+            _checker_result = _publish_or_stage(_pending_checker_notice)
             if _checker_result == BROADCAST_DISPATCHED:
                 checker_out_notice_sent = True
                 _pending_checker_notice = None
@@ -4130,6 +5108,10 @@ def poll_iracing():
                         _pace_first = _pace_last = None
                     _pending_summary = {
                         'type': 'session_summary',
+                        # ★WO017：summaryを確定したframeのrace/session（送信が遅れても発生元を保つ）。
+                        'race_instance_id': _this_frame_race_instance_id,
+                        'session_num': cur_snum,
+                        'bridge_process_epoch': canonical_mod.PROCESS_EPOCH,
                         'track': session_track,
                         'car_class': session_car_class,
                         'car_model': session_car_model,
@@ -4154,6 +5136,9 @@ def poll_iracing():
                         'incidents': prev_incidents if isinstance(prev_incidents, int) else None,
                         'laps': session_laps,
                         'pit_events': list(pit_events),
+                        # ★WO018：同じrace/sessionのLifecycleがPlanをどう終えたか（debriefの旧Plan失効・再計算結果）。
+                        'plan_outcomes': debrief_outcomes_mod.plan_outcomes(
+                            _race_strategy_state, _this_frame_race_instance_id, cur_snum),
                         # ★スライス1：同一条件の検索キーと、その日の実測条件。
                         'setup_fingerprint': session_setup_fingerprint or None,
                         'series_id': session_series_id,
@@ -4191,6 +5176,9 @@ def poll_iracing():
         # pending 再送ループ（毎フレーム走る・成功まで諦めない）
         if _pending_summary is not None and not summary_sent:
             # ★v3 Codex P1：DISPATCHED のみ成功。HELD/DROPPED は同じpayloadを保持。
+            # ★WO018：保持中に同じrace/sessionのLifecycleが進んだ（本人完走のsession_end close等）なら
+            #   送信直前の結果へ更新する。scopeが変わった後（別race/session）は作成時の値を保つ。
+            _pending_summary = debrief_outcomes_mod.refresh(_pending_summary, _race_strategy_state)
             _summary_snapshot = _pending_summary
             _pending_summary, summary_sent, _summary_result = dispatch_pending_summary(
                 _pending_summary, summary_sent, broadcast)
@@ -4224,7 +5212,7 @@ def poll_iracing():
                 checkered_pending = False
 
         if driver_state != prev_driver_state:
-            broadcast({'type': 'driver_state', 'state': driver_state})
+            _publish_or_stage({'type': 'driver_state', 'state': driver_state})
             # ガレージから復帰＝新しいスティント開始（耐久レースのドライバー交代・給油の可能性が高い）。
             #   古いスティントの燃料消費履歴（fuel_per_lap_hist）を持ち越すと、交代直後に「あと何周」を
             #   聞かれた時、前任ドライバーの消費率×今のスティントの残燃料で計算してしまい数字が破綻する
@@ -4362,7 +5350,7 @@ def poll_iracing():
                         _side_msg = {'left': 'Car left.', 'right': 'Car right.', 'both': 'Cars both sides.'}[_side]
                         # CarLeftRight はスカラーで car_idx を持たない。identity は
                         # side だけ＝存在しない車番を作らない。観測時刻は必ず送る。
-                        broadcast({'type': 'radio', 'trigger': 'side_by_side', 'side': _side,
+                        _publish_or_stage({'type': 'radio', 'trigger': 'side_by_side', 'side': _side,
                                    'source_timestamp': round(_now3, 3),
                                    'car_left_right': car_left_right,
                                    'message': _side_msg})
@@ -4376,7 +5364,7 @@ def poll_iracing():
                 if _now3 - _last_fired >= SIDE_BY_SIDE_COOLDOWN_S:
                     side_by_side_last_fired[_side] = _now3
                     _side_msg = {'left': 'Car left.', 'right': 'Car right.'}[_side]
-                    broadcast({'type': 'radio', 'trigger': 'side_by_side',
+                    _publish_or_stage({'type': 'radio', 'trigger': 'side_by_side',
                                'side': _side, 'source_timestamp': round(_now3, 3),
                                'car_left_right': car_left_right,
                                'message': _side_msg})
@@ -4385,7 +5373,7 @@ def poll_iracing():
             # (自分+両側1台ずつ、または自分+片側2台＝どちらも計3台)。
             elif not in_side_zone and car_left_right in (4, 5, 6):
                 if _now3 - straight_sbs_warned > 20:
-                    broadcast({'type': 'radio', 'trigger': 'multi_car_straight', 'message': 'Three wide. Watch the space.'})
+                    _publish_or_stage({'type': 'radio', 'trigger': 'multi_car_straight', 'message': 'Three wide. Watch the space.'})
                     straight_sbs_warned = _now3
                     last_battle_global = _now3
 
@@ -4554,7 +5542,7 @@ def poll_iracing():
                 else:
                     _q_pos = _q_class if _q_class is not None else _q_overall
                     _q_msg = 'Provisional qualifying result, P%d.' % _q_pos
-                broadcast({'type': 'radio', 'trigger': 'qualifying_provisional_result',
+                _publish_or_stage({'type': 'radio', 'trigger': 'qualifying_provisional_result',
                            'class_pos': _q_class, 'overall_pos': _q_overall,
                            'message': _q_msg})
                 qualifying_result_announced_for = cur_snum
@@ -4595,7 +5583,7 @@ def poll_iracing():
                                 secs.append({'sector': i + 1, 'time': round(t_, 2),
                                              'delta': delta, 'best': is_best})
                             if secs:
-                                broadcast({'type': 'lap_sectors', 'sectors': secs})
+                                _publish_or_stage({'type': 'lap_sectors', 'sectors': secs})
                             lap_sector_times = []
                         cur_sector = idx
             except Exception:
@@ -4825,7 +5813,7 @@ def poll_iracing():
             if _milestone is not None:
                 _msg = ('Final lap.' if _milestone == 1
                         else '%d laps to go.' % _milestone)
-                _final_result = broadcast({
+                _final_result = _publish_or_stage({
                     'type': 'radio',
                     'trigger': 'final_lap_notice',
                     'laps_remaining': _milestone,
@@ -4877,6 +5865,7 @@ def poll_iracing():
                 # レース長(残り周回)が分からなくても、燃料残量÷消費量で「あと何周走れるか」は出せる。
                 # これを常に持たせることで、練習/テストドライブや序盤でも燃料を把握できる（捏造防止）。
                 laps_of_fuel_left = round(fuel / avg_fuel_lap, 1) if avg_fuel_lap > 0 else None
+                _recommendation_sources['fuel_strategy']={'source_frame_sequence':_source_frame_sequence,'session_time_s':_race_facts_snapshot['source_frame']['session_time_s']}
                 fuel_strategy = {
                     'avg_fuel_per_lap': round(avg_fuel_lap, 2),
                     'laps_of_fuel_left': laps_of_fuel_left,   # 現燃料であと何周走れるか（レース長不要）
@@ -4979,6 +5968,22 @@ def poll_iracing():
                         fuel_strategy['total_fuel_to_add_l'] = (
                             _endurance_plan.get('total_fuel_to_add_l'))
 
+                # Validate fixed authority before ANY intermediate fuel consumer.
+                _early_target_inputs = fixed_target_authority_mod.build_inputs(
+                    race_instance_id=_race_facts_snapshot['race_instance_id'],session_num=cur_snum,
+                    source_frame_sequence=_source_frame_sequence,
+                    session_time_s=_race_facts_snapshot['source_frame']['session_time_s'],
+                    current_lap=(int(_wo008_raw_lap) if fixed_target_authority_mod.finite(_wo008_raw_lap) and _wo008_raw_lap==int(_wo008_raw_lap) else None),
+                    total_laps=lapsTot,lap_dist_pct=reader.read_float('LapDistPct'),fuel_level_l=fuel,
+                    avg_fuel_per_lap_l=session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+                    clean_laps_sampled=len(clean_fuel_per_lap_hist),effective_capacity_l=session_effective_fuel_capacity_l,
+                    driver_pit_sequence=driver_pit_sequence,is_lap_race=is_race_session and not _is_time_race,
+                    reserve_l=endurance_fuel_mod.DEFAULT_RESERVE_L, multi_stop=None)
+                if _driver_target_constraint and not _plan_gate_reason:
+                    _early_target_record = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+                    _early_target_verdict = fixed_target_authority_mod.evaluate(_early_target_inputs, _early_target_record.target_lap, frozen_set=_early_target_record.set_fuel_l)
+                    if not _early_target_verdict.get('available'):
+                        _plan_gate_reason = 'authority_requires_new_decision'
                 _fuel_dispatch_result = None
                 # ★Build 265 fix A (Codex 差戻し 2 反映・same-frame plan snapshot):
                 #   Plan 生成を燃料 P0 判定の手前まで前倒し、同じフレームの同じ入力から
@@ -5018,14 +6023,25 @@ def poll_iracing():
                 if (_plan_options_for_authority is None
                         and isinstance(_session_race_state.get('active_plan_snapshot'), dict)):
                     _plan_options_for_authority = _session_race_state['active_plan_snapshot']
+                # ★WO-005 §3.1：Lifecycle activeが存在するframeでは、P0 fuel authority
+                #   はそのactive recordの凍結options projectionだけを実行Planとして読む
+                #   ——上のcandidate/session_race_state fallback chainより優先する。
+                #   live `strategy_options`はここでは読まない（比較・再提案材料に限定）。
+                _authority_active_record = (
+                    plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+                    if _race_strategy_state is not None else None)
+                if _authority_active_record is not None:
+                    _plan_options_for_authority = (
+                        plan_lifecycle_adapter.legacy_strategy_options_projection(
+                            _authority_active_record))
                 # ★Build 265 fix A（Codex 差戻し反映・bridge-authoritative contract）:
                 #   plan-aware ゲートを director/broadcast より手前に置く。
-                #   suppression 時は broadcast() を呼ばない = director 通過も
+                #   suppression 時は _publish_or_stage() を呼ばない = director 通過も
                 #   予算計上も無し = 全キャラクター (JP/EN/DE/BR) に対して確実に抑止。
                 #   fuel_warning_band の dedupe は commit されない (band 状態は前回のまま) ため、
                 #   次のframeで再評価される (plan が変わった瞬間に再ゲート)。
                 _plan_authority_verdict = None
-                if _fuel_eval.get('should_warn') and not onPit:
+                if _fuel_eval.get('should_warn') and not onPit and not _plan_gate_reason:
                     _plan_authority_verdict = plan_fuel_authority_mod.evaluate(
                         _fuel_eval, _plan_options_for_authority,
                         current_lap=int(lap) if isinstance(lap, (int, float)) else None,
@@ -5041,22 +6057,90 @@ def poll_iracing():
                     _recommended_set = _plan_authority_verdict.get('recommended_set_fuel_l')
                     _recommended_add = _plan_authority_verdict.get('recommended_add_l')
                     _recommended_plan_id = _plan_authority_verdict.get('plan_id')
-                    if (isinstance(_recommended_plan_id, str)
+                    if (not _driver_target_constraint and isinstance(_recommended_plan_id, str)
                             and isinstance(_recommended_set, int)
                             and isinstance(_recommended_add, (int, float))):
+                        # ★WO-005 §4.6：補正はrecommended（live `strategy_options`）
+                        #   へだけ保持する。`_session_race_state['active_plan_snapshot']`
+                        #   はLifecycle active recordのcompatibility projectionに
+                        #   限定するため、独立mutationの対象から外す
+                        #   （Plan決定箇所以外からの書込みを作らない）。
                         _top_up_applied = apply_recommended_plan_fuel(
-                            (strategy_options, _plan_options_for_authority,
-                             _session_race_state.get('active_plan_snapshot')),
-                            _recommended_plan_id, _recommended_add, _recommended_set)
+                            (strategy_options,), _recommended_plan_id, _recommended_add,
+                            _recommended_set)
                         log('PLAN FUEL TOP-UP: plan=%s add=%.3f set=%s applied=%s'
                             % (_recommended_plan_id, _recommended_add, _recommended_set,
                                _top_up_applied))
+                        # ★WO-005 §4.4/§4.6：top-upがpendingと同じPlanのsignatureを
+                        #   実際に変えた時は、旧pendingを非recalculation material更新
+                        #   として同frameで失効させる——古いfuel値を提示済みのrecordを
+                        #   accepted可能状態へ残さない。
+                        if (isinstance(pending_strategy_proposal, dict)
+                                and pending_strategy_proposal.get('selected_plan')
+                                == _recommended_plan_id):
+                            _top_up_new_signature = plan_actionable_signature(dict(
+                                pending_strategy_proposal,
+                                add_fuel_l=round(float(_recommended_add), 3),
+                                set_fuel_l=int(_recommended_set)))
+                            if _top_up_new_signature != plan_actionable_signature(
+                                    pending_strategy_proposal):
+                                _superseded_pending_id = pending_strategy_proposal.get(
+                                    'decision_id')
+                                if (_race_strategy_state is not None
+                                        and isinstance(_superseded_pending_id, str)
+                                        and _superseded_pending_id
+                                        in _race_strategy_state.plan_records):
+                                    _race_strategy_state, _supersede_outcome = (
+                                        plan_lifecycle_mod.cancel_plan(
+                                            _race_strategy_state,
+                                            decision_id=_superseded_pending_id,
+                                            reason='proposal_superseded_by_material_update'))
+                                    log('PLAN LIFECYCLE PROPOSAL SUPERSEDED: '
+                                        'reason=proposal_superseded_by_material_update '
+                                        'decision_id=%s status=%s'
+                                        % (_superseded_pending_id, _supersede_outcome.status))
+                                pending_strategy_proposal = None
+                                strategy_options_proposal_sent = False
+                                strategy_proposal_delivery_state = None
                     log('PLAN FUEL AUTHORITY: '
                         + json.dumps(_plan_authority_verdict, ensure_ascii=False,
                                      separators=(',', ':')))
                 _plan_authority_permits = (
                     _plan_authority_verdict is None
                     or _plan_authority_verdict.get('allow_p0_pit_now') is True)
+                # ★WO-005 §4.6/P1-11：凍結active fuelがfinish safetyを満たさないと
+                #   evaluate()自身が判定した（active plan_idに対して
+                #   allow_p0_pit_now=True）時だけ、canonical active decision ID/
+                #   revision/source frame/`authority_requires_new_decision`診断に
+                #   結合したsafety overrideをこのwarningへ付ける。新給油量・BOX
+                #   instruction・active Plan変更は一切含めない——Rendererが同一
+                #   warningの検証済みoverrideに限り二段guardを越えるための最小情報。
+                _active_fuel_safety_override = None
+                if (_authority_active_record is not None
+                        and isinstance(_plan_authority_verdict, dict)
+                        and _plan_authority_verdict.get('plan_id')
+                        == _authority_active_record.selected_plan
+                        and _plan_authority_verdict.get('allow_p0_pit_now') is True
+                        and _plan_authority_verdict.get('override_reason') is not None):
+                    _active_fuel_safety_override = {
+                        'decision_id': _authority_active_record.decision_id,
+                        'revision': _authority_active_record.revision,
+                        # ★WO-005 REVISE 1 R3：この値は「現在のライブフレーム番号」
+                        #   （毎フレーム増分し、warning発生フレームと後続frameのtelemetry_live
+                        #   送信フレームが一致する保証が無い）ではなく、active recordが
+                        #   activateされた時点で固定される`activated_source_frame_sequence`
+                        #   （§4.5の登録／置換transactionが書く安定値）を使う。Rendererは
+                        #   `telemetry_live.active_plan_activated_source_frame_sequence`
+                        #   （同じ安定値）と一意照合できる。
+                        'activated_source_frame_sequence': (
+                            _authority_active_record.activated_source_frame_sequence),
+                        'diagnostic': 'authority_requires_new_decision',
+                        'override_reason': _plan_authority_verdict.get('override_reason'),
+                    }
+                    log('PLAN LIFECYCLE SAFETY OVERRIDE: decision_id=%s revision=%s reason=%s'
+                        % (_authority_active_record.decision_id,
+                           _authority_active_record.revision,
+                           _plan_authority_verdict.get('override_reason')))
                 # ★Build 266 Phase E フィックス⑤（旧 Build 265 未接続修正）：ファイナルラップ／
                 #   チェッカー確定後は「この周でボックス」「給油設定」の新規発話を一切禁止する。
                 #   結果の保存(fuel_strategy自体の計算)は続けてよい、発話だけ止める。
@@ -5130,7 +6214,15 @@ def poll_iracing():
                     if (_endurance_plan.get('available')
                             and _endurance_plan.get('multi_stop')):
                         _fuel_message = 'Box this lap. Normal fuel stop.'
-                    _fuel_dispatch_result = broadcast({
+                    if _plan_gate_reason:
+                        # Preserve P0 fuel facts, but never turn observation hold
+                        # into a new execution instruction or safety override.
+                        _fuel_message = ('Fuel margin is under half a liter. Save fuel now.'
+                                         if _fuel_band == fuel_strategy_mod.TIGHT else
+                                         'Fuel short %.1f liters. Execution held.' % abs(_fuel_margin))
+                        _warning_set = None
+                        _active_fuel_safety_override = None
+                    _fuel_dispatch_result = _publish_or_stage({
                         'type': 'radio',
                         'trigger': 'fuel_strategy_warning',
                         'fuel_band': _fuel_band,
@@ -5142,6 +6234,9 @@ def poll_iracing():
                         'effective_capacity_l': session_effective_fuel_capacity_l,
                         'one_stop_shortfall_l': round(_warning_one_stop_short, 3),
                         'post_stop_fuel_projection': _warning_post_stop,
+                        'execution_hold': _plan_gate_reason,
+                        'fact_only': bool(_plan_gate_reason),
+                        'safety_override': _active_fuel_safety_override,
                         'endurance_plan': _endurance_plan,
                         'estimated_crossings_to_finish': _milestone_laps,
                         'pit_physical_position': _warning_likely.get('position'),
@@ -5167,7 +6262,7 @@ def poll_iracing():
                         if _push_ok else
                         ('Fuel margin is fine, %.1f liters. Push is on hold pending damage '
                          'assessment.' % _fuel_eval['margin_l']))
-                    _fuel_dispatch_result = broadcast({
+                    _fuel_dispatch_result = _publish_or_stage({
                         'type': 'radio',
                         'trigger': 'fuel_strategy_safe',
                         'margin_l': _fuel_eval['margin_l'],
@@ -5182,7 +6277,7 @@ def poll_iracing():
                       and not fuel_margin_hold_announced):
                     # 余裕が安全帯のまま縮んだ場合でも、プッシュ許可は取り消す。
                     # 0.8〜0.9 Lを「ペースを上げていい」とは扱わない。
-                    _fuel_dispatch_result = broadcast({
+                    _fuel_dispatch_result = _publish_or_stage({
                         'type': 'radio',
                         'trigger': 'fuel_margin_hold',
                         'margin_l': _fuel_eval['margin_l'],
@@ -5257,13 +6352,13 @@ def poll_iracing():
                         #   ベスト更新は"祝う瞬間"であり、黙る判断を許す種類のものではない。
                         #   機械音を避けるため言い回しは複数から回す。
                         _bl = ['Personal best. ', 'That\'s your best. ', 'New best. ', 'Best of the day. ']
-                        broadcast({'type': 'radio', 'trigger': 'personal_best',
+                        _publish_or_stage({'type': 'radio', 'trigger': 'personal_best',
                             'time': t, 'time_seconds': round(lapTime, 3),
                             'diff': round(diff, 2),
                             'message': _bl[int(time.time()) % len(_bl)] + t + '.',
                             **_clean_lap_evidence})
                     else:
-                        broadcast({'type': 'radio', 'trigger': 'first_lap', 'time': t,
+                        _publish_or_stage({'type': 'radio', 'trigger': 'first_lap', 'time': t,
                             'time_seconds': round(lapTime, 3),
                             'message': t + '. Baseline lap.',
                             **_clean_lap_evidence})
@@ -5271,7 +6366,7 @@ def poll_iracing():
                     session_best = lapTime
 
                 elif is_session_best:
-                    broadcast({'type': 'radio', 'trigger': 'session_best', 'time': t,
+                    _publish_or_stage({'type': 'radio', 'trigger': 'session_best', 'time': t,
                         'time_seconds': round(lapTime, 3),
                         'message': 'Session best. ' + t + '.',
                         **_clean_lap_evidence})
@@ -5285,7 +6380,7 @@ def poll_iracing():
                     #   dirty 周 (incident / pit_in / pit_out / off_track) では発行しない
                     #   ため、clean_lap_candidate_count はここでも一致する。
                     if _lap_valid_clean:
-                        broadcast({'type': 'radio', 'trigger': 'lap_time', 'time': t,
+                        _publish_or_stage({'type': 'radio', 'trigger': 'lap_time', 'time': t,
                             'time_seconds': round(lapTime, 3),
                             'diff': round(diff, 2),
                             'message': t + '.',
@@ -5319,7 +6414,7 @@ def poll_iracing():
                         if _dir:
                             _paced = True
                             pace_check_last_lap = lap
-                            broadcast({'type': 'pace_check', 'direction': _dir,
+                            _publish_or_stage({'type': 'pace_check', 'direction': _dir,
                                 'recent_deltas': lap_delta_hist[:],
                                 'pos': pos, 'class_pos': class_pos,
                                 'gap_ahead': round(nearest_ahead_gap, 2) if nearest_ahead_gap is not None else None,
@@ -5335,7 +6430,7 @@ def poll_iracing():
                         if _prev:
                             _typ = sum(_prev) / len(_prev)
                             if (diff - _typ) >= 1.5 and _judge_llm_gate('time_loss', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
-                                broadcast({'type': 'judge_call', 'kind': 'time_loss',
+                                _publish_or_stage({'type': 'judge_call', 'kind': 'time_loss',
                                     'lost': round(diff - _typ, 1), 'time': t})
 
                 last_lap_time = lapTime
@@ -5396,7 +6491,7 @@ def poll_iracing():
                 now_r = time.time()
                 if (best_ahead is not None and best_ahead > 7.0 and
                         now_r - rolling_gap_warned_time > 5.0):
-                    broadcast({'type': 'radio', 'trigger': 'rolling_gap',
+                    _publish_or_stage({'type': 'radio', 'trigger': 'rolling_gap',
                         'gap': round(best_ahead, 1),
                         'message': 'Gap ' + str(round(best_ahead, 1)) + '. Reel them in.'})
                     rolling_gap_warned_time = now_r
@@ -5414,13 +6509,13 @@ def poll_iracing():
                         'Too many incidents. Calm down. Forget position — just finish.',
                         'That is enough. Reset your head. Clean laps to the flag.',
                         'Stop the risks now. Bring this car home in one piece.'])
-                    broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
+                    _publish_or_stage({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
                         'message': msg})
                 elif delta >= 4:
                     # 大クラッシュ＝まず身体を気遣う「Are you OK?」を最優先で。ダイレクトドライブの
                     # 強力なモーターはクラッシュ時にハンドルを持っていき、手首の捻挫/怪我が実際に起きる。
                     # 順位やレース運びより先に、ドライバーの安否を確認するのが本物のエンジニア(Yuji方針)。
-                    broadcast({'type': 'radio', 'trigger': 'crash_check', 'delta': delta, 'recent': recent,
+                    _publish_or_stage({'type': 'radio', 'trigger': 'crash_check', 'delta': delta, 'recent': recent,
                         'message': 'Are you okay? Any injury to your hands? Can the car still drive? If not, take the tow back and we will regroup from there.'})
                     # ★2026-07-24 post_contact_ok 監視開始（Yuji方針）：
                     #   5秒間の観察窓を開き、Speed>30km/h を維持できたら Pattern B（走行継続）と判定して
@@ -5434,7 +6529,7 @@ def poll_iracing():
                         'Watch it. Bring it back.',
                         'Spin. Collect yourself. We are okay.',
                         'Easy. Settle it down.'])
-                    broadcast({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
+                    _publish_or_stage({'type': 'radio', 'trigger': 'incident', 'delta': delta, 'recent': recent,
                         'message': msg})
                 # delta==1（コースオフ）は基本黙る。連発時のみ上のrecent>=3で拾う
             prev_incidents = incidents
@@ -5454,7 +6549,7 @@ def poll_iracing():
             _pcs_fire, post_contact_watch_start, post_contact_speed_ok = evaluate_post_contact_watch(
                 post_contact_watch_start, post_contact_speed_ok, _pcs_now, _pcs_spd)
             if _pcs_fire:
-                broadcast({'type': 'radio', 'trigger': 'post_contact_ok',
+                _publish_or_stage({'type': 'radio', 'trigger': 'post_contact_ok',
                     'message': 'Still driving? Alignment or handling — any effect?'})
 
         # ── ダメージレポート（2026-07-12マーボー要望：損傷度合い・走行継続可否を知りたい）──
@@ -5471,9 +6566,10 @@ def poll_iracing():
                     str(round(repair_mand)) + ' seconds. Box next lap.')
             else:
                 dmg_msg = 'If it does not affect performance, keep going. Watch the state, but let us avoid another incident.'
-            broadcast({'type': 'radio', 'trigger': 'damage_report', 'mandatory': mandatory,
-                'repair_mand': round(repair_mand or 0, 1), 'repair_opt': round(repair_opt or 0, 1),
-                'message': dmg_msg})
+            if _plan_closed_identity != _plan_identity:
+                _publish_or_stage({'type': 'radio', 'trigger': 'damage_report', 'mandatory': mandatory,
+                    'repair_mand': round(repair_mand or 0, 1), 'repair_opt': round(repair_opt or 0, 1),
+                    'message': dmg_msg})
             # ★Build 266 Phase E：SDK確定の損傷証拠を Session Race State へ記録する。
             #   `record_damage_observation` は最初の検出周を永久に保持し、後続の増分は
             #   累計だけ更新する（初検出の事実を消さない）。
@@ -5563,11 +6659,11 @@ def poll_iracing():
             if gained > 0:
                 _pu_msg = random.choice(['P' + str(class_pos) + '.', 'P' + str(class_pos) + ', good pass.',
                     'Position gained. P' + str(class_pos) + '.'])
-                broadcast({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos, 'message': _pu_msg})
+                _publish_or_stage({'type': 'radio', 'trigger': 'position_up', 'pos': class_pos, 'message': _pu_msg})
             else:
                 _pd_msg = random.choice(['P' + str(class_pos) + '. Lost one.', 'P' + str(class_pos) + '. He got you — still reachable.',
                     'Down to P' + str(class_pos) + '. You\'re fine, pace is there.'])
-                broadcast({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos, 'message': _pd_msg})
+                _publish_or_stage({'type': 'radio', 'trigger': 'position_down', 'pos': class_pos, 'message': _pd_msg})
 
         # ★2026-07-20 順位コールの連発対策（実走で16秒に5回＝ピットアウト直後の順位激変）。
         #   ドライバーは前レースでも「そういうのはいらない」と明言。1周に1回までに制限し、
@@ -5603,10 +6699,14 @@ def poll_iracing():
             _fuel_margin_l = _fs.get('margin_l')
             _fuel_pit_required = bool(_fs.get('pit_required')) or (
                 isinstance(_fuel_margin_l, (int, float)) and _fuel_margin_l < 0)
-            broadcast({'type': 'radio', 'trigger': 'fuel_warning', 'fuel': round(fuel, 1),
-                'pit_required': _fuel_pit_required,
+            _publish_or_stage({'type': 'radio', 'trigger': 'fuel_warning', 'fuel': round(fuel, 1),
+                'pit_required': _fuel_pit_required and not _plan_gate_reason,
+                'execution_hold': _plan_gate_reason, 'fact_only': bool(_plan_gate_reason),
+                'set_fuel_l': None, 'safety_override': None,
                 'margin_l': _fuel_margin_l,
                 'message': (
+                    'Fuel ' + str(round(fuel, 1)) + '. Execution held.'
+                    if _plan_gate_reason else
                     'Fuel ' + str(round(fuel, 1)) + '. Box this lap.'
                     if _fuel_pit_required
                     else 'Fuel ' + str(round(fuel, 1)) + '. Save mode now.')})
@@ -5715,7 +6815,7 @@ def poll_iracing():
         #       これを忘れると limiter_off_announced_stopがTrueのまま次ストップに持ち越し＝リミッターオフ消失＋
         #       pit_lane_secが計測不能＝ピットタイミング学習も消える連鎖崩壊が起きる。
         #   (3) 発話は上のSDK接近境界で先行。ここは境界が取れない環境のフォールバックだけ。
-        if onPit and prev['onPit'] is False:
+        if onPit is True and prev['onPit'] is False:
             # 状態更新は無条件（低速の正規進入でも必ず走らせる）
             pit_enter_time = reader.read_double('SessionTime')   # 進入時刻を記録
             pit_enter_lap = int(lap) if isinstance(lap, (int, float)) else None
@@ -5723,6 +6823,28 @@ def poll_iracing():
             pit_exit_lap = None
             pit_enter_pct = reader.read_float('LapDistPct')
             pit_enter_fuel = fuel
+            # ★WO-003：immutable DriverPitEventの訪問trackerをここで開始する。
+            #   entry factとPlan参照はこのframeで凍結し、exit時のlatest Planで
+            #   後付けしない。penalty証拠の畳み込みも、このentry frame自身の
+            #   権威black_flagから開始する（早期accumulationステップは、この
+            #   ifブロックがまだ走っていないため、このframe自身は拾えない）。
+            _pit_visit_entry_fact = driver_pit_event_mod.PitBoundaryFact(
+                lap=pit_enter_lap,
+                session_time_s=pit_enter_time,
+                source_frame_sequence=_race_facts_snapshot['source_frame']['sequence'],
+                class_position=pit_enter_pos,
+                lap_dist_pct=pit_enter_pct,
+                fuel_l=pit_enter_fuel,
+            )
+            _pit_visit_plan_reference = driver_pit_event_mod.freeze_plan_reference(
+                _frame_entry_plan,
+                race_instance_id=_race_facts_snapshot['race_instance_id'],
+                session_num=_race_facts_snapshot['session_num'])
+            _pit_visit_entry_race_instance_id = _race_facts_snapshot['race_instance_id']
+            _pit_visit_entry_session_num = _race_facts_snapshot['session_num']
+            _pit_visit_penalty_state = driver_pit_event_mod.observe_black_flag_frame(
+                driver_pit_event_mod.initial_visit_penalty_state(),
+                _race_facts_snapshot['black_flag'])
             pit_repair_start_s = damage_s
             pit_stall_start_time = None
             pit_stall_total_s = 0.0
@@ -5815,11 +6937,11 @@ def poll_iracing():
             #   再武装は上の「確定したピット訪問」判定だけが行う。
             # 先行通知済みなら重複させない。未通知環境のみここでフォールバック。
             if not pit_entry_announced_stop and _pit_entry_speed_ok:
-                broadcast({'type': 'radio', 'trigger': 'pit_entry',
+                _publish_or_stage({'type': 'radio', 'trigger': 'pit_entry',
                     'message': 'Watch the limit line, limiter on.'})
                 pit_entry_announced_stop = True
 
-        if prev['onPit'] and not onPit and onTrack:
+        if prev['onPit'] is True and onPit is False and onTrack is True:
             pit_exit_lap = lap
             # ── ピットレーン所要時間を実測（進入→退出のSessionTime差）──
             # 耐久のピットウィンドウ予測(復帰順位・トラフィック回避)の土台。1階記憶に残す。
@@ -5828,23 +6950,38 @@ def poll_iracing():
             if pit_stall_start_time is not None and _pit_exit_session_time is not None:
                 pit_stall_total_s += max(0.0, _pit_exit_session_time - pit_stall_start_time)
                 pit_stall_start_time = None
-            if pit_enter_time is not None:
-                _now = _pit_exit_session_time
-                if _now is not None:
-                    pit_lane_sec = round(_now - pit_enter_time, 1)
-                pit_enter_time = None
+            # ★WO-003 REVISE 2：pit滞在中のsustained reconnectで汎用
+            #   `_sig_reset`経路がlegacy `pit_enter_time`をNone化しても、
+            #   凍結済み`_pit_visit_entry_fact.session_time_s`を同一訪問・
+            #   同一identityの時だけlane duration計算のfallbackに使う。
+            #   tracker無し・identity不一致では別訪問の時刻を使わず
+            #   fail-closedで`None`のまま（下のfinalizeブロック自体を
+            #   skipさせる）。
+            _pit_lane_entry_time_s = driver_pit_event_mod.resolve_lane_entry_time_s(
+                legacy_pit_enter_time_s=pit_enter_time,
+                entry_fact=_pit_visit_entry_fact,
+                entry_race_instance_id=_pit_visit_entry_race_instance_id,
+                entry_session_num=_pit_visit_entry_session_num,
+                exit_race_instance_id=_race_facts_snapshot['race_instance_id'],
+                exit_session_num=_race_facts_snapshot['session_num'])
+            if _pit_lane_entry_time_s is not None and _pit_exit_session_time is not None:
+                pit_lane_sec = round(_pit_exit_session_time - _pit_lane_entry_time_s, 1)
+            pit_enter_time = None
             # ⑥ フォールバック：EngineWarningsのリミッタービットが未検知でこのストップでまだ鳴らして
             # いなければ、ピットレーン退出(OnPitRoad False)の瞬間に「リミッターオフ」を鳴らす。
             # ★八木さん実走ログ 7-4：OnPitRoad true→false が唯一の発火点。
             if not limiter_off_announced_stop:
-                broadcast({'type': 'radio', 'trigger': 'limiter_off',
+                _publish_or_stage({'type': 'radio', 'trigger': 'limiter_off',
                     'message': 'Limiter off. Hold pace on the out-lap.'})
                 limiter_off_announced_stop = True
             else:
                 log('LIMITER_OFF_SUPPRESSED reason=already_announced_for_pit_cycle')
             # 出口直後の二重コールは廃止。ここでは limiter_off だけを発話する。
             pit_entry_announced_stop = False
-            if pit_lane_sec is not None and 5 < pit_lane_sec < 300:  # 妥当範囲のみ(誤検知除外)
+            # Canonical exit comes from the known SDK boundary, not a lane
+            # duration heuristic. Unknown entry/time stays unresolved; the
+            # calibrator independently rejects missing/implausible samples.
+            if onPit is False:
                 _exit_pct = reader.read_float('LapDistPct')
                 _fuel_added = (
                     round(max(0.0, fuel - pit_enter_fuel), 2)
@@ -5911,8 +7048,134 @@ def poll_iracing():
                     # 満タン給油は観測記録として残すが、最適な通常サービス量の
                     # pit-loss baseline には混ぜない。
                     _classification = 'full_refuel_reference'
-                _flags = reader.read_int('SessionFlags') or 0
+                # ★WO-002：このpit exitと同じframeで既に読んだ権威snapshotを使う。
+                #   ここで再読込しない（同じframeの根拠であることを保証するため）。
+                _flags = _race_facts_snapshot['session_flags']['raw_value'] or 0
                 _caution = 'caution' if (_flags & 0xC000) else 'green'
+                # ★WO-002 REVISE 1（差戻し#1）：driver_pit_sequenceの単一owner
+                #   はsnapshotそのもの。以前はsampleへ書く値とsnapshot本体を
+                #   別々にincrementしており、同じexit frameでsnapshot本体=旧値・
+                #   sample=新値という食い違いが起きていた。`with_incremented_pit_
+                #   sequence()`はraw flags/SessionTime/source frameを再読込せず、
+                #   既存snapshotのdriver_pit_sequenceだけを+1した新しいsnapshotを
+                #   返す（このifブロック自体がOnPitRoad true->false遷移で1回しか
+                #   通らないため、二重incrementしない）。以後この frame 内の
+                #   sampleと次frameへのcarry-forward（`driver_pit_sequence`
+                #   ローカル変数）は、両方ともこの更新後snapshotから取る。
+                _race_facts_snapshot = race_facts_mod.with_incremented_pit_sequence(
+                    _race_facts_snapshot)
+                driver_pit_sequence = _race_facts_snapshot['driver_pit_sequence']
+                log('RACE FACTS SNAPSHOT pit_exit driver_pit_sequence=%s '
+                    'source_frame_sequence=%s race_instance_id=%s' % (
+                        _race_facts_snapshot['driver_pit_sequence'],
+                        _race_facts_snapshot['source_frame']['sequence'],
+                        _race_facts_snapshot['race_instance_id']))
+                # ★WO-003：immutable DriverPitEventをこの確定退出で一度だけfinalizeする。
+                #   このexit frame自身の権威black_flagを畳み込んでから解決する——
+                #   訪問中のtrue観測はこのexit frameがfalseでも消えない
+                #   （observe_black_flag_frameはtrueを一度観測したら上書きしない）。
+                if _pit_visit_penalty_state is None:
+                    _pit_visit_penalty_state = driver_pit_event_mod.initial_visit_penalty_state()
+                _pit_visit_penalty_state = driver_pit_event_mod.observe_black_flag_frame(
+                    _pit_visit_penalty_state, _race_facts_snapshot['black_flag'])
+                if _pit_visit_entry_fact is None:
+                    # 訪問trackerが無い（例：訪問中にrace/session identityが変わり
+                    #   上のresetでtrackerが消えた）。実測できる範囲だけでfail-closedに
+                    #   finalizeする——別訪問を合成しない。
+                    _pit_visit_entry_fact = driver_pit_event_mod.PitBoundaryFact(
+                        lap=pit_enter_lap, session_time_s=None, source_frame_sequence=None,
+                        class_position=pit_enter_pos, lap_dist_pct=pit_enter_pct,
+                        fuel_l=pit_enter_fuel)
+                _driver_pit_event_exit_fact = driver_pit_event_mod.PitBoundaryFact(
+                    lap=pit_exit_lap,
+                    session_time_s=_pit_exit_session_time,
+                    source_frame_sequence=_race_facts_snapshot['source_frame']['sequence'],
+                    class_position=class_pos,
+                    lap_dist_pct=_exit_pct,
+                    fuel_l=round(fuel, 2) if fuel is not None else None,
+                )
+                _driver_pit_event_service_fact = driver_pit_event_mod.PitServiceFact(
+                    fuel_added_l=_fuel_added,
+                    lane_total_s=pit_lane_sec,
+                    stall_s=round(pit_stall_total_s, 2),
+                    repair_s=_repair_done,
+                    tire_service='unknown',
+                )
+                _driver_pit_event = driver_pit_event_mod.finalize_driver_pit_event(
+                    race_instance_id=_race_facts_snapshot['race_instance_id'],
+                    session_num=_race_facts_snapshot['session_num'],
+                    driver_pit_sequence=_race_facts_snapshot['driver_pit_sequence'],
+                    entry_fact=_pit_visit_entry_fact,
+                    exit_fact=_driver_pit_event_exit_fact,
+                    service_fact=_driver_pit_event_service_fact,
+                    visit_penalty_state=_pit_visit_penalty_state,
+                    plan_reference=_pit_visit_plan_reference,
+                    entry_race_instance_id=_pit_visit_entry_race_instance_id,
+                    entry_session_num=_pit_visit_entry_session_num,
+                )
+                # ★WO-003 REVISE 1 P1-1：storeの衝突検知（同一pit_event_idに異なる
+                #   内容）は、本来"起きてはならない"上流不変条件（sequenceの単一
+                #   owner）の破損を捉える防御であり、検知そのものでpoll loop全体を
+                #   落としてはならない（fail-closedはこのvisitのidentity trust
+                #   低下として扱う——telemetry処理全体の停止という別種の障害に
+                #   しない）。ただし衝突した非canonical eventはstoreに書けて
+                #   いないので、DRIVER PIT EVENT/pit_events/pit_timing.
+                #   driver_pit_eventへ正常eventとして投影しない。既存store event
+                #   を代わりに「今回の訪問」として再投影することもしない
+                #   （`_serialized_driver_pit_event`をNoneのままにし、下の
+                #   projection群をすべてスキップする）。structured invariant
+                #   errorだけを残し、poll loopとこのframeで計算できた他のfact
+                #   （pit_loss_summary等）は継続する。
+                _driver_pit_event_store_collision = False
+                try:
+                    _driver_pit_event_store, _driver_pit_event_inserted = (
+                        driver_pit_event_mod.store_put(_driver_pit_event_store, _driver_pit_event))
+                except driver_pit_event_mod.DriverPitEventCollisionError as _dpe_collision:
+                    _driver_pit_event_store_collision = True
+                    _driver_pit_event_inserted = False
+                    log('DRIVER PIT EVENT INVARIANT ERROR: ' + json.dumps({
+                        'type': 'driver_pit_event_store_collision',
+                        'pit_event_id': _driver_pit_event.pit_event_id,
+                        'race_instance_id': _driver_pit_event.race_instance_id,
+                        'session_num': _driver_pit_event.session_num,
+                        'driver_pit_sequence': _driver_pit_event.driver_pit_sequence,
+                        'detail': str(_dpe_collision),
+                    }, ensure_ascii=False, separators=(',', ':')))
+                if _driver_pit_event_store_collision:
+                    _serialized_driver_pit_event = None
+                    _plan_collision_scope = (*_plan_identity, driver_pit_sequence)
+                else:
+                    # Apply only the same immutable event accepted by store.
+                    _race_strategy_state, _pit_lifecycle_outcome = (
+                        plan_lifecycle_mod.apply_pit_event(
+                            _race_strategy_state, _driver_pit_event))
+                    log('PLAN LIFECYCLE PIT: ' + json.dumps({
+                        'frame': _source_frame_sequence, 'identity': _plan_identity,
+                        'pit_event_id': _driver_pit_event.pit_event_id,
+                        'decision_id': _pit_lifecycle_outcome.decision_id,
+                        'status': _pit_lifecycle_outcome.status,
+                        'reason': _pit_lifecycle_outcome.reason,
+                        'active_plan_id': _race_strategy_state.active_plan_id,
+                        'records': [plan_lifecycle_mod.serialize_plan_lifecycle_record(r)
+                                    for r in _race_strategy_state.plan_records.values()
+                                    if r.terminal_pit_event_id == _driver_pit_event.pit_event_id],
+                    }, ensure_ascii=False))
+                    _serialized_driver_pit_event = driver_pit_event_mod.serialize_driver_pit_event(
+                        _driver_pit_event)
+                    log('DRIVER PIT EVENT: ' + json.dumps(
+                        _serialized_driver_pit_event, ensure_ascii=False, separators=(',', ':')))
+                    # ★WO-003 REVISE 1 P1-2：pit_eventsはcanonical storeの
+                    #   serialized legacy viewとして毎回丸ごと再構成する
+                    #   （既存alias込み）——同一process・同一identityのreconnect
+                    #   でstoreが保持されていれば、このviewも過去訪問を失わない。
+                    pit_events = driver_pit_event_mod.legacy_pit_events_view(
+                        _driver_pit_event_store)
+                # 訪問完了。次の訪問のためtrackerを空へ戻す。
+                _pit_visit_entry_fact = None
+                _pit_visit_plan_reference = None
+                _pit_visit_penalty_state = None
+                _pit_visit_entry_race_instance_id = None
+                _pit_visit_entry_session_num = None
                 _pit_sample = {
                     'track': session_track, 'car_class': session_car_class,
                     'car_model': session_car_model,
@@ -5932,6 +7195,14 @@ def poll_iracing():
                     'repair_s': _repair_done, 'caution_state': _caution,
                     'classification': _classification,
                     'session_num': cur_snum,
+                    # ★WO-002：race/session/source-frame/pit-sequenceと逆引きできる
+                    #   ようにする。black_flag_evidenceはこのvisit自身のframeから
+                    #   copyした値で、後続frameのsnapshot更新で書き換わらない。
+                    'race_instance_id': _race_facts_snapshot['race_instance_id'],
+                    'source_frame_sequence': _race_facts_snapshot['source_frame']['sequence'],
+                    'driver_pit_sequence': _race_facts_snapshot['driver_pit_sequence'],
+                    'black_flag_evidence': race_facts_mod.project_black_flag_evidence(
+                        _race_facts_snapshot, _fuel_added),
                 }
                 _pit_loss_summary = pit_loss_calibrator.add_pit_sample(_pit_sample)
                 last_pit_service = {
@@ -5940,18 +7211,16 @@ def poll_iracing():
                     'fuel_added_l': _fuel_added,
                     'session_num': cur_snum,
                 }
-                _pit_event = {
-                    'entry_lap': pit_enter_lap,
-                    'exit_lap': pit_exit_lap,
-                    'entry_class_position': pit_enter_pos,
-                    'exit_class_position': class_pos,
-                    'fuel_added_l': _fuel_added,
-                    'lane_total_s': pit_lane_sec,
-                    'stall_s': round(pit_stall_total_s, 2),
-                }
-                pit_events.append(_pit_event)
-                log('PIT EVENT FACT: ' + json.dumps(_pit_event, ensure_ascii=False,
-                                                     separators=(',', ':')))
+                _pit_exit_finalized_this_frame = True
+                # ★WO-003 REVISE 1 P1-1/P1-2：既存consumer互換のpit_eventsは
+                #   上でcanonical storeからlegacy_pit_events_view()を使い丸ごと
+                #   再構成済み（既存field込み）。衝突訪問（collision=True）は
+                #   storeへ書けていないため、pit_eventsは前回のまま——このframeの
+                #   拒否eventを別途appendしない。同一visitがsummary/broadcast/log
+                #   で別IDにならない。
+                if not _driver_pit_event_store_collision:
+                    log('PIT EVENT FACT: ' + json.dumps(
+                        pit_events[-1], ensure_ascii=False, separators=(',', ':')))
                 _pit_exit_score = pit_exit_forecaster_mod.score_actual(
                     pit_exit_forecast_shadow, class_pos)
                 _strategy_option_score = strategy_options_mod.score_execution(
@@ -5962,7 +7231,7 @@ def poll_iracing():
                     session_track, session_car_model, _caution, _pit_exit_score)
                 if isinstance(_pit_learning_summary, dict):
                     _pit_loss_summary = _pit_learning_summary
-                broadcast({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
+                _publish_or_stage({'type': 'pit_timing', 'pit_lane_sec': pit_lane_sec,
                            'track': session_track, 'car_class': session_car_class,
                            'car_model': session_car_model,
                            # ★スライス2：どの判断を実行した結果なのかを結合キーで示す。
@@ -5971,6 +7240,9 @@ def poll_iracing():
                            'decision_plan': active_decision_plan,
                            'pos_in': pit_enter_pos, 'pos_out': class_pos,
                            'sample': _pit_sample, 'calibration': _pit_loss_summary,
+                           # ★WO-003：pit_events/logと同一のpit_event_id/execution_relation/
+                           #   classification_reasonを持つcanonical viewの投影。
+                           'driver_pit_event': _serialized_driver_pit_event,
                            'pit_exit_forecast_shadow': pit_exit_forecast_shadow,
                            'pit_exit_forecast_score': _pit_exit_score,
                            'strategy_option_score': _strategy_option_score})
@@ -5997,6 +7269,227 @@ def poll_iracing():
                         if isinstance(_pit_loss_summary, dict) else None),
                 }, ensure_ascii=False, separators=(',', ':')))
                 pit_exit_forecast_shadow = None
+
+        # WO-007 transaction boundary: exit -> finish close -> commands.
+        if (_plan_closed_identity == _plan_identity
+                and _plan_scope_close_applied != _plan_identity):
+            _plan_scope_close_applied = _plan_identity
+            _race_strategy_state, _finish_close = plan_lifecycle_mod.close_scope(
+                _race_strategy_state, reason='session_end')
+            log('PLAN LIFECYCLE SCOPE CLOSED: reason=session_end frame=%s status=%s'
+                % (_source_frame_sequence, _finish_close.status))
+        _post_event_active = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+        active_decision_id = _post_event_active.decision_id if _post_event_active else None
+        active_decision_plan = (plan_lifecycle_adapter.legacy_decision_projection(
+            _post_event_active) if _post_event_active else None)
+        if (_post_event_active is None and _active_plan_record_this_frame is not None
+                and any(r.phase == 'executed' and fixed_target_authority_mod.constraint(r)
+                        and r.decision_id == _active_plan_record_this_frame.decision_id
+                        for r in _race_strategy_state.plan_records.values())):
+            strategy_options = None
+        if _post_event_active is None and _pit_exit_finalized_this_frame:
+            # WO-019: a finalized visit (any relation, any fuel amount — including a 0 L
+            # penalty stop and an executed driver-amended target) leaves no active Plan. Every
+            # pre-visit snapshot is retired here; it must not be re-committed as a "new"
+            # decision. The next plan (if a further stop is needed) comes only from the
+            # post-stop measured state through the normal recalculation path.
+            if isinstance(strategy_options, dict):
+                log('STRATEGY OPTIONS invalidated: reason=post_service_requires_fresh_recalculation '
+                    'snapshot_id=%s' % strategy_options.get('snapshot_id'))
+            strategy_options = None
+            _pending_recalculations = queue_recalculation(
+                _pending_recalculations, reason='post_service',
+                dedupe_key=(_serialized_driver_pit_event or {}).get('pit_event_id'))
+        if _post_event_active is None:
+            if _session_race_state.get('active_plan') is not None:
+                _session_race_state = session_race_state_mod.clear_active_plan(_session_race_state)
+            strategy_options_decision_sent = False
+            strategy_options_box_call_sent = False
+        _post_event_awaiting = plan_lifecycle_adapter.current_awaiting_record(_race_strategy_state)
+        if _post_event_awaiting is None:
+            pending_strategy_proposal = None
+            strategy_options_proposal_sent = False
+            strategy_proposal_delivery_state = None
+        _wo008_inputs = fixed_target_authority_mod.build_inputs(
+            race_instance_id=_race_facts_snapshot['race_instance_id'],session_num=cur_snum,
+            source_frame_sequence=_source_frame_sequence,
+            session_time_s=_race_facts_snapshot['source_frame']['session_time_s'],
+            current_lap=(int(_wo008_raw_lap) if fixed_target_authority_mod.finite(_wo008_raw_lap) and _wo008_raw_lap==int(_wo008_raw_lap) else None),
+            total_laps=lapsTot,lap_dist_pct=reader.read_float('LapDistPct'),fuel_level_l=fuel,
+            avg_fuel_per_lap_l=session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+            clean_laps_sampled=len(clean_fuel_per_lap_hist),effective_capacity_l=session_effective_fuel_capacity_l,
+            driver_pit_sequence=driver_pit_sequence,is_lap_race=is_race_session and not _is_time_race,
+            reserve_l=endurance_fuel_mod.DEFAULT_RESERVE_L, multi_stop=None)
+        if _recovery_constraint is not None and not _recovery_error and _plan_closed_identity!=_plan_identity and not _plan_collision_scope and onPit is False and onTrack is True and _pit_visit_entry_fact is None:
+            _target=_recovery_constraint_record.target_lap
+            _fresh_constraint=fixed_target_authority_mod.evaluate(_wo008_inputs,_target)
+            if not _fresh_constraint.get('available') and _target==_wo008_inputs.get('current_lap'):
+                _mu=_wo008_inputs.get('avg_fuel_per_lap_l');_F=_wo008_inputs.get('fuel_level_l');_C=_wo008_inputs.get('crossings_to_finish');_q=_wo008_inputs.get('lap_dist_pct')
+                if all(fixed_target_authority_mod.finite(v) for v in (_mu,_F,_C,_q)):
+                    _fresh_set=math.ceil(max(0,_mu*(_C-_q)+_wo008_inputs['reserve_l']-_F))
+                    _fresh_constraint=fixed_target_authority_mod.evaluate(_wo008_inputs,_target,frozen_set=_fresh_set)
+            if _fresh_constraint.get('available'):
+                _new_basis=canonical_mod.clean(_recovery_constraint_record.plan_basis)
+                _new_basis.update(driver_target_constraint=canonical_mod.clean(_recovery_constraint),
+                  recovery_origin_record_ref=dict(_recovery_origins['records'][_recovery_constraint_record.decision_id],
+                    decision_id=_recovery_constraint_record.decision_id),
+                  recovery_fresh_calculation=_fresh_constraint)
+                _new_id=_this_frame_race_instance_id+':recovery:'+canonical_mod.PROCESS_EPOCH+':'+str(_source_frame_sequence)
+                _race_strategy_state,_new_outcome=plan_lifecycle_mod.register_plan(_race_strategy_state,
+                    decision_id=_new_id,race_instance_id=_this_frame_race_instance_id,session_num=cur_snum,
+                    selected_plan=_recovery_constraint_record.selected_plan,phase='active',current_driver_pit_sequence=driver_pit_sequence,
+                    created_source_frame_sequence=_source_frame_sequence,activation_source_frame_sequence=_source_frame_sequence,
+                    plan_basis=_new_basis,target_lap=_target,add_fuel_l=_fresh_constraint['add_fuel_l'],set_fuel_l=_fresh_constraint['set_fuel_l'],
+                    conditions=canonical_mod.clean(_recovery_constraint_record.conditions),validity_contract={'source':'fresh_recovery_wo008_calculation'},
+                    evidence_snapshot_id='recovery:'+canonical_mod.PROCESS_EPOCH+':'+str(_source_frame_sequence),options_snapshot=canonical_mod.clean(_recovery_constraint_record.options_snapshot))
+                if _new_outcome.status=='registered':
+                    _recovery_constraint=None;active_decision_id=_new_id
+                    active_decision_plan=plan_lifecycle_adapter.legacy_decision_projection(plan_lifecycle_mod.active_plan_view(_race_strategy_state))
+                    log('RECOVERY CONSTRAINT NEW DECISION: '+_new_id)
+            else:
+                log('RECOVERY CONSTRAINT HELD: '+str(_fresh_constraint.get('reason')))
+        _wo008_command_gate = (
+            _recovery_error if _recovery_error else
+            'identity_unsupported' if _recovery_status=='identity_unsupported' else
+            'sdk_gap_execution_unverified' if active_decision_id in _recovery_gap_held_ids else
+            'scope_closed' if _plan_closed_identity == _plan_identity else
+            'pit_event_collision' if _plan_collision_scope and _plan_collision_scope[:2] == _plan_identity else
+            'black_flag_' + _race_facts_snapshot['black_flag']['state']
+            if _race_facts_snapshot['black_flag']['state'] != 'false' else
+            'raw_pit_unavailable' if onPit is None else
+            'raw_track_unavailable' if onTrack is None else
+            'visit_open' if onPit is True or _pit_visit_entry_fact is not None else None)
+        # WO-007: apply the staged WO-006 commands after actual pit and finish
+        # transitions; all preceding Plan consumers were held.
+        # The websocket thread only queues envelopes; successful speech is
+        # impossible until the matching lifecycle ACK is broadcast here.
+        _driver_plan_command_ledger = driver_plan_command_mod.ensure_scope(
+            _driver_plan_command_ledger, _race_facts_snapshot['race_instance_id'], cur_snum)
+        for _driver_plan_command in _staged_driver_plan_commands:
+            (_race_strategy_state, _driver_plan_command_ledger,
+             _driver_plan_ack, _driver_plan_recalculate) = apply_driver_plan_command(
+                _race_strategy_state, _driver_plan_command_ledger,
+                _driver_plan_command, race_facts_snapshot=_race_facts_snapshot,
+                current_lap=(int(lap) if isinstance(lap, (int, float)) else None),
+                laps_total=(int(lapsTot) if isinstance(lapsTot, int) else None),
+                authority_inputs=_wo008_inputs,execution_gate=_wo008_command_gate,canonical_required=True)
+            _driver_plan_ack.update({k:_driver_plan_command.get(k) for k in ('bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence')})
+            if (_driver_plan_ack.get('bridge_process_epoch')==canonical_mod.PROCESS_EPOCH
+                    and _driver_plan_ack.get('race_instance_id')==_race_facts_snapshot['race_instance_id']
+                    and _driver_plan_ack.get('session_num')==cur_snum
+                    and isinstance(_driver_plan_ack.get('canonical_snapshot_id'),str)
+                    and isinstance(_driver_plan_ack.get('canonical_snapshot_sequence'),int)
+                    and not isinstance(_driver_plan_ack.get('canonical_snapshot_sequence'),bool)):
+                _last_driver_action=copy.deepcopy(_driver_plan_ack)
+                _last_driver_action['canonical_ref_available']=_driver_plan_ack['canonical_snapshot_id'] in _canonical_publications
+            if _driver_plan_ack.get('outcome') == 'applied':
+                active_decision_id = None
+                active_decision_plan = None
+                _session_race_state = session_race_state_mod.clear_active_plan(
+                    _session_race_state)
+                pending_strategy_proposal = None
+                strategy_options_proposal_sent = False
+                strategy_proposal_delivery_state = None
+                strategy_options_decision_sent = False
+                strategy_options_box_call_sent = False
+                if _driver_plan_ack.get('intent') == 'amend':
+                    _amended_active = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+                    active_decision_id = _amended_active.decision_id
+                    active_decision_plan = plan_lifecycle_adapter.legacy_decision_projection(_amended_active)
+                    strategy_options = plan_lifecycle_adapter.legacy_strategy_options_projection(_amended_active)
+                    _options_projection_provenance={'projection_kind':'frozen_record_with_fixed_target_constraint',
+                        'projection_record_ref':canonical_mod.record_view(_amended_active)['record_ref'],
+                        'constraint_calculation_source':{'source_frame_sequence':_driver_plan_ack['authority_snapshot']['source_frame_sequence'],
+                            'session_time_s':_driver_plan_ack['authority_snapshot']['session_time_s']}}
+                    strategy_options_decision_sent = True
+                    _session_race_state = session_race_state_mod.register_active_plan(
+                        _session_race_state,plan_id=_amended_active.selected_plan,
+                        plan_snapshot=strategy_options,snapshot_id=_amended_active.evidence_snapshot_id)
+                    log('DRIVER TARGET SUCCESSOR: ' + json.dumps(_driver_plan_ack,ensure_ascii=False))
+                if _driver_plan_ack.get('intent') == 'early_pit':
+                    _declared_early_pit = {
+                        'decision_id': _driver_plan_ack.get('decision_id'),
+                        'race_instance_id': _race_facts_snapshot['race_instance_id'],
+                        'session_num': cur_snum, 'driver_pit_sequence': driver_pit_sequence,
+                        'lap': int(lap) if isinstance(lap, (int, float)) else None,
+                        'command_id': _driver_plan_ack.get('command_id')}
+                    log('DRIVER EARLY PIT DECLARED: ' + json.dumps(
+                        _declared_early_pit, ensure_ascii=False, separators=(',', ':')))
+                if _driver_plan_recalculate:
+                    _pending_recalculations = queue_recalculation(
+                        _pending_recalculations, reason='driver_plan_intent',
+                        dedupe_key=_driver_plan_ack.get('command_id'))
+            log('DRIVER PLAN COMMAND outcome=%s command_id=%s decision_id=%s reason=%s'
+                % (_driver_plan_ack.get('outcome'), _driver_plan_ack.get('command_id'),
+                   _driver_plan_ack.get('decision_id'), _driver_plan_ack.get('reason')))
+            _publish_or_stage(_driver_plan_ack)
+        _plan_gate_reason = (
+            _recovery_error if _recovery_error else
+            'identity_unsupported' if _recovery_status=='identity_unsupported' else
+            'sdk_gap_execution_unverified' if active_decision_id in _recovery_gap_held_ids else
+            'restart_constraint_pending' if _recovery_constraint is not None else
+            'scope_closed' if _plan_closed_identity == _plan_identity else
+            'pit_event_collision' if _plan_collision_scope and _plan_collision_scope[:2] == _plan_identity else
+            'black_flag_' + _race_facts_snapshot['black_flag']['state']
+            if _race_facts_snapshot['black_flag']['state'] != 'false' else
+            'raw_pit_unavailable' if onPit is None else
+            'raw_track_unavailable' if onTrack is None else
+            'visit_open' if onPit is True or _pit_visit_entry_fact is not None else
+            # WO-019: until the declared visit happens (or the declaration lapses), the old
+            # opening snapshot must not be re-committed/announced against the Driver's call.
+            'driver_early_pit_declared' if early_pit_declaration_outstanding(
+                _declared_early_pit, state=_race_strategy_state,
+                race_instance_id=_this_frame_race_instance_id, session_num=cur_snum,
+                driver_pit_sequence=driver_pit_sequence, current_lap=lap) is not None else None)
+
+        if _plan_gate_reason:
+            log('PLAN EXECUTION HOLD resolved: frame=%s identity=%s reason=%s'
+                % (_source_frame_sequence, _plan_identity, _plan_gate_reason))
+
+        _driver_target_constraint = fixed_target_authority_mod.constraint(
+            plan_lifecycle_mod.active_plan_view(_race_strategy_state))
+        if _driver_target_constraint and not _plan_gate_reason:
+            _constraint_record = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+            _constraint_validation = fixed_target_authority_mod.evaluate(
+                _wo008_inputs,_constraint_record.target_lap,frozen_set=_constraint_record.set_fuel_l)
+            if not _constraint_validation.get('available'):
+                _plan_gate_reason = 'authority_requires_new_decision'
+                log('DRIVER TARGET AUTHORITY HOLD: '+str(_constraint_validation.get('reason')))
+        _historical_batch=list(_pending_historical_settlements);_pending_historical_settlements.clear()
+        for _history_request in _historical_batch:
+            _history_kind=_history_request.get('kind');_history_payload=_history_request.get('payload')
+            _history_ack={'type':'historical_settlement_ack','kind':_history_kind,'historical_only':True,
+              'current_bridge_process_epoch':canonical_mod.PROCESS_EPOCH,'payload':copy.deepcopy(_history_payload),
+              'applied':'rejected','reason':'unknown_origin_or_binding'}
+            if isinstance(_history_payload,dict):
+                _old_epoch=_history_payload.get('bridge_process_epoch');_archive=_recovery_archives.get(_old_epoch)
+                if _archive and _recovery_restored and (_history_payload.get('race_instance_id'),_history_payload.get('session_num'))==(_this_frame_race_instance_id,cur_snum):
+                    if _history_kind=='driver_plan_command' and _history_payload.get('cmd')=='driver_plan_reason':
+                        _prior=driver_plan_command_mod.prior_ack(_archive['commands'],_history_payload.get('command_id'))
+                        if _prior and all(type(_history_payload.get(k)) is type(_prior.get(k)) and _history_payload.get(k)==_prior.get(k) for k in ('bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence')):
+                            _reason_ledger,_reason_outcome=driver_plan_command_mod.link_reason(_archive['commands'],command_id=_history_payload.get('command_id'),race_instance_id=_history_payload.get('race_instance_id'),session_num=_history_payload.get('session_num'),decision_id=_history_payload.get('expected_decision_id'),expected_revision=_history_payload.get('expected_revision'),reason_event_id=_history_payload.get('reason_event_id'),reason_text=_history_payload.get('reason_text'))
+                            if _reason_outcome in ('linked','retry_no_op'):_recovery_archives[_old_epoch]=dict(_archive,commands=_reason_ledger)
+                            _history_ack.update(command_id=_history_payload.get('command_id'),reason_event_id=_history_payload.get('reason_event_id'),intent='reason',outcome=_reason_outcome,applied='applied' if _reason_outcome=='linked' else _reason_outcome)
+                    elif _history_kind=='driver_plan_command':
+                        _norm,_err=driver_plan_command_mod.validate_envelope(_history_payload)
+                        if not _err:
+                            _,_delivery,_content=driver_plan_command_mod.classify_delivery(_archive['commands'],_history_payload)
+                            if _delivery=='retry':
+                                _history_ack.update(driver_plan_command_mod.prior_ack(_archive['commands'],_norm['command_id']));_history_ack.update(type='historical_settlement_ack',applied='retry_no_op')
+                            elif _delivery=='collision':_history_ack['applied']='collision'
+                    elif _history_kind=='box_delivery_report':
+                        _historical_box,_original_ack=box_authority_delivery_mod.apply_report(_archive['box'],_history_payload)
+                        if _original_ack['applied'] in ('applied','retry_no_op'):
+                            _archive=dict(_archive,box=_historical_box);_recovery_archives[_old_epoch]=_archive
+                            _history_ack.update(_original_ack);_history_ack['type']='historical_settlement_ack'
+                    _history_ack.update({k:_history_payload.get(k) for k in ('bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence')})
+            _publish_or_stage(_history_ack)
+        for _box_report in _consume_box_delivery_reports():
+            _box_delivery_ledger, _box_ack = box_authority_delivery_mod.apply_report(
+                _box_delivery_ledger,_box_report if _box_report.get('bridge_process_epoch')==canonical_mod.PROCESS_EPOCH else {})
+            _box_ack.update({k:_box_report.get(k) for k in ('bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence')})
+            log('BOX DELIVERY REPORT: '+json.dumps(_box_ack,ensure_ascii=False))
+            _publish_or_stage(_box_ack)
 
         # ── ピット秒読み診断 v2（2026-07-17）──
         # iRacing公式スポッター相当の「Your box」信号を出してるSDK変数を推測ゼロで特定するため、
@@ -6045,7 +7538,7 @@ def poll_iracing():
                         for _mark in (100, 50, 20):
                             if pit_prev_dist_m > _mark >= _dist_m and _mark not in pit_marks_called:
                                 pit_marks_called.add(_mark)
-                                broadcast({'type': 'radio', 'trigger': 'pit_box_countdown',
+                                _publish_or_stage({'type': 'radio', 'trigger': 'pit_box_countdown',
                                     'meters': _mark, 'message': str(_mark) + ' metres.'})
                                 break
                     pit_prev_dist_m = _dist_m
@@ -6059,7 +7552,7 @@ def poll_iracing():
                     pit_box_pct = _ldp        # ★自分のボックス位置を学習（次回から秒読みできる）
                     log("PIT BOX learned at LapDistPct=%.4f (track=%.0fm)" % (_ldp, track_length_m or 0))
                 pit_marks_called.clear()
-                broadcast({'type': 'radio', 'trigger': 'pit_box_here', 'message': 'Box here.'})
+                _publish_or_stage({'type': 'radio', 'trigger': 'pit_box_here', 'message': 'Box here.'})
             # ② ★決定シグナル＝サービス開始(完全停止)。PlayerCarPitSvStatus 0→非0
             # 完全停止後の追加コールは遅い。最後の案内は「Box here.」で終える。
             # 値が変わった時だけ診断ログ（1541行の垂れ流し反省）
@@ -6091,7 +7584,7 @@ def poll_iracing():
             session_num=cur_snum)
         prev['_pit_loss_ldp'] = _pit_loss_ldp
         if _pit_loss_summary is not None:
-            broadcast({'type': 'pit_loss_calibration',
+            _publish_or_stage({'type': 'pit_loss_calibration',
                        'track': session_track, 'car_model': session_car_model,
                        'calibration': _pit_loss_summary})
             log("PIT LOSS calibration: " + str(_pit_loss_summary))
@@ -6147,7 +7640,7 @@ def poll_iracing():
                 yellow_flag_active = True
                 yellow_flag_timestamp = time.time()
                 if is_race_session and session_racing_started:
-                    broadcast({'type': 'radio', 'trigger': 'yellow_flag',
+                    _publish_or_stage({'type': 'radio', 'trigger': 'yellow_flag',
                                'flag_timestamp': round(yellow_flag_timestamp, 3),
                                'source_timestamp': round(yellow_flag_timestamp, 3),
                                'session_time': round(_session_time_now, 3)
@@ -6248,7 +7741,7 @@ def poll_iracing():
                                 #   訂正保留を判定するための最小の材料。
                                 #   track_side は SDK から確実に取れないので送らない
                                 #   （取れない側を推測で作らない＝発話でも省く）。
-                                broadcast({'type': 'radio', 'trigger': 'stopped_ahead',
+                                _publish_or_stage({'type': 'radio', 'trigger': 'stopped_ahead',
                                     'delta': round(_sdist, 1) if _has_lap_time else None,
                                     'car_idx': idx,
                                     'car_number': car_number_map.get(idx),
@@ -6361,7 +7854,7 @@ def poll_iracing():
                                 #   Yujiの「命令口調をやめる」方針に反していた（実走ログで4回発話）。
                                 #   危険予告は数秒かけて接近する＝判断の"間"がある。セッション中1台1回のまま。
                                 _judge_llm_gate('danger', judge_llm_call_times, time.time(), judge_llm_skip_log_last)  # 安全直結＝常にTrue。計測のためだけに通す
-                                broadcast({'type': 'judge_call', 'kind': 'danger',
+                                _publish_or_stage({'type': 'judge_call', 'kind': 'danger',
                                     'behind': bool(_behind), 'gap': round(abs(delta), 1),
                                     'reason': reason, 'car_number': num})
                                 ahead_armed[idx] = False
@@ -6402,7 +7895,7 @@ def poll_iracing():
                                         # ★v3 Codex P1：DISPATCHED のみ段階消費。HELD/DROPPED は消費しない。
                                         #   HELD は将来 flush_radio() が送るが judge_call は
                                         #   GATEABLE_TRIGGERS に含まれないため実際は HELD にならない。
-                                        _br = broadcast({'type': 'judge_call', 'kind': 'battle',
+                                        _br = _publish_or_stage({'type': 'judge_call', 'kind': 'battle',
                                                 'gap': round(delta, 1), 'faster': bool(pace_diff < -1.5),
                                                 'pace': round(abs(pace_diff), 2), 'repeat': is_repeat,
                                                 'car_number': num, 'class_pos': _bpos,
@@ -6475,7 +7968,7 @@ def poll_iracing():
                                     #   復活時は最新の1.5秒段階が最大1回送られる＝Codex受入条件の実現）。
                                     if _judge_llm_gate('catchup', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
                                         # ★v3 Codex P1：DISPATCHED のみ段階消費。
-                                        _br = broadcast({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
+                                        _br = _publish_or_stage({'type': 'judge_call', 'kind': 'catchup', 'stage': stage,
                                                 'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                                 'message': 'Ahead, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                         if _br == BROADCAST_DISPATCHED:
@@ -6494,7 +7987,7 @@ def poll_iracing():
                                     # ★2026-07-23 Codex再指摘 P1：段階消費はゲート通過時のみ（catchupと同じ理由）。
                                     if _judge_llm_gate('defend', judge_llm_call_times, time.time(), judge_llm_skip_log_last):
                                         # ★v3 Codex P1：DISPATCHED のみ段階消費。
-                                        _br = broadcast({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
+                                        _br = _publish_or_stage({'type': 'judge_call', 'kind': 'defend', 'stage': stage,
                                                 'gap': round(gap, 1), 'car_number': _num2, 'class_name': _norm_class_name(car_class_name_map.get(idx)), 'class_pos': other_cls_pos, 'confident': confident,
                                                 'message': 'Behind, ' + car_tag2 + 'within ' + _fmt_gap(gap) + '.'})
                                         if _br == BROADCAST_DISPATCHED:
@@ -6585,7 +8078,7 @@ def poll_iracing():
                                 _shape, _clusters = _describe_traffic(_gaps)
                                 log("MC fire class=%s nearest=%.1fs gaps=%s shape=%s clusters=%s stage=%d"
                                     % (_cn, _near, [round(g,1) for g in _gaps], _shape, _clusters, _stg))
-                                broadcast({'type': 'radio', 'trigger': 'multiclass',
+                                _publish_or_stage({'type': 'radio', 'trigger': 'multiclass',
                                     'stage': _stg, 'class_name': _cn,
                                     'delta': round(_near, 1), 'count': len(_gaps),
                                     'target_car_idx': _primary['car_idx'],
@@ -6778,7 +8271,7 @@ def poll_iracing():
                         'gap_s': _gap_event.get('gap_s'),
                         'sampled_at': _gap_event.get('observed_at'),
                     }
-                    broadcast({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
+                    _publish_or_stage({'type': 'radio', 'trigger': 'gap_trend', **_gap_event})
 
         # ── ライブテレメトリ・スナップショット（数秒おき・エンジニアが実値で答えるため）──
         # これが無いと「順位は？」「燃料残量は？」に推測（捏造）で答えてしまう。実値を脳へ渡す。
@@ -6890,8 +8383,13 @@ def poll_iracing():
                     last_pit_cycle_outcome = _pit_cycle_outcome
                     # ★スライス2：blend が落ち着いた時点の順位こそが「その判断は
                     #   効いたのか」の答え。pit exit 直後の一時的な順位で終えない。
-                    broadcast({'type': 'pit_cycle_outcome',
+                    _publish_or_stage({'type': 'pit_cycle_outcome',
                                'decision_id': active_decision_id,
+                               # ★WO017：blendを観測したframeのrace/session。Desktopは到着時の
+                               #   scopeではなくこの発生identityでだけ判断記録へ結合する。
+                               'race_instance_id': _this_frame_race_instance_id,
+                               'session_num': cur_snum,
+                               'bridge_process_epoch': canonical_mod.PROCESS_EPOCH,
                                'outcome': _pit_cycle_outcome})
                     log('PIT CYCLE outcome: ' + json.dumps(
                         _pit_cycle_outcome, ensure_ascii=False, separators=(',', ':')))
@@ -6964,6 +8462,7 @@ def poll_iracing():
                         lifecycle_state=lifecycle_state,
                         previous_band=_fuel_strategy_live.get('fuel_band'))
                     if _post_pit_eval.get('available'):
+                        _recommendation_sources['fuel_strategy']={'source_frame_sequence':_source_frame_sequence,'session_time_s':_race_facts_snapshot['source_frame']['session_time_s']}
                         _fuel_strategy_live.update({
                             'awaiting_post_pit_s_f': False,
                             'live_post_pit_recalculation': True,
@@ -7038,7 +8537,7 @@ def poll_iracing():
             # state by the live decision path, not reconstructed from the
             # opening playbook.  The latter produced the 8/13 trace where a
             # lap-7, 22L post-pit state announced a fictional one-litre stop.
-            if (strategy_options is None and last_pit_service is None
+            if (not _plan_gate_reason and not _driver_target_constraint and strategy_options is None and last_pit_service is None
                     and is_race_session and onTrack and not onPit
                     and isinstance(_fuel_strategy_live, dict)):
                 _option_crossings = _fuel_strategy_live.get(
@@ -7065,16 +8564,101 @@ def poll_iracing():
                 # then: a three-hour Chief plan must exist before the first
                 # driver change.
                 if _candidate_options.get('available'):
+                    # WO-020 P0: register/announce only a Plan A target and frozen set that the
+                    # BOX authority accepts from this same frame (see align_post_service_target).
+                    _candidate_options, _opening_clamp = align_post_service_target(
+                        _candidate_options, _wo008_inputs,
+                        current_lap=int(lap) if isinstance(lap, (int, float)) else None,
+                        snapshot_prefix='initial:')
+                    if _opening_clamp:
+                        log('OPENING TARGET ALIGNED: ' + json.dumps(
+                            _opening_clamp, ensure_ascii=False, separators=(',', ':')))
+                    _recommendation_sources['strategy_options']={'source_frame_sequence':_source_frame_sequence,'session_time_s':_race_facts_snapshot['source_frame']['session_time_s']}
                     strategy_options = _candidate_options
+                    _options_projection_provenance={}
                     log('STRATEGY OPTIONS ready: ' + json.dumps(
                         strategy_options, ensure_ascii=False, separators=(',', ':')))
+                    # ★WO-005 §4.2：initial playbookをLifecycle activeとして登録する
+                    #   のは、initial broadcastより前——このframeがPlanのcanonical
+                    #   registration frameである。登録が失敗したら旧
+                    #   `register_active_plan()`だけを成功させるfallbackは禁止
+                    #   （initial発話・active依存consumerもfail-closed）。
+                    _initial_selected = strategy_options.get('selected_plan') or 'A'
+                    _initial_plan_detail = strategy_options.get(
+                        'plan_' + _initial_selected.lower()) or {}
+                    _initial_snapshot_id = strategy_options.get('snapshot_id')
+                    _initial_options_snapshot = copy.deepcopy(strategy_options)
+                    _initial_kwargs = dict(
+                        selected_plan=_initial_selected,
+                        target_lap=_initial_plan_detail.get('target_lap'),
+                        add_fuel_l=_initial_plan_detail.get('add_fuel_l'),
+                        set_fuel_l=_initial_plan_detail.get('set_fuel_l'),
+                        conditions=None, evidence_snapshot_id=_initial_snapshot_id,
+                        options_snapshot=_initial_options_snapshot)
+                    _initial_registration_plan = (
+                        plan_lifecycle_adapter.classify_active_registration(
+                            _race_strategy_state, **_initial_kwargs)
+                        if _race_strategy_state is not None else None)
+                    _initial_active_record = None
+                    if _initial_registration_plan is None:
+                        log('PLAN LIFECYCLE INITIAL REGISTRATION SKIPPED: no scope')
+                    elif _initial_registration_plan.action == 'reuse':
+                        _initial_active_record = plan_lifecycle_mod.active_plan_view(
+                            _race_strategy_state)
+                    else:
+                        _initial_decision_id = plan_lifecycle_adapter.initial_plan_a_decision_id(
+                            _race_facts_snapshot['race_instance_id'], _initial_snapshot_id,
+                            **_initial_kwargs)
+                        if _initial_registration_plan.action == 'register_new':
+                            _race_strategy_state, _initial_outcome = (
+                                plan_lifecycle_mod.register_plan(
+                                    _race_strategy_state, decision_id=_initial_decision_id,
+                                    race_instance_id=_race_facts_snapshot['race_instance_id'],
+                                    session_num=_race_facts_snapshot['session_num'], phase='active',
+                                    current_driver_pit_sequence=driver_pit_sequence,
+                                    created_source_frame_sequence=(
+                                        _race_facts_snapshot['source_frame']['sequence']),
+                                    activation_source_frame_sequence=(
+                                        _race_facts_snapshot['source_frame']['sequence']),
+                                    **_initial_kwargs))
+                        else:  # 'register_replacing'
+                            _race_strategy_state, _initial_outcome = (
+                                plan_lifecycle_mod.register_active_replacing_plan(
+                                    _race_strategy_state, decision_id=_initial_decision_id,
+                                    race_instance_id=_race_facts_snapshot['race_instance_id'],
+                                    session_num=_race_facts_snapshot['session_num'],
+                                    current_driver_pit_sequence=driver_pit_sequence,
+                                    created_source_frame_sequence=(
+                                        _race_facts_snapshot['source_frame']['sequence']),
+                                    activation_source_frame_sequence=(
+                                        _race_facts_snapshot['source_frame']['sequence']),
+                                    expected_predecessor_decision_id=(
+                                        _initial_registration_plan.decision_id),
+                                    expected_predecessor_revision=(
+                                        _race_strategy_state.plan_records[
+                                            _initial_registration_plan.decision_id].revision),
+                                    **_initial_kwargs))
+                        log('PLAN LIFECYCLE INITIAL REGISTRATION: action=%s status=%s decision_id=%s'
+                            % (_initial_registration_plan.action, _initial_outcome.status,
+                               _initial_decision_id))
+                        _initial_active_record = plan_lifecycle_mod.active_plan_view(
+                            _race_strategy_state)
+                    if _initial_active_record is not None:
+                        active_decision_id = _initial_active_record.decision_id
+                        active_decision_plan = plan_lifecycle_adapter.legacy_decision_projection(
+                            _initial_active_record)
                     # ★Build 266 Phase E フィックス③：ブリーフィングPlanをビルドした同フレームで
                     #   active_plan を登録する。plan_fuel_authority が no_active_plan へ
                     #   落ちるのは、この登録が遅延／欠落していたのが原因（Build 265既知不具合）。
-                    _session_race_state = session_race_state_mod.register_active_plan(
-                        _session_race_state, plan_id=(strategy_options.get('selected_plan') or 'A'),
-                        plan_snapshot=strategy_options,
-                        snapshot_id=strategy_options.get('snapshot_id'))
+                    #   ★WO-005：Lifecycle登録が成功した時だけ、その凍結projectionを
+                    #   session_race_stateへ渡す——登録失敗時は旧`strategy_options`
+                    #   （live）へfallbackしない。
+                    if _initial_active_record is not None:
+                        _session_race_state = session_race_state_mod.register_active_plan(
+                            _session_race_state, plan_id=_initial_active_record.selected_plan,
+                            plan_snapshot=plan_lifecycle_adapter.legacy_strategy_options_projection(
+                                _initial_active_record),
+                            snapshot_id=_initial_active_record.evidence_snapshot_id)
                     # ★2026-09-16 Codex MD#5差戻し：推薦チェーンにも起点を与える
                     #   （最初のrecalculationのpreviousがNoneのまま、latched Plan C目標等の
                     #   連続性が失われないように）。開始時点は推薦=合意なので両方へ書く。
@@ -7082,31 +8666,38 @@ def poll_iracing():
                         _session_race_state, plan_id=(strategy_options.get('selected_plan') or 'A'),
                         plan_snapshot=strategy_options,
                         snapshot_id=strategy_options.get('snapshot_id'))
-                    _option_a = strategy_options.get('plan_a') or {}
-                    _option_b = strategy_options.get('plan_b') or {}
-                    strategy_options_dispatch = broadcast({
-                        'type': 'radio',
-                        'trigger': 'initial_strategy_plans',
-                        'strategy_options': strategy_options,
-                        'message': (
-                            'Fuel timing comparison. Baseline: pit in %s laps, set %s liters. '
-                            'Undercut window: pit in %s laps and set %s liters. '
-                            'I will call it only after fuel capacity, pace, and rejoin checks.'
-                            % (_option_a.get('target_in_laps'),
-                               _option_a.get('set_fuel_l'),
-                               _option_b.get('target_in_laps'),
-                               _option_b.get('set_fuel_l'))),
-                    })
-                    log('STRATEGY OPTIONS dispatch: snapshot_id=%s result=%s'
-                        % (strategy_options.get('snapshot_id'),
-                           strategy_options_dispatch))
+                    # ★WO-005 §4.2：Lifecycle登録が失敗した（active recordが無い）frameでは、
+                    #   initial発話とactive Plan依存consumerをfail-closedにする——旧
+                    #   `register_active_plan()`だけの成功で発話しない。
+                    if _initial_active_record is not None:
+                        _option_a = strategy_options.get('plan_a') or {}
+                        _option_b = strategy_options.get('plan_b') or {}
+                        strategy_options_dispatch = _publish_or_stage({
+                            'type': 'radio',
+                            'trigger': 'initial_strategy_plans',
+                            'strategy_options': strategy_options,
+                            'message': (
+                                'Fuel timing comparison. Baseline: pit in %s laps, set %s liters. '
+                                'Undercut window: pit in %s laps and set %s liters. '
+                                'I will call it only after fuel capacity, pace, and rejoin checks.'
+                                % (_option_a.get('target_in_laps'),
+                                   _option_a.get('set_fuel_l'),
+                                   _option_b.get('target_in_laps'),
+                                   _option_b.get('set_fuel_l'))),
+                        })
+                        log('STRATEGY OPTIONS dispatch: snapshot_id=%s result=%s'
+                            % (strategy_options.get('snapshot_id'),
+                               strategy_options_dispatch))
+                    else:
+                        log('PLAN LIFECYCLE INITIAL REGISTRATION FAILED: '
+                            'initial_strategy_plans broadcast withheld')
             # 決定はFuel Window（Plan Bの最初に容量内で完走分を積める周）の
             # 一周前に行う。ピット入口で初めて考えるのでは遅いので、この周は
             # 協議/ペース維持、次周だけを短いbox callにする。
             # Plan Bが燃料上成立しない場合だけ、Plan Aの一周前を境界にする。
             # rejoin for this lap versus one lap later from one live snapshot.
             # Conditional rival pit-cycle position is never used to select B.
-            if (isinstance(strategy_options, dict)
+            if (not _plan_gate_reason and not _driver_target_constraint and isinstance(strategy_options, dict)
                     and strategy_options.get('available')
                     and not strategy_options_decision_sent
                     # ★2026-09-16 Codex MD#4差戻し：B/Cは提案してDriver応答を待つ。
@@ -7116,6 +8707,11 @@ def poll_iracing():
                     # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
                     #   新規Plan決定を発話しない。
                     and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
+                strategy_options, _post_service_clamp = align_post_service_target(
+                    strategy_options, _wo008_inputs, current_lap=int(lap) if isinstance(lap, (int, float)) else None)
+                if _post_service_clamp:
+                    log('POST SERVICE TARGET ALIGNED: ' + json.dumps(
+                        _post_service_clamp, ensure_ascii=False, separators=(',', ':')))
                 _decision_a = strategy_options.get('plan_a') or {}
                 _decision_b = strategy_options.get('plan_b') or {}
                 _window_target = (_decision_b.get('target_lap')
@@ -7182,78 +8778,211 @@ def poll_iracing():
                         if _selected_option == 'C' else
                         ('Baseline selected. Hold pace; box on the planned lap, set %s liters.'
                          % _plan_target.get('set_fuel_l')))
+                    _decision_dispatch = None
                     if _proposal_suppressed:
                         log('STRATEGY PROPOSAL suppressed (already declined this signature): '
                             + json.dumps(_decision_plan, ensure_ascii=False, separators=(',', ':')))
                     elif _decision_record['mode'] == 'commit':
-                        # ★スライス2：提案時点の根拠をここで確定させる。以降の pit exit /
-                        #   blend / session終了 はこの id へ追記するだけで、後から
-                        #   「何を根拠に選んだのか」を作り直さない（＝捏造しない）。
-                        active_decision_id = _decision_plan['decision_id']
-                        active_decision_plan = _decision_plan
-                        log('DECISION opened: ' + json.dumps(
-                            active_decision_plan, ensure_ascii=False, separators=(',', ':')))
-                        _decision_dispatch = broadcast({
-                            'type': 'radio', 'trigger': 'strategy_plan_decision',
-                            'selected_plan': _selected_option,
-                            'reason': strategy_options['decision_reason'],
-                            'decision_id': active_decision_id,
-                            'decision_plan': active_decision_plan,
-                            'strategy_options': strategy_options, 'message': _radio_message,
-                        })
-                        if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
-                            strategy_options_decision_sent = True
-                        # ★Build 266 Phase E フィックス③：ブリーフィング/ライブPlanが決定した瞬間、
-                        #   必ず active_plan を同フレームで登録する（no_active_plan 誤爆の根絶）。
-                        _prev_active_plan = _session_race_state.get('active_plan')
-                        _session_race_state = session_race_state_mod.register_active_plan(
-                            _session_race_state, plan_id=_selected_option,
-                            plan_snapshot=strategy_options,
-                            snapshot_id=strategy_options.get('snapshot_id'))
-                        # ★トリガー⑥：相手のピット／リジョイン予測でPlan選択が変わった時に再計算する。
-                        if (_prev_active_plan != _selected_option
-                                and session_race_state_mod.should_recalculate(
-                                    _session_race_state, 'rival_pit_or_rejoin_shift',
-                                    dedupe_key=_option_decision.get('decision_id'))):
-                            # ★Codex差戻し#2：このトリガーだけ別経路で「記録」していると、
-                            #   Plan C を含む再評価を通らない。他の6トリガーと同じ待ち行列へ
-                            #   積み、下の実行ブロックで同じ入力・同じ手順で再計算する。
-                            _pending_recalculations = queue_recalculation(
-                                _pending_recalculations, reason='rival_pit_or_rejoin_shift',
-                                dedupe_key=_option_decision.get('decision_id'))
+                        # ★WO-005 §4.2/§4.3/§4.5：`build_strategy_decision()`が
+                        #   凍結した`_decision_plan`をLifecycleへ渡す。既存active recordと
+                        #   同content（reuse、decision radioのdelivery effectだけ更新）、
+                        #   active無し（新規register）、active有り＋差分content
+                        #   （register-active+replace atomic transaction）を明示的に分岐する。
+                        #   lifecycle registration/replaceが成功した時だけradio dispatchへ進む。
+                        _commit_kwargs = dict(
+                            selected_plan=_decision_plan['selected_plan'],
+                            target_lap=_decision_plan.get('target_lap'),
+                            add_fuel_l=_decision_plan.get('add_fuel_l'),
+                            set_fuel_l=_decision_plan.get('set_fuel_l'),
+                            conditions=_decision_plan.get('conditions'),
+                            evidence_snapshot_id=_decision_plan.get('evidence_snapshot_id'),
+                            options_snapshot=_decision_plan.get('options_snapshot'))
+                        _commit_registration_plan = (
+                            plan_lifecycle_adapter.classify_active_registration(
+                                _race_strategy_state, **_commit_kwargs)
+                            if _race_strategy_state is not None else None)
+                        _commit_active_record = None
+                        if _commit_registration_plan is None:
+                            log('PLAN LIFECYCLE COMMIT SKIPPED: no scope decision_id=%s'
+                                % _decision_plan['decision_id'])
+                        elif _commit_registration_plan.action == 'reuse':
+                            _commit_active_record = plan_lifecycle_mod.active_plan_view(
+                                _race_strategy_state)
+                        else:
+                            _commit_plan_basis = plan_lifecycle_adapter.plan_basis_from_decision(
+                                _decision_plan)
+                            if _commit_registration_plan.action == 'register_new':
+                                _race_strategy_state, _commit_outcome = (
+                                    plan_lifecycle_mod.register_plan(
+                                        _race_strategy_state,
+                                        decision_id=_decision_plan['decision_id'],
+                                        race_instance_id=_race_facts_snapshot['race_instance_id'],
+                                        session_num=_race_facts_snapshot['session_num'],
+                                        phase='active',
+                                        current_driver_pit_sequence=driver_pit_sequence,
+                                        created_source_frame_sequence=(
+                                            _race_facts_snapshot['source_frame']['sequence']),
+                                        activation_source_frame_sequence=(
+                                            _race_facts_snapshot['source_frame']['sequence']),
+                                        plan_basis=_commit_plan_basis, **_commit_kwargs))
+                            else:  # 'register_replacing'
+                                _commit_predecessor_id = _commit_registration_plan.decision_id
+                                _race_strategy_state, _commit_outcome = (
+                                    plan_lifecycle_mod.register_active_replacing_plan(
+                                        _race_strategy_state,
+                                        decision_id=_decision_plan['decision_id'],
+                                        race_instance_id=_race_facts_snapshot['race_instance_id'],
+                                        session_num=_race_facts_snapshot['session_num'],
+                                        current_driver_pit_sequence=driver_pit_sequence,
+                                        created_source_frame_sequence=(
+                                            _race_facts_snapshot['source_frame']['sequence']),
+                                        activation_source_frame_sequence=(
+                                            _race_facts_snapshot['source_frame']['sequence']),
+                                        expected_predecessor_decision_id=_commit_predecessor_id,
+                                        expected_predecessor_revision=(
+                                            _race_strategy_state.plan_records[
+                                                _commit_predecessor_id].revision),
+                                        plan_basis=_commit_plan_basis, **_commit_kwargs))
+                            log('PLAN LIFECYCLE COMMIT: action=%s status=%s decision_id=%s'
+                                % (_commit_registration_plan.action, _commit_outcome.status,
+                                   _decision_plan['decision_id']))
+                            _commit_active_record = plan_lifecycle_mod.active_plan_view(
+                                _race_strategy_state)
+                        if _commit_active_record is None:
+                            log('PLAN LIFECYCLE COMMIT FAILED: strategy_plan_decision broadcast '
+                                'withheld decision_id=%s' % _decision_plan['decision_id'])
+                        else:
+                            # ★スライス2：提案時点の根拠をここで確定させる。以降の pit exit /
+                            #   blend / session終了 はこの id へ追記するだけで、後から
+                            #   「何を根拠に選んだのか」を作り直さない（＝捏造しない）。
+                            active_decision_id = _commit_active_record.decision_id
+                            active_decision_plan = plan_lifecycle_adapter.legacy_decision_projection(
+                                _commit_active_record)
+                            log('DECISION opened: ' + json.dumps(
+                                active_decision_plan, ensure_ascii=False, separators=(',', ':')))
+                            _decision_dispatch = _publish_or_stage({
+                                'type': 'radio', 'trigger': 'strategy_plan_decision',
+                                'selected_plan': _selected_option,
+                                'reason': strategy_options['decision_reason'],
+                                'decision_id': active_decision_id,
+                                'decision_plan': active_decision_plan,
+                                # ★WO-005 §4.6：live `strategy_options`ではなく、
+                                #   このLifecycle active recordの凍結projection。
+                                'strategy_options': (
+                                    plan_lifecycle_adapter.legacy_strategy_options_projection(
+                                        _commit_active_record)),
+                                'message': _radio_message,
+                            })
+                            if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
+                                strategy_options_decision_sent = True
+                            # ★Build 266 Phase E フィックス③：ブリーフィング/ライブPlanが決定した瞬間、
+                            #   必ず active_plan を同フレームで登録する（no_active_plan 誤爆の根絶）。
+                            _prev_active_plan = _session_race_state.get('active_plan')
+                            _session_race_state = session_race_state_mod.register_active_plan(
+                                _session_race_state, plan_id=_commit_active_record.selected_plan,
+                                plan_snapshot=(
+                                    plan_lifecycle_adapter.legacy_strategy_options_projection(
+                                        _commit_active_record)),
+                                snapshot_id=_commit_active_record.evidence_snapshot_id)
+                            # ★トリガー⑥：相手のピット／リジョイン予測でPlan選択が変わった時に再計算する。
+                            if (_prev_active_plan != _selected_option
+                                    and session_race_state_mod.should_recalculate(
+                                        _session_race_state, 'rival_pit_or_rejoin_shift',
+                                        dedupe_key=_option_decision.get('decision_id'))):
+                                # ★Codex差戻し#2：このトリガーだけ別経路で「記録」していると、
+                                #   Plan C を含む再評価を通らない。他の6トリガーと同じ待ち行列へ
+                                #   積み、下の実行ブロックで同じ入力・同じ手順で再計算する。
+                                _pending_recalculations = queue_recalculation(
+                                    _pending_recalculations, reason='rival_pit_or_rejoin_shift',
+                                    dedupe_key=_option_decision.get('decision_id'))
                     else:
                         # 'propose'：Driverの合意が届くまでactive_decision_id/planは
                         # 更新しない。Desktop側の提案→合意状態機械（`proposePlan`/
                         # `PW_JUDGE`）がこの提案をLunaの発話として扱い、確定後に
                         # `strategy_decision_response`で送り返す。
-                        # ★2026-09-17 MD#9チェック差戻し（P1-1）：配送試行ごとに一意なID。
-                        #   decision_idは同じ周・同じsnapshotなら再提案でも同一になるため、
-                        #   これが無いと前の試行への遅延通知が今の提案を壊す。
-                        strategy_proposal_dispatch_seq += 1
-                        _dispatch_id = '%s#%d' % (_decision_plan['decision_id'],
-                                                  strategy_proposal_dispatch_seq)
-                        _decision_plan = dict(_decision_plan, dispatch_id=_dispatch_id)
-                        pending_strategy_proposal = _decision_plan
-                        log('PROPOSAL opened (awaiting driver agreement): ' + json.dumps(
-                            pending_strategy_proposal, ensure_ascii=False, separators=(',', ':')))
-                        _decision_dispatch = broadcast({
-                            'type': 'radio', 'trigger': 'strategy_plan_proposal',
-                            'selected_plan': _selected_option,
-                            'reason': strategy_options['decision_reason'],
-                            'decision_id': pending_strategy_proposal['decision_id'],
-                            'dispatch_id': _dispatch_id,
-                            'decision_plan': pending_strategy_proposal,
-                            'strategy_options': strategy_options, 'message': _radio_message,
-                        })
-                        if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
-                            # ★2026-09-17 Codex MD#8差戻し（P1）：DISPATCHEDは
-                            #   「WebSocketキューへ入れた」だけで、Driverの耳へ届いた
-                            #   証拠ではない。sentは「この提案がチャネルを占有している」
-                            #   （＝毎frame再提案しない）意味に留め、提示済みの確定は
-                            #   Desktopの'audible'ackを受けた時だけ行う。届かなければ
-                            #   `apply_proposal_delivery()`がpending/sentを解除する。
-                            strategy_options_proposal_sent = True
-                            strategy_proposal_delivery_state = 'inflight'
+                        # ★WO-005 §4.4：同content awaiting recordが既にLifecycleにあれば
+                        #   （same-identity reconnectで local `pending_strategy_proposal`が
+                        #   汎用resetされた後の再送等）それを再利用しdispatch effectだけ
+                        #   更新する。content相違時は新規registerする（旧awaiting recordは
+                        #   §4.6のtop-up経路／`sync_desktop_strategy_options()`の
+                        #   invalidationが別途cancelする——ここでは常に「今、Lifecycleに
+                        #   ある唯一のawaiting record」に対して動く）。
+                        _propose_kwargs = dict(
+                            selected_plan=_decision_plan['selected_plan'],
+                            target_lap=_decision_plan.get('target_lap'),
+                            add_fuel_l=_decision_plan.get('add_fuel_l'),
+                            set_fuel_l=_decision_plan.get('set_fuel_l'),
+                            conditions=_decision_plan.get('conditions'),
+                            evidence_snapshot_id=_decision_plan.get('evidence_snapshot_id'),
+                            options_snapshot=_decision_plan.get('options_snapshot'))
+                        _existing_awaiting_record = (
+                            plan_lifecycle_adapter.find_awaiting_record_for_signature(
+                                _race_strategy_state, **_propose_kwargs)
+                            if _race_strategy_state is not None else None)
+                        if _existing_awaiting_record is not None:
+                            _proposal_record = _existing_awaiting_record
+                            log('PLAN LIFECYCLE PROPOSAL REUSED: decision_id=%s'
+                                % _existing_awaiting_record.decision_id)
+                        elif _race_strategy_state is not None:
+                            _propose_plan_basis = plan_lifecycle_adapter.plan_basis_from_decision(
+                                _decision_plan)
+                            _race_strategy_state, _propose_outcome = (
+                                plan_lifecycle_mod.register_plan(
+                                    _race_strategy_state,
+                                    decision_id=_decision_plan['decision_id'],
+                                    race_instance_id=_race_facts_snapshot['race_instance_id'],
+                                    session_num=_race_facts_snapshot['session_num'],
+                                    phase='awaiting_driver',
+                                    current_driver_pit_sequence=driver_pit_sequence,
+                                    created_source_frame_sequence=(
+                                        _race_facts_snapshot['source_frame']['sequence']),
+                                    plan_basis=_propose_plan_basis, **_propose_kwargs))
+                            log('PLAN LIFECYCLE PROPOSAL REGISTERED: status=%s decision_id=%s'
+                                % (_propose_outcome.status, _decision_plan['decision_id']))
+                            _proposal_record = plan_lifecycle_adapter.current_awaiting_record(
+                                _race_strategy_state)
+                        else:
+                            _proposal_record = None
+                            log('PLAN LIFECYCLE PROPOSAL SKIPPED: no scope decision_id=%s'
+                                % _decision_plan['decision_id'])
+                        if _proposal_record is None:
+                            log('PLAN LIFECYCLE PROPOSAL FAILED: strategy_plan_proposal '
+                                'broadcast withheld decision_id=%s'
+                                % _decision_plan['decision_id'])
+                        else:
+                            # ★2026-09-17 MD#9チェック差戻し（P1-1）：配送試行ごとに一意なID。
+                            #   decision_idは同じ周・同じsnapshotなら再提案でも同一になるため、
+                            #   これが無いと前の試行への遅延通知が今の提案を壊す。
+                            strategy_proposal_dispatch_seq += 1
+                            _dispatch_id = '%s#%d' % (_proposal_record.decision_id,
+                                                      strategy_proposal_dispatch_seq)
+                            pending_strategy_proposal = plan_lifecycle_adapter.legacy_decision_projection(
+                                _proposal_record, dispatch_id=_dispatch_id)
+                            log('PROPOSAL opened (awaiting driver agreement): ' + json.dumps(
+                                pending_strategy_proposal, ensure_ascii=False, separators=(',', ':')))
+                            _decision_dispatch = _publish_or_stage({
+                                'type': 'radio', 'trigger': 'strategy_plan_proposal',
+                                'selected_plan': _selected_option,
+                                'reason': strategy_options['decision_reason'],
+                                'decision_id': pending_strategy_proposal['decision_id'],
+                                'dispatch_id': _dispatch_id,
+                                'decision_plan': pending_strategy_proposal,
+                                # ★WO-005 §4.6：live `strategy_options`ではなく、
+                                #   このLifecycle awaiting recordの凍結projection。
+                                'strategy_options': (
+                                    plan_lifecycle_adapter.legacy_strategy_options_projection(
+                                        _proposal_record)),
+                                'message': _radio_message,
+                            })
+                            if _decision_dispatch is True or _decision_dispatch == 'DISPATCHED':
+                                # ★2026-09-17 Codex MD#8差戻し（P1）：DISPATCHEDは
+                                #   「WebSocketキューへ入れた」だけで、Driverの耳へ届いた
+                                #   証拠ではない。sentは「この提案がチャネルを占有している」
+                                #   （＝毎frame再提案しない）意味に留め、提示済みの確定は
+                                #   Desktopの'audible'ackを受けた時だけ行う。届かなければ
+                                #   `apply_proposal_delivery()`がpending/sentを解除する。
+                                strategy_options_proposal_sent = True
+                                strategy_proposal_delivery_state = 'inflight'
                     log('STRATEGY OPTIONS decision: snapshot_id=%s selected=%s mode=%s '
                         'suppressed=%s reason=%s decision_id=%s dispatch=%s evidence=%s'
                         % (strategy_options.get('snapshot_id'),
@@ -7283,16 +9012,33 @@ def poll_iracing():
                 #   outcomeをそのまま返し、Desktopがそのキーだけを外せるようにする。
                 #   適用できなかった場合（stale/no_match）もackする——既に処理済み／
                 #   対象外で、再送しても意味が無いことを伝える唯一の手段。
-                broadcast({'type': 'strategy_delivery_ack',
+                _publish_or_stage({'type': 'strategy_delivery_ack',
                            'decision_id': _delivery_report.get('decision_id'),
                            'session_num': _delivery_report.get('session_num'),
                            'dispatch_id': _delivery_report.get('dispatch_id'),
                            'outcome': _delivery_report.get('outcome'),
-                           'applied': _delivery_outcome})
+                           'applied': _delivery_outcome,
+                           'utterance_id': _delivery_report.get('utterance_id'),
+                           'text_hash': _delivery_report.get('text_hash')})
                 log('STRATEGY DELIVERY resolved: decision_id=%s reported=%s outcome=%s state=%s'
                     % (_delivery_report.get('decision_id'), _delivery_report.get('outcome'),
                        _delivery_outcome, strategy_proposal_delivery_state))
             for _decision_response in _consume_strategy_decision_responses():
+                # Same-process proposal acceptance is preserved across an SDK
+                # gap, but its old record remains held by the BOX execution
+                # fence. Acceptance does not prove an unobserved pit absent.
+                # WO-019: a pending Driver early-pit declaration cancelled every awaiting
+                # proposal; a late response to one resolves to its terminal (no_match/stale).
+                if (_plan_gate_reason and _plan_gate_reason not in ('sdk_gap_execution_unverified', 'driver_early_pit_declared')) or _driver_target_constraint:
+                    _publish_or_stage({'type': 'strategy_decision_ack',
+                               'decision_id': _decision_response.get('decision_id'),
+                               'session_num': _decision_response.get('session_num'),
+                               'dispatch_id': _decision_response.get('dispatch_id'),
+                               'outcome': 'held', 'reason': _plan_gate_reason or 'driver_target_constraint'})
+                    log('PLAN ACCEPT HELD: frame=%s decision_id=%s reason=%s'
+                        % (_source_frame_sequence, _decision_response.get('decision_id'),
+                           _plan_gate_reason))
+                    continue
                 (pending_strategy_proposal, _promoted_plan, _resolve_outcome,
                  _declined_signature) = resolve_strategy_proposal(
                     pending_strategy_proposal, _decision_response)
@@ -7304,7 +9050,7 @@ def poll_iracing():
                 #   受理・拒否だけでなくstale/no_matchもackする——Bridgeが既に
                 #   処理済み（＝再送しても意味が無い）ことをDesktopへ伝える唯一の手段。
                 #   同じdecision_idの重複応答は2回目以降no_matchとなり冪等。
-                broadcast({'type': 'strategy_decision_ack',
+                _publish_or_stage({'type': 'strategy_decision_ack',
                            'decision_id': _decision_response.get('decision_id'),
                            'session_num': _decision_response.get('session_num'),
                            'dispatch_id': _decision_response.get('dispatch_id'),
@@ -7314,29 +9060,87 @@ def poll_iracing():
                     #   給油量）を覚え、次frameに同じ内容を毎frame再提案しない。
                     declined_plan_signatures = remember_declined_signature(
                         declined_plan_signatures, _declined_signature)
+                    # ★WO-005 §4.4：Driver declineはLifecycle awaiting recordを
+                    #   `cancel_plan(reason='driver_declined')`でterminal化する。
+                    _declined_decision_id = (
+                        _decision_response.get('decision_id')
+                        if isinstance(_decision_response, dict) else None)
+                    if (_race_strategy_state is not None
+                            and isinstance(_declined_decision_id, str)
+                            and _declined_decision_id in _race_strategy_state.plan_records):
+                        _race_strategy_state, _decline_outcome = plan_lifecycle_mod.cancel_plan(
+                            _race_strategy_state, decision_id=_declined_decision_id,
+                            reason='driver_declined')
+                        log('PLAN LIFECYCLE PROPOSAL DECLINED: status=%s decision_id=%s'
+                            % (_decline_outcome.status, _declined_decision_id))
                 if _resolve_outcome == 'accepted' and isinstance(_promoted_plan, dict):
-                    active_decision_id = _promoted_plan['decision_id']
-                    active_decision_plan = _promoted_plan
-                    strategy_options_decision_sent = True
-                    _prev_active_plan = _session_race_state.get('active_plan')
-                    # ★2026-09-17 Codex MD#6差戻し（P1）：ここで**その時点のlive
-                    #   `strategy_options`**をplan_snapshotとして保存していた。Driverが
-                    #   合意したのは提案時点の根拠であって、応答が届くまでの間に動いた
-                    #   ものではない——`_promoted_plan['options_snapshot']`
-                    #   （`build_strategy_decision()`が凍結したコピー）を使う。
-                    _frozen_options = (
-                        _promoted_plan.get('options_snapshot') or strategy_options)
-                    _session_race_state = session_race_state_mod.register_active_plan(
-                        _session_race_state, plan_id=_promoted_plan['selected_plan'],
-                        plan_snapshot=_frozen_options,
-                        snapshot_id=_frozen_options.get('snapshot_id'))
-                    if (_prev_active_plan != _promoted_plan['selected_plan']
-                            and session_race_state_mod.should_recalculate(
-                                _session_race_state, 'rival_pit_or_rejoin_shift',
-                                dedupe_key=_promoted_plan['decision_id'])):
-                        _pending_recalculations = queue_recalculation(
-                            _pending_recalculations, reason='rival_pit_or_rejoin_shift',
-                            dedupe_key=_promoted_plan['decision_id'])
+                    # ★WO-005 §4.4/§4.5：active predecessorが無いacceptedは既存
+                    #   `activate_plan()`を唯一のawaiting->active入口とする。active
+                    #   predecessorがある（B/C accepted while A active）acceptedは
+                    #   `activate_replacing_plan()`のatomic置換transactionだけを使う
+                    #   （`cancel_plan(); activate_plan()`のような部分成功を許す
+                    #   逐次公開は行わない）。
+                    _accept_decision_id = _promoted_plan.get('decision_id')
+                    _accept_record = (
+                        _race_strategy_state.plan_records.get(_accept_decision_id)
+                        if _race_strategy_state is not None else None)
+                    _accepted_active_record = None
+                    if _accept_record is None:
+                        log('PLAN LIFECYCLE ACCEPT SKIPPED: unknown decision_id=%s'
+                            % _accept_decision_id)
+                    elif _race_strategy_state.active_plan_id is None:
+                        _race_strategy_state, _accept_outcome = plan_lifecycle_mod.activate_plan(
+                            _race_strategy_state, decision_id=_accept_decision_id,
+                            expected_record_revision=_accept_record.revision,
+                            current_driver_pit_sequence=driver_pit_sequence,
+                            activation_source_frame_sequence=(
+                                _race_facts_snapshot['source_frame']['sequence']))
+                        log('PLAN LIFECYCLE ACCEPT ACTIVATED: status=%s decision_id=%s'
+                            % (_accept_outcome.status, _accept_decision_id))
+                        _accepted_active_record = plan_lifecycle_mod.active_plan_view(
+                            _race_strategy_state)
+                    else:
+                        _accept_predecessor_id = _race_strategy_state.active_plan_id
+                        _race_strategy_state, _accept_outcome = (
+                            plan_lifecycle_mod.activate_replacing_plan(
+                                _race_strategy_state,
+                                predecessor_decision_id=_accept_predecessor_id,
+                                expected_predecessor_revision=(
+                                    _race_strategy_state.plan_records[
+                                        _accept_predecessor_id].revision),
+                                successor_decision_id=_accept_decision_id,
+                                expected_successor_revision=_accept_record.revision,
+                                current_driver_pit_sequence=driver_pit_sequence,
+                                activation_source_frame_sequence=(
+                                    _race_facts_snapshot['source_frame']['sequence'])))
+                        log('PLAN LIFECYCLE ACCEPT REPLACED: status=%s decision_id=%s '
+                            'predecessor=%s'
+                            % (_accept_outcome.status, _accept_decision_id,
+                               _accept_predecessor_id))
+                        _accepted_active_record = plan_lifecycle_mod.active_plan_view(
+                            _race_strategy_state)
+                    if _accepted_active_record is None:
+                        log('PLAN LIFECYCLE ACCEPT FAILED: active_decision_plan not promoted '
+                            'decision_id=%s' % _accept_decision_id)
+                    else:
+                        active_decision_id = _accepted_active_record.decision_id
+                        active_decision_plan = plan_lifecycle_adapter.legacy_decision_projection(
+                            _accepted_active_record)
+                        strategy_options_decision_sent = True
+                        _prev_active_plan = _session_race_state.get('active_plan')
+                        _session_race_state = session_race_state_mod.register_active_plan(
+                            _session_race_state, plan_id=_accepted_active_record.selected_plan,
+                            plan_snapshot=(
+                                plan_lifecycle_adapter.legacy_strategy_options_projection(
+                                    _accepted_active_record)),
+                            snapshot_id=_accepted_active_record.evidence_snapshot_id)
+                        if (_prev_active_plan != _accepted_active_record.selected_plan
+                                and session_race_state_mod.should_recalculate(
+                                    _session_race_state, 'rival_pit_or_rejoin_shift',
+                                    dedupe_key=_accepted_active_record.decision_id)):
+                            _pending_recalculations = queue_recalculation(
+                                _pending_recalculations, reason='rival_pit_or_rejoin_shift',
+                                dedupe_key=_accepted_active_record.decision_id)
                 log('STRATEGY DECISION RESPONSE resolved: decision_id=%s outcome=%s'
                     % (_decision_response.get('decision_id'), _resolve_outcome))
             # ★Build 266 Codex差戻し#2：待ち行列に積まれた再計算を、ここで実行する。
@@ -7345,7 +9149,13 @@ def poll_iracing():
             #   ドライバー申告・燃費/ペース乖離・クリーン3周）より後なので、再計算は
             #   常に最新の権威データを入力に使う。
             #   ここで実際に Plan A/B/C を組み直し、選び直し、active_plan を更新する。
-            if _pending_recalculations:
+            if _pending_recalculations and _driver_target_constraint:
+                _constraint_record = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+                _constraint_recalc = fixed_target_authority_mod.evaluate(
+                    _wo008_inputs,_constraint_record.target_lap,frozen_set=_constraint_record.set_fuel_l)
+                log('DRIVER TARGET RECALC: '+json.dumps(_constraint_recalc,ensure_ascii=False))
+                _pending_recalculations = []
+            if _pending_recalculations and not _plan_gate_reason:
                 # ── Plan C の成立条件を実測から導く ──────────────────────
                 # ★2026-09-16 Codex MD#4差戻し：`derive_plan_c_live_conditions()`
                 #   （本番関数）へ集約した。decision-lock直前の再検証（下）と
@@ -7408,6 +9218,9 @@ def poll_iracing():
                         _session_race_state, _recalc_item, inputs=_item_inputs,
                         srs_mod=session_race_state_mod,
                         options_mod=strategy_options_mod)
+                    if _recalc_verdict.get('available') and isinstance(_recalc_verdict.get('options'), dict):
+                        _recommendation_sources['strategy_options']={'source_frame_sequence':_source_frame_sequence,'session_time_s':_race_facts_snapshot['source_frame']['session_time_s']}
+                        _options_projection_provenance={}
                     # ★2026-09-16 Codex MD#1差戻し→MD#2差戻し：desktop向け`strategy_options`
                     #   （telemetry payloadのフィールド、6409で一度だけラッチされる）が
                     #   Bridge内部の再計算（`_session_race_state['active_plan_snapshot']`）と
@@ -7418,6 +9231,7 @@ def poll_iracing():
                     #   起こし得る問題——の両方を、本番関数`sync_desktop_strategy_options()`
                     #   （このpoll loopとテストが同じ関数を呼ぶ。詳細は同関数のdocstring）へ
                     #   集約した。
+                    _pending_before_sync = pending_strategy_proposal
                     (strategy_options, strategy_options_decision_sent,
                      strategy_options_box_call_sent, pending_strategy_proposal,
                      strategy_options_proposal_sent) = sync_desktop_strategy_options(
@@ -7427,6 +9241,24 @@ def poll_iracing():
                         strategy_options_box_call_sent=strategy_options_box_call_sent,
                         pending_strategy_proposal=pending_strategy_proposal,
                         strategy_options_proposal_sent=strategy_options_proposal_sent)
+                    # ★WO-005 §4.4：`sync_desktop_strategy_options()`が再計算による
+                    #   actionable signature相違でlocal `pending_strategy_proposal`を
+                    #   Noneへ無効化した時、対応するLifecycle awaiting recordも
+                    #   `proposal_superseded_by_recalculation`でterminal化する
+                    #   （local変数だけ消してLifecycle側は放置しない）。
+                    if (isinstance(_pending_before_sync, dict) and pending_strategy_proposal is None
+                            and _race_strategy_state is not None):
+                        _superseded_by_recalc_id = _pending_before_sync.get('decision_id')
+                        if (isinstance(_superseded_by_recalc_id, str)
+                                and _superseded_by_recalc_id in _race_strategy_state.plan_records):
+                            _race_strategy_state, _supersede_recalc_outcome = (
+                                plan_lifecycle_mod.cancel_plan(
+                                    _race_strategy_state, decision_id=_superseded_by_recalc_id,
+                                    reason='proposal_superseded_by_recalculation'))
+                            log('PLAN LIFECYCLE PROPOSAL SUPERSEDED: '
+                                'reason=proposal_superseded_by_recalculation decision_id=%s '
+                                'status=%s'
+                                % (_superseded_by_recalc_id, _supersede_recalc_outcome.status))
                     log(session_race_state_mod.format_recalculation_trace(
                         _session_race_state['last_recalculation']).replace('\n', ' | '))
                     log('STRATEGY RECALCULATION OUTCOME reason=%s available=%s '
@@ -7441,7 +9273,7 @@ def poll_iracing():
                                       ensure_ascii=False, separators=(',', ':'))))
                     _recalc_payload = _recalc_item.get('broadcast_payload')
                     if isinstance(_recalc_payload, dict):
-                        broadcast({
+                        _publish_or_stage({
                             **_recalc_payload,
                             'selected_plan': _recalc_verdict.get('selected_plan'),
                             'previous_plan': _recalc_verdict.get('previous_plan'),
@@ -7465,35 +9297,8 @@ def poll_iracing():
             #   だけを読む——`strategy_options_decision_sent`は、A（即時確定）またはB/Cが
             #   実際にDriver合意を経た（`resolve_strategy_proposal`が'accepted'を返した）
             #   時だけTrueになる契約なので、このゲート自体が「合意済み」を保証する。
-            if (isinstance(active_decision_plan, dict)
-                    and strategy_options_decision_sent
-                    and active_decision_plan.get('selected_plan') in ('A', 'B', 'C')
-                    and not strategy_options_box_call_sent
-                    and is_race_session and onTrack and not onPit
-                    # ★Build 266 Phase E フィックス⑤：ファイナルラップ／チェッカー確定後は
-                    #   予定していたBox callも発話しない。
-                    and not session_race_state_mod.strategy_speech_blocked(_session_race_state)):
-                _box_selected = active_decision_plan.get('selected_plan') or 'A'
-                _box_target = active_decision_plan.get('target_lap')
-                if (isinstance(_box_target, int)
-                        and isinstance(lap, (int, float))
-                        and int(lap) >= _box_target):
-                    _box_dispatch = broadcast({
-                        'type': 'radio',
-                        'trigger': 'strategy_plan_box_call',
-                        'selected_plan': _box_selected,
-                        'decision_id': active_decision_plan.get('decision_id'),
-                        'decision_plan': active_decision_plan,
-                        'strategy_options': strategy_options,
-                        'message': ('Box this lap. Set %s liters.'
-                                    % active_decision_plan.get('set_fuel_l')),
-                    })
-                    if _box_dispatch is True or _box_dispatch == 'DISPATCHED':
-                        strategy_options_box_call_sent = True
-                    log('STRATEGY OPTIONS box call: decision_id=%s target_lap=%s '
-                        'actual_lap=%s dispatch=%s'
-                        % (active_decision_plan.get('decision_id'), _box_target,
-                           int(lap), _box_dispatch))
+            # WO-008 BOX authority/delivery runs every poll before this cadence
+            # block; no legacy lap>=target or DISPATCHED-owned sent flag.
             _pit_phase_state = derive_pit_phase(
                 lifecycle_state, onPit, lap, pit_exit_lap)
             if (_pit_phase_state == 'racing' and isinstance(lap, (int, float))
@@ -7530,6 +9335,8 @@ def poll_iracing():
                     isinstance(_fuel_strategy_live, dict)
                     and _fuel_strategy_live.get('pit_required') is True):
                 _plan_action, _plan_reason = 'hold', 'out_lap'
+            if _plan_gate_reason:
+                _plan_action, _plan_reason, _plan_set_fuel = 'hold', _plan_gate_reason, None
             _plan_physical = None
             _plan_cycle = None
             if isinstance(_pit_now_forecast, dict) and _pit_now_forecast.get('available'):
@@ -7595,14 +9402,23 @@ def poll_iracing():
                 tyre_temp_c=(sum(_style_tyres) / len(_style_tyres)
                              if _style_tyres else None),
                 last_lap_time_s=lapTime)
+            # ★WO-005 §3.1：Lifecycle activeが存在するframeでは、driver-facing
+            #   pit timing authorityもその凍結options projectionだけを読む。
+            _telemetry_active_record = (
+                plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+                if _race_strategy_state is not None else None)
+            _timing_authority_options = (
+                plan_lifecycle_adapter.legacy_strategy_options_projection(
+                    _telemetry_active_record)
+                if _telemetry_active_record is not None else strategy_options)
             if isinstance(_fuel_strategy_live, dict):
-                _fuel_strategy_live['pit_timing_authority'] = (
+                _telemetry_timing_authority = (
                     plan_fuel_authority_mod.build_timing_authority(
-                        _fuel_strategy_live, strategy_options,
+                        _fuel_strategy_live, _timing_authority_options,
                         current_lap=lap, fuel_level_l=fuel,
                         endurance_plan=(_fuel_strategy_live.get('endurance_plan')
                                         or latest_endurance_plan)))
-            broadcast({
+            _publish_or_stage({
                 'type': 'telemetry_live',
                 'class_pos': class_pos,
                 'pos': pos,
@@ -7645,6 +9461,13 @@ def poll_iracing():
                 # not the preceding Practice session for up to ten seconds.
                 'session_type': cur_sess_type or info.get('current_session_type'),
                 'session_num': cur_snum,
+                # WO-006 command authority envelope.  source_frame_sequence is
+                # the current telemetry frame, not the active Plan activation
+                # frame; Desktop must send both back for fail-closed matching.
+                'race_instance_id': _race_facts_snapshot.get('race_instance_id'),
+                'source_frame_sequence': (
+                    (_race_facts_snapshot.get('source_frame') or {}).get('sequence')),
+                'driver_pit_sequence': _race_facts_snapshot.get('driver_pit_sequence'),
                 'driver_pace_median_s': round(_driver_pace_median, 3)
                 if _driver_pace_median is not None else None,
                 'driver_pace_sample_count': len(_driver_pace_samples),
@@ -7693,12 +9516,29 @@ def poll_iracing():
                 'pit_phase_state': _pit_phase_state,
                 'player_track_surface': player_track_surface,
                 'pit_service_status': pit_service_status,
-                'fuel_strategy': _fuel_strategy_live,
+                'fuel_strategy': (dict(_fuel_strategy_live,pit_timing_authority=dict(_telemetry_timing_authority,calculation_source={'source_frame_sequence':_source_frame_sequence,'session_time_s':_race_facts_snapshot['source_frame']['session_time_s']},fuel_calculation_source=_recommendation_sources.get('fuel_strategy'))) if isinstance(_fuel_strategy_live,dict) else None),
                 'endurance_fuel_plan': (
                     (_fuel_strategy_live or {}).get('endurance_plan')
                     if isinstance(_fuel_strategy_live, dict) else None),
                 'strategy_plan': strategy_plan,
                 'strategy_options': strategy_options,
+                # ★WO-005 P1-11：Rendererが`fuel_strategy_warning`の
+                #   `safety_override`をこのframeのcanonical active decisionと
+                #   照合するための参照値（前フレームのlastTelemetryとの比較前提、
+                #   既存`pit_timing_authority`二段guardと同じ設計）。
+                'active_plan_decision_id': (
+                    _telemetry_active_record.decision_id
+                    if _telemetry_active_record is not None else None),
+                'active_plan_revision': (
+                    _telemetry_active_record.revision
+                    if _telemetry_active_record is not None else None),
+                # ★WO-005 REVISE 1 R3：safety_overrideの
+                #   `activated_source_frame_sequence`と同じ安定値（activateされた
+                #   frameで固定、毎frameは進まない）。decision_id/revisionだけでなく
+                #   frameも一意照合できるようにする。
+                'active_plan_activated_source_frame_sequence': (
+                    _telemetry_active_record.activated_source_frame_sequence
+                    if _telemetry_active_record is not None else None),
                 'tires': tires,
                 'tire_measurement': {
                     'available': _tire_measurement_available,
@@ -7765,8 +9605,121 @@ def poll_iracing():
             })
             last_telem_ts = _tnow
 
+        _box_active = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+        _box_delivery_ledger,_box_authority_snapshot,_box_candidate = box_authority_delivery_mod.advance(
+            _box_delivery_ledger,_box_active,_wo008_inputs,execution_gate=_plan_gate_reason,on_track=bool(onTrack))
+        _canonical_last_facts=copy.deepcopy(_race_facts_snapshot)
+        _canonical_last_inputs=copy.deepcopy(_wo008_inputs)
+        _recommendations={'fuel_strategy':{'value':_fuel_strategy_live if '_fuel_strategy_live' in locals() else None,
+             'calculation_source':_recommendation_sources.get('fuel_strategy'), 'role':'recommendation_not_execution'},
+             'strategy_options':{'value':strategy_options,'calculation_source':_recommendation_sources.get('strategy_options'),**_options_projection_provenance,
+             'role':'recommendation_not_execution'},
+             'timed_finish_forecast':{'value':_timed_final_eval,'role':'prediction_not_wo008_execution','calculation_source':{'session_time_s':(_timed_final_eval or {}).get('evaluated_session_time_s'),'source_frame_sequence':None}}}
+        _canonical_snapshot=canonical_mod.build(state=_race_strategy_state,facts=_race_facts_snapshot,
+            inputs=_wo008_inputs,pit_store=_driver_pit_event_store,box_ledger=_box_delivery_ledger,
+            box_projection=_box_authority_snapshot,gate_reason=_plan_gate_reason,
+            telemetry_available=True,on_pit_road=onPit,on_track=onTrack,
+            recommendations=_recommendations,last_driver_action=_last_driver_action,
+            scope_closed=_plan_closed_identity==_plan_identity,collision=bool(_plan_collision_scope and _plan_collision_scope[:2]==_plan_identity),visit_open=_pit_visit_entry_fact is not None,continuity=_recovery_continuity(),origins=_recovery_origins)
+        if _box_candidate is not None:
+            _box_candidate.update(canonical_mod.refs(_canonical_snapshot))
+            _box_delivery_ledger=box_authority_delivery_mod.bind_dispatch_ref(_box_delivery_ledger,_box_candidate['box_attempt']['attempt_id'],canonical_mod.refs(_canonical_snapshot))
+        _boundary={'source_frame_sequence':_source_frame_sequence,'session_time_s':_race_facts_snapshot['source_frame']['session_time_s'],
+            'on_pit_road':onPit if isinstance(onPit,bool) else (True if prev['onPit'] is True else None),'on_track':onTrack,'gap_unknown':_recovery_gap}
+        if prev['onPit'] is True and onPit is False and onTrack is not True:_boundary['on_pit_road']=True
+        _domains=_recovery_domains(_boundary)
+        _material=recovery_mod.pack(_domains);_material['boundary'].pop('source_frame_sequence');_material['boundary'].pop('session_time_s')
+        _fingerprint=recovery_mod.canonical(_material)
+        _critical=any(e.get('type') in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','strategy_decision_ack','strategy_delivery_ack') for e in _canonical_staged) or _box_candidate is not None
+        _boundary_known=recovery_mod.finite(_boundary['session_time_s']) and _boundary['session_time_s']>=0
+        _should_commit=_critical or _fingerprint!=_recovery_fingerprint or _recovery_last_save_time is None or (_boundary_known and _boundary['session_time_s']-_recovery_last_save_time>=1.0)
+        if _recovery_scope is not None and not _recovery_error and _should_commit and _boundary_known:
+            try:
+                _recovery_checkpoint_id=_recovery_store.commit(_recovery_scope,canonical_mod.PROCESS_EPOCH,_domains)
+                _recovery_last_save_time=_boundary['session_time_s'];_recovery_fingerprint=_fingerprint;_recovery_committed=True
+            except recovery_mod.RecoveryError as _write_error:
+                _recovery_error=str(_write_error);_recovery_status='restore_failed';_recovery_committed=False;_box_candidate=None
+                log('RECOVERY COMMIT FAILURE: '+_recovery_error)
+        elif _recovery_scope is None or _recovery_error or not _boundary_known:_recovery_committed=False
+        _wire_data=_canonical_snapshot.serialize();_wire_data['continuity']=_recovery_continuity()
+        if not _recovery_committed:
+            _wire_data['execution'].update(allowed=False,gate_reason=_recovery_error or 'identity_unsupported')
+            _wire_data['box_delivery'].update(allowed_attempt_id=None,allowed_proof_id=None,valid_until_session_s=None)
+            _wire_data['diagnostics'].append('uncommitted_readonly_state')
+        _canonical_snapshot=canonical_mod.LifecycleSnapshot(_wire_data)
+        _canonical_wire=_canonical_snapshot.serialize()
+        broadcast(_canonical_wire)
+        _remember_canonical_publication(_canonical_wire)
+        # WO020 observation only: canonical identity transitions (change-only, bounded).
+        BRIDGE_TRACE.lifecycle(_canonical_wire)
+        if _canonical_telemetry is not None:
+            broadcast(canonical_mod.project_telemetry(_canonical_snapshot,_canonical_telemetry))
+        for _staged_event in _canonical_staged:
+            _event_type=_staged_event.get('type');_trigger=_staged_event.get('trigger')
+            if _event_type in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','strategy_decision_ack','strategy_delivery_ack') and not _recovery_committed:
+                log('RECOVERY ACK HELD: uncommitted');BRIDGE_TRACE.dispatch(_staged_event,'HELD_UNCOMMITTED',_canonical_wire);continue
+            _origin=_staged_event.get('origin_record_ref')
+            _current_ids={r.decision_id:r for r in _race_strategy_state.plan_records.values()
+                          if r.phase in ('active','awaiting_driver')} if _race_strategy_state else {}
+            _origin_valid=(not _origin or _origin.get('decision_id') in _current_ids
+                and _current_ids[_origin['decision_id']].revision==_origin['revision'])
+            if _event_type=='radio' and _trigger in ('initial_strategy_plans','strategy_plan_decision','strategy_plan_proposal') and (not _origin_valid or _plan_gate_reason or not _recovery_committed):
+                _actual_dispatch=BROADCAST_DROPPED
+            else:
+                if _event_type=='radio' and _trigger in ('fuel_warning','fuel_strategy_warning'):
+                    _staged_event.update(fact_only=True,set_fuel_l=None,
+                        safety_override=_staged_event.get('safety_override') if _origin_valid else None,pit_required=False,
+                        execution_hold=_canonical_wire['execution']['gate_reason'] or 'dedicated_box_authority_only',
+                        message='Fuel '+str(_staged_event.get('fuel'))+'. Execution held.')
+                # Historical ACKs echo original command/report refs. Radios carry
+                # the final publication ref plus the untouched generation record.
+                if _event_type not in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack'):
+                    _staged_event.update(canonical_mod.refs(_canonical_snapshot))
+                _actual_dispatch=broadcast(_staged_event)
+            if _trigger=='initial_strategy_plans':strategy_options_dispatch=_actual_dispatch
+            elif _trigger=='strategy_plan_decision':
+                strategy_options_decision_sent=_actual_dispatch==BROADCAST_DISPATCHED
+            elif _trigger=='strategy_plan_proposal' and pending_strategy_proposal and _staged_event.get('dispatch_id')==pending_strategy_proposal.get('dispatch_id'):
+                strategy_options_proposal_sent=_actual_dispatch==BROADCAST_DISPATCHED
+                strategy_proposal_delivery_state='inflight' if strategy_options_proposal_sent else None
+            elif _trigger=='fuel_strategy_warning' and _actual_dispatch==BROADCAST_DISPATCHED:
+                fuel_warning_band=_staged_event.get('fuel_band')
+                fuel_strategy_warned=fuel_warning_band in (fuel_strategy_mod.TIGHT,fuel_strategy_mod.CRITICAL)
+            elif _trigger=='fuel_strategy_safe' and _actual_dispatch==BROADCAST_DISPATCHED:
+                fuel_warning_band=fuel_strategy_mod.SAFE;fuel_strategy_warned=False
+            elif _trigger=='fuel_margin_hold':fuel_margin_hold_announced=_actual_dispatch==BROADCAST_DISPATCHED
+            log('CANONICAL EVENT DISPATCH: type=%s trigger=%s result=%s snapshot=%s'%(_event_type,_trigger,_actual_dispatch,_canonical_wire['snapshot_id']))
+            BRIDGE_TRACE.dispatch(_staged_event,_actual_dispatch,_canonical_wire)
+        _box_authority_snapshot=canonical_mod.project_box(_canonical_snapshot,_box_authority_snapshot)
+        broadcast(_box_authority_snapshot)
+        log('BOX AUTHORITY SNAPSHOT: '+json.dumps(_box_authority_snapshot,ensure_ascii=False))
+        if _box_candidate is not None and _canonical_wire['box_delivery']['allowed_attempt_id']:
+            _box_candidate.update(canonical_mod.refs(_canonical_snapshot))
+            _box_delivery_ledger=box_authority_delivery_mod.bind_dispatch_ref(
+                _box_delivery_ledger,_box_candidate['box_attempt']['attempt_id'],canonical_mod.refs(_canonical_snapshot))
+            _box_dispatch_result = broadcast(_box_candidate)
+            _box_delivery_ledger = box_authority_delivery_mod.mark_dispatch(
+                _box_delivery_ledger,_box_candidate['box_attempt']['attempt_id'],_box_dispatch_result)
+            BRIDGE_TRACE.dispatch(_box_candidate,_box_dispatch_result,_canonical_wire)
+            try:
+                _recovery_checkpoint_id=_recovery_store.commit(_recovery_scope,canonical_mod.PROCESS_EPOCH,_recovery_domains(_boundary))
+            except recovery_mod.RecoveryError as _write_error:
+                _recovery_error=str(_write_error);_recovery_committed=False;_recovery_status='restore_failed'
+                log('RECOVERY POST DISPATCH FAILURE: '+_recovery_error)
+            log('BOX ATTEMPT: '+json.dumps(_box_candidate,ensure_ascii=False))
+        strategy_options_box_call_sent = box_authority_delivery_mod.audible_for(
+            _box_delivery_ledger,active_decision_id)
+
+
+        # Preserve a known open visit until BOTH exit facts are observed.
+        # Unknown after known-False breaks the entry edge instead of forging
+        # False->True through an unread frame. SDK-inactive loops do not
+        # update this boundary cache at all. Raw canonical pit stays None.
+        _pit_boundary_carry = onPit if isinstance(onPit,bool) else (True if prev['onPit'] is True else None)
+        if prev['onPit'] is True and onPit is False and onTrack is not True:
+            _pit_boundary_carry = True
         prev.update({'pos': pos, 'class_pos': class_pos, 'fuel': fuel, 'lap': lap,
-                     'lapsTot': lapsTot, 'onPit': onPit})
+                     'lapsTot': lapsTot, 'onPit': _pit_boundary_carry})
         time.sleep(0.1)  # 0.1秒ポーリング = コントロールライン通過を0.1秒以内に検知
 
 
@@ -7932,13 +9885,11 @@ def poll_joystick():
                     #   PTT 押下を再搭乗信号にすると誤活性する。activity 変更は行わない。
                     # ★2026-07-27：renderer往復を待たず、この入力エッジで録音開始。
                     #   短い第一声がストリームopen前に欠けて STT empty になる窓を最小化する。
-                    start_ptt_record()
-                    broadcast({'type': 'ptt', 'state': 'down'})
+                    _ptt_physical_edge(True)
                 elif not cur and ptt_pressed:
                     ptt_pressed = False
                     # 離したエッジでも即停止。rendererから戻る重複CMDは関数側で無害化する。
-                    stop_ptt_record()
-                    broadcast({'type': 'ptt', 'state': 'up'})
+                    _ptt_physical_edge(False)
 
             # 音量ボタン監視：押した瞬間（立ち上がりエッジ）に1段変更を送る。
             # ダイヤル（ロータリー）は1クリック=1パルスなので、回すたびに1段動く。
@@ -7967,7 +9918,9 @@ async def handler(websocket):
     connected_clients.add(websocket)
     log("Browser connected (" + str(len(connected_clients)) + " client)")
     try:
-        await websocket.send(json.dumps({'type': 'connected'}))
+        await websocket.send(json.dumps({'type': 'connected', 'schema_version': 1, 'bridge_process_epoch': canonical_mod.PROCESS_EPOCH}))
+        if _last_committed_canonical is not None:
+            await websocket.send(json.dumps(_last_committed_canonical))
         # Browser late join時の副作用なし状態同期。Activeならrendererを即座に緑へ、
         # memory open/status 0なら「Telemetry待ち」へする。iracing_connectedを再送すると
         # usage session再発行・briefing再実行を起こすため、専用snapshotを使う。
@@ -8034,7 +9987,8 @@ async def handler(websocket):
                         ptt_lang = lang
                         log("PTT STT language -> " + str(lang))
                     # ★v3 Codex P0-1：PTT は activity 変更源にしない（観戦者会話でも押されるため）
-                    start_ptt_record()
+                    # ★WO016：capture_id付きのrenderer CMDは物理テイクの確認のみ。新しいテイクを作らない。
+                    _ptt_renderer_start(msg.get('capture_id'))
                 elif cmd == "ptt_abort":
                     abort_ptt_record()
                 elif cmd == "resume_driving_support":
@@ -8051,6 +10005,23 @@ async def handler(websocket):
                     if isinstance(_text, str) and _text.strip():
                         _queue_driver_damage_report(_text)
                         log('DRIVER DAMAGE REPORT queued: ' + _text.strip())
+                elif cmd == 'historical_settlement':
+                    _queue_historical_settlement(msg)
+                elif cmd == 'box_delivery_report':
+                    _queue_box_delivery_report(msg)
+                elif cmd == 'driver_plan_command':
+                    # WO-006: preserve the complete identity envelope.  Do not
+                    # classify natural language or apply lifecycle state in the
+                    # websocket thread.
+                    _queue_driver_plan_command(msg)
+                    log('DRIVER PLAN COMMAND queued: command_id=%s intent=%s'
+                        % (msg.get('command_id'), msg.get('intent')))
+                elif cmd == 'driver_plan_reason':
+                    _reason = dict(msg)
+                    _reason['_reason_only'] = True
+                    _queue_driver_plan_command(_reason)
+                    log('DRIVER PLAN REASON queued: command_id=%s'
+                        % msg.get('command_id'))
                 elif cmd == 'strategy_decision_response':
                     # ★2026-09-16 Codex MD#4差戻し（P1-2）：DesktopのLuna会話（提案→合意
                     #   状態機械）でDriverが戦略提案に応答した結果をBridgeへ送り返す。
@@ -8072,11 +10043,14 @@ async def handler(websocket):
                     _queue_strategy_delivery_report(
                         msg.get('decision_id'), msg.get('outcome'),
                         session_num=msg.get('session_num'),
-                        dispatch_id=msg.get('dispatch_id'))
+                        dispatch_id=msg.get('dispatch_id'),
+                        utterance_id=msg.get('utterance_id'),
+                        text_hash=msg.get('text_hash'))
                     log('STRATEGY DELIVERY queued: decision_id=%s outcome=%s session_num=%s'
                         % (msg.get('decision_id'), msg.get('outcome'), msg.get('session_num')))
                 elif cmd == "ptt_stop":
-                    stop_ptt_record()
+                    # ★WO016：capture_id付きは、そのテイクが今も録音中の時だけ止める（別テイクを止めない）。
+                    _ptt_renderer_stop(msg.get('capture_id'))
                 elif cmd == 'ptt_setup':
                     ptt_capturing = True
                     log("PTT setup mode: waiting for button press")

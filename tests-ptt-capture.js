@@ -28,17 +28,27 @@ check('無音テイクをSTTへ送らず診断',
 check('診断に時間・peak・deviceを記録',
   bridge.includes('PTT DIAG: too_short duration=')
   && bridge.includes('PTT DIAG: no_signal duration='));
-check('busy中の即時録音を破棄',
-  /if\(isBusy\)\{[\s\S]*?cmd:'ptt_abort'/.test(renderer)
-  && /elif cmd == "ptt_abort":\s*abort_ptt_record\(\)/.test(bridge));
+// ★WO016：旧契約「busy中は録音をptt_abortで破棄」は、Driver入力を無言で捨てる欠陥だった。
+//   新契約＝busyでも録音を開始し（ptt_abortを送らない）、押下は進行中turnの取消（barge-in）。
+//   実挙動の縦断はtests-wo016-driver-input-ownership.jsで検査する。
+{
+  const s = renderer.indexOf('async function pttStart(');
+  const body = s >= 0 ? renderer.slice(s, renderer.indexOf('\nfunction pttStop(', s)) : '';
+  check('busy中もPTT録音を破棄せず開始（ptt_abort不送信）',
+    !!body && !body.includes("cmd:'ptt_abort'") && body.includes("cmd:'ptt_start'")
+    && body.indexOf('beginCapture(') >= 0);
+  check('busy中のPTT押下は進行中turnの取消（barge-in）',
+    /if\(isBusy\)\s*cancelDriverTurn\('ptt_barge_in'\)/.test(body));
+}
 check('rendererは短音声と無音を区別表示',
   renderer.includes("if(data.type==='ptt_diagnostic')")
   && renderer.includes("reason==='too_short'"));
 check('通信失敗を聞き取り失敗と区別',
   renderer.includes("if(data.type==='ptt_error')")
   && renderer.includes("t('hint_ptt_network')"));
+// WO016: the per-take terminal is emitted by _finish_ptt_capture() (emit() adds capture_id/epoch, then broadcasts).
 check('STTを正常なElectron HTTPS経路へ統一',
-  bridge.includes("broadcast({'type': 'ptt_audio'")
+  /def _finish_ptt_capture\([\s\S]*?return emit\(\{'type': 'ptt_audio'/.test(bridge)
   && renderer.includes("if(data.type==='ptt_audio')")
   && renderer.includes("fetch(API_BASE+'/api/stt'"));
 check('Electron STT経路も一時障害を3回まで再試行',

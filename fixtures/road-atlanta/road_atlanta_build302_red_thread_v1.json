@@ -1,0 +1,330 @@
+{
+  "scenario_id": "road_atlanta_build302_red_thread_v1",
+  "_readme": [
+    "WO-001 (review/PITWALL_ARCHITECTURE_REPAIR_PROGRAM.md) Road Atlanta red-thread fixture.",
+    "The original log OMORAY-bridge-debug-20260922-0934.log is NOT present in this repository",
+    "(confirmed absent by `find . -iname '*20260922*'` returning nothing at authoring time).",
+    "This fixture therefore mixes three provenance tiers, tagged per payload field below:",
+    "  repository_evidence     - value read directly from current repo source (file:line cited)",
+    "  handoff_only             - value that exists only in HANDOFF.md's 2026-09-22 narrative entry,",
+    "                            not independently confirmed against a raw log in this repo",
+    "  synthetic_reconstruction - value invented by this fixture to make the real product code",
+    "                            reach the scenario shape (e.g. lap numbers, fuel curve, session",
+    "                            length) because the original telemetry stream does not exist here",
+    "This fixture is NOT a verified_log_fact replay and must never be described as one.",
+    "harness_correlation_id values are fixture-only identity for event ordering; they are never",
+    "used as a stand-in for a product-issued race_instance_id/decision_id/pit_event_id."
+  ],
+  "events": [
+    {
+      "event_id": "e01",
+      "harness_correlation_id": "fixture-race-a/event-001",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": 1,
+      "at": 0.0,
+      "type": "telemetry",
+      "payload": { "note": "clean racing laps 1-14, establishes baseline pace/fuel-per-lap so strategy_options becomes available and Plan A is committed by the real poll loop." },
+      "provenance": {
+        "payload.note": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/replay_harness.py:136 (make_frame), irsdk-bridge/tests_bridge_poll_replay.py:28-53 (clean_laps pattern reused)",
+          "note": "Original telemetry stream for these laps is not in the repo; frames are built with the same clean_laps() shape already used by an existing product test."
+        },
+        "source_frame_id": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/tests_wo001_road_atlanta_fixture.py clean_laps()",
+          "note": "Fixture-only ordinal marking the start of the frame sequence this event represents; not a real iRacing frame counter (none exists in this repo for the original incident)."
+        },
+        "at": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/tests_wo001_road_atlanta_fixture.py clean_laps() start_time=100.0",
+          "note": "Fixture-only nominal scenario-relative timestamp for event ordering; not a real SessionTime from the original session."
+        }
+      }
+    },
+    {
+      "event_id": "e02",
+      "harness_correlation_id": "fixture-race-a/event-002",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "driver_utterance",
+      "payload": { "text": "ピットウィンド湧いてる？", "lang": "ja" },
+      "provenance": {
+        "payload.text": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22 entry: \"「ピットウィンド湧いてる？」はローカルrouterのfuel-window表現に「ピットウィンド」が無くunhandled\"",
+          "note": "Exact wording and timestamp (11:21) are recorded only in HANDOFF.md, not verified against a raw log present in this repo."
+        },
+        "payload.lang": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/tests_wo001_road_atlanta_fixture.py / tests-wo001-road-atlanta-fixture.js router harness input",
+          "note": "HANDOFF.md does not record a language tag; 'ja' is a fixture-only router-input field required by desktop/local-intent-router.js's route() signature."
+        }
+      }
+    },
+    {
+      "event_id": "e03",
+      "harness_correlation_id": "fixture-race-a/event-003",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "driver_utterance",
+      "payload": { "text": "ピット入るぞ", "lang": "ja" },
+      "provenance": {
+        "payload.text": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22 entry: \"11:21のDriver「ピット入るぞ」「前#25が遅いから先に」\"",
+          "note": "Wording recorded only in HANDOFF.md narrative."
+        },
+        "payload.lang": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/tests_wo001_road_atlanta_fixture.py / tests-wo001-road-atlanta-fixture.js router harness input",
+          "note": "HANDOFF.md does not record a language tag; 'ja' is a fixture-only router-input field required by desktop/local-intent-router.js's route() signature."
+        }
+      }
+    },
+    {
+      "event_id": "e04",
+      "harness_correlation_id": "fixture-race-a/event-004",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "driver_utterance",
+      "payload": { "text": "前の25が遅いから先に入る", "lang": "ja" },
+      "provenance": {
+        "payload.text": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22 entry (paraphrased from \"前#25が遅いから先に\")",
+          "note": "Reworded into a full sentence for router input; original fragment is HANDOFF-only."
+        },
+        "payload.lang": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/tests_wo001_road_atlanta_fixture.py / tests-wo001-road-atlanta-fixture.js router harness input",
+          "note": "HANDOFF.md does not record a language tag; 'ja' is a fixture-only router-input field required by desktop/local-intent-router.js's route() signature."
+        }
+      }
+    },
+    {
+      "event_id": "e05",
+      "harness_correlation_id": "fixture-race-a/event-005",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "telemetry",
+      "payload": { "note": "Real poll_iracing() commits Plan A at lap 13 via build_strategy_decision(); this fixture's synthetic fuel burn is tuned so the real fuel-strategy arithmetic selects target_lap=21, matching HANDOFF's record of the real incident (see irsdk-bridge/tests_wo001_road_atlanta_fixture.py test_road_atlanta_lap21_target_and_fuel_margin_are_real_product_output)." },
+      "provenance": {
+        "payload.note": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/bridge.py:7159-7195 (build_strategy_decision / active_decision_plan commit); irsdk-bridge/tests_wo001_road_atlanta_fixture.py FUEL_PER_LAP=2.9",
+          "note": "target_lap is a product OUTPUT, asserted directly from the real replay (not fixture-declared here). product_identity.decision_id is left null: the real decision_id is only known after the replay runs, and this WO's contract (§7) forbids an adapter backfilling a harness label into product_identity."
+        }
+      }
+    },
+    {
+      "event_id": "e06",
+      "harness_correlation_id": "fixture-race-a/event-006",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "pit_entry",
+      "payload": { "lap": 15, "fuel_delta_l": 16.79, "reason": "driver_early_pit_declaration" },
+      "provenance": {
+        "payload.lap": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22: \"実際のピットはlap 15で給油16.79L\"",
+          "note": "Lap number recorded only in HANDOFF.md."
+        },
+        "payload.fuel_delta_l": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22: \"給油16.79L\"",
+          "note": "This exact figure is used as the fixture's pit-visit input so the real bridge.py pit_event fact echoes it back unchanged (repository_evidence for the OUTPUT, handoff_only for why this INPUT value was chosen)."
+        },
+        "payload.reason": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22: \"Driver「ピット入るぞ」「前#25が遅いから先に」\" (e03/e04)",
+          "note": "Narrative label connecting this pit entry to the Driver's declared reason; not a field the real product reads or produces."
+        }
+      }
+    },
+    {
+      "event_id": "e07",
+      "harness_correlation_id": "fixture-race-a/event-007",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "pit_exit",
+      "payload": { "lap": 15, "note": "real bridge.py pit_events.append() fact, entry_lap=exit_lap=15" },
+      "provenance": {
+        "payload.lap": {
+          "source_class": "repository_evidence",
+          "reference": "irsdk-bridge/bridge.py:5943-5952 (pit_event construction, observed directly from the replay output)",
+          "note": "This is the real code's own OUTPUT for the synthetic pit-visit frames above, not asserted against an original log."
+        },
+        "payload.note": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/bridge.py:5943-5952 (pit_event construction)",
+          "note": "Descriptive of what the real pit_events.append() fact represents; product_identity.pit_event_id stays null because the current pit_event dict (bridge.py:5943-5952) carries no identity field at all (see test_pit_events_carry_no_race_identity_or_penalty_evidence, F07)."
+        }
+      }
+    },
+    {
+      "event_id": "e08",
+      "harness_correlation_id": "fixture-race-a/event-008",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "flag",
+      "payload": { "lap": 16, "raw_session_flags_bit": "0x00010000", "meaning": "black_flag_penalty" },
+      "provenance": {
+        "payload.lap": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22: \"続くペナルティpit（lap 16、給油0L、93.5秒）\"",
+          "note": "Lap number and characterization ('penalty pit') recorded only in HANDOFF.md."
+        },
+        "payload.raw_session_flags_bit": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "HANDOFF.md 2026-09-22: \"ブラックフラッグはSDKのSessionFlags bit 0x00010000で取得可能\" + irsdk-bridge/bridge.py (grep confirms 0x00010000 and 'black_flag' do not appear anywhere in bridge.py)",
+          "note": "The exact bit value at the real incident's moment was never logged (HANDOFF.md: \"exactのbit値はログへ出していない\"). This fixture sets 0x00010000 during the penalty pit-entry frames as the best-documented candidate value, to probe whether product code reacts to it. It is a reconstruction, not a confirmed original value."
+        },
+        "payload.meaning": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "HANDOFF.md 2026-09-22: \"ブラックフラッグはSDKのSessionFlags bit 0x00010000で取得可能\"",
+          "note": "Fixture-only label naming what the raw bit is understood to mean; not a value any current code path in bridge.py produces (F03 — no code path reads 0x00010000 at all)."
+        }
+      }
+    },
+    {
+      "event_id": "e09",
+      "harness_correlation_id": "fixture-race-a/event-009",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "pit_exit",
+      "payload": { "lap": 16, "fuel_delta_l": 0.0, "note": "real bridge.py pit_events.append() fact, penalty stop with no fuel added" },
+      "provenance": {
+        "payload.lap": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22: \"続くペナルティpit（lap 16、給油0L、93.5秒）\"",
+          "note": "Lap number recorded only in HANDOFF.md."
+        },
+        "payload.fuel_delta_l": {
+          "source_class": "handoff_only",
+          "reference": "HANDOFF.md 2026-09-22: \"給油0L\"",
+          "note": "Chosen as fixture input to match the HANDOFF-recorded shape of the penalty stop."
+        },
+        "payload.note": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/bridge.py:5943-5952 (pit_event construction)",
+          "note": "Descriptive of what the real pit_events.append() fact represents; product_identity.pit_event_id stays null (F07, no identity field exists on the current pit_event dict)."
+        }
+      }
+    },
+    {
+      "event_id": "e10",
+      "harness_correlation_id": "fixture-race-a/event-010",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "telemetry",
+      "payload": { "note": "race continues past the lap-13 decision's target_lap=21. Acceptance invariant: 0 box calls from the lap-13 decision after two real pit events. Characterization (current HEAD): box call still fires from the same decision_id. At lap 21 the real product's own fuel_strategy.margin_l is asserted positive (safe)." },
+      "provenance": {
+        "payload.note": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "irsdk-bridge/bridge.py:7468-7492 (box-call gate reads only active_decision_plan / strategy_options_box_call_sent / speech-blocked, never pit history); irsdk-bridge/bridge.py:7696 (telemetry_live fuel_strategy)",
+          "note": "This is the F01 red-thread condition, plus the executed (not prose-only) target-lap-21/lap-21-fuel-margin assert (test_road_atlanta_lap21_target_and_fuel_margin_are_real_product_output). HANDOFF's specific numbers (fuel 18.14L, required 9.98L, margin 8.16L at lap 21) remain handoff_only narrative reference, kept for traceability, and are never asserted numerically equal to this fixture's own synthetic fuel curve — only that the real product's own lap-21 margin agrees with HANDOFF's qualitative claim (positive/safe)."
+        }
+      },
+      "handoff_expectation": {
+        "lap": 21,
+        "fuel_l": 18.14,
+        "required_fuel_l": 9.98,
+        "margin_l": 8.16,
+        "source_class": "handoff_only",
+        "reference": "HANDOFF.md 2026-09-22 entry: \"lap 21には燃料18.14L・完走必要9.98L・余裕8.16L=safeにもかかわらず、残った旧Planで『この周でピット、給油18L』を実発話した\""
+      }
+    },
+    {
+      "event_id": "e11",
+      "harness_correlation_id": "fixture-race-a/event-011",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "delivery",
+      "payload": {
+        "note": "Server stream + renderer judge-parser slice: a mocked Anthropic stream ending in a bare <<PW_JUDGE decision_id=\"...\" classification=\"confirm\">> tag with no trailing sentence punctuation must not reach the renderer's stripProposalJudgeTag as a parseable tag, because server.js's emitCompleteSentences() drops the unterminated final tail.",
+        "control_cases": [
+          "same text but with a trailing newline after the tag (must NOT be dropped)",
+          "same text chunked into many small deltas instead of one (must behave identically to the single-chunk case)"
+        ]
+      },
+      "provenance": {
+        "payload.note": {
+          "source_class": "repository_evidence",
+          "reference": "server.js:1289-1299 (emitCompleteSentences final-tail drop), desktop/renderer.html:5198-5219 (PW_JUDGE_TAG_START/RE, stripProposalJudgeTag)",
+          "note": "F02. No external LLM call is made; the Anthropic SDK constructor is replaced by a test-only stub that emits a scripted stream (see tests-wo001-anthropic-stream-stub-preload.js)."
+        },
+        "payload.control_cases[0]": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "tests-wo001-road-atlanta-fixture.js runServerStreamSlice() trailing_newline_control_single_chunk scenario",
+          "note": "Fixture-authored control case description, not from the original incident; exercised as the trailing-newline positive control against the real server.js/renderer.html code."
+        },
+        "payload.control_cases[1]": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "tests-wo001-road-atlanta-fixture.js runServerStreamSlice() no_punctuation_multi_chunk scenario",
+          "note": "Fixture-authored control case description, not from the original incident; exercised as the multi-chunk equivalence control against the real server.js/renderer.html code."
+        }
+      }
+    },
+    {
+      "event_id": "e12",
+      "harness_correlation_id": "fixture-race-a/event-012",
+      "product_identity": { "race_instance_id": null, "decision_id": null, "pit_event_id": null },
+      "session_num": 0,
+      "source_frame_id": null,
+      "at": null,
+      "type": "debrief",
+      "payload": { "note": "out of scope for WO-001 (see review/PITWALL_ARCHITECTURE_REPAIR_PROGRAM.md WO-001 section 4 item 11 / section 9); recorded here only as a placeholder for the trace contract's later stages." },
+      "provenance": {
+        "payload.note": {
+          "source_class": "synthetic_reconstruction",
+          "reference": "review/PITWALL_ARCHITECTURE_REPAIR_PROGRAM.md WO-001 §4 item 11",
+          "note": "Not executed by this WO's test harness. Present only so the fixture's event schema documents the full intended lifecycle for later WOs (reconnect/TTS/memory/debrief)."
+        }
+      }
+    }
+  ],
+  "final_invariants_under_test": {
+    "F01_old_plan_box_call_suppressed": {
+      "target_behavior": "after actual pit (e07) and penalty pit (e09), the lap-13 decision_id must produce 0 strategy_plan_box_call broadcasts",
+      "current_head_behavior": "the lap-13 decision_id still produces exactly 1 strategy_plan_box_call broadcast at its original target_lap",
+      "evidence": "irsdk-bridge/bridge.py:7468-7492"
+    },
+    "F03_black_flag_unrecognized": {
+      "target_behavior": "two independent asserts (WO-001 §8 item 7): (1) known-true — a pit sample whose own frames carried raw SessionFlags bit 0x00010000 must expose an authoritative, source-bound black_flag_state of 'true'; (2) unknown — a pit sample where the SessionFlags SDK var is unavailable must expose black_flag_state='unknown', never silently coerced to 'false'",
+      "current_head_behavior": "no code path in bridge.py reads 0x00010000; only 0xC000 (yellow/caution) is ever checked, so a black-flag frame is silently indistinguishable from a clean green frame, and reader.read_int('SessionFlags') or 0 (bridge.py:5914) collapses an unavailable SDK var into the same 0/green result as a genuinely known-false frame",
+      "evidence": "irsdk-bridge/bridge.py: grep confirms '0x00010000' and 'black_flag' do not occur anywhere in the file; irsdk-bridge/bridge.py:5914-5915 caution_state computation"
+    },
+    "F06_pit_declaration_misrouted": {
+      "target_behavior": "\"ピット入るぞ\" / \"前の25が遅いから先に入る\" must be recognized as a driver pit-execution declaration, not a strategy consultation question",
+      "current_head_behavior": "\"ピット入るぞ\" matches the strategyCallKind 'recommendation' regex and is answered as a strategy_recommendation/strategy_consultation reply; \"ピットウィンド湧いてる？\" matches no known phrase and falls through to handled:false",
+      "evidence": "desktop/local-intent-router.js:202 (strategyCallKind regex), :206-278 (strategyCallAnswer)"
+    },
+    "F02_judge_tag_dropped_by_stream_truncation": {
+      "target_behavior": "a trailing <<PW_JUDGE ...>> tag with no following punctuation must still reach the renderer's stripProposalJudgeTag as a parseable tag",
+      "current_head_behavior": "server.js's emitCompleteSentences() discards the entire unterminated tail (including the tag) when the stream ends, so stripProposalJudgeTag never even receives it",
+      "evidence": "server.js:1289-1299, desktop/renderer.html:5204-5219"
+    }
+  }
+}

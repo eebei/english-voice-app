@@ -19,7 +19,7 @@
 # 必要なもの: gh（認証済み） / bsdtar / shasum / node / python3
 # 外部有料APIは呼ばない。
 
-set -u
+set -uo pipefail
 
 RUN_ID=""; TARGET_SHA=""; BUILD_NUM=""; KEEP=0; WORK=""; PUBLISHED=0
 while [ $# -gt 0 ]; do
@@ -86,12 +86,7 @@ fi
 
 # ── 3. artifact 取得 ──────────────────────────────────────────────
 echo "── 3. artifact 取得"
-ART="$(gh api "repos/{owner}/{repo}/actions/runs/$RUN_ID/artifacts" 2>/dev/null | python3 -c '
-import json,sys
-a=json.load(sys.stdin).get("artifacts",[])
-if a:
-    x=a[0]
-    print("\t".join([str(x["id"]),x["name"],str(x["size_in_bytes"])]))')"
+ART="$(gh api --paginate --slurp "repos/{owner}/{repo}/actions/runs/$RUN_ID/artifacts" 2>/dev/null | python3 ci/artifact_gate.py select --json - --build "$BUILD_NUM")" || { bad "対象installer artifactの選択失敗"; exit 1; }
 if [ -z "$ART" ]; then bad "artifact が見つからない"; exit 1; fi
 ART_ID="$(printf '%s' "$ART" | cut -f1)"
 ART_NAME="$(printf '%s' "$ART" | cut -f2)"
@@ -137,7 +132,8 @@ unzip -o -q "$WORK/artifact.zip" -d "$WORK/extracted" || { bad "zip 展開失敗
 # ── 4. installer ─────────────────────────────────────────────────
 echo "── 4. installer（実測）"
 UNIQ="$(shasum -a 256 "$WORK"/extracted/*.exe | awk '{print $1}' | sort -u | wc -l | tr -d ' ')"
-[ "$UNIQ" = "1" ] && ok "installer 3本すべて同一ハッシュ（latest が古い版を指す事故なし）" \
+INSTALLER_COUNT="$(find "$WORK/extracted" -maxdepth 1 -name '*.exe' -type f | wc -l | tr -d ' ')"
+[ "$UNIQ" = "1" ] && ok "検出installer ${INSTALLER_COUNT}本の実測ハッシュ一致" \
                   || bad "installer のハッシュが $UNIQ 種類ある"
 INST="$(ls "$WORK"/extracted/*Setup-2*.exe 2>/dev/null | head -1)"
 [ -n "$INST" ] || INST="$(ls "$WORK"/extracted/*.exe | head -1)"
@@ -146,7 +142,7 @@ note "$(basename "$INST")  bytes=$(stat -f%z "$INST" 2>/dev/null || stat -c%s "$
 # ── 5. 同梱物を実際に取り出す ────────────────────────────────────
 echo "── 5. installer を展開して同梱物を取り出す"
 rm -rf "$WORK/unpacked"; mkdir -p "$WORK/unpacked"
-( cd "$WORK/unpacked" && bsdtar -xf "$INST" resources 2>/dev/null )
+python3 ci/artifact_gate.py extract --installer "$INST" --out "$WORK/unpacked" || { bad "installer展開失敗（NSIS/portable resourcesを確認できない）"; exit 1; }
 R="$WORK/unpacked/resources"
 for f in app.asar OMORAY-PITWALL-Bridge.exe; do
   if [ -f "$R/$f" ]; then
@@ -158,21 +154,12 @@ done
 
 # ── 6. CI manifest との突合（manifest は証拠でなく突合相手）────────
 echo "── 6. CI manifest との突合（manifest は runner の自己申告）"
-MANI="$(ls "$WORK"/extracted/BUILD-*-GATE5-MANIFEST.json 2>/dev/null | head -1)"
-if [ -n "$MANI" ]; then
-  python3 - "$MANI" "$INST" "$R" <<'PY'
-import json,hashlib,os,sys
-m=json.load(open(sys.argv[1])); inst,R=sys.argv[2],sys.argv[3]
-for key,p in (('installer',inst),('app_asar',os.path.join(R,'app.asar')),
-              ('bridge',os.path.join(R,'OMORAY-PITWALL-Bridge.exe'))):
-    if not os.path.exists(p): print(f"   ❌ {key} が無い"); continue
-    b=os.path.getsize(p); h=hashlib.sha256(open(p,'rb').read()).hexdigest()
-    exp=m.get(key,{})
-    print(("   ✅ " if b==exp.get('bytes') and h==str(exp.get('sha256','')).lower() else "   ❌ ")
-          +f"{key}  実測 {b} / {h[:16]}…")
-PY
+MANI="$WORK/extracted/BUILD-${BUILD_NUM}-GATE5-MANIFEST.json"
+MANIFEST_COUNT="$(find "$WORK/extracted" -maxdepth 1 -name 'BUILD-*-GATE5-MANIFEST.json' -type f | wc -l | tr -d ' ')"
+if [ -f "$MANI" ] && [ "$MANIFEST_COUNT" = "1" ]; then
+  python3 ci/artifact_gate.py manifest --manifest "$MANI" --installer "$INST" --resources "$R" --sha "$HEAD_SHA" --build "$BUILD_NUM" || fail=1
 else
-  note "manifest 無し（この build には同梱されていない）"
+  bad "対象Build manifest欠落または複数（対象SHA/Build/実測物の突合が未実行）"
 fi
 
 # ── 7. app.asar 内の runtime module ──────────────────────────────
@@ -212,6 +199,13 @@ if [ -f "$BI" ]; then
   GOT="$(python3 -c "import json;print(json.load(open('$BI'))['buildNum'])" 2>/dev/null)"
   [ "$GOT" = "$BUILD_NUM" ] && ok "build-info.json の buildNum = $GOT" \
                             || bad "build-info.json の buildNum が $GOT（期待 $BUILD_NUM）"
+  # WO021：tracked source の build-info は未Build印（buildTag "dev"）。CIが上書きせず同梱されたら
+  #   更新確認が止まり「Build N (unbuilt source)」を名乗る＝公開物として不合格。
+  TAG="$(python3 -c "import json;print(json.load(open('$BI')).get('buildTag') or '')" 2>/dev/null)"
+  if [ -n "$TAG" ] && [ "$TAG" != "dev" ]; then ok "build-info.json の buildTag = ${TAG}（Build固有）"
+  else bad "build-info.json の buildTag が '${TAG}'（未Buildのsource印のまま同梱）"; fi
+elif [ -f "$WORK/asar/renderer.html" ]; then
+  bad "build-info.json が asar に無い（Build番号・更新確認の根拠が無い）"
 fi
 
 # ── 8. Bridge 実行体 ─────────────────────────────────────────────

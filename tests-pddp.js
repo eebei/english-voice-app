@@ -152,6 +152,16 @@ console.log('══ ④ デブリーフの質問 ══');
   ck('DNFは原因の三択で聞く', /接触、機械、それとも判断ミス/.test(dnf.line), dnf.line);
   const blind = P.debriefQuestion(row({ incidents: null, startPos: null, finishPos: null }), null);
   ck('事実が無ければ質問しない', blind.speak === false && !/？/.test(blind.line), blind.line);
+  // WO-019: 観測0は「接触が無い」証拠ではない（light contactは0x）。数値だけ述べて開いた問いへ。
+  const zero = P.debriefQuestion(row({ incidents: 0, startPos: null, finishPos: null }), { category: 'consistency' });
+  ck('Incidents 0 は観測値として述べる', zero.speak === true && /Incidents 0/.test(zero.line), zero.line);
+  ck('Incidents 0 から接触の有無を断定しない', !/接触は無し|接触なし|接触が無/.test(zero.line), zero.line);
+  ck('Incidents 0 で「一番危なかった接触」を前提にしない', !/一番危なかった接触/.test(zero.line), zero.line);
+  ck('Incidents 0 でも開いた質問で聞く', /？$/.test(zero.line) && !/どうだった？$/.test(zero.line.replace(/場面はどこだった？$/, '')), zero.line);
+  const pos = P.debriefQuestion(row({ incidents: 4, startPos: null, finishPos: null }), { category: 'consistency' });
+  ck('正のincidentは接触の側を聞く（従来どおり）', /一番危なかった接触/.test(pos.line), pos.line);
+  const missing = P.debriefQuestion(row({ incidents: null, startPos: 5, finishPos: 4 }), { category: 'consistency' });
+  ck('incident不明は Incidents を言わない', !/Incidents/.test(missing.line), missing.line);
 }
 
 // ── ⑤ 目標を保証しない ─────────────────────────────────────────────

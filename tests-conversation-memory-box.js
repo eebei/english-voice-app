@@ -14,6 +14,7 @@
 // 期待値を下げて緑にすることはしない。
 
 const fs = require('fs');
+const WO017Scope = require('./tests-wo017-memory-scope-harness');
 const path = require('path');
 const box = require('./desktop/conversation-memory-box.js');
 const det = require('./desktop/dispute-detector.js');
@@ -337,16 +338,19 @@ console.log('\n══ renderer 配線（読み込み・呼出し・順序） ═
       currentMemoryUserId: () => 'Yuji', userName: 'Yuji',
       lastSessionNum: 2, lastSessionType: 'Race',
       lastTrack: 'Le Mans', lastCarModel: 'AMG', lastCarClass: 'GT3',
+      localStorage: { getItem: () => null }, diagnosticLog: () => {},
     };
+    // WO017：keyは実際の本人（localMemoryOwnerRef）とrace scope（memoryRaceScope）から作る。
+    ctx.globalThis = ctx; WO017Scope.install(ctx);
     vm.createContext(ctx);
-    vm.runInContext(src[0] + '\nthis.f = conversationSessionKey;', ctx);
+    vm.runInContext(WO017Scope.source(renderer) + src[0] + '\nthis.f = conversationSessionKey;', ctx);
     const k1 = ctx.f();
     ctx.lastSessionNum = 3;
     const k2 = ctx.f();
     check('session が変われば key が変わる（前 session の訂正を持ち越さない）',
       k1 !== k2, { k1, k2 });
-    check('key に driver / session / track / car が入る',
-      k1.includes('Yuji') && k1.includes('Race') && k1.includes('Le Mans') && k1.includes('AMG'), k1);
+    check('key に 本人 / race / session / track / car が入る',
+      k1.includes('user:Yuji') && k1.includes('race:unknown') && k1.includes('Race') && k1.includes('Le Mans') && k1.includes('AMG'), k1);
   }
 }
 
@@ -394,7 +398,8 @@ console.log('\n══ 実経路：Luna の全出力が箱へ入り、次のタ�
       + '\n' + (renderer.match(/let _convoBox=null;/) || [''])[0];
     check('箱のモジュール変数も renderer から取り出せる',
       decls.includes('CONVO_BOX_KEY') && decls.includes('_convoBox'), decls);
-    vm.runInContext(decls + '\n' + parts.join('\n')
+    WO017Scope.install(ctx);
+    vm.runInContext(decls + '\n' + WO017Scope.source(renderer) + parts.join('\n')
       + '\nthis.addMsg=addMsg; this.ensureConversationBox=ensureConversationBox;', ctx);
 
     // ── 実際の1ターン：Luna が値を言う → ドライバーが訂正する ──
@@ -403,7 +408,7 @@ console.log('\n══ 実経路：Luna の全出力が箱へ入り、次のタ�
     check('Luna の発話が addMsg 経由で箱へ入る',
       b && b.turns.length === 1 && b.turns[0].who === 'luna', b && b.turns);
     check('箱が localStorage へ書かれる',
-      typeof store['pw_conversation_box_v1'] === 'string', Object.keys(store));
+      typeof store['pw_conversation_boxes_v2'] === 'string', Object.keys(store));
 
     // 次のターンで検出器へ渡る形になっているか（本番と同じ組み立て）
     const lunaTurns = box.turnContext(b, Date.now()).filter(t => t.who === 'luna');
@@ -463,7 +468,8 @@ console.log('\n══ ストリーミング回答が箱へ入るか ══');
   };
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(decls + '\n' + parts.join('\n')
+  WO017Scope.install(ctx);
+  vm.runInContext(decls + '\n' + WO017Scope.source(renderer) + parts.join('\n')
     + '\nthis.addMsg=addMsg; this.recordLunaTurn=recordLunaTurn; this.ensureConversationBox=ensureConversationBox;', ctx);
 
   const bubble = ctx.addMsg('ai', '');     // ← ストリーミング開始（空文字）

@@ -167,7 +167,8 @@ check('8/24 GAP replay: live local facts run before an active debrief can interc
 check('renderer arms and delivers the one-shot fuel-window monitor from telemetry',
   renderer.includes("type==='arm_fuel_window_watch'")
   && renderer.includes('maybeDeliverFuelWindowWatch(lastTelemetry)')
-  && renderer.includes('ウィンドウ開いた。今周から入れる。'));
+  && renderer.includes('燃料ウィンドウの比較候補が成立。')
+  && renderer.includes('fuelWindowStatus(currentCanonicalStrategyLive('));
 check('renderer supplies personal history and identity to the deterministic router',
   renderer.includes("raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[])")
   && renderer.includes("currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null)"));

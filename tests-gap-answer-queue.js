@@ -50,7 +50,7 @@ const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
   'addMsg', 'convoLog', 'recordLunaTurn', 'amendLunaTurnById', 'dropLunaTurnById',
   'ensureConversationBox', 'saveConversationBox', 'conversationSessionKey',
   'handleLunaSelfMemoryInput', 'lunaSelfMemoryProposalLine',
-  'pendingConfirmationKinds', 'bareConfirmationAnswer', 'confirmationClarification']
+  'pendingConfirmationKinds', 'bareConfirmationAnswer', 'confirmationClarification', 'currentStrategyStateAPI', 'currentCanonicalStrategyLive', 'memoryTurnTag', 'localMemoryOwnerRef', 'currentMemoryUserId', 'debriefOutcomeModule', 'stableTextHash', 'deriveUtteranceSource', 'utteranceTrace', 'utteranceTraceFor', 'loadConversationBoxes', 'ensureConversationBox', 'saveConversationBox']
   .map(extract).join('\n');
 
 let pass = 0, fail = 0;
@@ -96,6 +96,7 @@ const sandbox = {
   console, setTimeout, clearTimeout, Date: FakeDate, JSON, Math, Number, String,
   Array, Object, Set, Map, Boolean, RegExp, Promise, Error, isNaN, parseFloat, parseInt,
   // ── speak / drainQueue の状態（本番と同じ初期値）──
+  utteranceTraceLog: [], UTTERANCE_TRACE_MAX:200,
   speakQueue: [], draining: false, isSpeaking: false, speakWatchdog: null,
   ttsAudio: null, currentSpeakPrio: 9, speakGeneration: 0, speakFetchCtrl: null,
   currentSpeakItem: null, voiceOn: true, pwVolume: 1, ttsDisabledUntil: 0,
@@ -156,7 +157,8 @@ sandbox.globalThis = sandbox;
 //   Overlay 窓は別プロセスなので、push された行を配列で保持して本文を検査する。
 sandbox._uttSeq = 0;
 sandbox._convoBox = null;
-sandbox.CONVO_BOX_KEY = 'pw_conversation_box_v1';
+sandbox.CONVO_BOX_KEY = 'pw_conversation_boxes_v2';
+  sandbox.CONVO_BOX_SLOTS=6;
 sandbox.lastTrack = 'Okayama'; sandbox.lastCarModel = 'Audi R8 LMS GT3';
 sandbox.lastCarClass = 'GT3'; sandbox.lastSessionType = 'Race'; sandbox.lastSessionNum = 2;
 sandbox.currentMemoryUserId = () => 'u1';
@@ -198,6 +200,16 @@ function loadModule(file) {
 loadModule('desktop/local-intent-router.js');
 loadModule('desktop/gap-freshness.js');
 loadModule('desktop/conversation-memory-box.js');   // ★第4回：会話Boxを本物で動かす
+sandbox.performance = {now:()=>fakeNow};
+const CF=require('./tests-canonical-lifecycle');
+const canonical=CF.fixture({race:'fixture-race',session:sandbox.lastSessionNum});
+canonical.continuity.stable_scope={race_instance_id:canonical.race_instance_id,session_num:canonical.session_num,driver_id:sandbox.lastTelemetry.cust_id||1};
+sandbox.canonicalLifecycleCache=CF.initialized(()=>fakeNow,canonical);
+sandbox.strategyProjection=require('./desktop/strategy-state-projection').create({canonical:sandbox.canonicalLifecycleCache,now:()=>fakeNow});
+sandbox.memoryRaceScope=require('./desktop/race-memory-scope').createTracker();
+sandbox.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');
+sandbox.pendingDriverPlanFollowup=null;
+sandbox.localStorage.setItem('pw_auth_user',JSON.stringify({id:'u1'}));
 vm.runInContext(productionCode, sandbox, { filename: 'renderer.html' });
 
 check('本番の router が読めた', typeof sandbox.window.PitwallLocalIntentRouter.route === 'function');
@@ -519,6 +531,7 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     reset(); spokenTexts.length = 0;
     sandbox.__ovl = {}; sandbox.__ovlSeq = 0; sandbox._convoBox = null;
     Object.keys(sandbox.__store).forEach(k => delete sandbox.__store[k]);
+    sandbox.localStorage.setItem('pw_auth_user',JSON.stringify({id:'u1'}));
 
     // 先行発話でキューを塞ぎ、回答を待たせる（実走の「queue待ちで陳腐化」を再現）
     sandbox.speak('先行発話。', { prio: sandbox.SPEAK_PRIO ? sandbox.SPEAK_PRIO.P1_HAZARD : 1,
@@ -541,7 +554,7 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     const candidateText = it.text;
     check('統合② 候補は Overlay にも会話Boxにも出ていない',
       Object.keys(sandbox.__ovl || {}).every(k => sandbox.__ovl[k].text !== candidateText)
-      && !(JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null') || { turns: [] })
+      && !(JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || '[]').find(b=>b.session_key===sandbox.conversationSessionKey()) || { turns: [] })
         .turns.some(t => t && t.text === candidateText),
       `cand=${candidateText} ovl=${JSON.stringify(sandbox.__ovl)}`);
 
@@ -557,7 +570,7 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     // 表示要素・Overlay行・会話turn は **確定後にここで初めて**作られている。
     const ovlId = it.displayEl && it.displayEl._ovlId;
     const turnId = it.displayEl && it.displayEl._turnId;
-    const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
+    const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || '[]').find(b=>b.session_key===sandbox.conversationSessionKey());
     const turnNow = boxNow && (boxNow.turns.find(t => t.turn_id === turnId) || {}).text;
     const ovlNow = sandbox.__ovl[ovlId] && sandbox.__ovl[ovlId].text;
     check('統合③-d 確定後に表示要素・Overlay行・会話turnが作られる',
@@ -594,6 +607,7 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     reset(); spokenTexts.length = 0;
     sandbox.__ovl = {}; sandbox.__ovlSeq = 0; sandbox._convoBox = null;
     Object.keys(sandbox.__store).forEach(k => delete sandbox.__store[k]);
+    sandbox.localStorage.setItem('pw_auth_user',JSON.stringify({id:'u1'}));
 
     sandbox.speak('先行発話。', { prio: 1, kind: 'reflex' });
     await sleep(5);
@@ -612,7 +626,7 @@ const resetSpoken = () => { spokenTexts.length = 0; };
     await finishCurrentUtterance();
     await sleep(15);
 
-    const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || 'null');
+    const boxNow = JSON.parse(sandbox.__store[sandbox.CONVO_BOX_KEY] || '[]').find(b=>b.session_key===sandbox.conversationSessionKey());
     const turnGone = !boxNow || !boxNow.turns.some(t => t.turn_id === turnId);
     // ★2026-09-06 ② 構造置換：候補は**そもそも表示していない**ので「消える」ではなく
     //   「一度も出ていない」が新しい正解。旧契約（出してから removed:true にする）は

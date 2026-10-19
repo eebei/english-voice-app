@@ -31,9 +31,9 @@ check('session-num reset clears both latches',
   renderer.includes('finalLapNoticeSeen=false;')
   && renderer.includes('checkerOutNoticeSeen=false;'));
 
-check('strategy live update returns silently when session is ending',
-  /if\(isSessionEndingLifecycle\(\)\)\{[\s\S]*?STRATEGY_PLAYBOOK_UPDATE_SILENT[\s\S]*?reason:'session_ending'/
-  .test(renderer));
+check('read-only live updates do not emit speech and current strategy announcement respects session ending',
+  /function updateStrategyPlaybookFromLive[^]*?return currentStrategyPlaybook\(\);/.test(renderer)
+  && /function announceStrategyPlaybook[^]*?if\(isSessionEndingLifecycle\(\)\)return;/.test(renderer));
 
 check('operational followup refuses to arm during session-ending lifecycle',
   /armOperationalFollowUp[\s\S]*?if\(isSessionEndingLifecycle\(\)\)/.test(renderer));

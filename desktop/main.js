@@ -96,7 +96,7 @@ function redactDiagnosticText(value) {
     .replace(/\bPITWALL-[A-Z0-9-]{6,}\b/g, 'PITWALL-[REDACTED]');
 }
 function ipcDiagnosticsSetup() {
-  ipcMain.handle('diagnostics:export', async () => {
+  ipcMain.handle('diagnostics:export', async (_event, observability) => {
     try {
       const desktop = app.getPath('desktop');
       const destination = path.join(desktop, 'OMORAY-PITWALL-support-' + diagnosticFileStamp() + '.txt');
@@ -108,7 +108,12 @@ function ipcDiagnosticsSetup() {
         'This package contains the current local diagnostic log with access credentials redacted.',
         '',
       ].join('\n');
-      fs.writeFileSync(destination, header + redactDiagnosticText(raw));
+      // WO020: allowlisted trace/queue metrics (renderer snapshot re-sanitized here + Bridge
+      // `[TRACE]` lines from this same log). Ids/enums/numbers only, no conversation text.
+      let observabilitySection = '';
+      try { observabilitySection = require('./observability-trace.js').buildSupportSection({ renderer: observability, bridgeLogText: raw }); }
+      catch (e) { observabilitySection = '\n=== PITWALL OBSERVABILITY unavailable: ' + String(e && e.message || e).slice(0, 120) + ' ===\n'; }
+      fs.writeFileSync(destination, header + redactDiagnosticText(raw) + redactDiagnosticText(observabilitySection));
       try { shell.showItemInFolder(destination); } catch (_) {}
       log('diagnostic package exported: ' + destination);
       return { ok: true, fileName: path.basename(destination) };
@@ -342,12 +347,12 @@ function log(msg) {
   try { if (LOG_FILE) fs.appendFileSync(LOG_FILE, line + '\n'); } catch (e) {}
 }
 
-// build-info.json から「Build N」ラベルを作る（無ければ空）。タイトルバー表示用。
+// build-info.json から「Build N」ラベルを作る（無ければ空）。タイトルバー・Support log用。
+// WO021：rendererと同じreader。未Buildのsource（buildTag 'dev'）は「Build N (unbuilt source)」。
 function currentBuildLabel() {
   try {
     const info = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
-    const n = (info.buildNum != null) ? info.buildNum : info.buildTag;
-    return (n != null && n !== 'dev') ? ('Build ' + n) : '';
+    return require('./build-identity.js').describe(info).label;
   } catch (e) { return ''; }
 }
 
@@ -531,6 +536,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);   // File/Edit/View/Window/Help の無意味な既定メニューを消す（Windows）
   loadDesktopSettings(); // installer更新後も保持される本体設定
   ipcDesktopSettingsSetup();
+  require('./critical-journal-store').setupIPC(ipcMain,app,event=>!!win&&!win.isDestroyed()&&event.sender===win.webContents&&event.senderFrame===win.webContents.mainFrame);
   ipcDiagnosticsSetup();
   ipcPracticeProfileSetup();
   loadOvlCfg();       // オーバーレイの保存済み設定を読む

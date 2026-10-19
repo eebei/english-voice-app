@@ -381,26 +381,28 @@ if (fail) process.exit(1);
 
   const renderer4c = fsz.readFileSync(__dirname + '/desktop/renderer.html', 'utf8')
     .split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
-  check('★記憶から喋った出所を1件だけ覚える', /function noteMemoryUtterance\(kind,id\)/.test(renderer4c));
-  check('  過去天候の発話が出所を残す', /if\(out\.record\) noteMemoryUtterance\('race',out\.record\.date\)/.test(renderer4c));
-  check('  前回結果の発話が出所を残す', /noteMemoryUtterance\('race',memoryFacts\.date\)/.test(renderer4c));
-  check('  setup 比較の発話が出所を残す', /noteMemoryUtterance\('race',_setupCmp\.previousDate\)/.test(renderer4c));
-  check('  戦略判断の発話が出所を残す', /noteMemoryUtterance\('decision',_decSel\.record\.decision_id\)/.test(renderer4c));
+  // WO017：出所は日付ではなく記録ID（同日の別raceを巻き添えにしない）。判断はrace_instance_idも持つ。
+  check('★記憶から喋った出所を1件だけ覚える', /function noteMemoryUtterance\(kind,id,raceInstanceId\)/.test(renderer4c));
+  check('  過去天候の発話が出所を残す', /if\(out\.record\) noteMemoryUtterance\('race',out\.record\.raceRecordId\)/.test(renderer4c));
+  check('  前回結果の発話が出所を残す', /noteMemoryUtterance\('race',memoryFacts\.raceRecordId\)/.test(renderer4c));
+  check('  setup 比較の発話が出所を残す', /noteMemoryUtterance\('race',_setupCmp\.previousRaceRecordId\)/.test(renderer4c));
+  check('  戦略判断の発話が出所を残す', /noteMemoryUtterance\('decision',_decSel\.record\.decision_id,_decSel\.record\.race_instance_id\)/.test(renderer4c));
   check('★「それ違う」が出所で振り分けられる',
     /_src&&_src\.kind==='race'\)\s*\?\s*disputeRaceRecord\(_src\.id,_lang\)/.test(renderer4c));
   check('race 記録にも読み返しがある', /記録を止めた。これで合っている？/.test(renderer4c));
-  check('★race 記録も削除できる', /function deleteRaceRecord\(recordDate\)/.test(renderer4c));
+  check('★race 記録も削除できる', /function deleteRaceRecord\(raceRecordId\)/.test(renderer4c));
   // ★文字列検査では「日付を無視して直近を掴む」変異を捕まえられない。
   //   本番の disputeRaceRecord を取り出して実際に動かす。
   {
     const vm = require('vm');
-    const m = renderer4c.match(/function disputeRaceRecord\(recordDate,lang\)\{[\s\S]*?\n\}/);
+    const m = renderer4c.match(/function disputeRaceRecord\(raceRecordId,lang\)\{[\s\S]*?\n\}/);
     check('本番の disputeRaceRecord を取り出せた', !!m);
     let stored = null;
     const box = {
       loadRaceHistory: () => ([
-        { date: '2026-08-23', track: 'Suzuka' },
-        { date: '2026-08-24', track: 'Okayama' },
+        { raceRecordId: 'rr-a', date: '2026-08-23', track: 'Suzuka' },
+        { raceRecordId: 'rr-b', date: '2026-08-24', track: 'Okayama' },
+        { raceRecordId: 'rr-c', date: '2026-08-24', track: 'Fuji' },
       ]),
       localStorage: { setItem: (_k, v) => { stored = JSON.parse(v); } },
       diagnosticLog: () => {}, RACE_DISPUTE_KEY: 'pw_raceHistory',
@@ -408,15 +410,15 @@ if (fail) process.exit(1);
     };
     vm.createContext(box);
     vm.runInContext(m[0], box);
-    const hit = box.disputeRaceRecord('2026-08-24', 'ja');
-    check('日付が一致した記録だけを止める',
+    const hit = box.disputeRaceRecord('rr-b', 'ja');
+    check('喋った記録（ID一致）だけを止める（同日の別raceは止めない）',
       !!hit && hit.date === '2026-08-24'
-      && stored[1].disputed === true && stored[0].disputed === undefined);
+      && stored[1].disputed === true && stored[0].disputed === undefined && stored[2].disputed === undefined);
     stored = null;
     const miss = box.disputeRaceRecord(null, 'ja');
     check('★出所が無ければ推測で直近を止めない', miss === null && stored === null);
-    const unknown = box.disputeRaceRecord('2026-01-01', 'ja');
-    check('★知らない日付では何も止めない', unknown === null);
+    const unknown = box.disputeRaceRecord('2026-08-24', 'ja');
+    check('★日付だけでは何も止めない（IDで名指しされた記録だけ）', unknown === null);
     check('聞き返し文が用意されている', /推測で直さない/.test(renderer4c));
   }
 }

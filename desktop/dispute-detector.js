@@ -19,6 +19,8 @@
 
 // 否定・修正のシグナル。ドライバーが「今言われたことは違う」と示す形。
 const NEGATION = /いや[、,]?|違う|ちがう|じゃない|ではない|ないよ|ないです|いない|来てない|来ていない|入ってない|入っていない|もうない|もう無い|足りる|足りない|そうじゃ|でなく/;
+// 疑問形の「足りる？／足りない？」は現在値の質問（異議ではない）。
+const SUFFICIENCY_QUESTION = /足り(?:る|ない)\s*(?:か|かな|の|かい)?\s*[？?]\s*$/;
 // 「〜んじゃないかな」「〜でしょ」＝ 断定を避けた訂正
 const SOFT_DISPUTE = /んじゃないかな|じゃないかな|でしょ[うか]?|はず(?:だよ|です)?|と思う(?:けど)?/;
 // ドライバーが値を言い直している形（数字＋助詞）
@@ -171,7 +173,11 @@ function detect(driverText, context = {}) {
   const reflexes = Array.isArray(context.reflexes) ? context.reflexes : [];
   const prev = lunaTurns.length ? lunaTurns[lunaTurns.length - 1] : null;
 
-  const negated = NEGATION.test(text) || ALT_CAUSE.test(text)
+  // WO-019: "燃料足りる？" asks for the current answer; it does not contest the last claim.
+  // Only the sufficiency words are neutralised in a bare question — "足りるよ" or a question
+  // that also negates ("違う、足りるでしょ？") stays a dispute.
+  const negationText = SUFFICIENCY_QUESTION.test(text) ? text.replace(/足り(?:る|ない)/g, '') : text;
+  const negated = NEGATION.test(negationText) || ALT_CAUSE.test(text)
     || NO_LONGER_NEEDED.test(text) || OMISSION.test(text) || ALREADY_DONE.test(text);
   const soft = SOFT_DISPUTE.test(text);
   const restated = RESTATE_VALUE.test(text) || BARE_VALUE.test(text);

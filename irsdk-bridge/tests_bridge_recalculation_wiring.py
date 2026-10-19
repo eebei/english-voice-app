@@ -9,6 +9,7 @@ just present as unused pure functions in session_race_state.py.
 import os
 import sys
 import unittest
+from pathlib import Path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _SRC = None
@@ -28,7 +29,7 @@ def recalc_execution_block():
     Sliced on its real boundaries rather than a fixed character window, so
     the assertions keep testing the block itself as it grows."""
     src = bridge_src()
-    start = src.index('if _pending_recalculations:')
+    start = src.index('if _pending_recalculations and not _plan_gate_reason:')
     end = src.index('# A selected Plan B/C creates', start)
     return src[start:end]
 
@@ -59,7 +60,14 @@ class ActivePlanRegistration(unittest.TestCase):
     def test_initial_briefing_plan_registers_active_plan_same_frame(self):
         src = bridge_src()
         i = src.index("strategy_options = _candidate_options")
-        window = src[i:i + 700]
+        # ★WO-005: the window was widened from 700 to 6200 chars. Between
+        # building the candidate options and the legacy
+        # `session_race_state_mod.register_active_plan()` call, this same
+        # block now also registers the initial Plan A into
+        # `plan_lifecycle` (WO-005 §4.2) BEFORE the legacy call — the legacy
+        # call still runs in the same frame/block, it is just further away
+        # in source text than before.
+        window = src[i:i + 6200]
         self.assertIn('session_race_state_mod.register_active_plan(', window,
                       'active_plan must be registered in the same block that builds the plan')
 
@@ -353,9 +361,11 @@ class RecalculationActuallyRecomputes(unittest.TestCase):
         # ★2026-09-16 Codex MD#4差戻し：trigger⑥（rival_pit_or_rejoin_shift）のrequeueが、
         #   即時commit(Plan A)経路と、Driver合意で昇格した後の経路の2箇所に増えた
         #   （B/Cは合意されるまでこのrequeueへ到達しないため）。
-        self.assertEqual(src.count('queue_recalculation('), 7,
+        # WO-019: + the post-service site (fresh plan after a refuelling stop).
+        self.assertEqual(src.count('queue_recalculation('), 9,
                          'five trigger sites plus the helper definition plus the '
-                         'post-agreement requeue site')
+                         'post-agreement requeue site plus the post-service site')
+        self.assertIn("reason='post_service'", src)
         for reason in ("reason='clean_3_laps_established'",
                        "reason='repair_detected_or_opt_not_taken'",
                        "reason='driver_reported_damage'"):
@@ -390,11 +400,11 @@ class RecalculationActuallyRecomputes(unittest.TestCase):
         後で実行されること（1周古い入力で組み直さない）。"""
         src = bridge_src()
         self.assertLess(src.index("reason='driver_reported_damage'"),
-                        src.index('if _pending_recalculations:'))
+                        src.index('if _pending_recalculations and not _plan_gate_reason:'))
         self.assertLess(src.index('_fuel_strategy_live = ('),
-                        src.index('if _pending_recalculations:'))
+                        src.index('if _pending_recalculations and not _plan_gate_reason:'))
         self.assertLess(src.index('_pit_now_forecast = None'),
-                        src.index('if _pending_recalculations:'))
+                        src.index('if _pending_recalculations and not _plan_gate_reason:'))
 
     def test_execution_feeds_measured_numbers(self):
         window = recalc_execution_block()
@@ -515,7 +525,11 @@ class FinalLapSpeechBlockWiring(unittest.TestCase):
     def test_fuel_p0_broadcast_gated_by_strategy_speech_blocked(self):
         src = bridge_src()
         i = src.index("_plan_authority_permits = (")
-        window = src[i:i + 700]
+        # ★WO-005: widened from 700 to 2600 chars — the WO-005 §4.6/P1-11
+        # safety-override computation now sits between
+        # `_plan_authority_permits` and `_strategy_speech_blocked` in the
+        # same block.
+        window = src[i:src.index('_fuel_dispatch_result = _publish_or_stage(', i)]
         self.assertIn('_strategy_speech_blocked = session_race_state_mod.strategy_speech_blocked(',
                       window)
         self.assertIn('and not _strategy_speech_blocked', window)
@@ -530,12 +544,17 @@ class FinalLapSpeechBlockWiring(unittest.TestCase):
         self.assertIn('not session_race_state_mod.strategy_speech_blocked(_session_race_state)',
                       window)
 
-    def test_box_call_gated_by_strategy_speech_blocked(self):
+    def test_box_call_uses_fresh_authority_and_canonical_execution_gate(self):
         src = bridge_src()
-        i = src.index('# A selected Plan B/C creates a second, mandatory trigger')
-        window = src[i:i + 1900]
-        self.assertIn('not session_race_state_mod.strategy_speech_blocked(_session_race_state)',
-                      window)
+        i = src.index('_box_delivery_ledger,_box_authority_snapshot,_box_candidate =')
+        window = src[i:src.index('strategy_options_box_call_sent = box_authority_delivery_mod.audible_for(',i)]
+        self.assertIn('execution_gate=_plan_gate_reason', window)
+        self.assertIn('box_authority_delivery_mod.advance(', window)
+        self.assertLess(window.index('broadcast(_canonical_wire)'),window.index('broadcast(_box_authority_snapshot)'))
+        self.assertLess(window.index('broadcast(_box_authority_snapshot)'), window.index('broadcast(_box_candidate)'))
+        authority = Path(__file__).with_name('box_authority_delivery.py').read_text()
+        self.assertIn("inputs['current_lap']!=record.target_lap", authority)
+        self.assertIn("record.phase!='active'", authority)
 
     def test_strategy_speech_blocked_true_only_after_final_lap_trigger(self):
         import session_race_state as srs
@@ -640,7 +659,7 @@ class PostPitOpeningPlanGuardWiring(unittest.TestCase):
 
     def test_initial_strategy_plan_requires_no_completed_pit_service(self):
         src = bridge_src()
-        i = src.index('if (strategy_options is None and last_pit_service is None')
+        i = src.index('if (not _plan_gate_reason and not _driver_target_constraint and strategy_options is None and last_pit_service is None')
         window = src[i - 700:i + 2600]
         self.assertIn('opening-plan contract only', window)
         self.assertIn('last_pit_service is None', window)
