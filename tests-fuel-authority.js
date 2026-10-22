@@ -70,13 +70,18 @@ ok(html.includes('全キャラクター共通安全契約')
 // ★八木さんログ 7-1 対応でカードは race 以外でも引くようになった。
 // ただし race 以外で採用してよいのはセットアップ相談だけで、燃料系ハンドラは
 // 従来どおり race 限定である。守るべき性質はそこなので、そこを直接検証する。
-ok(server.includes("mode === 'race' && isFuelQuestion(_lastText)")
+const liveFuelGuard=server.match(/if \((mode === 'race'[^\n]*isFuelQuestion\(_lastText\))\) \{/)[1];
+const directGuard=server.match(/if \((mode === 'race'[^\n]*_directPitCommand[^\n]*)\) \{/)[1];
+const vm=require('vm');
+const guard=(expr,mode,pending=false,historical=false)=>vm.runInNewContext(expr,{mode,_pendingJudgeTurn:pending,_historicalPitReview:historical,_directPitCommand:true,_lastText:'fuel',isFuelQuestion:()=>true});
+ok(['debrief','free','practice'].every(m=>!guard(liveFuelGuard,m)) && guard(liveFuelGuard,'race')
+  && !guard(liveFuelGuard,'race',true) && !guard(liveFuelGuard,'race',false,true)
   && server.includes("const _engineerRoute = (mode === 'race' && !req.body.paceCheck)")
   && server.includes("=== engineerCard.TOPIC.HANDLING_SETUP_ADVICE"),
   'live fuel handlers are disabled during debrief and cannot read garage 0.0L');
 ok(!/mode !== 'race'[\s\S]{0,200}isFuelQuestion/.test(server),
   'no non-race path reaches the live fuel handler');
-ok(server.includes("if (mode === 'race' && _directPitCommand)"),
+ok(['debrief','free','practice'].every(m=>!guard(directGuard,m))&&guard(directGuard,'race')&&!guard(directGuard,'race',true),
   'direct pit command fallback is also race-only');
 
 if(!process.exitCode) console.log(`Fuel authority tests: ${passed}/${passed} passed`);

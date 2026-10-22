@@ -109,9 +109,9 @@ def test_renderer_contract():
             "content:'[DRIVER_INSIGHT]" in renderer
             and 'sessionAuthority:lastSessionAuthority,\n      driverInsight:true'
             in renderer,
-        'history stores model separately from class':
-            'car:data.car_model||lastCarModel' in renderer
-            and 'carClass:data.car_class||lastCarClass' in renderer,
+        'history stores model separately from class (actual Renderer storage and foreign-scope controls)':
+            subprocess.run(['node', 'tests-summary-metric-boundary.js'], cwd=ROOT,
+                           capture_output=True, text=True).returncode == 0,
         'pit memory prefers exact model':
             'data.car_model||lastCarModel||data.car_class' in renderer,
         'car-track memory key prefers model':

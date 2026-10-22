@@ -44,7 +44,8 @@ for(const t of positives)ck('separate tyre negation keeps cancel request: '+t,op
 for(const t of negatives)ck('pit negation/history/condition/question never promoted: '+t,operation(router,t)!=='cancel',router.classifyDriverIntent(t));
 const fs=require('fs'),vm=require('vm');
 const original=fs.readFileSync(__dirname+'/desktop/local-intent-router.js','utf8');
-const fault=original.replace('/i.test(negationText);','/i.test(text);');
+const negationAnchor="/i.test(necessity?negationText.replace(/入らないと|入んないと|入らなければ|入らなきゃ|行かないと/g,'入る必要がある'):negationText);";
+const fault=original.replace(negationAnchor,'/i.test(text);');
 ck('whole-utterance negation fault anchor matched',fault!==original);
 const ctx={module:{exports:{}}};vm.createContext(ctx);vm.runInContext(fault,ctx);
 ck('fault loses the same compound cancel, plain cancel control still works',operation(ctx.module.exports,positives[0])!=='cancel'&&operation(ctx.module.exports,'ピット中止。')==='cancel');

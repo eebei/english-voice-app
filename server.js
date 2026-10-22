@@ -1015,12 +1015,12 @@ function buildFuelReferenceReply(liveData, lang) {
 function buildDirectPitReply(command, liveData, lang) {
   const live = liveData && typeof liveData === 'object' ? liveData : {};
   if (command.topic === strategyGuard.TOPIC.PIT_THIS_LAP) {
-    return lang === 'ja' ? '了解。この周の終わりでボックス。'
-      : 'Copy. Box at the end of this lap.';
+    return lang === 'ja' ? 'この周のピット希望として受けた。ただしBridgeへの作戦登録・受理は確認できていない。まだ確定指示ではない。'
+      : 'I received your request to pit this lap, but Bridge registration and acceptance are not confirmed. This is not a confirmed instruction.';
   }
   if (command.topic === strategyGuard.TOPIC.PIT_NEXT_LAP) {
-    return lang === 'ja' ? '了解。次のラップの終わりでボックス。'
-      : 'Copy. Box at the end of the next lap.';
+    return lang === 'ja' ? '次周のピット希望として受けた。ただしBridgeへの作戦登録・受理は確認できていない。まだ確定指示ではない。'
+      : 'I received your request to pit next lap, but Bridge registration and acceptance are not confirmed. This is not a confirmed instruction.';
   }
   if (command.topic === strategyGuard.TOPIC.PIT_TIMING) {
     const sample = live.last_pit_service;
@@ -1235,6 +1235,20 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       console.log('[race_context] rejected: schema_validation_failed');
     }
     const _canonicalLiveData = canonicalizeLiveData(req.body.liveData, _raceContext, _raceContextModern);
+    const _judgeTransportV1 = req.body.judgeTransport === 'v1'
+        && req.body.pendingJudgment && typeof req.body.pendingJudgment === 'object'
+        && typeof req.body.pendingJudgment.decision_id === 'string'
+        && req.body.pendingJudgment.decision_id.length > 0
+        && req.body.pendingJudgment.decision_id.length <= 128
+        && typeof req.body.pendingJudgment.request_id === 'string'
+        && req.body.pendingJudgment.request_id.length > 0
+        && req.body.pendingJudgment.request_id.length <= 128;
+    const _pendingJudgeTurn = !!(_judgeTransportV1 && req.body.stream === true
+      && _raceContext?.freshness?.available === true
+      && _raceContext.pending_proposal?.local_judgment_pending === true
+      && _raceContext.pending_proposal.local_proposal?.decision_id === req.body.pendingJudgment.decision_id
+      && _raceContext.pending_proposal.canonical_awaiting_records?.some(r=>r.decision_id===req.body.pendingJudgment.decision_id));
+
 
     let _strategyQ = null;
     let _directPitCommand = null;
@@ -1243,7 +1257,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
       const _lastText = _lastUser && typeof _lastUser.content === 'string'
         ? _lastUser.content : '';
-      _strategyQ = _lastText
+      const _historicalPitReview=/前回|前のレース|前戦|previous race|last race/i.test(_lastText)
+        &&/ピット|給油|pit|refuel/i.test(_lastText);
+      _strategyQ = _lastText && !_historicalPitReview
         ? strategyGuard.classifyStrategyQuestion(_lastUser.content, {
           activePitObjective: req.body.strategyObjective?.kind === 'pit_total_race_outcome'
             && req.body.strategyObjective?.status === 'active',
@@ -1255,14 +1271,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         console.log('[account_guard] conversational account change blocked');
         return sendGuardReply(req, res, buildAccountChangeReply(_lang), 100);
       }
-      if (mode === 'race' && _directPitCommand) {
+      if (mode === 'race' && _directPitCommand && !_pendingJudgeTurn) {
         const _directReply = buildDirectPitReply(_directPitCommand, _canonicalLiveData, _lang);
         if (_directReply) {
           console.log(`[INTENT_ROUTE] intent=${_directPitCommand.topic} confidence=1 handler=fired`);
           return sendGuardReply(req, res, _directReply, 100, 'deterministic', _directPitCommand.topic);
         }
       }
-      if (mode === 'race' && isRaceRuleQuestion(_lastText)) {
+      if (mode === 'race' && !_pendingJudgeTurn && isRaceRuleQuestion(_lastText)) {
         console.log('[INTENT_ROUTE] intent=race_distance confidence=1 handler=fired');
         return sendGuardReply(req, res, buildRacePlanReply(_canonicalLiveData, _lang), 110,
           'deterministic', engineerCard.TOPIC.RACE_DISTANCE);
@@ -1292,7 +1308,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       // Keep the established Phase-C path for the exact "pit now -> where"
       // contract: it carries calibration reasons, traffic and blend evidence.
       // Broader undercut/cycle language is handled by the new runtime card.
-      if (_engineerRoute && !(_engineerRoute.card.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
+      if (!_pendingJudgeTurn && !_historicalPitReview && _engineerRoute && !(_engineerRoute.card.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
         const _intent = _engineerRoute.card.topic;
         console.log(`[INTENT_ROUTE] intent=${_intent} confidence=${_engineerRoute.card.confidence ?? 0} handler=${_engineerRoute.status}`);
         // WO014 round4 residual ("reference role/age"), audit-corrected:
@@ -1311,7 +1327,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         }
         return sendGuardReply(req, res, _engineerRoute.reply, 180, 'deterministic', _intent);
       }
-      if (mode === 'race' && isFuelQuestion(_lastText)) {
+      if (mode === 'race' && !_pendingJudgeTurn && !_historicalPitReview && isFuelQuestion(_lastText)) {
         console.log('[fuel_guard] authoritative fuel reply');
         return sendGuardReply(req, res, buildFuelAuthorityReply(_engineerLive, _lang), 110);
       }
@@ -1319,7 +1335,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       console.log('[strategy_guard] classify skipped: ' + e.message);   // 分類前の失敗のみ通常経路へ
     }
     // 例外fallbackでもRace以外にピット無線を漏らさない。
-    if (mode === 'race' && _directPitCommand) {
+    if (mode === 'race' && _directPitCommand && !_pendingJudgeTurn) {
       const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
       const _reply = buildDirectPitReply(_directPitCommand, _canonicalLiveData, _lang);
       if (_reply) {
@@ -1327,7 +1343,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         return sendGuardReply(req, res, _reply, 100);
       }
     }
-    if (_strategyQ) {
+    if (_strategyQ && !_pendingJudgeTurn) {
       // ★P1-2（Codexレビュー）：対象質問だと分かった後は fail-closed。
       //   評価／返答生成で例外が起きても自由文LLMへは絶対に流さない
       //   （＝計算できないのに答えたふりをする経路を、ガード自身の不具合で復活させない）。
@@ -1430,7 +1446,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Never trust the client's token count — clamp it server-side.
     let safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
     // レース無線は物理的にも短く（長文の暴走を防ぐバックストップ）
-    if (mode === 'race') safeMaxTokens = Math.min(safeMaxTokens, 100);
+    if (mode === 'race') safeMaxTokens = _pendingJudgeTurn ? 100 : Math.min(safeMaxTokens, 100);
     const safeMaxChars = resolveReplyCharLimit(req.body, mode);
 
     // ユーザーログ（Railway のログで確認可能）
@@ -1482,14 +1498,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       //   必須にし、judgment frameへそのまま返すことでRendererが「このfetchが
       //   聞いたのと同じrequestの判定か」を照合できるようにする。欠落/不正形式は
       //   不完全なopt-inとして丸ごとlegacy平文経路へ落とす（fail-closed）。
-      const _judgeTransportV1 = req.body.judgeTransport === 'v1'
-        && req.body.pendingJudgment && typeof req.body.pendingJudgment === 'object'
-        && typeof req.body.pendingJudgment.decision_id === 'string'
-        && req.body.pendingJudgment.decision_id.length > 0
-        && req.body.pendingJudgment.decision_id.length <= 128
-        && typeof req.body.pendingJudgment.request_id === 'string'
-        && req.body.pendingJudgment.request_id.length > 0
-        && req.body.pendingJudgment.request_id.length <= 128;
+
       const _expectedJudgeDecisionId = _judgeTransportV1 ? req.body.pendingJudgment.decision_id : null;
       const _expectedJudgeRequestId = _judgeTransportV1 ? req.body.pendingJudgment.request_id : null;
       if (_judgeTransportV1) res.setHeader('X-Pitwall-Judge-Transport', 'v1');

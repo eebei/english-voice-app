@@ -443,7 +443,7 @@ async function testBaseline(port) {
       messages: [{ role: 'user', content: 'この週でbox。' }],
     });
     const text = JSON.parse(r.body).content[0].text;
-    check('⑨この周BOX: 過去の周回数を参照せず固定返答', /この周の終わりでボックス/.test(text), text);
+    check('⑨この周BOX: server単独ではBridge受理を偽らない', /作戦登録・受理は確認できていない/.test(text)&&!/了解。この周の終わりでボックス/.test(text), text);
   }
 
   // ── ⑩ ピットロスは差分推定でなく実測IN->OUTだけを返す ──

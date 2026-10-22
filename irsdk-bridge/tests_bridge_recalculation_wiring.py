@@ -7,6 +7,7 @@ just present as unused pure functions in session_race_state.py.
 """
 
 import os
+import ast
 import sys
 import unittest
 from pathlib import Path
@@ -32,6 +33,14 @@ def recalc_execution_block():
     start = src.index('if _pending_recalculations and not _plan_gate_reason:')
     end = src.index('# A selected Plan B/C creates', start)
     return src[start:end]
+
+
+def guarded_if(*terms):
+    src = bridge_src()
+    matches = [node for node in ast.walk(ast.parse(src)) if isinstance(node, ast.If)
+               and all(term in ast.unparse(node.test) for term in terms)]
+    assert len(matches) == 1, (terms, len(matches))
+    return ast.get_source_segment(src, matches[0].test)
 
 
 class ModuleImportAndStateInit(unittest.TestCase):
@@ -539,8 +548,9 @@ class FinalLapSpeechBlockWiring(unittest.TestCase):
 
     def test_plan_decision_gated_by_strategy_speech_blocked(self):
         src = bridge_src()
-        i = src.index("# rejoin for this lap versus one lap later from one live snapshot.")
-        window = src[i:i + 900]
+        window = guarded_if('isinstance(strategy_options, dict)', 'not strategy_options_decision_sent', 'not strategy_options_proposal_sent')
+        self.assertIn('not _plan_gate_reason',window)
+        self.assertIn('not any(fuel_reference_mod.reference_of(r)',window)
         self.assertIn('not session_race_state_mod.strategy_speech_blocked(_session_race_state)',
                       window)
 
@@ -659,9 +669,9 @@ class PostPitOpeningPlanGuardWiring(unittest.TestCase):
 
     def test_initial_strategy_plan_requires_no_completed_pit_service(self):
         src = bridge_src()
-        i = src.index('if (not _plan_gate_reason and not _driver_target_constraint and strategy_options is None and last_pit_service is None')
-        window = src[i - 700:i + 2600]
-        self.assertIn('opening-plan contract only', window)
+        window = guarded_if('strategy_options is None','last_pit_service is None')
+        self.assertIn('not _plan_gate_reason',window)
+        self.assertIn('not any(fuel_reference_mod.reference_of(r)',window)
         self.assertIn('last_pit_service is None', window)
         self.assertIn("'trigger': 'initial_strategy_plans'", src)
 

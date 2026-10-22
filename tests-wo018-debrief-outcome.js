@@ -155,7 +155,11 @@ function makeWorld(root, cut) {
     setOwner: id => store.set('pw_auth_user', JSON.stringify({ id })),
     // race変更は実noteMemoryRaceScope（canonical受信の唯一の入口）を通す
     observeRace: (race, driver) => {
-      const snap = { race_instance_id: race, continuity: { stable_scope: { race_instance_id: race, driver_id: driver || 101 } } };
+      // Model the canonical telemetry receiver as well as its scope observer.
+      // The production saver may attach the current account only when the
+      // arriving summary actually matches this current telemetry scope.
+      ctx.lastTelemetry={race_instance_id:race,session_num:0,cust_id:driver||10101};
+      const snap = { race_instance_id: race, continuity: { stable_scope: { race_instance_id: race, driver_id: driver || 10101 } } };
       return ctx.noteMemoryRaceScope ? ctx.noteMemoryRaceScope(snap) : ctx.__memoryRaceScope.observe(snap);
     },
     records: () => JSON.parse(store.get('pw_session_evidence') || '[]'),
@@ -176,7 +180,7 @@ function otherRace(s, race) {
 }
 function startDebrief(w, s) {
   // 現在sessionの車・コースはBridgeのsession_infoと同じ（実producerのsummaryから取る）
-  if (s.track) w.ctx.lastTrack = s.track;
+  if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; }
   if (s.car_model) w.ctx.lastCarModel = s.car_model;
   if (s.car_class) w.ctx.lastCarClass = s.car_class;
   w.observeRace(s.race_instance_id);
@@ -579,7 +583,7 @@ const CASES = {
   // ═════ 群4：後着summaryの実listener ═════
   C32_first_late_other_race_summary_history_only: { red_before: true, run: root => {
     const w = makeWorld(root); const s = summaryOf(root, PENALTY_PLAN_SCN);
-    if (s.track) w.ctx.lastTrack = s.track;
+    if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; }
     w.observeRace('sub:B');                                        // 今はrace B、A summaryが後着（初回）
     w.ctx.handleSessionSummaryMessage(clone(s));
     const hist = w.ctx.loadRaceHistory();
@@ -599,7 +603,7 @@ const CASES = {
   C34_same_race_full_summary_upgrades_saved_record: { run: root => {
     const w = makeWorld(root); const out = produce(root, PENALTY_PLAN_SCN); const s = clone(out.summaries[0]);
     w.ctx.__snap = clone(out.last_snapshot); w.observeRace(s.race_instance_id);
-    if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     const fallback = w.ctx.buildFallbackSessionSummary();              // FINISHED暫定（canonical race/session付き）
     w.ctx.beginEvidenceDebrief(fallback);
     answerAll(w, '前の車に引っかかって焦った');
@@ -614,7 +618,7 @@ const CASES = {
     const w = makeWorld(root); const s = summaryOf(root, PENALTY_PLAN_SCN);
     // Bridgeがplan名・確定順位を送ったvariant（順位改善＋plan＋pitで旧推測がsuccessになる条件）
     Object.assign(s, { plan_name: 'A', start_class_position: 8, finish_pos: 4, finish_pos_confirmed: true });
-    w.observeRace(s.race_instance_id); if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    w.observeRace(s.race_instance_id); if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.handleSessionSummaryMessage(clone(s));
     w.ctx.evidenceDebrief = null; w.observeRace('sub:next-race');
     w.ctx.prepareMemoryBrain('前回のレースどうだった？');
@@ -627,7 +631,7 @@ const CASES = {
   C36_memory_brain_executed_control: { run: root => {
     const w = makeWorld(root); const s = summaryOf(root, 'normal');
     Object.assign(s, { plan_name: 'A', start_class_position: 8, finish_pos: 6, finish_pos_confirmed: true });
-    w.observeRace(s.race_instance_id); if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    w.observeRace(s.race_instance_id); if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.handleSessionSummaryMessage(clone(s));
     w.ctx.evidenceDebrief = null; w.observeRace('sub:next-race');
     w.ctx.prepareMemoryBrain('前回は？');
@@ -640,7 +644,7 @@ const CASES = {
     const w = makeWorld(root); const out = produce(root, 'normal'); const s = clone(out.summaries[0]);
     Object.assign(s, { plan_name: 'A', start_class_position: 8, finish_pos: 6, finish_pos_confirmed: true });
     w.ctx.__snap = clone(out.last_snapshot); w.observeRace(s.race_instance_id);
-    if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.syncCanonicalDecisionHistory();
     w.ctx.handleSessionSummaryMessage(clone(s));
     const ex = s.plan_outcomes.records.find(r => r.phase === 'executed');
@@ -685,7 +689,7 @@ const CASES = {
     { // early失効したが好結果のrace（penalty無し）
       const w = makeWorld(root); const s = summaryOf(root, 'unknown_flags');
       Object.assign(s, { plan_name: 'A', start_class_position: 8, finish_pos: 4, finish_pos_confirmed: true });
-      w.observeRace(s.race_instance_id); if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+      w.observeRace(s.race_instance_id); if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
       w.ctx.handleSessionSummaryMessage(clone(s)); w.ctx.evidenceDebrief = null; w.observeRace('sub:next-race');
       w.ctx.prepareMemoryBrain('前回は？');
       res.early = (JSON.parse((w.ctx.currentMemoryBrainPrompt().split('\n').find(l => l.startsWith('{')) || '{}')).facts) || {};
@@ -697,7 +701,7 @@ const CASES = {
         execution_relation: 'penalty', penalty_evidence: Object.assign({}, pen.penalty_evidence, { state: 'true' }), plan_reference: null });
       s.pit_events.push(pen);
       Object.assign(s, { plan_name: 'A', start_class_position: 8, finish_pos: 4, finish_pos_confirmed: true });
-      w.observeRace(s.race_instance_id); if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+      w.observeRace(s.race_instance_id); if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
       w.ctx.handleSessionSummaryMessage(clone(s)); w.ctx.evidenceDebrief = null; w.observeRace('sub:next-race');
       w.ctx.prepareMemoryBrain('前回は？');
       res.penalty = (JSON.parse((w.ctx.currentMemoryBrainPrompt().split('\n').find(l => l.startsWith('{')) || '{}')).facts) || {};
@@ -710,7 +714,7 @@ const CASES = {
     const w = makeWorld(root); const out = produce(root, 'normal'); const s = clone(out.summaries[0]);
     Object.assign(s, { start_class_position: 8, finish_pos: 6, finish_pos_confirmed: true });
     w.ctx.__snap = clone(out.last_snapshot); w.observeRace(s.race_instance_id);
-    if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.syncCanonicalDecisionHistory();
     const ex = s.plan_outcomes.records.find(r => r.phase === 'executed');
     const m = w.ctx.PitwallDecisionMemory, race = { race_instance_id: s.race_instance_id, driver_id: null };
@@ -741,7 +745,7 @@ const CASES = {
   C44_expired_outcome_copy_not_used: { run: root => {
     const w = makeWorld(root); const s = summaryOf(root, PENALTY_PLAN_SCN);
     Object.assign(s, { plan_name: 'A', start_class_position: 8, finish_pos: 4, finish_pos_confirmed: true });
-    w.observeRace(s.race_instance_id); if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    w.observeRace(s.race_instance_id); if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.handleSessionSummaryMessage(clone(s));
     const h = w.ctx.loadRaceHistory(); h[h.length - 1].recordedAt = new Date(Date.now() - 91 * 86400000).toISOString();
     w.store.set('pw_raceHistory', JSON.stringify(h));
@@ -753,7 +757,7 @@ const CASES = {
   C45_corrected_decision_annotated_in_memory_brain: { run: root => {
     const w = makeWorld(root); const out = produce(root, PENALTY_PLAN_SCN); const s = clone(out.summaries[0]);
     w.ctx.__snap = clone(out.last_snapshot); w.observeRace(s.race_instance_id);
-    if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.syncCanonicalDecisionHistory(); w.ctx.handleSessionSummaryMessage(clone(s));
     const pen = s.plan_outcomes.records.find(r => r.reason === 'penalty_pit');
     const m = w.ctx.PitwallDecisionMemory, race = { race_instance_id: s.race_instance_id, driver_id: null };
@@ -769,7 +773,7 @@ const CASES = {
   // ═════ REVISE2 群3：旧本人のsession記録を新本人の実requestへ出さない ═════
   C46_owner_switch_request_has_no_old_owner_session: { red_before: true, run: root => {
     const w = makeWorld(root); const s = summaryOf(root, PENALTY_PLAN_SCN);
-    w.observeRace(s.race_instance_id); if (s.track) w.ctx.lastTrack = s.track; if (s.car_model) w.ctx.lastCarModel = s.car_model;
+    w.observeRace(s.race_instance_id); if (s.track) { w.ctx.lastTrack = s.track_display || s.track; w.ctx.lastTrackId = s.track; } if (s.car_model) w.ctx.lastCarModel = s.car_model;
     w.ctx.handleSessionSummaryMessage(clone(s));                    // U1が受けたsummary・振り返り
     answerAll(w, '前の車に引っかかって焦った');
     const u1 = w.ctx.__requestMemory('直前の振り返りを教えて');

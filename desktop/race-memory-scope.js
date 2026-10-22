@@ -20,7 +20,7 @@
 
   function scopeFromSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object' || !text(snapshot.race_instance_id)) return null;
-    const stable = snapshot.continuity && snapshot.continuity.stable_scope;
+    const stable = snapshot.continuity && (snapshot.continuity.stable_scope||snapshot.continuity.custody_scope);
     const driver = stable && stable.race_instance_id === snapshot.race_instance_id && posInt(stable.driver_id)
       ? stable.driver_id : null;
     return { race_instance_id: snapshot.race_instance_id, driver_id: driver };

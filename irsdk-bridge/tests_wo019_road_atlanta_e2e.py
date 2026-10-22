@@ -30,6 +30,9 @@ Modes (exit 0 = every expectation met, 1 = expectation failed, 2 = HARNESS_ERROR
   --scenario NAME        (internal) run one scenario, print its record
   --json FILE            write the machine-readable result
 
+WO019_AI_RACE=1 runs the same cases with both SDK session IDs removed at
+the reader boundary, and requires fallback canonical publications.
+
 LLM meaning is a SAVED response: these cases prove the machine connection (what reaches the
 provider request and what is spoken), not the semantic quality of a real model.
 """
@@ -46,6 +49,7 @@ import sys
 import tempfile
 import threading
 import time as _time
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -357,7 +361,7 @@ class Thread:
         if llm is not None:
             self.desktop.script_llm(label or 'say', text, llm)
         r = self.desktop.send('say', text=text, nowMs=self.now_ms())
-        note = {'frame': self.cursor, 'text': text, 'assistant': r.get('assistant'),
+        note = {'frame': self.cursor, 'text': text, 'assistant': r.get('assistant'), 'fuel_source': r.get('fuelSource'),
                 'utterances': r.get('utterances'),
                 'sent': [json.loads(o['raw']) for o in r.get('outbound', [])
                          if json.loads(o['raw']).get('cmd') != 'log_line']}
@@ -420,8 +424,22 @@ class Thread:
         if self.booted:
             # A later replay restarts the Bridge's virtual clock; the Desktop's keeps moving forward.
             self.offset_ms = max(0, self.clock_ms + 1000 - REPLAY_CLOCK_BASE_MS)
-        self.result = rh.replay(frames, session_info=session_info, on_frame_ready=self.hook,
-                                dispatch_result=bridge.broadcast)
+        if os.environ.get('WO019_AI_RACE') == '1':
+            # Change only the SDK reader boundary. Apply on EVERY read so
+            # later session-info changes cannot silently restore a stable ID.
+            original_read = rh.FakeReader.read_session_info
+            def read_ai_info(reader):
+                info = original_read(reader)
+                return re.sub(r'(SubSessionID|SessionID):\s*\d+', r'\1: 0', info) if isinstance(info, str) else info
+            with patch.object(rh.FakeReader, 'read_session_info', read_ai_info):
+                self.result = rh.replay(frames, session_info=session_info, on_frame_ready=self.hook,
+                                        dispatch_result=bridge.broadcast)
+            snapshots = [x for x in self.result.broadcasts if x.get('type') == 'canonical_lifecycle_snapshot']
+            if not snapshots or any(not x['race_instance_id'].startswith('fallback:') for x in snapshots):
+                raise HarnessError('AI reader mode did not reach fallback canonical publications')
+        else:
+            self.result = rh.replay(frames, session_info=session_info, on_frame_ready=self.hook,
+                                    dispatch_result=bridge.broadcast)
         self.deliver()
         return self.result
 
@@ -639,6 +657,14 @@ def collect(t, extra_keys=(), export=True):
                        'trace_bytes': sum(len(l) for l in logs if '[TRACE] ' in l)},
         'support': _collect_support(t, logs, export),
         'canonical_truth': _canonical_truth(r.broadcasts),
+        'decision_scopes': {
+            record['decision_id']: {'race_instance_id': snapshot['race_instance_id'],
+                                    'session_num': snapshot['session_num'],
+                                    'bridge_process_epoch': snapshot['bridge_process_epoch']}
+            for snapshot in r.broadcasts if snapshot.get('type') == 'canonical_lifecycle_snapshot'
+            for record in ([snapshot['lifecycle']['active']] if snapshot['lifecycle']['active'] else [])
+                          + snapshot['lifecycle']['awaiting'] + snapshot['lifecycle']['terminal_records']
+        },
         # WO021: the renderer's own Build output and the product Bridge's BUILD_VERSION constant.
         'build': o.get('build'),
         'bridge_build_version': getattr(bridge, 'BUILD_VERSION', None),
@@ -697,7 +723,7 @@ def scn_main(product_root, decl=ENTRY1 - 4, reason=ENTRY1 - 3):
         t.run(road.clean_laps(6)[0], next_race_session_info())
         nxt = collect(t)
         first['next_race'] = {k: nxt[k] for k in ('notes', 'llm', 'chat_bodies', 'desktop', 'pit_events', 'decisions',
-                                                   'obs', 'bridge_trace', 'support', 'log_volume', 'canonical_truth')}
+                                                   'obs', 'bridge_trace', 'support', 'log_volume', 'canonical_truth', 'decision_scopes')}
         return first
     finally:
         t.close()
@@ -1049,7 +1075,11 @@ def _utts(rec, kind=None, prefix=None):
 
 
 def _plan_a(rec):
-    return rec['decisions'][0] if rec['decisions'] else {}
+    plan = rec['decisions'][0] if rec['decisions'] else {}
+    # Legacy DECISION logs omit identity. Read it from the Bridge's actual
+    # canonical record, never invent it from a configured SubSessionID.
+    scope = (rec.get('decision_scopes') or {}).get(plan.get('decision_id')) or {}
+    return {**plan, **scope}
 
 
 def _pit(rec, n):
@@ -1114,7 +1144,8 @@ def c_declaration_command(R):
     acks = [b for b in _acks(m) if b['command_id'] == env.get('command_id') and b['outcome'] == 'applied']
     readback = [u for u in _utts(m, 'driver_plan_command_ack') if u.get('text') == '了解、今周ピットの申告を受けた。']
     return _ok(env.get('intent') == 'early_pit' and env.get('expected_decision_id') == a.get('decision_id')
-               and env.get('text') == DECLARE and env.get('race_instance_id', '').startswith('sub:')
+               and env.get('text') == DECLARE and bool(a.get('race_instance_id'))
+               and env.get('race_instance_id') == a.get('race_instance_id')
                and isinstance(env.get('canonical_snapshot_sequence'), int)
                and len(applied) == 1 and acks and acks[0]['lifecycle_phase'] == 'invalidated'
                and len(readback) == 1 and 'completed' in readback[0]['states'],
@@ -1205,9 +1236,28 @@ def c_fresh_current_answers(R):
     disputes = [u for n in ('fuel_q', 'plan_q') for u in (m['notes'].get(n) or {}).get('utterances') or []
                 if u.get('kind') == 'dispute_ack']
     rejected = [l for l in m['server_log'] if 'rejected' in l]
-    return _ok('27.5' in fuel and '足りる' in fuel and not disputes
+    # Derive the requirement from the actual canonical source captured at
+    # question entry, not a prose fragment from the previous implementation.
+    source = (m['notes'].get('fuel_q') or {}).get('fuel_source') or {}
+    facts, finish = source.get('current_facts') or {}, source.get('finish') or {}
+    calculation = source.get('fuel_calculation') or {}
+    rate = (calculation.get('value') or {}).get('avg_fuel_per_lap')
+    current, crossings = facts.get('fuel_level_l'), finish.get('remaining_sf_crossings')
+    numeric = isinstance(current, (int, float)) and isinstance(rate, (int, float)) and isinstance(crossings, int)
+    required = rate * crossings + 2 if numeric else None
+    same_source = ((facts.get('source_frame') or {}).get('sequence') == (source.get('source_frame') or {}).get('sequence')
+                   and (facts.get('source_frame') or {}).get('session_time_s') == (source.get('source_frame') or {}).get('session_time_s')
+                   and finish.get('source_frame_sequence') == (source.get('source_frame') or {}).get('sequence'))
+    useful = (numeric and same_source and finish.get('available') and current >= required
+              and ('現在燃料%.1fL' % current) in fuel and ('約%.1fL' % required) in fuel
+              and '予備2L' in fuel and 'この推定では完走できる' in fuel
+              and 'クリーン' in fuel and '確認できない' not in fuel and '不足' not in fuel)
+    return _ok(useful and not disputes
                and 'ステイアウト' in plan and '燃料余裕' in plan and 'クリーン実測がまだない' not in plan and not rejected,
-               {'fuel': fuel, 'plan': plan, 'disputes': len(disputes), 'race_context_rejected': rejected})
+               {'fuel': fuel, 'plan': plan, 'disputes': len(disputes), 'race_context_rejected': rejected,
+                'snapshot_id': source.get('snapshot_id'), 'current_fuel': current, 'burn_per_lap': rate,
+                'remaining_crossings': crossings, 'required_with_reserve': required, 'same_source': same_source})
+
 
 
 def c_retrospective_reaches_llm(R):
@@ -1281,7 +1331,7 @@ def c_save_readback(R):
     a = _plan_a(m)
     plans = (rec.get('race_outcome') or {}).get('plans') or []
     return _ok(len(recs) == 1 and rec.get('confidence') == 'confirmed_by_driver'
-               and rec.get('race_instance_id') == 'sub:%d' % road.ROAD_ATLANTA_SUB_SESSION_ID
+               and bool(a.get('race_instance_id')) and rec.get('race_instance_id') == a.get('race_instance_id')
                and any(p.get('decision_id') == a.get('decision_id') and p.get('reason') == 'driver_early_pit_declared' for p in plans)
                and len(rec.get('qa') or []) >= 2,
                {'records': len(recs), 'confidence': rec.get('confidence'),
@@ -1310,9 +1360,13 @@ def c_next_race_separation(R):
     m = R['main']
     nr = m.get('next_race') or {}
     canon = (nr.get('desktop') or {}).get('canonical') or {}
+    next_plan = _plan_a(nr)
+    old_race = _plan_a(m).get('race_instance_id')
+    next_race = next_plan.get('race_instance_id')
     first_reqs = [q for q in m['llm'] if q.get('stream') and any(RETRO_Q in str(x.get('content')) for x in q['messages'][-1:])]
     first_sys = first_reqs[0]['system'] if first_reqs else ''
-    return _ok(canon.get('race_instance_id') == 'sub:%d' % NEXT_RACE_SUB_SESSION_ID
+    return _ok(bool(old_race) and bool(next_race) and next_race != old_race
+               and canon.get('race_instance_id') == next_race
                and not (canon.get('pit_events') or []) and not nr.get('pit_events')
                and 'Bridge確定のPlan結果・ピット分類' not in first_sys,
                {'next_race': canon.get('race_instance_id'), 'next_pits': len(canon.get('pit_events') or []),
@@ -2034,7 +2088,7 @@ CUTS += [
      'red': ['I01_build_identity_matches_bridge_unbuilt_source'],
      'green': ['W01_box_call_output_to_native_source']},
     {'id': 'K29_tracked_build_info_stale_257', 'file': 'desktop/build-info.json',
-     'edits': [('{"buildDate":null,"buildNum":302,"buildTag":"dev","channel":"source"}',
+     'edits': [(open(os.path.join(REPO, 'desktop', 'build-info.json'), encoding='utf-8').read().strip(),
                 '{"buildDate":"2026-08-08","buildNum":257,"buildTag":"local-257"}')],
      'red': ['I01_build_identity_matches_bridge_unbuilt_source'],
      'green': ['M03_declaration_real_command_ack_readback', 'W06_offline_export_keeps_renderer_trace']},
@@ -2044,7 +2098,7 @@ CUTS += [
 # Release regressions: grammar loss and the former unrelated-facts ACK fence.
 CUTS += [
     {'id': 'K30_whole_turn_negation_swallows_cancel', 'file': 'desktop/local-intent-router.js',
-     'edits': [('/i.test(negationText);', '/i.test(text);')],
+     'edits': [("/i.test(necessity?negationText.replace(/入らないと|入んないと|入らなければ|入らなきゃ|行かないと/g,'入る必要がある'):negationText);", '/i.test(text);')],
      'red': ['R01_compound_tyre_negation_cancel_ack_readback'],
      'green': ['M03_declaration_real_command_ack_readback']},
     {'id': 'K31_terminal_readback_uses_unrelated_fuel_facts', 'file': 'desktop/renderer.html',
@@ -2215,7 +2269,8 @@ def main(argv):
     proxy = cost_proxy(records)
     print('COST_PROXY ' + json.dumps(proxy, ensure_ascii=False))
     if out_json:
-        json.dump({'root': root, 'results': results, 'harness': harness, 'cost_proxy': proxy},
+        json.dump({'root': root, 'reader_identity_mode': 'ai_fallback' if os.environ.get('WO019_AI_RACE') == '1' else 'stable',
+                   'results': results, 'harness': harness, 'cost_proxy': proxy},
                   open(out_json, 'w'), ensure_ascii=False, indent=1, default=str)
     print('WO019 Road Atlanta E2E (%s): %d passed / %d failed / %d harness_error' % (root, passed, failed, herr))
     return 2 if herr else (1 if failed else 0)

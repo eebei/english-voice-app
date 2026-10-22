@@ -265,7 +265,7 @@ function historyRecord(overrides) {
   } else {
     const sandbox = {
       currentMemoryUserId: () => 'driver-a',
-      lastTrack: 'fixture-track', lastCarModel: 'fixture-car', lastCarClass: 'GT3',
+      lastTrack: 'fixture-track', lastTrackId:'fixture-raw', lastCarModel: 'fixture-car', lastCarClass: 'GT3',
       lastSessionType: 'RACE',
       lastTelemetry: { cust_id: 'c1', laps_total: 40,
         race_plan: { kind: 'endurance', configured_duration_s: 3600 },
@@ -277,8 +277,9 @@ function historyRecord(overrides) {
     vm.createContext(sandbox);
     sandbox.localStorage={getItem:()=>null};sandbox.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');sandbox.globalThis=sandbox;
     sandbox.memoryRaceScope=sandbox.PitwallRaceMemoryScope.createTracker();
-    vm.runInContext(grab('localMemoryOwnerRef')+'\n'+grab('currentMemoryRaceScope')+'\n'+src + '\nvar __id = currentMemoryIdentity();', sandbox, { filename: 'renderer.html#identity' });
+    vm.runInContext(grab('memoryTrackCandidates')+'\n'+grab('localMemoryOwnerRef')+'\n'+grab('currentMemoryRaceScope')+'\n'+src + '\nvar __id = currentMemoryIdentity();', sandbox, { filename: 'renderer.html#identity' });
     const id = sandbox.__id;
+    check(G, '現在SDK display/rawの既存pairを履歴identityへ保持', JSON.stringify(id.trackCandidates)===JSON.stringify(['fixture-track','fixture-raw']));
     check(G, 'seriesId を Bridge 権威から載せる', id.seriesId === 222, JSON.stringify(id));
     check(G, 'sessionType を載せる', id.sessionType === 'RACE', JSON.stringify(id));
     check(G, 'raceFormat（race_plan.kind）を載せる', id.raceFormat === 'endurance', JSON.stringify(id));

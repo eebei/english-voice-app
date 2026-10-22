@@ -8,11 +8,26 @@ import driver_pit_event as pe
 import driver_plan_command as pc
 import box_authority_delivery as bd
 import fixed_target_authority as fa
+import fuel_reference_planning as fuel_reference
 
 VERSION=1
 MAX_BYTES=8*1024*1024
 DOMAINS={'state','pit_store','pit_sequence','closed','collision','constraint','commands','box','visit','boundary','origins','archives','scope_archives'}
 FUEL_INPUT_KEYS={'schema_version','race_instance_id','session_num','source_frame_sequence','session_time_s','current_lap','total_laps','lap_dist_pct','crossings_to_finish','finish_kind','fuel_level_l','avg_fuel_per_lap_l','clean_laps_sampled','reserve_l','effective_capacity_l','max_set_fuel_l','driver_pit_sequence','multi_stop'}
+REFERENCE_FUEL_INPUT_KEYS=FUEL_INPUT_KEYS|{'provisional_history','time_remaining_s','black_flag','on_track','on_pit_road',
+    'telemetry_available','source_available','scope_closed','collision','session_finished','race_format','configured_duration_s',
+    'cust_id','car_model','track','track_raw','process_epoch','current_measured_rate_l_per_lap','current_measured_samples','current_measured_pace_s','current_measured_pace_samples','planning_pace_s'}
+
+
+def fuel_input_schema(inputs,record):
+    if not isinstance(inputs,Mapping):return False
+    if inputs.get('finish_kind')!=fuel_reference.CONTRACT:return set(inputs)==FUEL_INPUT_KEYS
+    ref=fuel_reference.reference_of(record)
+    return (set(inputs)==REFERENCE_FUEL_INPUT_KEYS and ref is not None
+        and fuel_reference.reference_valid(inputs.get('provisional_history'))
+        and canonical(pack(ref))==canonical(pack(inputs['provisional_history'])))
+
+
 CLASSES={c.__name__:c for mod in (pl,pe,pc,bd) for c in vars(mod).values() if isinstance(c,type) and dataclasses.is_dataclass(c)}
 class RecoveryError(ValueError):pass
 
@@ -75,8 +90,26 @@ def stable_scope(info,race_id,session_num):
     if not integer(session_num) or not integer(cust) or cust<=0 or not isinstance(race_id,str) or not race_id.startswith(('sub:','sid:')):return None
     return {'race_instance_id':race_id,'session_num':session_num,'driver_id':cust}
 
+def custody_scope(info,race_id,session_num,process_epoch):
+    """Durable receipts for this owner only; never a restart identity."""
+    stable=stable_scope(info,race_id,session_num)
+    if stable is not None:return stable
+    cust=info.get('player_cust_id') if isinstance(info,dict) else None
+    if (not integer(session_num) or not integer(cust) or cust<=0
+        or not isinstance(race_id,str) or not race_id.startswith('fallback:') or len(race_id)<=9
+        or not isinstance(process_epoch,str) or not process_epoch):return None
+    return {'race_instance_id':race_id,'session_num':session_num,'driver_id':cust,'process_epoch':process_epoch}
+
+def valid_scope(scope,epoch=None):
+    if not isinstance(scope,dict):return False
+    if set(scope)=={'race_instance_id','session_num','driver_id'}:
+        return stable_scope({'player_cust_id':scope['driver_id']},scope['race_instance_id'],scope['session_num'])==scope
+    if set(scope)!={'race_instance_id','session_num','driver_id','process_epoch'}:return False
+    return (custody_scope({'player_cust_id':scope['driver_id']},scope['race_instance_id'],scope['session_num'],scope['process_epoch'])==scope
+            and (epoch is None or scope['process_epoch']==epoch))
+
 def validate_domains(d,scope,check_constraint_receipts=True):
-    if not isinstance(scope,dict) or set(scope)!={'race_instance_id','session_num','driver_id'} or stable_scope({'player_cust_id':scope['driver_id']},scope['race_instance_id'],scope['session_num'])!=scope:raise RecoveryError('unstable_scope')
+    if not valid_scope(scope):raise RecoveryError('unstable_scope')
     if not isinstance(d,dict) or set(d)!=DOMAINS:raise RecoveryError('missing_domain')
     s=d['state'];pit=d['pit_store'];n=d['pit_sequence'];race=scope['race_instance_id'];sn=scope['session_num']
     if not isinstance(s,pl.RaceStrategyState) or (s.race_instance_id,s.session_num)!=(race,sn) or not isinstance(pit,dict) or not integer(n):raise RecoveryError('invalid_state_scope_sequence')
@@ -168,7 +201,7 @@ def validate_domains(d,scope,check_constraint_receipts=True):
         if set(p)!=proof_keys or type(p['schema_version']) is not int or p['schema_version']!=1 or any(not integer(p[k]) for k in ('session_num','plan_revision','activation_frame','driver_pit_sequence','issued_source_frame','expected_pit_sequence','target_lap','current_lap')) or any(not finite(p[k]) or p[k]<0 for k in ('issued_session_time','add_fuel_l','set_fuel_l')) or p['set_fuel_l']!=int(p['set_fuel_l']) or p['issued_session_time']!=a['issued_session_time']:raise RecoveryError('proof_schema')
         proof_body={k:pl._deep_thaw(v) for k,v in p.items() if k!='proof_id'}
         if p['proof_id']!='box-proof:'+hashlib.sha256(json.dumps(proof_body,sort_keys=True,allow_nan=False).encode()).hexdigest()[:24]:raise RecoveryError('proof_digest')
-        if not isinstance(p['fuel_inputs'],Mapping) or set(p['fuel_inputs'])!=FUEL_INPUT_KEYS or type(p['fuel_inputs']['schema_version']) is not int or p['fuel_inputs']['schema_version']!=1 or not isinstance(p['validation'],Mapping) or p['validity_contract']!={'ttl_seconds':5.0,'window':'same_target_lap'}:raise RecoveryError('proof_calculation_schema')
+        if not fuel_input_schema(p['fuel_inputs'],s.plan_records[a['decision_id']]) or type(p['fuel_inputs']['schema_version']) is not int or p['fuel_inputs']['schema_version']!=1 or not isinstance(p['validation'],Mapping) or p['validity_contract']!={'ttl_seconds':5.0,'window':'same_target_lap'}:raise RecoveryError('proof_calculation_schema')
         verdict=fa.evaluate(p['fuel_inputs'],p['target_lap'],frozen_set=p['set_fuel_l'])
         if not verdict.get('available') or canonical(pack(verdict))!=canonical(pack(p['validation'])) or p['fuel_inputs'].get('source_frame_sequence')!=p['issued_source_frame'] or p['fuel_inputs'].get('session_time_s')!=p['issued_session_time']:raise RecoveryError('proof_calculation_content')
         r=s.plan_records[a['decision_id']]
@@ -240,7 +273,7 @@ def validate_domains(d,scope,check_constraint_receipts=True):
     for key,a in d['scope_archives'].items():
         if not isinstance(a,dict) or set(a)!={'scope','process_epoch','revision','domains'} or not isinstance(a['process_epoch'],str) or not a['process_epoch'] or not integer(a['revision']) or not isinstance(a['scope'],dict):raise RecoveryError('scope_archive_schema')
         sc=a['scope']
-        if set(sc)!={'race_instance_id','session_num','driver_id'} or stable_scope({'player_cust_id':sc['driver_id']},sc['race_instance_id'],sc['session_num'])!=sc or key!=scope_archive_key(sc,a['process_epoch'],a['revision']):raise RecoveryError('scope_archive_binding')
+        if not valid_scope(sc,a['process_epoch']) or key!=scope_archive_key(sc,a['process_epoch'],a['revision']):raise RecoveryError('scope_archive_binding')
         if not isinstance(a['domains'],dict) or set(a['domains'])!=DOMAINS-{'scope_archives'}:raise RecoveryError('scope_archive_domains')
         validate_domains(dict(a['domains'],scope_archives={}),sc)
     return d
@@ -264,7 +297,7 @@ class Store:
         if hashlib.sha256(canonical(body).encode()).hexdigest()!=w['digest']:raise RecoveryError('checkpoint_digest')
         if w['checkpoint_id']!=w['process_epoch']+':checkpoint:'+str(w['revision']):raise RecoveryError('checkpoint_id')
         scope=w['scope']
-        if not isinstance(scope,dict) or set(scope)!={'race_instance_id','session_num','driver_id'} or stable_scope({'player_cust_id':scope['driver_id']},scope['race_instance_id'],scope['session_num'])!=scope:raise RecoveryError('unstable_scope')
+        if not valid_scope(scope,w['process_epoch']):raise RecoveryError('unstable_scope')
         domains,legacy_migrated=migrate_legacy_domains(unpack(w['domains']))
         w['decoded']=validate_domains(domains,scope);w['legacy_migrated']=legacy_migrated;return w
     def commit(self,scope,epoch,domains):
@@ -285,6 +318,7 @@ class Store:
             existing=self.read() if os.path.exists(self.path) else None
             if (existing is None)!=(self.digest is None) or existing and (existing['revision']!=self.revision or existing['digest']!=self.digest):raise RecoveryError('checkpoint_writer_collision')
             if not isinstance(epoch,str) or not epoch:raise RecoveryError('checkpoint_epoch')
+            if not valid_scope(scope,epoch):raise RecoveryError('checkpoint_custody_epoch')
             encoded=pack(domains);decoded=unpack(encoded);validate_domains(decoded,scope)
             body={'schema_version':VERSION,'checkpoint_id':epoch+':checkpoint:'+str(self.revision+1),'revision':self.revision+1,'scope':scope,'process_epoch':epoch,'domains':encoded}
             digest=hashlib.sha256(canonical(body).encode()).hexdigest();raw=canonical(dict(body,digest=digest)).encode()

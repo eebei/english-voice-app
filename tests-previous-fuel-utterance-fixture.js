@@ -37,7 +37,7 @@ function extract(name) {
   return rest.slice(0, end > 0 ? end + 1 : rest.length);
 }
 
-const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
+const productionCode = ['syncFuelReferenceEvidence','sendMsg', 'speak', 'speechMayStart', 'drainQueue',
   'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech',
   'nextUtteranceId', 'finalizeUtterance', 'discardQueuedUtterances',
   'pushMsg', 'amendMessageById', 'removeMessageById',

@@ -192,7 +192,7 @@ function captureSystemIfRequested(req) {
     : (typeof sys === 'string' ? sys : '');
   const fs = require('fs');
   fs.appendFileSync(file, JSON.stringify({ system: text, messages: (req && req.messages) || [],
-    stream: !!(req && req.stream) }) + '\n');
+    stream: !!(req && req.stream), max_tokens: req && req.max_tokens, model: req && req.model }) + '\n');
 }
 
 const anthropicPath = require.resolve('@anthropic-ai/sdk');

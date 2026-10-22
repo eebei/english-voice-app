@@ -300,7 +300,11 @@ echo "── Phase F：前後相対ペース authority・GAP訂正保留・単�
 if node tests-phase-f-trackside.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-phase-f-trackside.js 2>&1|grep "❌"|head -10; fail=1; fi
 
 echo "── 8/30 RB Ring実走：null→0根絶・交通/ブレンドのpit誤爆（Build 291 replay）"
-if node tests-build291-20260830-replay.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build291-20260830-replay.js 2>&1|grep "❌"|head -10; fail=1; fi
+if out=$(node tests-build291-20260830-replay.js 2>&1); then
+  echo "   ✅ 全ケース合格"
+else
+  echo "   ❌ 不合格"; echo "$out"; fail=1
+fi
 
 echo "── Build 291 修正2：会話成立・反射イベント統合（2026-08-30）"
 if node tests-build291-fix2.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-build291-fix2.js 2>&1|grep "❌"|head -10; fail=1; fi
@@ -355,6 +359,38 @@ if out=$(node tests-bridge-strategy-proposal-roundtrip.js 2>&1); then echo "   �
 
 echo "▶ 燃料の履歴フォールバック：strategyFuelEvidenceのanswerFuel梯子への配線（2026-09-14）"
 if out=$(node tests-fuel-history-fallback.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+echo "▶ 過去燃費→時間レース推定→Driver回答（保存/訂正/配送binding）"
+if out=$(node tests-fuel-memory-planning.js 2>&1); then echo "   ✅ 製品経路回帰合格"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+
+echo "▶ 履歴暫定native契約とdebrief根拠/予測/実績の保存境界"
+if out=$(python3 irsdk-bridge/tests_history_reference_planning.py 2>&1); then echo "   ✅ native履歴契約合格"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+if out=$(node tests-history-reference-debrief.js 2>&1); then echo "   ✅ $out"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+if out=$(node tests-history-reference-renderer.js 2>&1); then echo "   ✅ $out"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+
+echo "▶ 過去燃費から始まる同一本相談（normal/AI：訂正・自然同意・ACK・BOX・pit・debrief・次race）"
+mkdir -p "${PREFLIGHT_HISTORY_EVIDENCE_DIR:-${TMPDIR:-/tmp}}"
+for history_mode in normal ai; do
+  history_ai=0
+  if [[ "$history_mode" == ai ]]; then history_ai=1; fi
+  if out=$(WO019_AI_RACE="$history_ai" HISTORY_E2E_OUTPUT="${PREFLIGHT_HISTORY_EVIDENCE_DIR:-${TMPDIR:-/tmp}}/history-consultation-${history_mode}.json" python3 irsdk-bridge/tests_history_consultation_e2e.py 2>&1); then
+    echo "   ✅ ${history_mode}: 同相談の実回答・音声・native実行・結果保存・次race取得合格"
+  else
+    echo "   ❌ ${history_mode}: 同相談不合格"; echo "$out"|tail -30; fail=1
+  fi
+  if out=$(WO019_AI_RACE="$history_ai" HISTORY_NEGATIVE_CASES=ack_retry,delete_bare,delete_delayed,correct_delayed,current_sample,worsening,faster_pace,sdk_gap,driver_change,commit_failed HISTORY_NEGATIVE_OUTPUT="${PREFLIGHT_HISTORY_EVIDENCE_DIR:-${TMPDIR:-/tmp}}/history-negatives-${history_mode}.json" python3 irsdk-bridge/tests_history_consultation_negatives.py 2>&1); then
+    echo "   ✅ ${history_mode}: retry/削除/訂正/通常sample/燃費悪化/速い当日pace/gap/driver/commit負例合格"
+  else
+    echo "   ❌ ${history_mode}: 履歴相談の負例不合格"; echo "$out"|tail -50; fail=1
+  fi
+done
+
+echo "▶ AI走行のprocess custody（native command/ACK/BOX、復元禁止、commit失敗）"
+if out=$(python3 irsdk-bridge/tests_process_custody.py 2>&1); then echo "   ✅ Bridge custody契約合格"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+if out=$(node tests-process-custody.js 2>&1); then echo "   ✅ $out"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+
+echo "▶ 終了結果の完了周/計測周/clean最速・遅着保存境界"
+if out=$(python3 irsdk-bridge/tests_summary_metric_boundary.py 2>&1); then echo "   ✅ Bridge summary境界合格"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
+if out=$(node tests-summary-metric-boundary.js 2>&1); then echo "   ✅ $out"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
 
 echo "▶ 残り周回のdriver訂正保留：fixture e09（申告 vs SDK を区別し条件付きで答える・2026-09-14）"
 if out=$(node tests-laps-dispute-hold.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -20; fail=1; fi
@@ -368,6 +404,12 @@ if node tests-terminal-readback-binding.js; then echo "   ✅ 全ケース合格
 echo "▶ WO019 Road Atlanta一本の相談 E2E（実Bridge×全Renderer×実server、IOのみ模擬）"
 if out=$(python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格（exit2=HARNESS_ERROR）"; echo "$out"|grep -E "❌|HARNESS"|head -20; fail=1; fi
 echo "▶ WO019 guard cut anchor到達性（全cut anchorが現sourceで一意）"
+echo "▶ 同じ相談E2EをAI race fallback identityでも検証"
+if out=$(WO019_AI_RACE=1 python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then
+  echo "   ✅ $(echo "$out"|tail -1)"
+else
+  echo "   ❌ AI race不合格（exit2=HARNESS_ERROR）"; echo "$out"; fail=1
+fi
 if out=$(python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py --anchors 2>&1); then echo "   ✅ anchors一意"; else echo "   ❌ anchor drift"; echo "$out"|grep "❌"; fail=1; fi
 echo "▶ WO019 post-stop Plan／宣言有効期間／意図pair"
 if python3 irsdk-bridge/tests_wo019_post_stop_plan.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_wo019_declaration_window.py >/dev/null 2>&1 && node tests-wo019-intent-pairs.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_wo019_post_stop_plan.py 2>&1|tail -5; python3 irsdk-bridge/tests_wo019_declaration_window.py 2>&1|tail -5; node tests-wo019-intent-pairs.js; fail=1; fi

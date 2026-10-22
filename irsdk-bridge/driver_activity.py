@@ -161,3 +161,41 @@ def should_finalize_non_race_summary(
         and bool(session_started)
         and not bool(summary_sent)
     )
+
+
+def summary_metrics(laps,completed_laps=None):
+    """Observed samples, strict-clean quickest, and SDK completion are distinct."""
+    import math
+    rows=[r for r in laps if isinstance(r,dict) and type(r.get('time')) in (int,float) and math.isfinite(r['time']) and r['time']>0]
+    clean=[r['time'] for r in rows if r.get('strict_clean') is True]
+    times=[r['time'] for r in rows]
+    completed=completed_laps if type(completed_laps) is int and completed_laps>=0 else None
+    return {'completed_laps':completed,'recorded_lap_count':len(rows),
+      'total_laps':completed if completed is not None else len(rows),
+      'completed_laps_source':'CarIdxLapCompleted_current_frame' if completed is not None else 'unavailable',
+      'laps_basis':'sdk_completed' if completed is not None else 'recorded_samples',
+      'measured_best_lap':round(min(times),3) if times else None,
+      'strict_clean_best_lap':round(min(clean),3) if clean else None,
+      'best_lap':round(min(clean or times),3) if times else None,
+      'best_lap_basis':'strict_clean_measurement' if clean else 'measured_unverified',
+      'strict_clean_recorded_laps':len(clean),
+      'strict_clean_avg_lap':round(sum(clean)/len(clean),3) if clean else None,
+      'avg_lap_basis':'recorded_samples','avg_lap':round(sum(times)/len(times),3) if times else None,'worst_lap':round(max(times),3) if times else None}
+
+def settle_finished_summary(previous,identity,now,finish_signal,lap_time,completed,last_record_completed,current_lap=None):
+    state=dict(previous) if previous and previous.get('identity')==identity else {'identity':identity}
+    if finish_signal and 'started' not in state:
+        state.update(started=now,changed=now,observed=(lap_time,completed))
+    if 'started' not in state:return state,False
+    observed=(lap_time,completed)
+    if observed!=state.get('observed'):state.update(changed=now,observed=observed)
+    elapsed=max(0,now-state['started']);quiet=max(0,now-state['changed'])
+    counter_known=type(completed) is int and completed>=0
+    counter_consistent=counter_known and not(type(current_lap) is int and completed<current_lap-1)
+    complete=counter_consistent and last_record_completed==completed
+    ready=elapsed>=1 and quiet>=.5 and (complete or not counter_known and elapsed>=2)
+    bounded=elapsed>=4
+    state['counter_consistent']=counter_consistent
+    state['status']='settled' if complete else 'settled_without_counter' if not counter_known and ready else 'bounded_incomplete'
+    state['timed_out']=bounded
+    return state,ready or bounded

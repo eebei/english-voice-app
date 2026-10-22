@@ -14,6 +14,7 @@ Rules:
 - Bounded: newest MAX_RECORDS by created frame.  Heavy basis/options stay in the owner.
 """
 import plan_lifecycle as pl
+import fuel_reference_planning as fuel_reference
 
 MAX_RECORDS = 16
 
@@ -28,6 +29,8 @@ def _view(record):
         'selected_plan': record.selected_plan,
         'target_lap': record.target_lap,
         'add_fuel_l': record.add_fuel_l,
+        'set_fuel_l': record.set_fuel_l,
+        'provisional_history': fuel_reference.public_reference(record),
         'phase': record.phase,
         'registered_phase': record.registered_phase,
         'terminal': terminal,

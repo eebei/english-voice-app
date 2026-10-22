@@ -113,7 +113,7 @@ function build(input) {
     local_proposal: view.pending_proposal ? { decision_id: view.pending_proposal.decision_id, lap: view.pending_proposal.lap, plan_id: view.pending_proposal.plan_id } : null,
   }) : null;
 
-  const lastDriverAction = (available && snapshot && snapshot.last_driver_action && snapshot.last_driver_action.available)
+  const lastDriverAction = (available && view.scope?.driver_id && snapshot && snapshot.last_driver_action && snapshot.last_driver_action.available)
     ? immutable(snapshot.last_driver_action.action) : null;
 
   const lastPitEvent = (available && view.pit_executed) ? immutable(view.pit_executed) : null;
@@ -368,7 +368,18 @@ function validate(ctx, now) {
   if (ctx.freshness.available) {
     const ri = ctx.race_identity;
     if (!object(ri) || !boundedStr(ri.race_instance_id)) return false;
-    if (!nonNegInt(ri.session_num) || !posInt(ri.driver_id)) return false;
+    if (!nonNegInt(ri.session_num)) return false;
+    if (!posInt(ri.driver_id)) {
+      // Process/session-scoped fresh observations remain usable without a
+      // restart-safe driver identity. This scope can never carry an agreed
+      // plan, pending proposal, driver action or execution authorization.
+      const actions=ctx.allowed_actions;
+      if(ri.driver_id!==null || ctx.active_plan!==null || ctx.last_driver_action!==null
+          || !actions || actions.execution_allowed!==false
+          || !['identity_unsupported','restore_pending','restore_failed','identity_unverified'].includes(actions.execution_hold_reason)
+          || actions.proof?.allowed_proof_id!==null || actions.proof?.allowed_attempt_id!==null
+          || ctx.pending_proposal?.canonical_awaiting || ctx.pending_proposal?.local_proposal) return false;
+    }
     if (!(ri.bridge_process_epoch === null || boundedStr(ri.bridge_process_epoch))) return false;
     if (ctx.active_plan !== null) {
       const a = ctx.active_plan;

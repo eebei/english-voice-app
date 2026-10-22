@@ -344,7 +344,7 @@ if (fail) process.exit(1);
   check('★renderer が pit_events を保存する',
     /pitEvents:Array\.isArray\(data\.pit_events\)\?data\.pit_events:null/.test(renderer4b));
   check('★renderer が燃費を保存する',
-    /avgFuelPerLap:Number\.isFinite\(Number\(data\.avg_fuel_per_lap\)\)/.test(renderer4b));
+    /avgFuelPerLap:_fuelAverage/.test(renderer4b)&&renderer4b.includes('const _fuelAverage=_strictValid?_strictFuel:')&&renderer4b.includes('data.avg_fuel_per_lap'));
 }
 
 console.log(`\n(スライス4b含む累計) ${pass}/${pass + fail}`);

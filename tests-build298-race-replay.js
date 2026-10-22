@@ -685,10 +685,10 @@ const pddp = require('./desktop/pddp.js');
 
     // ★関数を実行できるだけでは足りない。**telemetry 受信経路から呼ばれている**こと。
     //   呼出しを消しても緑のままだった（2026-09-06 変異M2）。
-    const ingest = renderer.slice(renderer.indexOf("data.type==='telemetry_live'"));
+    const ingest = renderer.slice(renderer.indexOf("if(data.type==='telemetry_live'){"),
+      renderer.indexOf("if(data.type==='driver_state')"));
     check(G, 'P1-3 telemetry 受信経路が observePitState を呼ぶ',
-      ingest.indexOf('observePitState(') >= 0
-      && ingest.indexOf('observePitState(') < 1500,
+      ingest.indexOf('observePitState(') >= 0,
       'telemetry_live の処理内に observePitState() の呼出しが無い');
   }
 

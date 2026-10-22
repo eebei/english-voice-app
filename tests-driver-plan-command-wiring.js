@@ -131,8 +131,10 @@ const ctx2={criticalJournal,performance:{now:()=>0},canonicalLifecycleCache:CF.i
   SPEAK_PRIO:{P2_PROCEDURE:2},speak:()=>{},bridgeStrategyDecisions:new Map(),
   strategyResponseOutbox:new Map(),strategyDeliveryOutbox:new Map(),strategyPlaybookDecisionKeys:new Set()};
 ctx2.globalThis=ctx2;ctx2.window=ctx2;ctx2.PitwallLocalIntentRouter=router;
+ctx2.currentMemoryUserId=()=>null;ctx2.lastTrackId=null;ctx2.lastSessionAuthority=null;ctx2.lastSessionType='RACE';
+ctx2.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');ctx2.localStorage={getItem:()=>null};
 vm.createContext(ctx2);
-vm.runInContext(names.slice(0,4).map(n=>extract(renderer,n)).join('\n')+'\nasync '+sendMsgSrc,ctx2);
+vm.runInContext(['syncFuelReferenceEvidence','currentMemoryIdentity','localMemoryOwnerRef','memoryTrackCandidates'].map(n=>extract(renderer,n)).join('\n')+'\n'+names.slice(0,4).map(n=>extract(renderer,n)).join('\n')+'\nasync '+sendMsgSrc,ctx2);
 ctx2.sendMsg('typed');
 check('actual sendMsg final turn emits the production WS command envelope',sentBySendMsg.length===1
   &&sentBySendMsg[0].cmd==='driver_plan_command'&&sentBySendMsg[0].command_id==='actual-sendmsg-cmd'

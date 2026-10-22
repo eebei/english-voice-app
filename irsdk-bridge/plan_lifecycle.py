@@ -1158,7 +1158,8 @@ def amend_active_plan(state, intent, *, calculation, authority_inputs, decision_
         created_source_frame_sequence=authority_inputs['source_frame_sequence'],
         activation_source_frame_sequence=authority_inputs['source_frame_sequence'],
         plan_basis={'reason':'driver_plan_amended','driver_target_constraint':constraint,
-                    'authority_inputs':authority_inputs,'command_id':intent.command_id},
+                    'authority_inputs':authority_inputs,'command_id':intent.command_id,
+                    **({'provisional_history_v1':_deep_thaw(state.plan_records[intent.target_decision_id].plan_basis['provisional_history_v1'])} if isinstance(state.plan_records[intent.target_decision_id].plan_basis,Mapping) and 'provisional_history_v1' in state.plan_records[intent.target_decision_id].plan_basis else {})},
         target_lap=calculation['target_lap'],add_fuel_l=calculation['add_fuel_l'],set_fuel_l=calculation['set_fuel_l'],
         evidence_snapshot_id=snapshot_id,options_snapshot=options)
     if registration.status!='registered':return state,registration

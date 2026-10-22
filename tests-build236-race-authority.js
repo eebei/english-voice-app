@@ -17,8 +17,15 @@ check('Race FINISHEDは直前Qualify summaryでなくRace fallbackを使う',
   && !renderer.includes("if(driverActivity==='FINISHED') scheduleAutoDebrief(lastSessionSummary||buildFallbackSessionSummary());"));
 
 const fallback = renderer.match(/function buildFallbackSessionSummary\(\)\{[\s\S]*?\n\}/);
-check('Race fallback lapはlive lap/lap_completedの最大値',
-  !!fallback && fallback[0].includes('Math.max(') && fallback[0].includes('total_laps:liveLap'));
+const sanitize = renderer.match(/function sanitizeSessionEvidence\(data\)\{[\s\S]*?\n\}/);
+const fallbackContext={lastTelemetry:{lap:13,lap_completed:12},lastTrack:'Monza',lastCarClass:'GT3',
+  lastCarModel:'Mercedes-AMG GT3',lastSessionType:'Race',sessionBestLapSeconds:114.835,
+  validFinishPosition:()=>null,currentDebriefSourceIdentity:()=>({race_instance_id:'sub:current',session_num:2})};
+if(fallback&&sanitize)vm.runInNewContext(sanitize[0]+'\n'+fallback[0],fallbackContext);
+const provisional=fallbackContext.buildFallbackSessionSummary?.();
+check('Race fallbackは走行中周を完了周・計測周に昇格しない（実関数）',
+  !!provisional&&provisional.completed_laps===null&&provisional.recorded_lap_count===null&&provisional.total_laps===null
+  &&provisional.race_instance_id==='sub:current'&&provisional.session_num===2);
 
 const normalize = renderer.match(/function normalizeLunaSpeech\(text\)\{[\s\S]*?\n\}/);
 check('Luna最終話法・安全ゲートを抽出', !!normalize);
@@ -40,7 +47,12 @@ if (normalize) {
 }
 
 check('燃料実測前のピット周回捏造を禁止',
-  renderer.includes('measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無いレース開始前は、ピット周回を絶対に提示するな。'));
+  ['measured_avg_l_per_lapまたはauthoritative_laps_to_finishが無い時、独自のピット周回を提示するな。',
+    'canonical awaitingに既に登録されたprovisional_history_v1候補の説明と同意判定',
+    'その同一decision IDの暫定案だけ', '変更はBridge再計算と再同意を要する',
+    'ACK前に合意確定・登録済み・BOX実行を宣言するな',
+    'The sole exception is explaining or judging consent for the exact provisional_history_v1 proposal already registered in canonical awaiting',
+    'never announce acceptance, registration or BOX execution before its ACK'].every(s=>renderer.includes(s)));
 const bridge = fs.readFileSync('irsdk-bridge/bridge.py', 'utf8');
 check('残量5L警告も計算器が不足判定ならこの周でピット',
   bridge.includes("'pit_required': _fuel_pit_required")

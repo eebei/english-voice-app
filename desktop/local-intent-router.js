@@ -246,7 +246,8 @@
     const negationText=text.split(/[、。;,；]/).filter(clause=>
       !/(?:タイヤ|tyres?|tires?)/i.test(clause)
       ||/(?:ピット|ボックス|box|pit|プラン|plan|キャンセル|取消|中止|cancel)/i.test(clause)).join('、');
-    const negated=/(?:^\s*(?:not|no)\s+(?:box|pit)|言ってない|言っていない|入らない|入んない|行かない|行かん|しない|つもりはない|やめないで|取り消さない|キャンセルしない|ではない|じゃない|入るな|行くな|don't|do not|won't|will not|not going)/i.test(negationText);
+    const necessity=/(?:入らないと(?:いけない|だめ|ダメ)|入らなければならない)/.test(text)||/(?:入らないと|入んないと|入らなければ|入らなきゃ|行かないと).{0,24}(?:燃料|ガス|切れ|足り|止ま|もたない|持たない)/.test(text);
+    const negated=/(?:^\s*(?:not|no)\s+(?:box|pit)|言ってない|言っていない|入らない|入んない|行かない|行かん|しない|つもりはない|やめないで|取り消さない|キャンセルしない|ではない|じゃない|入るな|行くな|don't|do not|won't|will not|not going)/i.test(necessity?negationText.replace(/入らないと|入んないと|入らなければ|入らなきゃ|行かないと/g,'入る必要がある'):negationText);
     const conditional=/(?:もし|仮に|だったら|ならば|なら|if\b|would\b)/i.test(text);
     const question=/[?？]|(?:入って|行って|して)いい|入れる|入るべき|どう|べき|いいの|入るかな|入ろうか|合ってる|合っている|だよね|だった|should|can (?:we|i)|may i|could|whether/i.test(text);
     const penalty=/(?:黒旗|ブラックフラッグ|ペナルティ|ドライブスルー|ストップ.{0,2}ゴー|black flag|penalty|drive.?through|stop.?go)/i.test(text);
@@ -273,14 +274,14 @@
     if(question)return {kind:'consultation',topic:'pit',executionQuestion:/(?:合ってる|合っている|だよね|だった)|(?:入る|入って|入れる|行って|pit|box).{0,12}(?:いい|べき|can|should)|(?:can|should|may|could).{0,12}(?:pit|box)|この周|今周/i.test(text)};
     const targets=[...text.matchAll(/([0-9０-９]{1,3})\s*周(?:目)?/g)].map(m=>Number(m[1].replace(/[０-９]/g,d=>'０１２３４５６７８９'.indexOf(d))));
     const cancel=/(?:やめる|やめとく|止める|取り消|キャンセル|中止|cancel)/i.test(text);
-    const early=/(?:先に|早めに)入る|(?:今周|この周|今の周|この\s*周|今の\s*周).{0,8}(?:入る|ピット|ボックス)|(?:ピット|ボックス).{0,8}(?:入る|行く|する)|(?:box|pit)\s+(?:this lap|now)\b/i.test(text);
+    const early=necessity&&/(?:この周|今周|ピット|ボックス)/.test(text)||/(?:先に|早めに)入る|(?:今周|この周|今の周|この\s*周|今の\s*周).{0,8}(?:入る|ピット|ボックス)|(?:ピット|ボックス).{0,8}(?:入る|行く|する)|(?:box|pit)\s+(?:this lap|now)\b/i.test(text);
     if(/(?:今周|この周|this lap|now).{0,24}(?:次周|次の周|next lap)|(?:次周|次の周|next lap).{0,24}(?:今周|この周|this lap|now)/i.test(text)||new Set(targets).size>1||(cancel&&early)||(targets.length&&/(?:今周|この周|this lap|next lap|次周)/i.test(text)))return {kind:'ambiguous',priority:true};
     if(cancel)return {kind:'command',operation:'cancel',requestedTargetLap:null,priority:true};
     if(targets.length&&!/(?:変更|変え|訂正|じゃなくて|やっぱり|ピット.{0,12}(?:入る|行く)|box|pit|move|change)/i.test(text))return {kind:'consultation',topic:'pit',executionQuestion:true};
     if(targets.length)return {kind:'command',operation:'amend',requestedTargetLap:targets[0],reasonText:/(?:から|ので|ため|because)/i.test(text)?text:null,priority:true};
     if(/次(?:の)?周|next lap/i.test(text))return {kind:'command',operation:'amend',nextLap:true,priority:true};
     const reason=/(?:から|ので|ため|because|due to|traffic|slow)/i.test(text);
-    if(early)return {kind:'command',operation:'early_pit',requestedTargetLap:null,reasonText:reason?text:null,explanationContinuation:reason&&!/(?:今周|この周|今の周|now|this lap)/i.test(text),priority:true};
+    if(early)return {kind:'command',operation:'early_pit',requestedTargetLap:null,reasonText:reason||necessity?text:null,explanationContinuation:!necessity&&reason&&!/(?:今周|この周|今の周|now|this lap)/i.test(text),priority:true};
     return {kind:'consultation',topic:'pit'};
   }
   const driverPlanCommand=text=>{const semantic=classifyDriverIntent(text);return semantic.kind==='command'?semantic:null;};
@@ -472,7 +473,8 @@
   function historyFuelEvidence(input, live, sessionAuthority, currentUserId) {
     const mem = input && input.sessionMemory && typeof input.sessionMemory === 'object'
       ? input.sessionMemory : null;
-    const history = input && Array.isArray(input.raceHistory) ? input.raceHistory : [];
+    const history = input && Array.isArray(input.fuelHistory) ? input.fuelHistory
+      : input && Array.isArray(input.raceHistory) ? input.raceHistory : [];
     if (!mem || typeof mem.strategyFuelEvidence !== 'function' || history.length === 0) return null;
     const liveNow = live && typeof live === 'object' ? live : {};
     const memIdent = (input && input.memoryIdentity && typeof input.memoryIdentity === 'object')
@@ -485,6 +487,7 @@
       userId: pick(currentUserId, memIdent.userId),
       custId: pick(liveNow.cust_id, memIdent.custId),
       track: pick(liveNow.track, memIdent.track),
+      trackCandidates:Array.isArray(memIdent.trackCandidates)?memIdent.trackCandidates:[],
       car: pick(liveNow.car_model, memIdent.car),
       carClass: pick(liveNow.car_class, memIdent.carClass),
       seriesId: Number.isInteger(memIdent.seriesId) ? memIdent.seriesId
@@ -498,14 +501,16 @@
       trackTempC: finite(memIdent.trackTempC) !== null ? finite(memIdent.trackTempC)
         : finite(weather.track_temp_c),
     };
-    const evidence = mem.strategyFuelEvidence(history, identity, Date.now());
+    const retrieve = input?.strategy?.state?.readonly_projection && mem.fuelPlanningEvidence
+      ? mem.fuelPlanningEvidence : mem.strategyFuelEvidence;
+    const evidence = retrieve(history, identity, Date.now());
     return (evidence && evidence.available && finite(evidence.avgFuelPerLap) > 0) ? evidence : null;
   }
 
   function routeInner(input) {
     const text = normalizeSttText(String(input && input.text || '').trim());
     const lang = input && input.lang === 'en' ? 'en' : 'ja';
-    const live = input && input.live && typeof input.live === 'object' ? input.live : null;
+    let live = input && input.live && typeof input.live === 'object' ? input.live : null;
     // PTT の直接質問も snapshot 時刻を検査する。渡されない場合は従来どおり
     // 検査しない（呼び出し側が古さを判断できない時に黙らせないため）。
     const snapshotAgeMs = finite(input && input.snapshotAgeMs);
@@ -537,6 +542,14 @@
     const strategyModule = (strategy && strategy.api)
       || (typeof globalThis !== 'undefined' ? globalThis.PitwallSessionStrategyState : null)
       || null;
+    if(live&&strategyState?.readonly_projection&&input.telemetryScope!==undefined){
+      const raw=input.telemetryScope,scope=strategyState.scope,publication=strategyState.publication_ref;
+      const matched=!!raw&&!!scope&&!!publication&&raw.race_instance_id===scope.race_instance_id
+        &&raw.session_num===scope.session_num&&raw.bridge_process_epoch===publication.bridge_process_epoch
+        &&(!scope.driver_id||!raw.cust_id||scope.driver_id===raw.cust_id);
+      if(!matched)live={...live,last:null,best:null,driver_pace_median_s:null,driver_pace_sample_count:null,
+        session_time_remaining_s:null,timed_finish_forecast:null,race_plan:null,laps_total:null};
+    }
     if (!text || !live) return { handled:false };
     const semantic=input.driverIntent||classifyDriverIntent(text);
     const reasonTarget=input.pendingDriverPlanCommand;
@@ -643,22 +656,71 @@
     }
     // Driver strategy calls consume the same A/B/C snapshot as proactive
     // radio.  The LLM must not independently recalculate or rename the plan.
+    // A previous-race pit review consumes stored outcomes in the conversation
+    // path; the current plan evaluator cannot answer what happened last race.
+    if(/前回|前のレース|前戦|previous race|last race/i.test(text)
+        &&/ピット|給油|pit|refuel/i.test(text)&&!PREVIOUS_FUEL_RE.test(text))return {handled:false};
     const strategyCall = strategyCallAnswer(input, live, text, lang);
     if (strategyCall) return strategyCall;
-    if (/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
+    // A race-side "how is my driving?" asks about the driver, including
+    // the correction "違う、俺の走り". Answer with measured pace first.
+    if(/(?:俺|僕|私|自分|今日|今)?(?:の)?走り.{0,12}(?:どう|評価|分析)|(?:how).{0,20}(?:my driving|my pace|am i driving)/i.test(text)){
+      const fresh=(!strategyState?.readonly_projection||strategyState.available)&&(snapshotAgeMs===null||snapshotAgeMs<=5000);
+      const last=fresh?finite(live.last):null,best=fresh?finite(live.best):null;
+      const pace=fresh?finite(live.driver_pace_median_s):null,jp=isJP(lang),parts=[];
+      if(last>0)parts.push(jp?`直近${formatLapTime(last,lang)}`:`Last lap ${formatLapTime(last,lang)}`);
+      if(best>0)parts.push(jp?`ベスト${formatLapTime(best,lang)}`:`best ${formatLapTime(best,lang)}`);
+      if(pace>0)parts.push(jp?`最近の中央値${formatLapTime(pace,lang)}`:`recent median ${formatLapTime(pace,lang)}`);
+      let reply=parts.length?parts.join(jp?'、':', ')+(jp?'。':'. '):(jp?'走りの評価に使える最新ラップタイムはまだ取得できない。':'Current lap times for a driving assessment are unavailable. ');
+      if(last>0&&best>0){const delta=last-best;
+        reply+=jp?(delta>0.5?`直近はベストより${delta.toFixed(1)}秒遅い。まずベストに近いラップの再現を狙おう。`:'直近はベストに近いペース。無理に上げず、この再現性を保とう。')
+          :(delta>0.5?`The last lap is ${delta.toFixed(1)} seconds off your best; aim to reproduce the quicker lap.`:'The last lap is close to your best; maintain that pace.');
+      }
+      return answer('driving_assessment',reply,null,{confidence:parts.length?'confirmed':'unavailable'});
+    }
+    const pitTimingQuestion=/(?:ピット|ボックス).{0,16}(?:何周(?:目|年)?|いつ|予定)|(?:何周目|いつ).{0,8}(?:ピット|ボックス)|pit.{0,10}(?:which lap|what lap|when)|when.{0,10}pit/i.test(text);
+    const canEstimatePit=pitTimingQuestion&&strategyState?.available&&!strategyState.pit_plan
+      &&typeof input.sessionMemory?.fuelPlanningEstimate==='function'
+      &&(finite(live.fuel_strategy?.avg_fuel_per_lap)>0||historyFuelEvidence(input,live,sessionAuthority,currentUserId));
+    if (canEstimatePit||/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
       if(strategyState?.readonly_projection){
         const a=strategyModule.answerFuel(strategyState,{lang});
-        const history=a.fuel_basis==='unavailable'?historyFuelEvidence(input,live,sessionAuthority,currentUserId):null;
-        const rate=history?finite(history.avgFuelPerLap):null;
-        let reply=a.reply;
-        if(rate!==null&&rate>0){
-          const warnings=Array.isArray(history.warnings)?history.warnings:[];
-          const differences=[];
-          if(warnings.includes('setup_mismatch'))differences.push(isJP(lang)?'セットアップが違う':'different setup');
-          if(warnings.includes('track_temp_delta'))differences.push(isJP(lang)?'路温が違う':'different track temperature');
-          reply+=isJP(lang)?` 同条件の本人履歴では1周${rate.toFixed(2)}L（過去参考値）。現在の実測燃費ではなく、完走やピット指示は確定できない。${differences.length?'前回とは'+differences.join('・')+'。':''}`:` Your scoped previous record used ${rate.toFixed(2)} L per lap (historical reference). This is not current measured fuel burn and does not establish finish or pit instructions.${differences.length?' '+differences.join(', ')+'.':''}`;
+        const onlyRemaining=/(?:残量|残り何(?:リットル|リッター|L)|何(?:リットル|リッター|L).{0,8}入って)/i.test(text)
+          &&!/(?:最後|給油|足り|もつ|持つ|必要|fuel use|consum)/i.test(text);
+        if(onlyRemaining){
+          const fuel=finite(strategyState.current_facts?.fuel_level_l);
+          return answer('fuel_status',fuel!==null?(isJP(lang)?`観測時の残量は約${fuel.toFixed(1)}L。`:`Observed ~${fuel.toFixed(1)} L.`):a.reply,null,
+            {confidence:fuel!==null?'confirmed':'unavailable',strategyBinding:fuel!==null&&typeof strategyModule.fuelObservationBinding==='function'?strategyModule.fuelObservationBinding():a.binding,basis:'current_fuel_observation'});
         }
-        return answer('fuel_status',reply,null,{confidence:rate!==null?'estimate':a.fuel_basis==='unavailable'?'unavailable':'estimate',strategyBinding:a.binding,basis:rate!==null?'historical_reference':'bridge_calculation_reference',evidence_date:history?.recordDate||null});
+
+        const history=historyFuelEvidence(input,live,sessionAuthority,currentUserId);
+        const mem=input.sessionMemory;
+        const estimate=strategyState.available&&typeof mem?.fuelPlanningEstimate==='function'
+          ?mem.fuelPlanningEstimate(live,history,Date.now()):null;
+        if(estimate){
+          const e=estimate,jp=isJP(lang),rate=e.rate_l_per_lap;
+          const historical=['memory_analysis','device_reference'].includes(e.basis);
+          let reply=e.fuel_l!==null?(jp?`現在燃料${e.fuel_l.toFixed(1)}L。`:`Current fuel ${e.fuel_l.toFixed(1)} L. `):a.reply+' ';
+          if(e.required_l!==null){
+            reply+=jp?`予備${e.reserve_l}L込み必要約${e.required_l.toFixed(1)}L。`:`Finish requirement with ${e.reserve_l} L reserve: ${e.required_l.toFixed(1)} L. `;
+            if(e.additional_l!==null)reply+=e.additional_l>0?(jp?`追加${e.additional_l.toFixed(1)}Lを推奨。`:`Recommend ${e.additional_l.toFixed(1)} L additional fuel. `)
+              :(jp?'この推定では完走できる。':'This estimate covers the finish. ');
+          }else reply+=jp?'完走距離は未確定。':'Finish distance is unconfirmed. ';
+          if(e.laps_with_reserve!==null&&e.additional_l>0){
+            const lap=integer(live.lap),target=lap!==null?lap+Math.max(0,e.laps_with_reserve-1):null;
+            reply+=jp?(target!==null?`燃料上は${target}周目までの補給案。`:`補給は約${e.laps_with_reserve}周以内の案。`):`Fuel-only proposal: stop within approximately ${e.laps_with_reserve} laps. `;
+          }
+          if(e.basis==='device_reference')reply+=jp?'端末参考・本人未確認の暫定値。':'Provisional device reference, driver unverified.';
+          else if(historical)reply+=jp?'過去燃費からの暫定値。':'Provisional estimate from historical fuel use.';
+          else if(e.basis==='current_clean_laps')reply+=jp?`クリーン${e.live_sample_laps}周からの推定。`:`Estimate from ${e.live_sample_laps} clean laps.`;
+          else reply+=jp?'ピット除外測定の暫定値、クリーン未確定。':'Provisional pit-excluded measurements; clean status unconfirmed.';
+          if(/燃費|消費|1周|一周|per lap|consum/i.test(text))reply+=jp?`約${rate.toFixed(2)}L/周。`:` ${rate.toFixed(2)} L/lap.`;
+          return answer(canEstimatePit?'pit_plan_question':'fuel_status',reply,null,{confidence:e.confidence,basis:e.basis,fuelEstimate:e,
+            strategyBinding:typeof strategyModule.fuelEstimateBinding==='function'?strategyModule.fuelEstimateBinding(e):a.binding,evidence_date:historical?history.recordDate:null});
+        }
+        let reply=a.reply;
+        if(history)reply+=isJP(lang)?` 本人・同車・同コースの過去分析は約${history.avgFuelPerLap.toFixed(2)}L/周。現在の距離・残量を再取得するまで必要量は断定しない。`:` Matching historical analysis gives ${history.avgFuelPerLap.toFixed(2)} L/lap; the current distance and fuel require fresh confirmation.`;
+        return answer('fuel_status',reply,null,{confidence:history?'estimate_low':a.fuel_basis==='unavailable'?'unavailable':'estimate',strategyBinding:a.binding,basis:history?'memory_analysis':'bridge_calculation_reference',evidence_date:history?.recordDate||null});
       }
       // ★Codex P1-1：`fuelReply()` は `pit_timing_authority`（pit前の全レース距離を
       //   前提にした旧権威）から「◯L不足」「Plan A継続」を作る。実走 18:44:53 は
@@ -809,7 +871,7 @@
     //   「何周目にピットインする？」は `何周` を含むため、順序を誤ると
     //   残り周回の質問として食われる。実走ではそもそも `何週` で unhandled だった。
     //   合意Plan・pit実績は session-strategy-state が唯一の正本。
-    if (/(?:何周目|いつ|どこ).{0,8}(?:ピット|ボックス|box)|(?:ピット|ボックス).{0,10}(?:何周目|いつ|予定)/i.test(text)
+    if (/(?:何周目|いつ|どこ).{0,8}(?:ピット|ボックス|box)|(?:ピット|ボックス).{0,16}(?:何周(?:目|年)?|いつ|予定)/i.test(text)
         || /pit.{0,10}(?:which lap|what lap|when)|when.{0,10}pit/i.test(text)) {
       if (strategyModule && strategyState && stratCan(strategyModule, 'answerPitDecision')) {
         const a = strategyModule.answerPitDecision(strategyState,
@@ -1019,6 +1081,9 @@
     }
     if (weatherQuestion) {
       const w = weatherValues(live);
+      if (/気温|air temp/i.test(text)&&!/天気|天候|weather|路面|路温|トラック温度|track temp|湿度|humidity|雨|rain/i.test(text)) return answer('air_temperature',w.air!==null
+        ?(isJP(lang)?`気温${w.air.toFixed(1)}℃。`:`Air temperature ${w.air.toFixed(1)}C.`)
+        :(isJP(lang)?'現在の気温は取得できない。':'Current air temperature is unavailable.'));
       if (/路面(?:温度)?|路温|トラック温度|track temp/i.test(text)) return answer('track_temperature', w.track !== null
         ? (isJP(lang) ? `路面${w.track.toFixed(1)}℃。` : `Track temperature ${w.track.toFixed(1)}C.`)
         : (isJP(lang) ? '現在の路面温度は取得できない。' : 'Current track temperature is unavailable.'));
@@ -1149,7 +1214,7 @@
         isJP(lang) ? 'ごめん、前後のGAPはまだ取れていない。次の計測で言う。'
           : 'Sorry — the nearest gaps are not available yet. I will call them at the next measurement.');
     }
-    if (/(?:トップ|首位|P1|leader).{0,10}(?:何周|何ラップ|周回|ラップ数|lap)|(?:何周|何ラップ|周回|ラップ数).{0,10}(?:トップ|首位|P1|leader)/i.test(text)) {
+    if (!/ピットストップ/.test(text)&&/(?:トップ|首位|P1|leader).{0,10}(?:何周|何ラップ|周回|ラップ数|lap)|(?:何周|何ラップ|周回|ラップ数).{0,10}(?:トップ|首位|P1|leader)/i.test(text)) {
       const wantsOverall = /総合|GTP|gdp|overall/i.test(text);
       const leader = wantsOverall ? live.leaders && live.leaders.overall : live.leaders && live.leaders.player_class;
       const lap = integer(leader && leader.lap);
@@ -1181,7 +1246,7 @@
     if (!/[?？]/.test(text) && /(?:無事.{0,6}完走|完走.{0,6}目指|インシデント.{0,6}ゼロ|bring it home|finish clean)/i.test(text)) {
       return answer('race_goal_ack', isJP(lang) ? '了解。完走を優先しよう。' : 'Copy. Let us prioritise bringing it home.');
     }
-    if (!/[?？]/.test(text) && /(?:全く|ひどい|荒れて|めちゃくちゃ|ばっか|祭り|危なすぎ|what a mess|this is chaos)/i.test(text)) {
+    if (!/(?:改善|返答|回答|答え|エンジニア|engineer|your answer|not improved)/i.test(text)&&!/[?？]/.test(text) && /(?:全く|ひどい|荒れて|めちゃくちゃ|ばっか|祭り|危なすぎ|what a mess|this is chaos)/i.test(text)) {
       return answer('race_comment_ack', isJP(lang) ? '了解。落ち着いていこう。' : 'Copy. Stay calm and keep it clean.');
     }
     return { handled:false };
@@ -1253,7 +1318,21 @@
     const canTrack = !!(strategyModule && strategyState && stratCan(strategyModule, 'pendingProposal')
       && stratCan(strategyModule, 'invalidatePendingProposal'));
     const hadPending = canTrack && !!strategyModule.pendingProposal(strategyState, { at: Date.now() });
-    const result = routeInner(input);
+    const referencePending=hadPending?strategyModule.pendingProposal(strategyState,{at:Date.now()}):null;
+    const referenceSemantic=referencePending?.reference?.contract==='provisional_history_v1';
+    const currentText=String(input?.text||'');
+    const currentIntent=classifyDriverIntent(currentText);
+    const requested=currentText.match(/([0-9０-９]{1,3})\s*周(?:目)?/);
+    if(referenceSemantic&&requested&&/(?:やっぱり|変更|変えて|訂正|じゃなく)/.test(currentText)){
+      return answer('fuel_reference_revision','現在の条件で訂正案を確認する。',
+        {type:'fuel_reference_revision',requestedTargetLap:Number(requested[1].replace(/[０-９]/g,d=>'０１２３４５６７８９'.indexOf(d))),replacesDecisionId:referencePending.decision_id});
+    }
+    // A native reference consultation uses the existing semantic judge for
+    // a compound reply, including proposed litres. Keyword fuel routing must
+    // not consume that turn before its proposal meaning is classified.
+    const bare=/^(?:了解|了解です|わかった|分かった|オーケー|OK|copy|roger|understood|はい|うん|ええ|いや|いいえ|やめ(?:て|とく|とこう)?|ちがう|違う|no|not now|not yet)[。.!！?？]?$/i.test(currentText);
+    const result = referenceSemantic&&!bare&&currentIntent.kind!=='command'
+      ?{handled:false}:routeInner(input);
     const sameTopic = !!(result && (STRATEGY_TOPIC_INTENTS.has(result.intent)
       || NEUTRAL_NON_TOPIC_INTENTS.has(result.intent)));
     if (hadPending && !sameTopic && result
@@ -1276,6 +1355,11 @@
   // 「来週」を壊しても intent が変わらず**変異が検出できなかった**（2026-09-06）。
   function route(input){
     const out=routeLegacy(input);
+    if(out?.handled&&out.intent==='fuel_status'&&/(?:周回数|何周目|ラップ数|lap count|current lap)/i.test(String(input?.text||''))){
+      const live=input.live||{},lap=integer(live.lap),left=integer(live.finish_crossings_authority),jp=isJP(input.lang||'ja');
+      out.reply+=jp?` 現在${lap===null?'周回数は不明':lap+'周目'}。${left!==null?'残りライン通過は'+left+'回。':''}`
+        :` Current lap ${lap===null?'unavailable':lap}.${left!==null?' Remaining finish-line crossings: '+left+'.':''}`;
+    }
     if(input?.strategy?.state?.readonly_projection&&out?.handled&&/(?:pit|plan|fuel|strategy)/.test(String(out.intent||''))){
       out.strategyBinding=out.strategyBinding||input.strategy.binding||null;
       out.canonicalSource=input.strategy.state.publication_ref||null;

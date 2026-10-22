@@ -435,7 +435,9 @@ const judgeConstSrc = (judgeConstStartMatch ? judgeConstStartMatch[0] : '')
 const stripJudgeTagSrc = grabFn(html, 'stripProposalJudgeTag');
 const applyJudgeTagSrc = grabFn(html, 'applyProposalJudgeTag');
 function makeJudgeCtx(st) {
+  const canonicalLifecycleCache=require('./desktop/canonical-lifecycle-cache').create({now:()=>Date.now()});
   const ctx = {
+    canonicalLifecycleCache,
     console, globalThis: null,
     PitwallSessionStrategyState: S,
     ensureStrategyState: () => st,

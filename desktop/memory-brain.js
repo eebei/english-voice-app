@@ -34,7 +34,8 @@
     if (!user && !cust && !identity.ownerRef) return false;
     if (user && idValue(record.userId) !== user) return false;
     if (cust && idValue(record.custId ?? record.cust_id) !== cust) return false;
-    if (norm(identity.track) && norm(trackOf(record)) !== norm(identity.track)) return false;
+    const tracks=[identity.track,...(Array.isArray(identity.trackCandidates)?identity.trackCandidates.slice(0,2):[])].map(norm).filter(Boolean);
+    if (tracks.length && !tracks.includes(norm(trackOf(record)))) return false;
     if (norm(identity.car || identity.carClass)
         && norm(carOf(record)) !== norm(identity.car || identity.carClass)) return false;
     return true;

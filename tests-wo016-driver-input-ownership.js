@@ -143,7 +143,7 @@ const RENDERER_FNS = [
   'noteDriverInputIdentity', 'onDriverInputCanonicalEvent', 'enforceDriverInputScope', 'interruptTurnSpeech', 'attachBridgePttTerminal',
   'handleBridgePttText', 'handleBridgePttAudio', 'handleBridgePttDiagnostic', 'handleBridgePttError', 'deliverReleasedCaptures',
   // product paths
-  'sendMsg', 'callAPI', 'pttStart', 'pttStop', 'transcribePttAudio', 'setHint', 'isJapaneseEngineer',
+  'syncFuelReferenceEvidence', 'sendMsg', 'callAPI', 'pttStart', 'pttStop', 'transcribePttAudio', 'setHint', 'isJapaneseEngineer',
   'currentCanonicalStrategyLive', 'buildCurrentRaceContext', 'stripProposalJudgeTag', 'currentPlanReplyDependsOn',
   'recordLunaTurn', 'ensureConversationBox', 'saveConversationBox', 'conversationSessionKey', 'addMsg', 'convoLog',
   'pushMsg', 'removeMessageById', 'speak', 'speakReplyChunk', 'drainQueue', 'finalizeUtterance', 'discardQueuedUtterances',

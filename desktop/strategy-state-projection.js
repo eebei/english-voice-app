@@ -7,6 +7,12 @@ function freeze(v){if(v&&typeof v==='object'){Object.values(v).forEach(freeze);O
 const immutable=v=>freeze(clone(v));
 function stable(v){if(Array.isArray(v))return '['+v.map(stable).join(',')+']';if(v&&typeof v==='object')return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+stable(v[k])).join(',')+'}';return JSON.stringify(v);}
 function factContent(s){const f=s.current_facts;return stable({fuel_level_l:f.fuel_level_l,current_lap:f.current_lap,on_pit_road:f.on_pit_road,on_track:f.on_track,finish:{kind:s.finish.kind,available:s.finish.available,remaining_after_current:s.finish.remaining_after_current,remaining_sf_crossings:s.finish.remaining_sf_crossings},fuel_calculation:s.recommendations.fuel_strategy||null,pit_events:s.pit_ledger.events,active:s.lifecycle.active});}
+// An explicitly approximate, dated fuel observation can finish during a
+// small amount of normal burn. Its original value and five-second deadline
+// stay fixed; lap/finish/critical changes still invalidate the answer.
+function fuelObservationContent(s){const f=s.current_facts;return stable({current_lap:f.current_lap,on_pit_road:f.on_pit_road,on_track:f.on_track,finish:{kind:s.finish.kind,available:s.finish.available,remaining_after_current:s.finish.remaining_after_current,remaining_sf_crossings:s.finish.remaining_sf_crossings},critical:criticalContent(s)});}
+function fuelObservationEvidence(s){const fuel=s.current_facts.fuel_level_l,rate=s.recommendations.fuel_strategy?.value?.strict_clean_avg_fuel_per_lap??s.recommendations.fuel_strategy?.value?.avg_fuel_per_lap;
+ return {fuel_level_l:fuel,max_burn_l:finite(fuel)&&fuel<=Math.max((finite(rate)&&rate>0?rate:0)+2,2)?0.1:0.25};}
 // round4 (audit correction): the critical_context unavailable sentinel used
 // to carry identity:null -- no scope signal at all -- so validBinding's
 // `!usable(source())` check alone could not tell "still the SAME unknown"
@@ -26,7 +32,7 @@ function factContent(s){const f=s.current_facts;return stable({fuel_level_l:f.fu
 // even while current() stays null throughout. Callers without that accessor
 // (simpler test mocks) pass null, which degrades to the prior behavior.
 function rawScopeSignature(s,connGen){const conn=typeof connGen==='number'?connGen:null;
- if(!s)return JSON.stringify(['disconnected',conn]);const scope=s.continuity&&s.continuity.stable_scope;
+ if(!s)return JSON.stringify(['disconnected',conn]);const scope=s.continuity&&(s.continuity.stable_scope||s.continuity.custody_scope);
  return JSON.stringify([s.bridge_process_epoch??null,s.race_instance_id??null,s.session_num??null,(scope&&typeof scope==='object')?(scope.driver_id??null):null,conn]);}
 function connectionGeneration(canonical){return typeof canonical.connectionGeneration==='function'?canonical.connectionGeneration():null;}
 // WO014 round3: the 5 current-race LLM callers (sendMessage/followUp/
@@ -68,17 +74,42 @@ function criticalContent(s){const bf=s.race_facts.black_flag;
  return stable({active:s.lifecycle.active,pit_events:s.pit_ledger.events,black_flag:bf?{state:bf.state,freshness:bf.freshness}:null,awaiting:s.lifecycle.awaiting,
   execution:{allowed:s.execution.allowed,gate_reason:s.execution.gate_reason||null},
   proof:{allowed_proof_id:s.box_delivery.allowed_proof_id||null,allowed_attempt_id:s.box_delivery.allowed_attempt_id||null}});}
-function create({canonical,now=()=>Date.now()}){
+function create({canonical,now=()=>Date.now(),fuelEvidenceVersion=()=>null}){
  let identity=null,generation=0,proposal=null,dispute=null,driverStrategy=null;
+ let fuelObservationScope=0,lastObservedFuel=null,fuelIncreaseGeneration=0;
  const seen=new Map();
  function unavailable(){if(proposal||dispute){generation++;proposal=null;dispute=null;}return null;}
  function source(){
-  const s=canonical.current(),scope=s?.continuity?.stable_scope;
-  if(!s||!scope||scope.race_instance_id!==s.race_instance_id||scope.session_num!==s.session_num||!integer(scope.driver_id)||scope.driver_id===0
-   ||!integer(scope.session_num)||typeof scope.race_instance_id!=='string'||!scope.race_instance_id)return unavailable();
-  if(s.continuity.durable_commit===false||['restore_pending','restore_failed','identity_unsupported'].includes(s.continuity.recovery_status))return unavailable();
-  const id=JSON.stringify([s.bridge_process_epoch,scope.race_instance_id,scope.session_num,scope.driver_id]);
-  if(id!==identity){identity=id;generation++;proposal=null;dispute=null;driverStrategy=null;seen.clear();}
+  let s=canonical.current();
+  if(!s)return unavailable();
+  let scope=s.continuity?.stable_scope||s.continuity?.custody_scope;
+  const validScope=!!scope&&scope.race_instance_id===s.race_instance_id&&scope.session_num===s.session_num
+   &&integer(scope.driver_id)&&scope.driver_id>0&&integer(scope.session_num)
+   &&typeof scope.race_instance_id==='string'&&!!scope.race_instance_id
+   &&(!scope.process_epoch||scope.process_epoch===s.bridge_process_epoch&&scope.race_instance_id.startsWith('fallback:'));
+  const recoverable=validScope&&s.continuity.durable_commit!==false&&!['restore_pending','restore_failed','identity_unsupported'].includes(s.continuity.recovery_status);
+  if(!recoverable){
+   if(!validScope && !(!scope&&s.continuity?.recovery_status==='identity_unsupported'))return unavailable();
+   // Restart recovery cannot authorize a Plan. It must not erase fresh,
+   // process/session-scoped observations that already passed the cache.
+   scope={race_instance_id:s.race_instance_id,session_num:s.session_num,driver_id:null};
+   s={...s,continuity:{...s.continuity,stable_scope:scope},
+    lifecycle:{...s.lifecycle,active:null,awaiting:[]},
+    last_driver_action:{available:false,action:null},
+    execution:{...s.execution,allowed:false,gate_reason:s.continuity.recovery_status||'identity_unverified'},
+    box_delivery:{...s.box_delivery,allowed_proof_id:null,allowed_attempt_id:null,attempts:[]}};
+  }
+  const id=JSON.stringify([s.bridge_process_epoch,s.race_instance_id,s.session_num,scope.driver_id,recoverable]);
+  if(id!==identity){identity=id;generation++;proposal=null;dispute=null;driverStrategy=null;seen.clear();
+   fuelObservationScope++;lastObservedFuel=null;fuelIncreaseGeneration=0;}
+  // The previous fresh observation, not just the reply's starting fuel,
+  // detects a top-up after ordinary burn. Repeated reads of one immutable
+  // snapshot compare equal and do not create another increase event.
+  const observedFuel=s.current_facts.fuel_level_l;
+  if(s.telemetry_available===true&&s.current_facts.available===true&&finite(observedFuel)){
+   if(finite(lastObservedFuel)&&observedFuel>lastObservedFuel)fuelIncreaseGeneration++;
+   lastObservedFuel=observedFuel;
+  }
   if(s.telemetry_available!==true||s.source_frame.available!==true||s.current_facts.available!==true||s.execution.scope_closed||s.execution.collision)unavailable();
   if(!seen.has(s.snapshot_id)){seen.set(s.snapshot_id,now());if(seen.size>64)seen.delete(seen.keys().next().value);}
   return s;
@@ -103,7 +134,7 @@ function create({canonical,now=()=>Date.now()}){
     ?{fuel_added_l:last.service.fuel_added_l,lane_total_s:last.service.lane_total_s,stall_s:last.service.stall_s}:null;
   const pitPlan=a?{lap:a.target_lap,plan_id:a.selected_plan,source:'bridge_canonical',decision_id:a.decision_id,revision:a.revision,record_ref:a.record_ref}:null;
   return immutable({readonly_projection:true,available,reason:!s?'canonical_unavailable':!available?'canonical_unavailable_or_closed':null,
-   scope:s?s.continuity.stable_scope:null,publication_ref:s?{bridge_process_epoch:s.bridge_process_epoch,canonical_snapshot_id:s.snapshot_id,canonical_snapshot_sequence:s.snapshot_sequence}:null,
+   scope:s?(s.continuity.stable_scope||s.continuity.custody_scope):null,publication_ref:s?{bridge_process_epoch:s.bridge_process_epoch,canonical_snapshot_id:s.snapshot_id,canonical_snapshot_sequence:s.snapshot_sequence}:null,
    canonical_revision:a?.revision??null,revision:generation,active:a,pending:available?s.lifecycle.awaiting:[],terminals:s?s.lifecycle.terminal_records:[],pitEvents:events,history_role:'canonical_observed_history',history_available:!!s,
    pit_plan:pitPlan,pit_executed:last?{lap:last.entry?.lap??last.entry?.current_lap??null,execution_relation:last.execution_relation,pit_event_id:last.pit_event_id,event_ref:last.event_ref,service:lastServiceVerified,source:'bridge_canonical'}:null,
    pending_proposal:pending(),driver_strategy:driverStrategy,laps_dispute:dispute,
@@ -133,10 +164,11 @@ function create({canonical,now=()=>Date.now()}){
   if(!usable(s))return ['critical_context','scope_continuity'].includes(kind)?immutable({kind,identity:null,unavailable:true,captured_scope:rawScopeSignature(canonical.current(),connectionGeneration(canonical))}):null;
   const r=kind==='awaiting'?s.lifecycle.awaiting.find(r=>!decisionId||r.decision_id===decisionId)
    :kind==='terminal'?s.lifecycle.terminal_records.find(r=>decisionId&&r.decision_id===decisionId):s.lifecycle.active;
-  if(!r&&!['facts','recommendation','critical_context','scope_continuity'].includes(kind))return null;
-  const deadline=typeof canonical.expiresAt==='function'?canonical.expiresAt():seen.get(s.snapshot_id)+5000;
-  return immutable({kind,identity,bridge_process_epoch:s.bridge_process_epoch,canonical_snapshot_id:s.snapshot_id,canonical_snapshot_sequence:s.snapshot_sequence,
-   deadline_ms:deadline,record_content:r?stable(r):null,fact_content:kind==='facts'?factContent(s):null,critical_context_content:kind==='critical_context'?criticalContent(s):null,recommendation_content:kind==='recommendation'?JSON.stringify(s.recommendations):null,scope:s.continuity.stable_scope,decision_id:r?.decision_id??null,revision:r?.revision??null,record_ref:r?.record_ref??null});
+  if(!r&&!['fuel_estimate','fuel_observation','facts','recommendation','critical_context','scope_continuity'].includes(kind))return null;
+  const reference=r?.provisional_history?.contract==='provisional_history_v1'?r.provisional_history:null;
+  const deadline=kind==='fuel_estimate'?now()+30000:kind==='awaiting'&&reference?now()+Math.max(0,Math.min(30,reference.expires_session_time_s-s.source_frame.session_time_s))*1000:typeof canonical.expiresAt==='function'?canonical.expiresAt():seen.get(s.snapshot_id)+5000;
+  return immutable({kind,identity,fuel_estimate:kind==='fuel_estimate'?{critical:criticalContent(s),finish:stable(s.finish),fuel:s.current_facts.fuel_level_l,on_pit_road:s.current_facts.on_pit_road,evidence_version:fuelEvidenceVersion(),rate:s.recommendations.fuel_strategy?.value?.avg_fuel_per_lap??null,strict_rate:s.recommendations.fuel_strategy?.value?.strict_clean_avg_fuel_per_lap??null,strict_count:s.recommendations.fuel_strategy?.value?.strict_clean_laps_sampled??null}:null,bridge_process_epoch:s.bridge_process_epoch,canonical_snapshot_id:s.snapshot_id,canonical_snapshot_sequence:s.snapshot_sequence,
+   deadline_ms:deadline,reference_lap:reference?s.current_facts.current_lap:null,fuel_observation:kind==='fuel_observation'?{...fuelObservationEvidence(s),scope_generation:fuelObservationScope,increase_generation:fuelIncreaseGeneration}:null,fuel_observation_content:kind==='fuel_observation'?fuelObservationContent(s):null,record_content:r?stable(r):null,fact_content:kind==='facts'?factContent(s):null,critical_context_content:kind==='critical_context'?criticalContent(s):null,recommendation_content:kind==='recommendation'?JSON.stringify(s.recommendations):null,scope:s.continuity.stable_scope||s.continuity.custody_scope,decision_id:r?.decision_id??null,revision:r?.revision??null,record_ref:r?.record_ref??null});
  }
  // round5 (main複合fence): a caller that must fence on BOTH a precise
  // domain binding (facts/plan/proposal -- the exact content the reply text
@@ -168,10 +200,35 @@ function create({canonical,now=()=>Date.now()}){
   // reply that never claimed anything about Plan/pit/fuel must not be
   // discarded just because those facts changed under the SAME scope).
   if(b.kind==='scope_continuity')return true;
+  if(b.kind==='fuel_estimate'){
+   const e=b.fuel_estimate,rate=s.recommendations.fuel_strategy?.value?.avg_fuel_per_lap??null;
+   // A live cache is still mandatory above. Ordinary fuel burn/sequence
+   // progression does not interrupt a short provisional answer; refuelling,
+   // a pit/plan change, a new consumption sample or changed memory does.
+   const finish={...s.finish};delete finish.source_frame_sequence;
+   const priorFinish=JSON.parse(e.finish);delete priorFinish.source_frame_sequence;
+   return criticalContent(s)===e.critical&&stable(finish)===stable(priorFinish)
+    &&s.current_facts.on_pit_road===e.on_pit_road&&rate===e.rate
+    &&(s.recommendations.fuel_strategy?.value?.strict_clean_avg_fuel_per_lap??null)===e.strict_rate
+    &&(s.recommendations.fuel_strategy?.value?.strict_clean_laps_sampled??null)===e.strict_count
+    &&(!finite(e.fuel)||!finite(s.current_facts.fuel_level_l)||(s.current_facts.fuel_level_l<=e.fuel+0.5&&s.current_facts.fuel_level_l>=e.fuel-(e.fuel<=Math.max(e.planning_rate||e.rate||0,2)?0.1:0.5)))
+    &&fuelEvidenceVersion()===e.evidence_version;
+  }
+  if(b.kind==='fuel_observation'){
+   const e=b.fuel_observation,current=s.current_facts.fuel_level_l;
+   // Compare against the original generation-time observation, never the
+   // previous frame. Any increase means refuelling/new evidence; unknown
+   // fuel cannot preserve a previously numeric answer.
+   return !!e&&e.scope_generation===fuelObservationScope&&e.increase_generation===fuelIncreaseGeneration
+    &&finite(e.fuel_level_l)&&finite(current)&&current<=e.fuel_level_l
+    &&current>=e.fuel_level_l-e.max_burn_l
+    &&fuelObservationContent(s)===b.fuel_observation_content;
+  }
   if(b.kind==='facts')return factContent(s)===b.fact_content;
   if(b.kind==='critical_context')return criticalContent(s)===b.critical_context_content;
   if(b.kind==='recommendation'&&JSON.stringify(s.recommendations)!==b.recommendation_content)return false;
   if(b.kind==='recommendation'&&b.decision_id===null)return s.lifecycle.active===null;
+  if(b.kind==='awaiting'&&b.reference_lap!=null&&s.current_facts.current_lap!==b.reference_lap)return false;
   const r=b.kind==='awaiting'?s.lifecycle.awaiting.find(r=>r.decision_id===b.decision_id)
    :b.kind==='terminal'?s.lifecycle.terminal_records.find(r=>r.decision_id===b.decision_id):s.lifecycle.active;
   return !!r&&r.decision_id===b.decision_id&&r.revision===b.revision&&stable(r)===b.record_content;
@@ -182,7 +239,7 @@ function create({canonical,now=()=>Date.now()}){
   const attempt=i.dispatch_id&&s.box_delivery.attempts.find(a=>a.dispatch_id===i.dispatch_id&&a.decision_id===i.decision_id);
   if(!r||!(i.audible===true||attempt?.status==='audible_started'))return null;
   generation++;proposal={plan_id:r.selected_plan,lap:r.target_lap,decision_id:r.decision_id,canonical_revision:r.revision,canonical_record_content:stable(r),base_revision:generation,identity,
-   at:now(),expires_at:now()+90000,dispatch_id:i.dispatch_id??null,audible:true,awaiting_judgment:false,binding:binding('awaiting',r.decision_id)};return pending();
+   reference:r.provisional_history||null,at:now(),expires_at:now()+90000,dispatch_id:i.dispatch_id??null,audible:true,awaiting_judgment:false,binding:binding('awaiting',r.decision_id)};return pending();
  }
  function resolvePendingProposal(st,i={}){const p=pending();if(!p||p.awaiting_judgment&&!i.bypassJudgmentGate)return null;
   generation++;proposal=null;return immutable({accepted:i.accepted===true,requested:true,applied:false,proposal:p,plan:{lap:p.lap,plan_id:p.plan_id,decision_id:p.decision_id},reason:'bridge_confirmation_required'});
@@ -237,9 +294,9 @@ function create({canonical,now=()=>Date.now()}){
   return immutable({available:!!a||Object.keys(plans).length>0,selected_plan:a?.selected_plan??null,active_record:a,plans,recommendations:recs,source:'bridge_canonical',execution_allowed:s.execution.allowed,hold_reason:s.execution.gate_reason});
  }
  function raceFactsNote(){const v=current();if(!v.available)return '[Current strategy unavailable: no fresh canonical authority]'+(v.history_available?' Historical canonical outcomes only: '+v.terminals.map(r=>r.decision_id+':'+r.phase).join(', ')+'; pit outcomes '+v.pitEvents.map(e=>e.pit_event_id+':'+e.execution_relation).join(', '):'');
-  const a=v.active;return `[Bridge canonical ${v.publication_ref.canonical_snapshot_id}; driver ${v.scope.driver_id}] Current agreed plan: ${a?`Plan ${a.selected_plan}, lap ${a.target_lap}, decision ${a.decision_id}, revision ${a.revision}`:'none'}. Execution: ${v.execution_allowed?'allowed':'held '+v.execution_hold_reason}. Observed pit outcomes: ${v.pitEvents.map(e=>e.pit_event_id+':'+e.execution_relation).join(', ')||'none'}. Historical/recommendation data cannot establish a current agreement.`;
+  const a=v.active;return `[Bridge canonical ${v.publication_ref.canonical_snapshot_id}; driver ${v.scope?.driver_id??'unverified'}] Current agreed plan: ${a?`Plan ${a.selected_plan}, lap ${a.target_lap}, decision ${a.decision_id}, revision ${a.revision}`:'none'}. Execution: ${v.execution_allowed?'allowed':'held '+v.execution_hold_reason}. Observed pit outcomes: ${v.pitEvents.map(e=>e.pit_event_id+':'+e.execution_relation).join(', ')||'none'}. Historical/recommendation data cannot establish a current agreement.`;
  }
- const api={revision:()=>{source();return generation;},pitPlan:()=>current().pit_plan,pitExecuted:()=>current().pit_executed,answerPitDecision,answerFuel,
+ const api={fuelObservationBinding:()=>binding('fuel_observation'),fuelEstimateBinding:(estimate={})=>{const b=binding('fuel_estimate');return b?immutable({...b,fuel_estimate:{...b.fuel_estimate,planning_rate:estimate.rate_l_per_lap??null}}):null;},revision:()=>{source();return generation;},pitPlan:()=>current().pit_plan,pitExecuted:()=>current().pit_executed,answerPitDecision,answerFuel,
   pendingProposal:()=>pending(),proposePlan,resolvePendingProposal,markAwaitingJudgment,invalidatePendingProposal,applyProposalClassification,
   agreePitPlan:(st,i)=>request(st,i,'agree'),amendPitPlan:(st,i)=>request(st,i,'amend'),cancelPitPlan:(st,i)=>request(st,i,'cancel'),recordPitExecuted:()=>null,
   disputeLapsRemaining,lapsRemainingStatus,restateDriverStrategy};

@@ -66,6 +66,7 @@ import bridge_plan_lifecycle_adapter as plan_lifecycle_adapter
 import debrief_outcomes as debrief_outcomes_mod
 import driver_plan_command as driver_plan_command_mod
 import fixed_target_authority as fixed_target_authority_mod
+import fuel_reference_planning as fuel_reference_mod
 import box_authority_delivery as box_authority_delivery_mod
 import observability_trace as observability_trace_mod
 
@@ -1736,6 +1737,38 @@ def apply_driver_plan_command(state, ledger, command, *, race_facts_snapshot,
     return state, ledger, ack, ack.get('outcome') == 'applied' and normalized['intent'] != 'amend'
 
 
+_pending_fuel_references = []
+
+def _queue_fuel_reference(value):
+    if isinstance(value,dict) and len(_pending_fuel_references)<100:
+        _pending_fuel_references.append(copy.deepcopy(value))
+
+def _consume_fuel_references():
+    result=list(_pending_fuel_references);_pending_fuel_references.clear();return result
+
+def register_fuel_reference_candidate(state,calculation,current,replace_id=None):
+    """Only the canonical Lifecycle owner registers a reference proposal."""
+    if state is None or not calculation.get('available'):return state,None
+    decision_id=calculation['decision_id']
+    existing=state.plan_records.get(decision_id)
+    if existing is not None:return state,existing if existing.phase in ('active','awaiting_driver') else None
+    if replace_id:
+        prior=state.plan_records.get(replace_id)
+        if prior is None or fuel_reference_mod.reference_of(prior) is None:return state,None
+        state,_=plan_lifecycle_mod.cancel_plan(state,decision_id=replace_id,reason='driver_reference_revision')
+    ref=canonical_mod.clean(calculation['reference'])
+    options={'available':True,'selected_plan':'A','snapshot_id':ref['source_snapshot_id'],
+             'plan_a':{**calculation,'available':True},'plan_b':{'available':False},'plan_c':{'available':False}}
+    state,outcome=plan_lifecycle_mod.register_plan(state,decision_id=decision_id,
+        race_instance_id=current['race_instance_id'],session_num=current['session_num'],selected_plan='A',phase='awaiting_driver',
+        current_driver_pit_sequence=current['driver_pit_sequence'],created_source_frame_sequence=current['source_frame_sequence'],
+        target_lap=calculation['target_lap'],add_fuel_l=calculation['add_fuel_l'],set_fuel_l=calculation['set_fuel_l'],
+        plan_basis={'reason':fuel_reference_mod.CONTRACT,fuel_reference_mod.CONTRACT:ref},
+        validity_contract={'contract':fuel_reference_mod.CONTRACT,'consent_window_seconds':30},
+        evidence_snapshot_id=ref['source_snapshot_id'],options_snapshot=options)
+    return state,state.plan_records.get(decision_id) if outcome.status=='registered' else None
+
+
 def _queue_strategy_decision_response(decision_id, accepted, session_num=None,
                                       dispatch_id=None):
     """WebSocket cmd 'strategy_decision_response' 受信時に呼ぶ。
@@ -1810,7 +1843,7 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     # ★2026-09-17 Codex MD#8差戻し（P1）：Driver応答の受領ack。Desktopはackが
     #   返るまでoutboxに保持して再送するため、非搭乗ゲートで落とすと永久に
     #   再送し続ける。音声イベントではない。
-    'strategy_decision_ack', 'strategy_delivery_ack', 'driver_plan_command_ack',
+    'strategy_decision_ack', 'strategy_delivery_ack', 'driver_plan_command_ack', 'fuel_reference_ack',
     'box_authority_snapshot', 'box_delivery_ack', 'canonical_lifecycle_snapshot',
     # ACTIVE -> DRIVER_HANDOFF の遷移後に生成される耐久引き継ぎパケット。
     # 通常 radio にすると非搭乗ゲートで破棄されるため、データイベントとして届け、
@@ -2174,6 +2207,12 @@ def director_gate(event):
             log("DIRECTOR drop: %s reason=debrief_state" % kind)
             return False
         prio = PRIORITY.get(kind, DEFAULT_PRIORITY)
+        if (kind=='strategy_plan_proposal' and event.get('reason')==fuel_reference_mod.CONTRACT
+                and event.get('selected_plan')=='A'
+                and ((event.get('decision_plan') or {}).get('provisional_history') or {}).get('contract')==fuel_reference_mod.CONTRACT):
+            # A reply to the driver's reference consultation is procedure,
+            # rather than an unsolicited background strategy suggestion.
+            prio=2
         # ★2026-07-20 Codexレビュー P0-1：bridgeで決めた優先度が renderer に伝わっておらず、
         #   crash_check以外の安全コールが全て既定のP4扱いになっていた（＝安全保証が成立していない）。
         #   イベント自体に載せて発話の最後まで運ぶ。
@@ -3733,6 +3772,8 @@ def poll_iracing():
     _race_strategy_state = None
     _plan_scope_close_applied = None
     _box_delivery_ledger = box_authority_delivery_mod.new_ledger()
+    _reference_dispatch_attempts = {}
+    _reference_request_receipts = {}
     _plan_collision_scope = None  # race/session/failed authoritative pit sequence
     _plan_closed_identity = None  # WO-007: only genuine identity change opens a scope
     _driver_plan_command_ledger = driver_plan_command_mod.new_ledger()
@@ -3874,6 +3915,10 @@ def poll_iracing():
     post_contact_speed_ok    = True   # 監視窓中に Speed>30 を維持できてるかフラグ
     prev_damage_s = 0.0        # 前回計測のdamage_s（義務+任意修理秒）。増えたら1回だけダメージ報告
     prev_incidents = None
+    _finished_summary_outbox = {}
+    _current_summary_identity = None
+    _race_summary_settle = {}
+    _session_completed_counts = {}
     _race_summary_gate_last = None   # RACE SUMMARY GATE の直前状態（変化時だけログ）
     incident_times = []
     # ★Build 266 Phase E：damage_observation の incident_delta 計算専用。prev_incidents は
@@ -3928,7 +3973,7 @@ def poll_iracing():
             _canonical_telemetry=copy.deepcopy(event)
             return 'STAGED'
         if (event_type in ('session_info','driver_plan_command_ack','box_delivery_ack',
-                           'strategy_decision_ack','strategy_delivery_ack')
+                           'strategy_decision_ack','strategy_delivery_ack','fuel_reference_ack')
                 or event_type=='radio' and event.get('trigger') in _canonical_critical):
             item=copy.deepcopy(event)
             # ★WO015反例修復：driver_plan_command_ack/box_delivery_ack/
@@ -3941,7 +3986,7 @@ def poll_iracing():
             #   そのrecord自身を引く——存在しなければorigin_record_refを
             #   省略する（fail closed、別recordを代用しない）。
             if event_type in ('driver_plan_command_ack','box_delivery_ack',
-                              'strategy_decision_ack','strategy_delivery_ack') and event.get('decision_id'):
+                              'strategy_decision_ack','strategy_delivery_ack','fuel_reference_ack') and event.get('decision_id'):
                 record=_race_strategy_state.plan_records.get(event['decision_id']) if _race_strategy_state else None
             else:
                 record=plan_lifecycle_mod.active_plan_view(_race_strategy_state) if _race_strategy_state else None
@@ -3959,7 +4004,8 @@ def poll_iracing():
           'state_origin_epoch':canonical_mod.PROCESS_EPOCH,'recovery_status':_recovery_status,'gap_unknown':_recovery_gap,
           'checkpoint_id':_recovery_checkpoint_id,'checkpoint_revision':_recovery_store.revision or None,
           'durable_commit':_recovery_committed,'error':_recovery_error,
-          'stable_scope':copy.deepcopy(_recovery_scope),
+          'stable_scope':copy.deepcopy(_recovery_scope) if _recovery_scope and 'process_epoch' not in _recovery_scope else None,
+          'custody_scope':copy.deepcopy(_recovery_scope) if _recovery_scope and 'process_epoch' in _recovery_scope else None,
           'isolated_scope_archive_count':len(_recovery_scope_archives),
           'origin_epoch':_recovery_origins['origin_epoch'] if _recovery_restored else None,
           'metrics':copy.deepcopy(_recovery_store.metrics),
@@ -3975,6 +4021,19 @@ def poll_iracing():
           'boundary':boundary,'origins':copy.deepcopy(_recovery_origins),'archives':dict(_recovery_archives),'scope_archives':dict(_recovery_scope_archives)}
 
     while True:
+        # A confirmed finish is captured while telemetry is available. This
+        # tiny outbox can settle/retry its frozen evidence through SDK gaps or
+        # a later session; it never reads new-session numbers to fill blanks.
+        for _finish_key,_finish_entry in list(_finished_summary_outbox.items()):
+            if time.time()<_finish_entry['deadline']:continue
+            _finish_payload=debrief_outcomes_mod.refresh(copy.deepcopy(_finish_entry['payload']),_race_strategy_state)
+            if not _finish_entry.get('normal_ready'):_finish_payload['final_lap_sample_status']='bounded_incomplete'
+            _,_finish_sent,_finish_result=dispatch_pending_summary(_finish_payload,False,broadcast)
+            if _finish_sent:
+                del _finished_summary_outbox[_finish_key]
+                if _finish_key==_current_summary_identity:
+                    summary_sent=True
+                    _pending_summary=None
         _canonical_staged=[]
         _canonical_telemetry=None
         _map_unavailable=False
@@ -4409,6 +4468,10 @@ def poll_iracing():
                         'best_lap': round(min(_old_times), 3),
                         'worst_lap': round(max(_old_times), 3),
                         'avg_lap': round(sum(_old_times) / len(_old_times), 3),
+                        'fuel_sample_basis':'pit_excluded_measured',
+                        'strict_clean_laps_sampled':len(clean_fuel_per_lap_hist),
+                        'strict_clean_avg_fuel_per_lap':(round(sum(clean_fuel_per_lap_hist)/len(clean_fuel_per_lap_hist),3) if clean_fuel_per_lap_hist else None),
+                        'measured_laps_sampled':len(fuel_per_lap_hist),
                         'avg_fuel_per_lap': (
                             round(sum(fuel_per_lap_hist) / len(fuel_per_lap_hist), 2)
                             if fuel_per_lap_hist else None),
@@ -4434,6 +4497,7 @@ def poll_iracing():
                         # ★共用生成関数（build_summary_identity_and_freeze_fields）で
                         #   cust_id / fuel_at_finish を生成。文字列grepではなく実処理で検証可能。
                         **build_summary_identity_and_freeze_fields(info, checker_fuel_freeze),
+                        **driver_activity_mod.summary_metrics(session_laps,_session_completed_counts.get((_pit_seq_prev_race_instance_id,_pit_seq_prev_session_num))),
                     }
                     _transition_summary = _old_summary
             checker_out_notice_sent = _reset['checker_out_notice_sent']
@@ -4622,10 +4686,10 @@ def poll_iracing():
                     % (_this_frame_race_instance_id, cur_snum))
         # WO010: raw identity fence before any Plan/pit consumer; whole decode
         # and all cross-reference validation precede this atomic owner swap.
-        _fresh_recovery_scope=recovery_mod.stable_scope(info,_this_frame_race_instance_id,cur_snum)
+        _fresh_recovery_scope=recovery_mod.custody_scope(info,_this_frame_race_instance_id,cur_snum,canonical_mod.PROCESS_EPOCH)
         if _fresh_recovery_scope is None:
             _recovery_status='identity_unsupported';_recovery_scope=None
-        elif _recovery_loaded_scope!=_fresh_recovery_scope:
+        elif _recovery_loaded_scope!=_fresh_recovery_scope or _recovery_status=='identity_unsupported':
             _scope_switch=_recovery_loaded_scope is not None
             if _scope_switch:
                 _archive_bundle=_recovery_store.loaded
@@ -4655,7 +4719,7 @@ def poll_iracing():
             _recovery_loaded_scope=copy.deepcopy(_fresh_recovery_scope)
             if _recovery_store.error:
                 _recovery_status='restore_failed';_recovery_error=_recovery_store.error
-            elif not _recovery_restore_consumed and _recovery_store.loaded and _recovery_store.loaded['scope']==_fresh_recovery_scope:
+            elif 'process_epoch' not in _fresh_recovery_scope and not _recovery_restore_consumed and _recovery_store.loaded and _recovery_store.loaded['scope']==_fresh_recovery_scope:
                 _bundle=_recovery_store.loaded;_domains=_bundle['decoded']
                 _recovery_scope_archives=dict(_domains['scope_archives'])
                 _old_state=_domains['state']
@@ -4759,7 +4823,8 @@ def poll_iracing():
             pending_strategy_proposal = plan_lifecycle_adapter.legacy_decision_projection(
                 _awaiting_plan_record_this_frame,
                 dispatch_id=(pending_strategy_proposal.get('dispatch_id')
-                             if isinstance(pending_strategy_proposal, dict) else None))
+                             if isinstance(pending_strategy_proposal, dict)
+                             and pending_strategy_proposal.get('decision_id')==_awaiting_plan_record_this_frame.decision_id else None))
         else:
             pending_strategy_proposal = None
         _race_facts_snapshot = race_facts_mod.build_snapshot(
@@ -4887,6 +4952,10 @@ def poll_iracing():
                 _car_idx_lap_completed = _clc_arr[player_car_idx]
         except Exception:
             pass
+        if type(_car_idx_lap_completed) is int and _car_idx_lap_completed>=0:
+            _session_completed_counts[(_this_frame_race_instance_id,cur_snum)]=_car_idx_lap_completed
+            if len(_session_completed_counts)>4:_session_completed_counts.pop(next(iter(_session_completed_counts)))
+        _current_summary_identity=(_this_frame_race_instance_id,cur_snum,info.get('player_cust_id'))
         _previous_lifecycle_state = race_lifecycle_fsm.state
         lifecycle_state = race_lifecycle_fsm.update(
             session_state=cur_ss, lap_last_lap_time=lapTime, telemetry_active=active,
@@ -5064,11 +5133,43 @@ def poll_iracing():
                     and _last_rec.get('time') > 0)
                 _should_fire = driver_activity_mod.should_fire_race_summary(
                     _driver_activity_local, lifecycle_state)
+                _race_summary_settle,_summary_ready=driver_activity_mod.settle_finished_summary(
+                    _race_summary_settle,(_this_frame_race_instance_id,cur_snum,info.get('player_cust_id')),
+                    time.time(),_should_fire,lapTime,_car_idx_lap_completed,
+                    _last_rec.get('completed_lap') if _last_rec else None,lap)
+                _should_fire=_should_fire or 'started' in _race_summary_settle
+                if 'started' in _race_summary_settle and _current_summary_identity not in _finished_summary_outbox:
+                    _frozen_completed=_car_idx_lap_completed if _race_summary_settle.get('counter_consistent') else None
+                    _finished_summary_outbox[_current_summary_identity]={'deadline':_race_summary_settle['started']+4,'payload':{
+                      'type':'session_summary','race_instance_id':_this_frame_race_instance_id,'session_num':cur_snum,
+                      'bridge_process_epoch':canonical_mod.PROCESS_EPOCH,'track':session_track,'track_display':info.get('track_display'),'car_model':session_car_model,
+                      'race_format':_race_plan.get('kind'),'configured_duration_s':_configured_duration_s,
+                      'total_laps_rule':lapsTot if _laps_total_ok and lapsTot and lapsTot>0 else None,
+                      'car_class':session_car_class,'event_type':session_event_type,'is_race':True,
+                      'finish_pos':None,'finish_pos_confirmed':False,'laps':copy.deepcopy(session_laps),
+                      'incidents':prev_incidents if isinstance(prev_incidents,int) else None,
+                      'pit_events':copy.deepcopy(pit_events),'weather':copy.deepcopy(last_weather),
+                      'plan_outcomes':debrief_outcomes_mod.plan_outcomes(_race_strategy_state,_this_frame_race_instance_id,cur_snum),
+                      'setup_fingerprint':session_setup_fingerprint or None,'series_id':session_series_id,
+                      'start_class_position':race_start_class_pos,
+                      'avg_fuel_per_lap':round(sum(fuel_per_lap_hist)/len(fuel_per_lap_hist),3) if fuel_per_lap_hist else None,
+                      'fuel_sample_basis':'pit_excluded_measured','measured_laps_sampled':len(fuel_per_lap_hist),
+                      'strict_clean_laps_sampled':len(clean_fuel_per_lap_hist),
+                      'strict_clean_avg_fuel_per_lap':round(sum(clean_fuel_per_lap_hist)/len(clean_fuel_per_lap_hist),3) if clean_fuel_per_lap_hist else None,
+                      **build_summary_identity_and_freeze_fields(info,checker_fuel_freeze),
+                      **driver_activity_mod.summary_metrics(session_laps,_frozen_completed)}}
+
+                if _current_summary_identity in _finished_summary_outbox:
+                    _finish_evidence=_finished_summary_outbox[_current_summary_identity]['payload']
+                    _finish_evidence.update(driver_activity_mod.summary_metrics(session_laps,
+                        _car_idx_lap_completed if _race_summary_settle.get('counter_consistent') else None))
+                    _finish_evidence.update(laps=copy.deepcopy(session_laps),last_observed_completed_laps=_car_idx_lap_completed)
                 _lap_time_settled = last_lap_time == lapTime
                 # tests_phase_ab_integration.py は、この式の末尾の形を契約文字列として
                 # 検査し、同じ形を消す変異も見ている。式の意味は変えずに括弧を保つこと。
                 _may_summary = (
                     _should_fire and _lap_time_settled and _latest_lap_recorded)
+                _may_summary=_summary_ready and (_may_summary or _race_summary_settle.get('timed_out',False))
                 # ★2026-09-01：実走ログ3本（8/30夕・8/31朝・8/31夜）すべてで
                 #   レースsummaryが一度も発行されず、最終順位・iRating・incidentsが
                 #   デブリーフへ届いていなかった。どの条件で止まったかを残す記録が
@@ -5079,7 +5180,10 @@ def poll_iracing():
                 #   ローカル扱いになり、2872行の `_gate_state['pending']` が
                 #   UnboundLocalError を投げて **telemetry スレッドごと落ちた**。
                 #   Build 292 の実走（9/2 10:45:22）で発生。名前を専用のものへ変える。
-                _rs_gate_state = (_should_fire, _lap_time_settled, _latest_lap_recorded)
+                # Settlement can become ready without changing the three
+                # original gate inputs. Record the resulting gate transition
+                # as well, so a successful dispatch is visible in diagnostics.
+                _rs_gate_state = (_should_fire, _lap_time_settled, _latest_lap_recorded, _may_summary)
                 if _rs_gate_state != _race_summary_gate_last:
                     _race_summary_gate_last = _rs_gate_state
                     _last_row = session_laps[-1] if session_laps else {}
@@ -5127,6 +5231,10 @@ def poll_iracing():
                         'worst_lap': round(_worst_t, 3),
                         'avg_lap': round(sum(_times) / len(_times), 3),
                         'avg_fuel_per_lap': _avg_fuel_summary,
+                        'fuel_sample_basis':'pit_excluded_measured',
+                        'strict_clean_laps_sampled':len(clean_fuel_per_lap_hist),
+                        'strict_clean_avg_fuel_per_lap':(round(sum(clean_fuel_per_lap_hist)/len(clean_fuel_per_lap_hist),3) if clean_fuel_per_lap_hist else None),
+                        'measured_laps_sampled':len(fuel_per_lap_hist),
                         'pace_first_half': _pace_first,
                         'pace_last_half': _pace_last,
                         # ★2026-08-31 型①捏造：`or 0` は **不明を0に化けさせる**。
@@ -5143,6 +5251,9 @@ def poll_iracing():
                         'setup_fingerprint': session_setup_fingerprint or None,
                         'series_id': session_series_id,
                         'start_class_position': race_start_class_pos,
+                        'track_display':info.get('track_display'),
+                        'race_format':_race_plan.get('kind'),'configured_duration_s':_configured_duration_s,
+                        'total_laps_rule':lapsTot if _laps_total_ok and lapsTot and lapsTot>0 else None,
                         # ★スライス2：session が終わった事実も同じ判断へ追記する。
                         #   DNF・切断・途中終了でも判断材料を失わないため、完走時だけ
                         #   ではなくここでも必ず結合キーを載せる。
@@ -5154,6 +5265,9 @@ def poll_iracing():
                         # ★共用生成関数（build_summary_identity_and_freeze_fields）で
                         #   cust_id / fuel_at_finish / checker_fuel_l を生成。
                         **build_summary_identity_and_freeze_fields(info, checker_fuel_freeze),
+                        **driver_activity_mod.summary_metrics(session_laps,_car_idx_lap_completed if _race_summary_settle.get('counter_consistent') else None),
+                        'last_observed_completed_laps':_session_completed_counts.get((_this_frame_race_instance_id,cur_snum)),
+                        'final_lap_sample_status':_race_summary_settle.get('status','unknown'),
                     }
                     _official_rows = latest_session_results.get(cur_snum, [])
                     _official_player = next((r for r in _official_rows
@@ -5179,10 +5293,13 @@ def poll_iracing():
             # ★WO018：保持中に同じrace/sessionのLifecycleが進んだ（本人完走のsession_end close等）なら
             #   送信直前の結果へ更新する。scopeが変わった後（別race/session）は作成時の値を保つ。
             _pending_summary = debrief_outcomes_mod.refresh(_pending_summary, _race_strategy_state)
+            if _current_summary_identity in _finished_summary_outbox:
+                _finished_summary_outbox[_current_summary_identity].update(payload=copy.deepcopy(_pending_summary),normal_ready=True)
             _summary_snapshot = _pending_summary
             _pending_summary, summary_sent, _summary_result = dispatch_pending_summary(
                 _pending_summary, summary_sent, broadcast)
             if _summary_result == BROADCAST_DISPATCHED:
+                _finished_summary_outbox.pop((_summary_snapshot.get('race_instance_id'),_summary_snapshot.get('session_num'),_summary_snapshot.get('cust_id')),None)
                 log('Session summary dispatched (from pending): %d laps' %
                     _summary_snapshot.get('total_laps', 0))
                 if _summary_snapshot.get('is_race'):
@@ -5869,7 +5986,11 @@ def poll_iracing():
                 fuel_strategy = {
                     'avg_fuel_per_lap': round(avg_fuel_lap, 2),
                     'laps_of_fuel_left': laps_of_fuel_left,   # 現燃料であと何周走れるか（レース長不要）
-                    'clean_laps_sampled': len(fuel_per_lap_hist),  # 何周分の実測から出したか（信頼度の目安）
+                    'clean_laps_sampled': len(clean_fuel_per_lap_hist),
+                    'strict_clean_laps_sampled': len(clean_fuel_per_lap_hist),
+                    'strict_clean_avg_fuel_per_lap': (round(sum(clean_fuel_per_lap_hist)/len(clean_fuel_per_lap_hist),3) if clean_fuel_per_lap_hist else None),
+                    'measured_laps_sampled': len(fuel_per_lap_hist),
+                    'fuel_sample_basis': 'pit_excluded_measured',
                     'evaluated_fuel_l': round(fuel, 3),
                     'evaluated_lap': int(lap) if isinstance(lap, (int, float)) else None,
                 }
@@ -6011,7 +6132,7 @@ def poll_iracing():
                         current_lap=int(lap) if isinstance(lap, (int, float)) else -1,
                         fuel_level_l=fuel,
                         avg_fuel_per_lap_l=fuel_strategy.get('avg_fuel_per_lap'),
-                        clean_laps_sampled=fuel_strategy.get('clean_laps_sampled'),
+                        clean_laps_sampled=fuel_strategy.get('measured_laps_sampled',fuel_strategy.get('clean_laps_sampled')),
                         crossings_to_finish=_authority_crossings,
                         reserve_l=fuel_strategy.get('reserve_l', 0.5),
                         effective_capacity_l=session_effective_fuel_capacity_l)
@@ -6447,6 +6568,9 @@ def poll_iracing():
                     'time': round(lapTime, 3),
                     'class_pos': class_pos,
                     'pb': is_personal_best,
+                    'strict_clean':_lap_valid_clean,
+                    'completed_lap':_car_idx_lap_completed if type(_car_idx_lap_completed) is int and _car_idx_lap_completed>=0 else None,
+                    'completed_lap_source':'CarIdxLapCompleted_at_time_sample',
                     'fuel': round(fuel, 2) if fuel is not None and isinstance(fuel, (int, float)) and math.isfinite(fuel) else None,
                 }
                 if lap_sector_times:
@@ -6455,6 +6579,8 @@ def poll_iracing():
                 # car. PITWALL supports the configured user only, so teammate
                 # laps must not enter the user's summary/readiness evidence.
                 if _driver_activity_local == driver_activity_mod.ACTIVE:
+                    session_laps.append(lap_record)
+                elif (_driver_activity_local == driver_activity_mod.FINISHED and not summary_sent and _pending_summary is None):
                     session_laps.append(lap_record)
 
                 # ── チェッカー後、自分がこのラップ(S/Fライン通過)を終えた＝本当の完走タイミング ──
@@ -7320,6 +7446,90 @@ def poll_iracing():
             clean_laps_sampled=len(clean_fuel_per_lap_hist),effective_capacity_l=session_effective_fuel_capacity_l,
             driver_pit_sequence=driver_pit_sequence,is_lap_race=is_race_session and not _is_time_race,
             reserve_l=endurance_fuel_mod.DEFAULT_RESERVE_L, multi_stop=None)
+        _reference_flag=_race_facts_snapshot.get('black_flag') or {}
+        _reference_source=_race_facts_snapshot['source_frame']
+        _reference_flag_fresh=(_reference_flag.get('freshness')=='fresh'
+            and _reference_flag.get('source_frame_sequence')==_source_frame_sequence
+            and _reference_flag.get('observed_session_time')==_reference_source.get('session_time_s'))
+        _fuel_reference_current={**_wo008_inputs,'time_remaining_s':timeRemain,
+            'race_format':_race_plan.get('kind') if _is_time_race else 'laps','configured_duration_s':_configured_duration_s,
+            'cust_id':info.get('player_cust_id'),'car_model':session_car_model,
+            'track':info.get('track_display') or session_track,'track_raw':session_track,
+            'black_flag':_reference_flag.get('state') if _reference_flag_fresh else 'unknown',
+            'telemetry_available':True,'source_available':True,'on_track':onTrack,'on_pit_road':onPit,
+            'scope_closed':_plan_closed_identity==_plan_identity,
+            'collision':bool(_plan_collision_scope and _plan_collision_scope[:2]==_plan_identity),
+            'session_finished':not is_race_session or cur_ss>=5,
+            'snapshot_id':(_last_committed_canonical or {}).get('snapshot_id'),
+            'current_measured_rate_l_per_lap':session_race_state_mod.recent_median(fuel_per_lap_hist,minimum=1),
+            'current_measured_samples':len(fuel_per_lap_hist),
+            'current_measured_pace_s':session_race_state_mod.recent_median(clean_lap_time_hist,minimum=1),
+            'current_measured_pace_samples':len(clean_lap_time_hist)}
+        # Reference input is queued by the socket thread. All validation,
+        # registration/cancellation and publication happen in this poll owner.
+        for _reference_request in _consume_fuel_references():
+            _reference_ack={k:_reference_request.get(k) for k in ('command_id','bridge_process_epoch','canonical_snapshot_id','canonical_snapshot_sequence','race_instance_id','session_num')}
+            _reference_ack.update(type='fuel_reference_ack',outcome='rejected',decision_id=None)
+            _reference_digest=fuel_reference_mod.request_digest(_reference_request)
+            _reference_key=_reference_request.get('command_id')
+            _reference_prior=_reference_request_receipts.get(_reference_key) if isinstance(_reference_key,str) else None
+            if _reference_prior is not None:
+                if (_reference_digest is not None and _reference_digest==_reference_prior['digest']
+                        and _reference_request.get('bridge_process_epoch')==canonical_mod.PROCESS_EPOCH
+                        and _reference_request.get('race_instance_id')==_fuel_reference_current['race_instance_id']
+                        and _reference_request.get('session_num')==_fuel_reference_current['session_num']):
+                    # Receipt retry only: never register, dispatch or activate again.
+                    _publish_or_stage(copy.deepcopy(_reference_prior['ack']))
+                else:
+                    _reference_ack['reason']='reference_command_collision_or_scope_changed'
+                    _publish_or_stage(_reference_ack)
+                continue
+            _reference_pub=_canonical_publications.get(_reference_request.get('canonical_snapshot_id'))
+            _reference_normalized={**_reference_request,'snapshot_id':_reference_request.get('canonical_snapshot_id'),'snapshot_sequence':_reference_request.get('canonical_snapshot_sequence')}
+            _reference_error=fuel_reference_mod.reference_error(_reference_normalized,_reference_pub,_fuel_reference_current)
+            if _reference_request.get('bridge_process_epoch')!=canonical_mod.PROCESS_EPOCH:_reference_error='bridge_process_epoch_mismatch'
+            if _recovery_error or _plan_gate_reason:_reference_error=_recovery_error or _plan_gate_reason
+            if _reference_error is None and _reference_request.get('mode')=='invalidate':
+                _reference_old=_race_strategy_state.plan_records.get(_reference_request.get('replaces_decision_id')) if _race_strategy_state else None
+                if _reference_old and fuel_reference_mod.reference_of(_reference_old):
+                    _race_strategy_state,_=plan_lifecycle_mod.cancel_plan(_race_strategy_state,decision_id=_reference_old.decision_id,reason='reference_withdrawn_or_evidence_changed')
+                    _reference_ack.update(outcome='cancelled',decision_id=_reference_old.decision_id)
+                else:_reference_error='reference_decision_unavailable'
+            elif _reference_error is None:
+                _reference_calculation=fuel_reference_mod.proposal(_reference_normalized,_reference_pub,_fuel_reference_current,time.time())
+                if _reference_calculation.get('available'):
+                    _race_strategy_state,_reference_record=register_fuel_reference_candidate(_race_strategy_state,_reference_calculation,_fuel_reference_current,_reference_request.get('replaces_decision_id'))
+                    if _reference_record:
+                        _reference_ack.update(outcome='registered',decision_id=_reference_record.decision_id)
+                    else:_reference_error='reference_registration_rejected'
+                else:_reference_error=_reference_calculation.get('reason')
+            _reference_ack['reason']=_reference_error
+            if _reference_digest is not None and isinstance(_reference_key,str):
+                _reference_request_receipts[_reference_key]={'digest':_reference_digest,'ack':copy.deepcopy(_reference_ack)}
+                if len(_reference_request_receipts)>1024:
+                    del _reference_request_receipts[next(iter(_reference_request_receipts))]
+            _publish_or_stage(_reference_ack)
+        for _reference_check in list(_race_strategy_state.plan_records.values()):
+            _owned_ref=fuel_reference_mod.reference_of(_reference_check)
+            if _owned_ref is None or _reference_check.phase not in ('active','awaiting_driver'):continue
+            _reference_check_inputs=fuel_reference_mod.inputs_for_record(_reference_check,_wo008_inputs,_fuel_reference_current,canonical_mod.PROCESS_EPOCH)
+            _reference_verdict=fixed_target_authority_mod.evaluate(_reference_check_inputs,_reference_check.target_lap,frozen_set=_reference_check.set_fuel_l)
+            _reference_elapsed=_fuel_reference_current['session_time_s']-_owned_ref['created_session_time_s']
+            _reference_obsolete=_owned_ref['process_epoch']!=canonical_mod.PROCESS_EPOCH
+            _reference_expired=_reference_check.phase=='awaiting_driver' and _reference_elapsed>=30
+            if _reference_obsolete or _reference_expired or _reference_verdict.get('reason')=='reference_stop_not_required':
+                _race_strategy_state,_=plan_lifecycle_mod.cancel_plan(_race_strategy_state,decision_id=_reference_check.decision_id,reason='reference_process_changed' if _reference_obsolete else 'reference_expired' if _reference_expired else 'reference_stop_not_required')
+            elif _reference_check.phase=='active' and not _reference_verdict.get('available') and not _plan_gate_reason and not any(r.phase=='awaiting_driver' and fuel_reference_mod.reference_of(r) for r in _race_strategy_state.plan_records.values()):
+                _revised_reference=fuel_reference_mod.replan(_reference_check,_fuel_reference_current)
+                if _revised_reference.get('available'):
+                    _race_strategy_state,_=register_fuel_reference_candidate(_race_strategy_state,_revised_reference,_fuel_reference_current)
+                    log('FUEL REFERENCE RECONSENT REQUIRED: predecessor='+_reference_check.decision_id)
+        if pending_strategy_proposal:
+            _pending_native=_race_strategy_state.plan_records.get(pending_strategy_proposal.get('decision_id'))
+            if _pending_native is None or _pending_native.phase!='awaiting_driver':
+                pending_strategy_proposal=None;strategy_options_proposal_sent=False;strategy_proposal_delivery_state=None
+        _reference_active=plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+        _wo008_inputs=fuel_reference_mod.inputs_for_record(_reference_active,_wo008_inputs,_fuel_reference_current,canonical_mod.PROCESS_EPOCH)
         if _recovery_constraint is not None and not _recovery_error and _plan_closed_identity!=_plan_identity and not _plan_collision_scope and onPit is False and onTrack is True and _pit_visit_entry_fact is None:
             _target=_recovery_constraint_record.target_lap
             _fresh_constraint=fixed_target_authority_mod.evaluate(_wo008_inputs,_target)
@@ -8458,7 +8668,7 @@ def poll_iracing():
                         estimated_crossings_to_finish=_fuel_strategy_live.get(
                             'estimated_crossings_to_finish'),
                         clean_laps_sampled=_fuel_strategy_live.get(
-                            'clean_laps_sampled'),
+                            'measured_laps_sampled',_fuel_strategy_live.get('clean_laps_sampled')),
                         lifecycle_state=lifecycle_state,
                         previous_band=_fuel_strategy_live.get('fuel_band'))
                     if _post_pit_eval.get('available'):
@@ -8537,7 +8747,7 @@ def poll_iracing():
             # state by the live decision path, not reconstructed from the
             # opening playbook.  The latter produced the 8/13 trace where a
             # lap-7, 22L post-pit state announced a fictional one-litre stop.
-            if (not _plan_gate_reason and not _driver_target_constraint and strategy_options is None and last_pit_service is None
+            if (not _plan_gate_reason and not _driver_target_constraint and not any(fuel_reference_mod.reference_of(r) for r in _race_strategy_state.plan_records.values() if r.phase in ('active','awaiting_driver')) and strategy_options is None and last_pit_service is None
                     and is_race_session and onTrack and not onPit
                     and isinstance(_fuel_strategy_live, dict)):
                 _option_crossings = _fuel_strategy_live.get(
@@ -8554,7 +8764,7 @@ def poll_iracing():
                     current_lap=int(lap) if isinstance(lap, (int, float)) else -1,
                     fuel_level_l=fuel,
                     avg_fuel_per_lap_l=_fuel_strategy_live.get('avg_fuel_per_lap'),
-                    clean_laps_sampled=_fuel_strategy_live.get('clean_laps_sampled'),
+                    clean_laps_sampled=_fuel_strategy_live.get('measured_laps_sampled',_fuel_strategy_live.get('clean_laps_sampled')),
                     crossings_to_finish=_option_crossings,
                     reserve_l=_fuel_strategy_live.get('reserve_l', 0.5),
                     effective_capacity_l=session_effective_fuel_capacity_l)
@@ -8697,7 +8907,7 @@ def poll_iracing():
             # Plan Bが燃料上成立しない場合だけ、Plan Aの一周前を境界にする。
             # rejoin for this lap versus one lap later from one live snapshot.
             # Conditional rival pit-cycle position is never used to select B.
-            if (not _plan_gate_reason and not _driver_target_constraint and isinstance(strategy_options, dict)
+            if (not _plan_gate_reason and not _driver_target_constraint and not any(fuel_reference_mod.reference_of(r) for r in _race_strategy_state.plan_records.values() if r.phase in ('active','awaiting_driver')) and isinstance(strategy_options, dict)
                     and strategy_options.get('available')
                     and not strategy_options_decision_sent
                     # ★2026-09-16 Codex MD#4差戻し：B/Cは提案してDriver応答を待つ。
@@ -9023,7 +9233,33 @@ def poll_iracing():
                 log('STRATEGY DELIVERY resolved: decision_id=%s reported=%s outcome=%s state=%s'
                     % (_delivery_report.get('decision_id'), _delivery_report.get('outcome'),
                        _delivery_outcome, strategy_proposal_delivery_state))
+            _reference_waiting=plan_lifecycle_adapter.current_awaiting_record(_race_strategy_state)
+            if (_reference_waiting is not None and fuel_reference_mod.reference_of(_reference_waiting) is not None
+                    and (pending_strategy_proposal is None
+                         or pending_strategy_proposal.get('decision_id')==_reference_waiting.decision_id
+                         and not pending_strategy_proposal.get('dispatch_id')) and not _plan_gate_reason
+                    and _reference_dispatch_attempts.get(_reference_waiting.decision_id,0)<3):
+                _reference_dispatch_attempts[_reference_waiting.decision_id]=_reference_dispatch_attempts.get(_reference_waiting.decision_id,0)+1
+                strategy_proposal_dispatch_seq+=1
+                _reference_dispatch='%s#%s'%(_reference_waiting.decision_id,strategy_proposal_dispatch_seq)
+                pending_strategy_proposal=plan_lifecycle_adapter.legacy_decision_projection(_reference_waiting,dispatch_id=_reference_dispatch)
+                _publish_or_stage({'type':'radio','trigger':'strategy_plan_proposal','selected_plan':'A',
+                    'reason':fuel_reference_mod.CONTRACT,'decision_id':_reference_waiting.decision_id,'dispatch_id':_reference_dispatch,
+                    'decision_plan':pending_strategy_proposal,'strategy_options':plan_lifecycle_adapter.legacy_strategy_options_projection(_reference_waiting),
+                    'message':'Provisional personal fuel reference proposal.'})
             for _decision_response in _consume_strategy_decision_responses():
+                _reference_response_record=(_race_strategy_state.plan_records.get(_decision_response.get('decision_id')) if _race_strategy_state else None)
+                _response_reference=fuel_reference_mod.reference_of(_reference_response_record)
+                if _response_reference is not None:
+                    _response_inputs=fuel_reference_mod.inputs_for_record(_reference_response_record,_wo008_inputs,_fuel_reference_current,canonical_mod.PROCESS_EPOCH)
+                    _response_validation=fixed_target_authority_mod.evaluate(_response_inputs,_reference_response_record.target_lap,frozen_set=_reference_response_record.set_fuel_l)
+                    _response_expired=_fuel_reference_current['session_time_s']-_response_reference['created_session_time_s']>=30
+                    if _decision_response.get('accepted') is True and (_response_expired or not _response_validation.get('available')):
+                        _race_strategy_state,_=plan_lifecycle_mod.cancel_plan(_race_strategy_state,decision_id=_reference_response_record.decision_id,reason='reference_changed_before_consent')
+                        pending_strategy_proposal=None
+                        _publish_or_stage({'type':'strategy_decision_ack','decision_id':_decision_response.get('decision_id'),'session_num':_decision_response.get('session_num'),'dispatch_id':_decision_response.get('dispatch_id'),'outcome':'held','reason':'reference_expired' if _response_expired else _response_validation.get('reason')})
+                        continue
+
                 # Same-process proposal acceptance is preserved across an SDK
                 # gap, but its old record remains held by the BOX execution
                 # fence. Acceptance does not prove an unobserved pit absent.
@@ -9606,6 +9842,7 @@ def poll_iracing():
             last_telem_ts = _tnow
 
         _box_active = plan_lifecycle_mod.active_plan_view(_race_strategy_state)
+        _wo008_inputs=fuel_reference_mod.inputs_for_record(_box_active,_wo008_inputs,_fuel_reference_current,canonical_mod.PROCESS_EPOCH)
         _box_delivery_ledger,_box_authority_snapshot,_box_candidate = box_authority_delivery_mod.advance(
             _box_delivery_ledger,_box_active,_wo008_inputs,execution_gate=_plan_gate_reason,on_track=bool(onTrack))
         _canonical_last_facts=copy.deepcopy(_race_facts_snapshot)
@@ -9630,7 +9867,7 @@ def poll_iracing():
         _domains=_recovery_domains(_boundary)
         _material=recovery_mod.pack(_domains);_material['boundary'].pop('source_frame_sequence');_material['boundary'].pop('session_time_s')
         _fingerprint=recovery_mod.canonical(_material)
-        _critical=any(e.get('type') in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','strategy_decision_ack','strategy_delivery_ack') for e in _canonical_staged) or _box_candidate is not None
+        _critical=any(e.get('type') in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','strategy_decision_ack','strategy_delivery_ack','fuel_reference_ack') for e in _canonical_staged) or _box_candidate is not None
         _boundary_known=recovery_mod.finite(_boundary['session_time_s']) and _boundary['session_time_s']>=0
         _should_commit=_critical or _fingerprint!=_recovery_fingerprint or _recovery_last_save_time is None or (_boundary_known and _boundary['session_time_s']-_recovery_last_save_time>=1.0)
         if _recovery_scope is not None and not _recovery_error and _should_commit and _boundary_known:
@@ -9656,7 +9893,7 @@ def poll_iracing():
             broadcast(canonical_mod.project_telemetry(_canonical_snapshot,_canonical_telemetry))
         for _staged_event in _canonical_staged:
             _event_type=_staged_event.get('type');_trigger=_staged_event.get('trigger')
-            if _event_type in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','strategy_decision_ack','strategy_delivery_ack') and not _recovery_committed:
+            if _event_type in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','strategy_decision_ack','strategy_delivery_ack','fuel_reference_ack') and not _recovery_committed:
                 log('RECOVERY ACK HELD: uncommitted');BRIDGE_TRACE.dispatch(_staged_event,'HELD_UNCOMMITTED',_canonical_wire);continue
             _origin=_staged_event.get('origin_record_ref')
             _current_ids={r.decision_id:r for r in _race_strategy_state.plan_records.values()
@@ -9673,7 +9910,7 @@ def poll_iracing():
                         message='Fuel '+str(_staged_event.get('fuel'))+'. Execution held.')
                 # Historical ACKs echo original command/report refs. Radios carry
                 # the final publication ref plus the untouched generation record.
-                if _event_type not in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack'):
+                if _event_type not in ('driver_plan_command_ack','box_delivery_ack','historical_settlement_ack','fuel_reference_ack'):
                     _staged_event.update(canonical_mod.refs(_canonical_snapshot))
                 _actual_dispatch=broadcast(_staged_event)
             if _trigger=='initial_strategy_plans':strategy_options_dispatch=_actual_dispatch
@@ -9682,6 +9919,11 @@ def poll_iracing():
             elif _trigger=='strategy_plan_proposal' and pending_strategy_proposal and _staged_event.get('dispatch_id')==pending_strategy_proposal.get('dispatch_id'):
                 strategy_options_proposal_sent=_actual_dispatch==BROADCAST_DISPATCHED
                 strategy_proposal_delivery_state='inflight' if strategy_options_proposal_sent else None
+                if (not strategy_options_proposal_sent
+                        and (pending_strategy_proposal.get('provisional_history') or {}).get('contract')==fuel_reference_mod.CONTRACT):
+                    # No socket delivery occurred. Leave the native candidate
+                    # awaiting and arm a bounded fresh transport attempt.
+                    pending_strategy_proposal=None
             elif _trigger=='fuel_strategy_warning' and _actual_dispatch==BROADCAST_DISPATCHED:
                 fuel_warning_band=_staged_event.get('fuel_band')
                 fuel_strategy_warned=fuel_warning_band in (fuel_strategy_mod.TIGHT,fuel_strategy_mod.CRITICAL)
@@ -10022,6 +10264,8 @@ async def handler(websocket):
                     _queue_driver_plan_command(_reason)
                     log('DRIVER PLAN REASON queued: command_id=%s'
                         % msg.get('command_id'))
+                elif cmd == 'fuel_reference_request':
+                    _queue_fuel_reference(msg)
                 elif cmd == 'strategy_decision_response':
                     # ★2026-09-16 Codex MD#4差戻し（P1-2）：DesktopのLuna会話（提案→合意
                     #   状態機械）でDriverが戦略提案に応答した結果をBridgeへ送り返す。

@@ -25,9 +25,10 @@
   const SPIELBERG_GP_ALIASES = new Set([
     'red bull ring', 'red bull ring gp', 'spielberg', 'spielberg gp'
   ]);
+  const MONZA_GP_ALIASES = new Set(['autodromo nazionale monza','monza grand prix','monza full']);
   function normTrack(value) {
     const text = norm(value).replace(/[^a-z0-9]+/g, ' ').trim();
-    return SPIELBERG_GP_ALIASES.has(text) ? 'spielberg:gp' : text;
+    return SPIELBERG_GP_ALIASES.has(text) ? 'spielberg:gp' : MONZA_GP_ALIASES.has(text) ? 'monza:gp' : text;
   }
   const isJP = lang => String(lang || '').toLowerCase().startsWith('ja');
   const MAX_RECORD_AGE_MS = 90 * 24 * 60 * 60 * 1000;
@@ -250,6 +251,102 @@
     };
   }
 
+  // Planning is an estimate, not a claim that old conditions are today's
+  // facts. Keep driver/car/track strict; report age/rule/setup differences.
+  function fuelPlanningEvidence(history, identity, nowMs) {
+    if (!Array.isArray(history) || !identity || !normTrack(identity.track)
+        || !norm(identity.car || identity.carClass)) return {available:false,reason:'identity_unavailable'};
+    const now = Number.isFinite(nowMs) ? nowMs : Date.now(), candidates = new Map(), deviceCandidates = new Map();
+    for (const record of history) {
+      if (!record || record.disputed === true || record.deleted === true) continue;
+      if (![identity.track,...(Array.isArray(identity.trackCandidates)?identity.trackCandidates:[])].some(track=>normTrack(record.track)===normTrack(track))
+          || norm(record.car || record.carClass) !== norm(identity.car || identity.carClass)) continue;
+      const cust=identity.custId, priorCust=record.custId??record.cust_id;
+      const user=identity.userId, priorUser=record.userId;
+      if (cust && priorCust && String(cust)!==String(priorCust)) continue;
+      if (user && priorUser && String(user)!==String(priorUser)) continue;
+      const deviceOnly=record.unverified_owner===true&&!priorCust&&!priorUser;
+      if (!(cust && priorCust && String(cust)===String(priorCust))
+          && !(user && priorUser && String(user)===String(priorUser)) && !deviceOnly) continue;
+      const dated=Date.parse(record.recordedAt||record.date||'');
+      const at=Number.isFinite(dated)?dated:0;
+      if ((!at&&!deviceOnly) || at>now+300000 || !(finite(record.avgFuelPerLap)>0)) continue;
+      const warnings=deviceOnly?['owner_unverified']:[];
+      if(record.fuelSampleBasis!=='strict_clean')warnings.push('cleanliness_unverified');
+      if(!at)warnings.push('record_date_unknown');
+      if (now-at>MAX_RECORD_AGE_MS) warnings.push('older_than_90_days');
+      for (const [key, field] of [['seriesId','series'],['sessionType','session_type'],['raceFormat','race_format'],['fuelRule','fuel_rule'],['tyreRule','tyre_rule']]) {
+        if (identity[key]!==null && identity[key]!==undefined && identity[key]!=='') {
+          if (record[key]===null || record[key]===undefined || record[key]==='') warnings.push(field+'_unknown');
+          else if (norm(record[key])!==norm(identity[key])) warnings.push(field+'_mismatch');
+        }
+      }
+      if (sameSetup(record,identity)==='mismatch') warnings.push('setup_mismatch');
+      if (finite(record.trackTempC)!==null && finite(identity.trackTempC)!==null
+          && Math.abs(Number(record.trackTempC)-Number(identity.trackTempC))>=10) warnings.push('track_temp_delta');
+      const key=record.race_instance_id ? String(record.race_instance_id)+'|'+String(record.sessionNum??'') : record.raceRecordId||String(at);
+      const row={record,at,warnings,quality:record.fuelSampleBasis==='strict_clean'?1:0,weight:Math.max(1,Math.min(50,finite(record.fuelSampleCount)||finite(record.totalLaps)||1))};
+      const target=deviceOnly?deviceCandidates:candidates, prior=target.get(key);
+      if (!prior || row.quality>prior.quality || row.quality===prior.quality&&(row.weight>prior.weight || row.weight===prior.weight&&at>prior.at)) target.set(key,row);
+    }
+    const rows=[...(candidates.size?candidates:deviceCandidates).values()];
+    if (!rows.length) return {available:false,reason:'no_matching_fuel_history'};
+    const samples=rows.reduce((n,r)=>n+r.weight,0);
+    const average=rows.reduce((n,r)=>n+Number(r.record.avgFuelPerLap)*r.weight,0)/samples;
+    const paceRows=rows.filter(r=>finite(r.record.avgLap)>20);
+    const paceWeight=paceRows.reduce((n,r)=>n+r.weight,0);
+    const warnings=[...new Set(rows.flatMap(r=>r.warnings))];
+    const upper=Math.max(...rows.map(r=>Number(r.record.avgFuelPerLap)));
+    const lower=Math.min(...rows.map(r=>Number(r.record.avgFuelPerLap)));
+    const variable=upper>lower*1.2;
+    if(variable)warnings.push('variable_burn_upper_bound');
+    return {available:true,avgFuelPerLap:average,planningFuelPerLap:variable?upper:average,sampleLaps:samples,recordCount:rows.length,
+      averageLapS:paceWeight?paceRows.reduce((n,r)=>n+Number(r.record.avgLap)*r.weight,0)/paceWeight:null,
+      basis:candidates.size?'memory_analysis':'device_reference',confidence:warnings.length?'estimate_low':'estimate',warnings,
+      recordDate:Math.max(...rows.map(r=>r.at))?new Date(Math.max(...rows.map(r=>r.at))).toISOString():null,
+      recordIds:rows.map(r=>r.record.raceRecordId||r.record.race_instance_id||new Date(r.at).toISOString()),
+      minFuelPerLap:Math.min(...rows.map(r=>Number(r.record.avgFuelPerLap))),
+      maxFuelPerLap:Math.max(...rows.map(r=>Number(r.record.avgFuelPerLap)))};
+  }
+
+  function fuelPlanningEstimate(live, history, nowMs) {
+    if (!live || live.on_track===false && !live.race_plan) return null;
+    const state=finite(live.race_plan&&live.race_plan.session_state);
+    if (state!==null && state>=5) return null; // checker/cooldown is not a new pit recommendation
+    const fs=live.fuel_strategy||{}, measured=finite(fs.avg_fuel_per_lap);
+    const count=finite(fs.strict_clean_laps_sampled)||0;
+    const strict=finite(fs.strict_clean_avg_fuel_per_lap);
+    const measuredCount=finite(fs.measured_laps_sampled)||finite(fs.clean_laps_sampled)||0;
+    const historyRate=finite(history&&(history.planningFuelPerLap||history.avgFuelPerLap));
+    // Three strict clean laps establish today's basis. Before then use
+    // accumulated history; still answer provisionally when only one/two clean
+    // samples or pit-excluded measured samples exist.
+    let rate,basis,sampleCount;
+    if(count>=3&&strict>0){rate=strict;basis='current_clean_laps';sampleCount=count;}
+    else if(historyRate>0){rate=historyRate;basis=history.basis||'memory_analysis';sampleCount=0;}
+    else if(count>0&&strict>0){rate=strict;basis='current_clean_laps';sampleCount=count;}
+    else {rate=measured;basis='current_measured_laps';sampleCount=measuredCount;}
+    if (!(rate>0)) return null;
+    let crossings=finite(live.finish_crossings_authority),distanceBasis='bridge_finish_crossings',extraLap=0;
+    if (crossings===null || crossings<0) {
+      const seconds=finite(live.session_time_remaining_s);
+      const forecast=live.timed_finish_forecast||{};
+      const leader=finite(forecast.leader_time_to_checkered_s);
+      const pace=finite(forecast.driver_avg_lap_s)||finite(live.driver_pace_median_s)||finite(history&&history.averageLapS);
+      if (seconds!==null && seconds>=0 && pace>20) {
+        crossings=Math.ceil((leader!==null&&leader>=0?leader:seconds)/pace)+1;
+        distanceBasis=leader!==null&&leader>=0?'leader_clock_estimate':'time_and_pace_estimate';extraLap=1;
+      } else crossings=null;
+    }
+    const reserve=2, fuel=finite(live.fuel);
+    const needed=crossings===null?null:crossings*rate+reserve;
+    return {basis,rate_l_per_lap:rate,live_sample_laps:sampleCount,strict_clean_laps:count,confidence:basis==='current_clean_laps'&&count>=3?'estimate':'estimate_low',
+      crossings,distance_basis:distanceBasis,extra_lap:extraLap,reserve_l:reserve,
+      required_l:needed,additional_l:needed!==null&&fuel!==null?Math.max(0,needed-fuel):null,
+      fuel_l:fuel,laps_with_reserve:fuel!==null?Math.max(0,Math.floor((fuel-reserve)/rate)):null,
+      history:['memory_analysis','device_reference'].includes(basis)?history:null,role:'recommendation_not_execution'};
+  }
+
   // Lap pace is reusable more broadly than fuel burn. Series/fuel/tyre rules
   // may change without invalidating a measured driver/car/track lap time.
   function strategyLapEvidence(history, identity, nowMs) {
@@ -432,6 +529,6 @@
     }
   }
 
-  return { matchesIdentity, selectPrevious, answerHistoricalWeather, answerPreviousFuel, briefingFacts, briefingLine, strategyFuelEvidence, strategyLapEvidence, isFreshRecord,
+  return { normalizeTrack:normTrack,matchesIdentity, selectPrevious, answerHistoricalWeather, answerPreviousFuel, briefingFacts, briefingLine, strategyFuelEvidence, fuelPlanningEvidence, fuelPlanningEstimate, strategyLapEvidence, isFreshRecord,
     setupComparison, setupComparisonLine, attachSetupDeclaration, mergeRaceRecord, persistRaceRecord };
 }));

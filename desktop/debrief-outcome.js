@@ -39,7 +39,7 @@
       exit_lap: int(e.exit_lap) ? e.exit_lap : (int(exit.lap) ? exit.lap : null),
       relation: e.execution_relation,
       penalty_state: ['true', 'false', 'unknown'].indexOf(pen.state) >= 0 ? pen.state : 'unknown',
-      fuel_added_l: num(e.fuel_added_l),
+      fuel_added_l: num(e.service?.fuel_added_l ?? e.fuel_added_l),
       plan_ref: ref && text(ref.decision_id) ? { decision_id: ref.decision_id.slice(0, 200),
         selected_plan: str(ref.selected_plan, 8), target_lap: int(ref.target_lap) ? ref.target_lap : null } : null,
     };
@@ -60,6 +60,28 @@
     if (r.phase === 'executed') return false;
     return INDIRECT_REASONS.indexOf(r.reason) >= 0;
   }
+  function referenceView(v) {
+    if (!v || v.contract !== 'provisional_history_v1') return null;
+    const keys=['command_id','evidence_version','source_snapshot_id'];
+    if(keys.some(k=>!text(v[k])||v[k].length>512)) return null;
+    if(!(num(v.rate_l_per_lap)>0&&v.rate_l_per_lap<50&&num(v.pace_s)>20&&v.pace_s<2000
+        &&(v.planning_pace_s===undefined||num(v.planning_pace_s)!==null&&v.planning_pace_s>20&&v.planning_pace_s<=v.pace_s)
+        &&(v.planning_rate_l_per_lap===undefined||num(v.planning_rate_l_per_lap)!==null&&v.planning_rate_l_per_lap>=v.rate_l_per_lap&&v.planning_rate_l_per_lap<50)
+        &&int(v.record_count)&&v.record_count>0&&v.record_count<=500
+        &&Array.isArray(v.record_ids)&&v.record_ids.length>0&&v.record_ids.length<=32
+        &&v.record_ids.every(x=>text(x)&&x.length<=512)
+        &&new Set(v.record_ids).size===v.record_ids.length
+        &&(v.record_ids_truncated===true?v.record_count>v.record_ids.length:v.record_count===v.record_ids.length)
+        &&num(v.predicted_add_fuel_l)!==null&&v.predicted_add_fuel_l>=0
+        &&num(v.set_fuel_l)!==null&&v.set_fuel_l>=0)) return null;
+    return {contract:v.contract,command_id:v.command_id,evidence_version:v.evidence_version,
+      source_snapshot_id:v.source_snapshot_id,rate_l_per_lap:v.rate_l_per_lap,pace_s:v.pace_s,
+      ...(v.planning_rate_l_per_lap===undefined?{}:{planning_rate_l_per_lap:v.planning_rate_l_per_lap}),
+      ...(v.planning_pace_s===undefined?{}:{planning_pace_s:v.planning_pace_s}),
+      record_count:v.record_count,record_ids:v.record_ids.slice(),record_ids_truncated:v.record_ids_truncated===true,
+      predicted_add_fuel_l:v.predicted_add_fuel_l,set_fuel_l:v.set_fuel_l};
+  }
+
   function planView(r, race, session, pitsById) {
     if (!r || typeof r !== 'object' || !text(r.decision_id)) return null;
     if (r.race_instance_id !== race || r.session_num !== session) return null;
@@ -75,6 +97,7 @@
     return {
       decision_id: r.decision_id.slice(0, 200), revision: int(r.revision) ? r.revision : null,
       selected_plan: str(r.selected_plan, 8), target_lap: int(r.target_lap) ? r.target_lap : null,
+      add_fuel_l:num(r.add_fuel_l),set_fuel_l:num(r.set_fuel_l),provisional_history:referenceView(r.provisional_history),
       phase: r.phase, terminal, reason: terminal ? str(r.reason, 200) : null,
       relation: RELATIONS.indexOf(r.execution_relation) >= 0 ? r.execution_relation : null,
       pit_event_id: pit, pit_link: pitLink,
@@ -272,6 +295,16 @@
       const d = (decisionNotes || []).find(x => x.decision_id === r.decision_id);
       // Driverが判断記録を削除した → その判断を次の根拠として出さない（pitの測定事実は残す）。
       if (d && d.status === 'deleted') continue;
+      const ref=r.provisional_history;
+      if(ref){
+        const pit=r.pit_event_id?outcome.pits.find(p=>p.pit_event_id===r.pit_event_id):null;
+        s += ja ? ` ／ 履歴${ref.record_count}件・${ref.rate_l_per_lap.toFixed(2)}L/周・${ref.pace_s.toFixed(1)}秒/周、予測追加${ref.predicted_add_fuel_l.toFixed(1)}L・設定${ref.set_fuel_l}L`
+          : ` / ${ref.record_count} history records, ${ref.rate_l_per_lap.toFixed(2)} L/lap, ${ref.pace_s.toFixed(1)} s/lap; predicted add ${ref.predicted_add_fuel_l.toFixed(1)} L, set ${ref.set_fuel_l} L`;
+        if(ref.planning_pace_s<ref.pace_s)s += ja ? `・当日計測により${ref.planning_pace_s.toFixed(1)}秒/周で計画` : `; planned at measured ${ref.planning_pace_s.toFixed(1)} s/lap`;
+        if(ref.planning_rate_l_per_lap>ref.rate_l_per_lap)s += ja ? `・当日計測により${ref.planning_rate_l_per_lap.toFixed(2)}L/周で計画` : `; planned at measured ${ref.planning_rate_l_per_lap.toFixed(2)} L/lap`;
+        if(pit&&pit.fuel_added_l!==null)s += ja ? `・実補給${pit.fuel_added_l.toFixed(1)}L` : `; actual added ${pit.fuel_added_l.toFixed(1)} L`;
+        s += ` [decision=${r.decision_id}; sources=${ref.record_ids.slice(0,3).join(',')}${ref.record_ids.length>3?',…':''}]`;
+      }
       if (d) s += d.status === 'disputed'
         ? (ja ? ' ／ Driver訂正：この判断記録は保留中' : ' / Driver disputed this decision record')
         : (ja ? ` ／ Driver訂正済み${d.outcome ? '：' + d.outcome : ''}` : ` / Driver-corrected${d.outcome ? ': ' + d.outcome : ''}`);

@@ -27,6 +27,7 @@ import hashlib
 import types
 
 import plan_lifecycle as pl
+import fuel_reference_planning as reference_planning
 
 
 _CONTENT_FIELDS = (
@@ -118,6 +119,7 @@ def legacy_decision_projection(record, *, dispatch_id=None):
     basis = serialized.get('plan_basis') or {}
     projection = {
         'decision_id': serialized['decision_id'],
+        'provisional_history': reference_planning.public_reference(record),
         'selected_plan': serialized['selected_plan'],
         'reason': basis.get('reason'),
         'decided_at_lap': basis.get('decided_at_lap'),

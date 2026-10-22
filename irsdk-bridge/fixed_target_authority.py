@@ -3,6 +3,7 @@ import math, hashlib, json
 from collections.abc import Mapping
 from dataclasses import dataclass
 import plan_lifecycle as pl
+import fuel_reference_planning as reference_planning
 
 
 def finite(x):
@@ -36,6 +37,8 @@ def build_inputs(*, race_instance_id, session_num, source_frame_sequence,
 
 def evaluate(inputs,target,*,frozen_set=None):
     i=inputs if isinstance(inputs,Mapping) else {}
+    if i.get('finish_kind') == reference_planning.CONTRACT:
+        return reference_planning.evaluate_inputs(i, target, frozen_set)
     def fail(reason):return {'available':False,'reason':reason}
     if i.get('finish_kind')!='lap_race':return fail('unsupported_finish_authority')
     if i.get('multi_stop') is not False:return fail('unsupported_multi_stop' if i.get('multi_stop') is True else 'unknown_single_stop_authority')
@@ -73,10 +76,16 @@ def constraint(record):
 
 
 def material_key(record,inputs):
+    reference=inputs.get('provisional_history') if inputs.get('finish_kind')==reference_planning.CONTRACT else None
+    reference_key=((reference.get('command_id'),reference.get('evidence_version'),
+                    (reference.get('evidence') or {}).get('pace_s'),inputs.get('crossings_to_finish'),
+                    inputs.get('current_measured_rate_l_per_lap'),inputs.get('current_measured_samples'),
+                    inputs.get('current_measured_pace_s'),inputs.get('current_measured_pace_samples'),inputs.get('planning_pace_s'))
+                   if isinstance(reference,Mapping) else ())
     return (record.decision_id,record.revision,record.activated_source_frame_sequence,
             record.target_lap,record.add_fuel_l,record.set_fuel_l,
             tuple(inputs.get(k) for k in ('avg_fuel_per_lap_l','reserve_l','effective_capacity_l','finish_kind','total_laps')),
-            (constraint(record) or {}).get('constraint_id'))
+            (constraint(record) or {}).get('constraint_id')) + reference_key
 
 
 @dataclass(frozen=True)

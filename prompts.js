@@ -716,7 +716,10 @@ function buildSystem(p) {
     + 'This block is the sole authority for the CURRENT track, car model, and session type. '
     + 'It overrides profile notes, race history, car/track memory, conversation history, and assumptions. '
     + 'A value of UNKNOWN means the current fact is unavailable: do not infer, guess, repeat an old value, '
-    + 'or promise to check it later.\n\n';
+    + 'or promise to check it later. '
+    + 'CURRENT UNAVAILABLE DOES NOT MEAN NEVER RECEIVED: after a race, closure/disconnection can make current facts unavailable even when earlier telemetry and answers existed. '
+    + 'Use the supplied session summary and dated conversation observations for past claims, label them as past observations, and never infer that fuel, position or weather were absent throughout the race from a current UNKNOWN. '
+    + 'Do not diagnose data-loss causes without supplied diagnostic evidence; distinguish what was observed, what is unavailable now, and what remains unexplained.\n\n';
 
   const base = CHARACTERS[character];
   if (!base) return null; // 未知キャラ → 呼び出し側でフォールバック

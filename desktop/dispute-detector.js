@@ -168,6 +168,9 @@ function isReflexText(text) {
 function detect(driverText, context = {}) {
   const text = String(driverText || '').trim();
   if (!text) return null;
+  // Service-quality feedback and a corrected question do not assert that a
+  // measured fuel/gap value is false. They must reach the engineer response.
+  if(/(?:エンジニア|engineer).{0,12}(?:仕事|job)|(?:改善|返答|回答).{0,12}(?:され|ない|違)|(?:俺|僕|私|自分)の走り.{0,10}(?:どう|評価)/i.test(text))return null;
 
   const lunaTurns = Array.isArray(context.lunaTurns) ? context.lunaTurns : [];
   const reflexes = Array.isArray(context.reflexes) ? context.reflexes : [];

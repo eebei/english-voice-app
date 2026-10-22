@@ -16,6 +16,12 @@ function validate(s){
  const scope=s.continuity.stable_scope;
  if(scope!==undefined&&scope!==null&&(!object(scope)||Object.keys(scope).sort().join(',')!=='driver_id,race_instance_id,session_num'
   ||scope.race_instance_id!==s.race_instance_id||scope.session_num!==s.session_num||!integer(scope.driver_id)||scope.driver_id===0))return false;
+ const custody=s.continuity.custody_scope;
+ if(custody!==undefined&&custody!==null&&(!object(custody)||scope!=null
+  ||Object.keys(custody).sort().join(',')!=='driver_id,process_epoch,race_instance_id,session_num'
+  ||!s.race_instance_id.startsWith('fallback:')||custody.race_instance_id!==s.race_instance_id
+  ||custody.session_num!==s.session_num||custody.process_epoch!==s.bridge_process_epoch
+  ||!integer(custody.driver_id)||custody.driver_id===0))return false;
  const a=s.lifecycle.active,e=s.execution,b=s.box_delivery,f=s.current_facts;
  const nullable=(v,test)=>v===null||test(v), finite=v=>typeof v==='number'&&Number.isFinite(v);
  const originMatches=(origin,ref,recordOrigin=false)=>origin===undefined||object(origin)&&text(origin.bridge_process_epoch)

@@ -356,11 +356,15 @@ function drainOutbound() { return outbound.splice(0, outbound.length); }
         return { ok: true, now, sockets: sockets.length, connecting: !!(socketNow() && socketNow().readyState === 0), outbound: drainOutbound() };
       }
       case 'say': {
+        const fuelSnapshot=ev('canonicalLifecycleCache.current()');
+        const fuelSource=fuelSnapshot?{snapshot_id:fuelSnapshot.snapshot_id,source_frame:fuelSnapshot.source_frame,
+          current_facts:fuelSnapshot.current_facts,finish:fuelSnapshot.finish,
+          fuel_calculation:fuelSnapshot.recommendations.fuel_strategy||null}:null;
         const before = traceMark();
         const msgsBefore = ev('messages.length');
         await ev('sendMsg')('typed', { text: msg.text });
         await settle();
-        return { ok: true, outbound: drainOutbound(), utterances: utterances(before),
+        return { ok: true, fuelSource, outbound: drainOutbound(), utterances: utterances(before),
           assistant: ev('messages').slice(msgsBefore).filter(m => m.role === 'assistant').map(m => m.content) };
       }
       case 'say_start': {
@@ -431,6 +435,14 @@ function drainOutbound() { return outbound.splice(0, outbound.length); }
         const text = file ? fs.readFileSync(file, 'utf8') : null;
         if (file) fs.unlinkSync(file);
         return { ok: true, file: file ? path.basename(file) : null, text, outbound: drainOutbound() };
+      }
+      case 'history_store_write': {
+        // Historical storage is an external I/O boundary. No canonical,
+        // proposal, permission or execution state can be assigned here.
+        const keys=new Set(['pw_raceHistory','pw_fuel_history','pw_fuel_deleted']);
+        if(!keys.has(msg.key)||typeof msg.value!=='string'||!Array.isArray(JSON.parse(msg.value)))return {ok:false,error:'invalid historical storage input'};
+        store.set(msg.key,msg.value);
+        return {ok:true};
       }
       case 'call': {
         // Read-only product getter calls only (named, no arbitrary source): used for the

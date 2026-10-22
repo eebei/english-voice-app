@@ -3,6 +3,7 @@ import math,uuid
 from dataclasses import dataclass,fields,is_dataclass
 from collections.abc import Mapping
 import plan_lifecycle as pl
+import fuel_reference_planning as reference_planning
 import driver_pit_event as pe
 import bridge_plan_lifecycle_adapter as adapter
 
@@ -29,6 +30,7 @@ def record_view(record):
     r.pop('options_snapshot',None)
     basis=r.pop('plan_basis',None) or {}
     r['constraint']=basis.get('driver_target_constraint')
+    r['provisional_history']=reference_planning.public_reference(record)
     r['record_ref']={'bridge_process_epoch':PROCESS_EPOCH,'race_instance_id':record.race_instance_id,
                      'session_num':record.session_num,'decision_id':record.decision_id,'revision':record.revision}
     r['terminal_event_ref']=({'bridge_process_epoch':PROCESS_EPOCH,'race_instance_id':record.race_instance_id,

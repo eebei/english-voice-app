@@ -175,7 +175,12 @@ function classify(text, options = {}) {
     const choice=/プラン\s*[AＡ]|plan\s*a/i.test(t)?'A':/プラン\s*[BＢ]|plan\s*b/i.test(t)?'B':/プラン\s*[CＣ]|plan\s*c/i.test(t)?'C':null;
     return { topic: TOPIC.PLAN_STATUS, planChoice: choice, confidence: 0.96 };
   }
-  if (/トラフィック|集団|クリアエア|前方.*(?:集団|車群)|traffic|pack|clear air/i.test(t)) return { topic: TOPIC.TRAFFIC_STATUS, confidence: 0.96 };
+  // A report that other cars are stopping is strategy context. A question
+  // about the pack AFTER our stop still needs the traffic/rejoin answer.
+  const groupPitReport = /集団|車群|pack|traffic/i.test(t)
+    && /ピット(?:イン)?(?:して|した)|ピット.{0,6}入っ|\bpitt(?:ing|ed)\b/i.test(t)
+    && !/したら|入ったら|入ると|ピット後|after.{0,12}pit|if.{0,12}pit|rejoin/i.test(t);
+  if (!groupPitReport&&/トラフィック|集団|クリアエア|前方.*(?:集団|車群)|traffic|pack|clear air/i.test(t)) return { topic: TOPIC.TRAFFIC_STATUS, confidence: 0.96 };
   if (/ペース|タイム.*上げ|上げて|プッシュ|攻め|飛ば|push|pace|speed up/i.test(t)) return { topic: TOPIC.PACE, confidence: 0.97 };
 
   if (/クラストップ|クラスリーダー|トップまで|首位まで|リーダーまで|overall leader|class leader|gap to (?:the )?leader/i.test(t)) return { topic: TOPIC.LEADER_GAP, confidence: 0.99 };

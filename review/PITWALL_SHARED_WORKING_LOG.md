@@ -28394,3 +28394,122 @@ WO021 親独立の最終検査結果（正式回覧/最後のfixture復元とSHA
 |保全/限界/次|4file source archive codex/phase-b-source.tar SHA256 **9612eced490141f2018fb0980e4c63f3696cc6d0c3c34d41247e630ed80c4eda**。採番は実artifact生成/Windows動作証拠ではない。親独立確認→親の正確なstage/commit/push/CI候補→Gate5で実同梱Build303/targetSHA/hash照合。実音声/実走/DB/providerの未検証境界はPhase Aから不変。自己承認しない|
 
 次のMDに指示書あり
+
+
+### 2026-10-20 Build303候補 最終Gate5親独立判定 APPROVE（本番/公開前）
+
+|項目|独立結果|
+|---|---|
+|対象/分離|commit a69544fd27225ee3812d2c0693e0f9cb38108c8a、build/303。Codex開発担当source実装/親独立reviewと実物検査。175file commit/push、scratch2除外。主証拠parent-candidate-final-review.json|
+|CI|Desktop39330240891、Bridge39330240986、同SHA/両success/両Publish skipped。ログ/metadata保存。本番ff180b8のまま|
+|Desktop実物|ZIP101075530bytes/API SHA一致。NSISから実resources/asarを抽出。installer101071478bytes SHAaeca2d7f9f6de1ac7e837bd9d855842c63da327109ec05716002f4a22aaf9daf、manifest3物実測一致。29scriptあり、main/preload/storeを含む35JS/HTMLが対象commit一致、Build303/固有tag|
+|両Bridge実物|各実archive31local/必要external欠落0、native Build303/旧302なし、抽出compiled Bridge本体SHA同一。独立生成containerは別hashとして各記録。単体installerは実bytes/hash記録、Inno実インストールは未実施|
+|source/変更保護|full preflight0、E2E49/0/0、K30/31正負2/0/0、fixture変更0、全stage diffcheck0/secretpattern0。metadata採番4file関連検査0。整形後に不要な全test再実行はせず、末尾spaceとMDhardbreak以外差0を独立確認|
+|署名/残条件|親source Gate3/4とartifact Gate5 APPROVE。Gate7 production SHA/機能反映は未完/別承認待ち、Windows/音声/実走は未確認。公開署名・実機成功ではない。Owner承認→同SHA本番反映/検証→合格時検査済み候補公開→Gate9取得照合→Owner Gate6/8、という承認済み運用順を維持|
+
+次のMDに指示書あり
+
+
+### 2026-10-20 夜 Build303本番反映・公開・Gate9照合完了
+
+|項目|結果/証拠|
+|---|---|
+|Owner GO|完成候補を示した後の夜「GO!」を、本番同SHA反映→検証→合格後公開の承認として実行。追加購入/課金設定/有料provider/本番Stripeテストなし|
+|本番|mainをa69544fd27225ee3812d2c0693e0f9cb38108c8aへfast-forward。Railway deployment172249ca-56b4-4df4-b8c6-a849a9e51df7 SUCCESS、/api/version同SHA、verify-deploy0、schema初期化ready、記憶/seed/chief未認証とinvalid token拒否401|
+|公開|Desktop39330240891/Bridge39330240986の親検査済み原artifactを直接昇格。再buildなし、両Release名Build303/両rolling tag同SHA。Desktop stable2＋dated1、Bridge canonical2＋dated2を更新、旧dated履歴は保持|
+|実取得|公開URLを認証なしcurlで7ファイル実取得、全bytes/SHAがcandidateと一致。Desktopinstaller101071478bytes SHAaeca2d7f9f6de1ac7e837bd9d855842c63da327109ec05716002f4a22aaf9daf。公開後server同SHAも再確認。public-final-verification.json、release303-final-record.json|
+|判定/限界|Gate0–5/変更範囲7/公開9の機械・反映・実物照合完了、実走用candidate公開済み。Windows Gate6/実走Gate8はOwner確認待ち、最終出荷署名/実機成功ではない。署名範囲と未検証点はHANDOFF先頭。問題発生時Gate10に従い無断rollbackしない|
+|次|Ownerが公開Setup-latestから上書きinstall、表示/Bridge303、PTT/音声/overlay/診断、session/GAP/燃料/pit/終了後を実機確認。予約3機能は別scope|
+
+次のMDに指示書あり
+
+
+## 10/20 実走監査：Build303 Gate8 FAILED／原因を製品コードで再現
+
+**設計どおりに機能していない。実走成功・最終出荷とは判定しない。** Owner提供のMonza AI実走ログ（27,505,941bytes／74,471行、Bridge Build303起動確認）と結果JSONを取得。証拠は `../pitwall-local-evidence/field303-oct20/`。前回の機械・artifact照合の合格は維持するが、実用上の成功を裏付けない。Gate10対象。公開物・本番・tagは変更していない。修正、再Build、rollbackは未実施。
+
+|破断点|実走・実コードの証拠|修復に必要な契約|
+|---|---|---|
+|現データと永続復元の混同|AI race `fallback:5ea2a4cbd247` はdurable_recovery.stable_scope対象外。Bridgeはfresh fuelを正規snapshotに保持するがstrategy-state-projection.js:74–79がstable_scope/durable_commitで全体を利用不能にし、renderer.html:6286がfuel/lapをnullにする。実Bridge16frame→実cache→実projection→実Rendererの比較でも、同一燃料18.4Lがfallbackならnull、SubSessionIDありなら18.4L。`real-bridge-to-renderer-comparison.json`|現在のfresh factとcross-restart復元可否を分離する。fallbackを永続ID扱いにして安全策を外す修正は不可。設計WO009の独立fuel/flags保持とWO011の全projection stable_scope条件も衝突している|
+|相談を別の質問へ変換|20:06:34「ピットストップ？何周年ぐらいにするの？」→「クラス首位は3周目」。実routerでもleader_lap再現。「ピットストップ」内部の「トップ」と「何周」をleader regexが拾う。なお「ピットストップ、何周目にする？」はpit_plan_questionになるため、全pit質問で常時発生とは言わない|Driverの目的を保持し、音声表記揺れ・疑問符位置・訂正を含め相談単位で反証|
+|serverの旧BOX返答がcommand/ACKを迂回|20:07:47「この週でピット 入らないと燃料切れちゃうよ。」を実Desktop classifierはnegated、実server classifierはpit_this_lap。server.js:1015/1259はliveData空でも「了解。この周の終わりでボックス」。実走u38もspoken/completed。全ログdriver_plan_command/同ACK文字列0。`server-bypass-repro.json`と`critical-spoken-traces.json`|必要条件「入らないと」と否定を区別。合意/実行を示す返答は同一native command→ACK→状態の経路に限定。単なる返事を実行成功に数えない|
+|試験条件と診断の盲点|既存Renderer helperがstable_scope driver1を常に注入、E2E入力もSubSessionIDあり。現実のAI unsupported状態でfresh fuelを答える対照が欠落。runtime reporterは実UMDのPitwallCriticalJournalをPitwallCriticalJournalClientと誤推定しmissing表示、試験も同じ推定名のdummyを作りGREENになる。`actual-module-diagnostic-repro.json`|製品UMDを実行して配線を確認し、実Bridgeのunsupported identityと通常identityを同条件比較する。実走ログのmodule missingを真の欠落と断定しない|
+
+実走Bridgeは20:07:18 fuel7.59L、20:09:13 fuel3.90L/critical、20:17:17 fuel12.76Lを記録。一方、Rendererはfuel警告をmissing_current_publicationで保留、質問には確認不能と返す。従って単純な「iRacingデータ未着」では説明できない。ただし原ログには質問瞬間の正規wire payload全体がなく、各発話時点の正確な残量まで復元したとの主張はしない。18.4Lは比較replayの入力、12.76Lは実走記録値で区別する。
+
+23発話をturns.jsonへ抽出。上記以外にも「俺の走り」への訂正後の分析不成立、「気温だけ」の訂正無視、燃料＋周回の複合要求で周回無回答、終了後「順位も無い」とする返答と直前P13応答の矛盾を確認。これらの全原因をidentity問題だけに帰属させない。Memory matching_race_unavailableを確認したがsync optoutを故障扱いにしない。結果JSON9完了周/ベスト114.835秒とdebrief8周/114.548秒の相違は集計定義・同一結果対応を追加確認するまで断定保留。原音声なし、STT誤認識の元発話や実際の聴感は未検証。
+
+優先順：fresh facts/永続復元/実行権限の契約分離 → Desktop/serverの相談・合意・実行経路統一 → 23発話の訂正・複合要求と別表現を含む製品経路回帰 → 独立確認 → 別候補Build/公開GO → 同じAI実走。今回の旧302rollbackで改善する証拠はなく、無断rollbackしない。現303を燃料判断・BOX実行の信頼できるengineerとして扱えないことをOwnerへ明示する。
+
+次のMDに指示書あり
+
+
+### 2026-10-21 次チャット移動：実走303修復WIP回覧（最終承認前）
+
+|項目|現在の回覧|
+|---|---|
+|担当/対象|Codex開発担当 fuel_developer実装、親Codex独立確認。base a69544fd27225ee3812d2c0693e0f9cb38108c8a、branch build/303、working tree未commit。Ownerの次チャット移動で編集保存/停止。未Build/未公開、有料API0。最終対象SHAは未固定、handoff WIP manifest/source archiveへ保全|
+|変更箇所|desktop/session-memory.js:履歴分析/暫定燃料推定。local-intent-router.js:燃料/相談/複合要求/短いradio。renderer.html:履歴保存/取得/削除、rawscope fence、runtime診断、終了結果basis/遅着summary保存。cache/projection/race-memory-scope、Bridge durable_recovery/bridge.py: fresh fact分離とAI process custody。bridge.py/driver_activity.py:終了counter/最速basis、bounded settle/finish outbox。engineer-card/dispute/server/prompts:誤分類/偽BOX/現在unknownから過去断定防止。対応test/harness/preflight修復|
+|親検査|phase1通常E2E49/0/0、phase2 custodyPython7/JS14、fuel72、AI subset M03/M14/M16 3/0/0、K29/K30cuts対象RED/controlGREEN。全Rendererで19L開始→履歴燃費/42.7L/追加23.7L/4周案の模擬音声completed、給油後16L/必要12.5L/7周、気温onlyを確認。phase3最終親検査は未|
+|phase3担当検査|summary新Python8、実Renderer保存/label+real prompt新JS12、phase_ab28/tunnel126/fuel72PASS。py_compile/node--checkPASS。自己報告のみなので最終独立署名なし|
+|未完/不安点|新summary2testのpreflight接続、explicit summary race_format等の保存優先、time先着counter遅着対照、旧debrief訂正回帰、provider request捕捉、full preflight両49、短文化後全Renderer再実行が未。finish outboxの同scope更新/切断/一度配送と遅着別raceの条件補完禁止を親が反証。実モデル意味/実音声/Windows/実走未証明|
+|次担当/合否条件|次chatはHANDOFF先頭の具体的6手順から再開。担当の不足を閉じ、親がfreeze sourceの全経路/反例/全preflight/rendererを独立確認。全件/実走合格へ読み替えない。生成fixture noiseとscratch2を混ぜず正確stage、localcommit可。Build/公開前は別release gate|
+
+次のMDに指示書あり
+
+
+### 2026-10-21 実走303 残件実装freeze／親独立確認へ
+
+|項目|担当回覧|
+|---|---|
+|担当/状態|Codex repair_remaining実装、親Codex独立確認。base a69544f、未commit/未Build/未公開。有料API0。対象6file SHAは外部証拠 `field303-oct20/developer-remaining-freeze-oct21.json` に固定|
+|変更箇所|preflight.shへsummary Python/JS2suite接続。renderer saveSessionSummaryはexplicit race_format/configured_duration_s/total_laps_ruleをrace_plan/current fallbackより優先し、明示nullも保持。Bridge終了normal summary/finish outboxに当該scopeのformat/duration/lap-ruleをfreeze。summary Pythonへtime先着counter遅着とfrozen条件保存確認、JSへexplicit条件優先/unknown保存を追加|
+|関連回帰修復|WO018 harness observeRaceがscope observerだけを呼びlastTelemetry=nullのままだったため、遅着scope保護でraceHistory ownerが不明になりMemoryBrain8casesがRED。canonical受信に相当するrace/session/cust telemetryも設定するようharness修復。製品側の遅着foreign条件補完禁止は維持|
+|検査|summary Python9/JS15 PASS、evidence-debrief48 PASS、WO018 cases/cuts122 passed/0 failed、session-memory-tunnel126 PASS、fuel-memory72 PASS。Python compile/Node syntax/bash -n/diffcheck PASS。raw/matrixは外部field303-oct20/developer-remaining-*へ保全。初回WO018の8 REDは修復前harness結果として区別|
+|不安点/未実施|親独立確認、全preflight（normal/AI各49）、全Renderer、保存provider request捕捉は親担当。実LLM意味/音声/Windows/実走は未証明。担当のPASSだけで最終承認しない。旧session signature変更時の途中summaryに新session条件を補完しない|
+|次担当/合否|親が固定sourceを逆追跡しsummary単発/再送/別scope/遅着、explicit保存→再取得を独立反証、全preflight/full Rendererを実行。freeze後source変更は親判断で記録、Build/push/公開へ自動拡張しない|
+
+次のMDに指示書あり
+
+
+### 2026-10-21 Owner停止：核心接続WIPを保存
+
+|項目|状態|
+|---|---|
+|停止|Owner「ここでストップ！またあした！」、開発担当interrupt、製品編集/検査停止。未commit/未Build/未公開、有料API0|
+|現在地|履歴提案→native候補→同意→実行→結果/次回の核心接続を実装中。親はreference request→Bridge registered ACKを独立再現、proposal配送/pending/自然同意は未成立。WIP raw parent-core-smoke-wip-oct21.json|
+|再開|HANDOFF先頭の残件と停止manifest、担当停止報告を読む。旧49合格で新相談の完成にしない。scratch/fixture保護維持|
+
+次のMDに指示書あり
+
+
+### 2026-10-22 06:19 Owner続GO：核心接続を再開
+
+停止source44path・保護scratch2のSHA drift0を親照合。既存開発担当再開、親独立確認。実Bridge×全Rendererで履歴→registered→native awaiting→Renderer pending配列まで確認、proposal配送とaudible pendingは未成立。各frameのpending再投影と未dispatch条件の不整合を担当へ差戻し。親19境界／fuel114／projection158／summary Python9＋JS17／給油後通常微減の残量＋周回音声completedを確認。ただし新相談全経路・最終全preflight未合格。次は候補配送→訂正→自然同意→ACK→BOX→実pit→振り返り保存・次race、負例、独立確認→freeze→全preflight通常/AI両49＋新相談。Build/公開/有料APIなし。詳細HANDOFF先頭と外部証拠parent-core-smoke-wip-oct22.json、parent-renderer-postburn-oct22.json。
+
+次のMDに指示書あり
+
+
+### 2026-10-22 核心相談の全経路修復：source固定候補・独立再確認待ち
+
+|項目|状態|
+|---|---|
+|実装/正本|Bridge `fuel_reference_planning.py`で本人・車・当該SDK raw/display履歴を有限cohortから検証し、timed限定provisional_history_v1を再計算。native awaiting→訂正候補→既存semantic同意→durable ACK→既存FAの明示history分岐→BOXへ接続。Rendererはauthorityを生成せず、登録前/ACK前のモデル成功宣言をbufferして抑止。既存clean3/通常FAは維持|
+|配送/再送|未dispatch pending再投影、director driver応答優先度、drop再配送、同command凍結receipt、awaiting→active後のsent ACK receipt保持を修復。裸はい/自然同意前と完了時に使用履歴cohortのversion照合、削除/訂正は旧同意失効。現race sampleと無関係履歴はcohort変更に数えない|
+|結果→次回|race prefix native IDで実pitをexact bind、debrief finite subsetに根拠IDs/率/予測/設定/実24Lを保持、Driver not_planned訂正と同decision保存→次race provider根拠へ。過去数値文のみtruth guardを時制分離し、混在current claimの遮断は維持|
+|本線の実証|親v8実Bridge×全Renderer×実serverで4周提案completed→3周訂正completed→自然複合同意→active/ACK読上げcompleted→BOX24Lcompleted→実pit executed/exactlinked→Driver訂正保存→次race 3周/24L/訂正の回答completed。保存応答stubによる接続実証で、実LLM意味品質/実音声/Windows実走は未証明。通常/AI旧fixture本線もPASS、最終固定sourceで親が再確認|
+|負例/測定修復|9負例のうち旧current_sampleを除く8件は親PASS。ただし旧worseningは単なる燃料減による25/26L再提案で実測4.2の証明にならず除外。fixtureを実周ごと115.00→115.01へ修正し、normal/AI current_sampleの実保存3.68/同active/取消なしPASS。worseningでhistory専用callerのmedian既定3が単一実測を落とす欠陥を特定しminimum=1へ修復、親normal/AI再走待ち。通常clean3 gate不変|
+|対象検査|pure history11、Renderer history境界、debrief subset、WO010 recovery22、WO018 Python9/JS122、truth60、gap71、previous-fuel17、intent31、fuel-memory114 PASS。親WO014 vertical/WO011361 PASS。新main/AI main/normal-AI全9負例をpreflightへ接続済み。最終全preflight/全Rendererは親がsource固定後に実施、未合格|
+|既知未修復|連続するSDK LapLastLapTimeが完全同値だと既存lap_time_changed入口が発火せず、燃費/clean/summaryの同値周が未採用になり得る。completedだけの即ORはtime遅着で旧time混入・二重採用を招く。scope/driver付き確定周cursorとsummary settleを伴う別修復が必要。親判断で今回に全lap集計再設計を混ぜず、当日の悪化反映は実際sampleが出た条件に限定して証明する。全計測問題解消とは扱わない|
+|固定/次担当|外部developer-core-freeze-candidate-oct22.jsonの52source SHA、保護scratch2を基準。fixture noise/docsはmanifest対象外。minimum1負例独立確認→最終freeze→全preflight通常/AI49＋新相談→全Renderer。製品大変更停止、親依頼の修正以外source編集停止。Build/公開/有料API0|
+
+次のMDに指示書あり
+
+
+### 2026-10-22 親独立最終確認：時間制の燃料相談の完成単位PASS
+
+実装repair_remaining／独立確認親Codex。source57pathとscratch2をSHA固定して最終全preflight exit0/573.57秒。通常49/AI49・新同相談各15条件・負例各10・coverage49/32modules/Renderer29・WO00142・WO018122等PASS。外部attempt0・fixture復元true・source driftはlog2のみ。最終raw/result/historyは外部証拠parent-full-preflight-final-oct22-v2/、親承認parent-final-review-oct22.json。旧sourceは同意に再計算のみ、新sourceは履歴→native候補→4から3周へ訂正→自然同意→commit/ACK音声→BOX→実補給24Lと同ID結合→Driver訂正保存→別raceのprovider context/実回答音声まで接続。通常微減、当日実測3.68保存、4.2悪化再同意、90秒paceで旧24拒否/35案、130秒非減量を確認。親の通常/AI伸長probeは実target4でも不足旧24のBOXを拒否。
+
+最初の全走exit1は隠さず前dirへ保持、旧static/抽出VM依存/指定出力dir不足を修復して全再走。旧固定115秒fixtureの4.2証明は除外済み。現在実測を測ってhistory専用minimum1へ接続、通常clean3/公式finishは維持。完全同値lap time欠落は全lap集計cursor/遅着整合が必要な別残件として未修復。実LLM意味・Windows実音声/installer・実走成功は未証明、LUNA全体完成とは呼ばない。未Build/未公開、有料provider呼出0、公開303/a69544f/Gate8 FAILED不変。複合同意は1provider call・cap100、通常race55維持。詳細と次の境界はHANDOFF先頭。生成fixture1pathのみHEADへ復元、scratch2保持・stage禁止、検査済source＋既存docs2のみlocalcommit対象。
+
+次のMDに指示書あり

@@ -41,7 +41,7 @@ function extract(name) {
 // ★2026-08-26：`sendMsg` の先頭に自己反省記憶の分岐が入った。
 //   スタブで潰さず**本番の関数をそのまま抽出する**。潰すと、
 //   「自己反省記憶が GAP の質問を飲み込む」回帰を検出できなくなる。
-const productionCode = ['sendMsg', 'speak', 'speechMayStart', 'drainQueue',
+const productionCode = ['syncFuelReferenceEvidence','sendMsg', 'speak', 'speechMayStart', 'drainQueue',
   'stopCurrentAudio', 'onUtteranceDone', 'playWebSpeech',
   // ★2026-09-05 第4回 Gate 4：終端集約を**本物で**動かす。
   //   スタブに差し替えると「呼ばれた記録」しか取れず、Overlay・会話Boxまで到達しない。

@@ -15,8 +15,31 @@ const finite=v=>typeof v==='number'&&Number.isFinite(v);
 const text=v=>typeof v==='string'&&v.length>0;
 const copy=v=>JSON.parse(JSON.stringify(v));
 function freeze(v){if(v&&typeof v==='object'){Object.values(v).forEach(freeze);Object.freeze(v);}return v;}
+function provisionalFuelValid(p){
+ const f=p.fuel_inputs,v=p.validity_contract,b=p.validation,r=f?.provisional_history,e=r?.evidence;
+ if(!f||!v||!b||!r||!e||r.contract!=='provisional_history_v1'||f.finish_kind!==r.contract||f.process_epoch!==r.process_epoch
+  ||!text(r.command_id)||!text(r.evidence_version)||!Array.isArray(e.record_ids)||!e.record_ids.length||e.record_count!==e.record_ids.length
+  ||!finite(e.rate_l_per_lap)||e.rate_l_per_lap<=0||!finite(e.pace_s)||e.pace_s<=20
+  ||!['source_frame_sequence','current_lap','crossings_to_finish','max_set_fuel_l'].every(k=>integer(f[k]))
+  ||!['session_time_s','time_remaining_s','configured_duration_s','lap_dist_pct','fuel_level_l','avg_fuel_per_lap_l','reserve_l','effective_capacity_l'].every(k=>finite(f[k]))
+  ||f.race_format!=='timed'||f.configured_duration_s<=0||f.time_remaining_s<=0||f.black_flag!=='false'
+  ||f.on_track!==true||f.on_pit_road!==false||f.telemetry_available!==true||f.source_available!==true
+  ||f.scope_closed||f.collision||f.session_finished||r.identity?.cust_id!==f.cust_id||r.identity?.car_model!==f.car_model||r.identity?.track!==f.track
+  ||f.race_instance_id!==p.race_instance_id||f.session_num!==p.session_num||f.source_frame_sequence!==p.issued_source_frame
+  ||f.session_time_s!==p.issued_session_time||f.driver_pit_sequence!==p.driver_pit_sequence||f.current_lap!==p.target_lap
+  ||!finite(f.planning_pace_s)||f.planning_pace_s<=20||f.planning_pace_s!==((finite(f.current_measured_pace_s)&&f.current_measured_pace_s>20&&f.current_measured_pace_s<2000&&integer(f.current_measured_pace_samples)&&f.current_measured_pace_samples>0)?Math.min(e.pace_s,f.current_measured_pace_s):e.pace_s)
+  ||f.crossings_to_finish!==Math.ceil(f.time_remaining_s/f.planning_pace_s)+1||f.reserve_l!==2||f.lap_dist_pct<0||f.lap_dist_pct>1
+  ||f.avg_fuel_per_lap_l<e.rate_l_per_lap||f.effective_capacity_l<=0||f.fuel_level_l<0||f.fuel_level_l>f.effective_capacity_l
+  ||p.set_fuel_l>f.max_set_fuel_l||f.max_set_fuel_l>Math.floor(f.effective_capacity_l)
+  ||v.ttl_seconds!==5||v.window!=='same_target_lap'||b.available!==true||b.geometry_contract!=='provisional_history_running_lap'
+  ||b.target_lap!==p.target_lap||b.target_in_laps!==0||b.set_fuel_l!==p.set_fuel_l)return false;
+ const rate=f.avg_fuel_per_lap_l,need=rate*(f.crossings_to_finish-f.lap_dist_pct)+2;
+ return f.fuel_level_l-rate*(1-f.lap_dist_pct)>=2&&rate*f.crossings_to_finish+2<=f.effective_capacity_l
+  &&f.fuel_level_l+p.set_fuel_l+1e-9>=need;
+}
 function fuelValid(p){
  const f=p.fuel_inputs,v=p.validity_contract,b=p.validation;
+ if(f?.finish_kind==='provisional_history_v1')return provisionalFuelValid(p);
  return f&&v&&b&&b.available===true&&b.geometry_contract==='coupled_current_running_lap'
   &&b.target_lap===p.target_lap&&b.target_in_laps===0&&b.set_fuel_l===p.set_fuel_l
   &&v.ttl_seconds===5&&v.window==='same_target_lap'
@@ -151,6 +174,7 @@ function create(opts){
    ||p.activation_frame>p.issued_source_frame||p.expected_pit_sequence!==p.driver_pit_sequence+1||!text(a.attempt_id)||!integer(a.dispatch_sequence)
    ||!['proof_id','race_instance_id','session_num','decision_id','plan_revision','activation_frame','driver_pit_sequence'].every(k=>a[k]===p[k]))return null;
   const active=opts.canonical.current()?.lifecycle.active;
+  if(p.fuel_inputs?.finish_kind==='provisional_history_v1'&&(!active?.provisional_history||active.provisional_history.command_id!==p.fuel_inputs.provisional_history.command_id||active.provisional_history.evidence_version!==p.fuel_inputs.provisional_history.evidence_version))return null;
   if(!active||p.selected_plan!==active.selected_plan||p.target_lap!==active.target_lap||p.add_fuel_l!==active.add_fuel_l||p.set_fuel_l!==active.set_fuel_l)return null;
   if(attempts.has(attemptKey(a))||opts.journal?.hasAttempt(epoch,a.attempt_id))return null;
   if(opts.journal&&!opts.journal.attempt({...Object.fromEntries(refs.map(k=>[k,data[k]])),attempt:copy(a),potentially_started:true})){revoke();return null;}

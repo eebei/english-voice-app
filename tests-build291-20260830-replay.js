@@ -120,8 +120,12 @@ console.log('══ P0-2 質問分類の誤爆 ══');
    ['トラフィックどう？', cards.TOPIC.TRAFFIC_STATUS],
    ['この周でピットしたらブレンドする？', cards.TOPIC.REJOIN],
    ['ピット後は集団の中？', cards.TOPIC.TRAFFIC_STATUS]].forEach(([text, want]) => {
-    ck(`「${text}」→ ${want}`, cards.classify(text).topic === want, JSON.stringify(cards.classify(text)));
+    ck(`「${text}」→ ${want}`, cards.classify(text)?.topic === want, JSON.stringify(cards.classify(text)));
   });
+  for (const text of ['後方集団は一気にピットインしてる。', '広報 集団は一気に ピットインしてる。守護代ぐらいはね。', 'The pack is pitting.']) {
+    ck(`集団の入庫報告を直前車GAPの質問へ変えない: ${text}`,
+      cards.classify(text)?.topic !== cards.TOPIC.TRAFFIC_STATUS, JSON.stringify(cards.classify(text)));
+  }
 
   // 正当な pit 判断は従来どおり pit_decision のまま（過剰修正の検出）
   ['ピット 入る？', 'どうするのはこの州 入るのか？次の週なのか？', 'この周でボックス？',

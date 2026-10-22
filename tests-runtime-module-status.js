@@ -29,23 +29,26 @@ const run=(present)=>{
   const box={console,JSON,Object,String,RegExp,
     document:{querySelectorAll:()=>wanted.map(s=>({getAttribute:()=>s}))},
     diagnosticLog:(t,b)=>{if(t==='RUNTIME_MODULE_STATUS')logged=JSON.parse(b);}};
-  box.window=box; vm.createContext(box); vm.runInContext(code,box);
-  present.forEach(g=>{box[g]={};});
+  box.window=box; vm.createContext(box);
+  // Execute the packaged UMDs themselves. Never manufacture a global from
+  // the diagnostic's naming convention: that hid a real export mismatch.
+  present.forEach(file=>vm.runInContext(fs.readFileSync('desktop/'+file,'utf8'),box,{filename:file}));
+  vm.runInContext(code,box);
   box.reportRuntimeModuleStatus();
-  return logged;
+  return {logged,box};
 };
-const nameOf=s=>'Pitwall'+s.replace(/\.js$/,'').split('-').map(p=>p[0].toUpperCase()+p.slice(1)).join('');
-const all=wanted.map(nameOf);
+const all=wanted;
 
 console.log('══ 起動時 module 診断が派生になっているか ══');
 console.log('  renderer が読み込む: '+wanted.length+' 本');
-const okAll=run(all);
+const {logged:okAll,box:loaded}=run(all);
+ck('real journal UMD exports its production global',typeof loaded.PitwallCriticalJournal==='object'&&loaded.PitwallCriticalJournalClient===undefined);
 ck('全部あれば loaded',okAll&&okAll.status==='loaded'&&okAll.missing.length===0,JSON.stringify(okAll));
 ck('★8本すべてを検査対象にする（5本ハードコードでない）',
   okAll&&Object.keys(okAll.modules).length===wanted.length,
   okAll?Object.keys(okAll.modules).length+'本':'-');
 wanted.forEach(f=>{
-  const r=run(all.filter(g=>g!==nameOf(f)));
+  const {logged:r}=run(all.filter(file=>file!==f));
   ck('  '+f+' が欠けたら missing になる',
     r&&r.status==='missing'&&r.missing.includes(f),JSON.stringify(r&&r.missing));
 });
