@@ -1,6 +1,16 @@
 # OMORAY PITWALL 引き継ぎ
 
-## 10/23 Build304 private候補完成・Gate5独立確認PASS（未公開／本番未反映）
+## 10/23 Build304 本番反映・公開・公開物照合完了（実走候補）
+
+Owner公開GOにより、検査済み候補SHA `75cb05643f03c475606897b24c980ff549924ce0` をmainへ反映。本番 `/api/version` と `verify-deploy.sh` が同SHAで合格。記憶/seed/chief関連の未認証経路は401拒否。Railway CLI OAuthは期限切れだったが、live本番version/起動時刻/経路応答で反映を確認した。
+
+Desktop/Bridge両ReleaseをBuild304へ更新、両rolling tagも同SHA。Gate5独立検査済みCI原artifactを直接昇格し、再buildなし。公開URLから認証なしでDesktop3/Bridge4の全7fileを実取得し全bytes/SHA一致、別担当も再hashして独立PASS。Desktop installer101108415bytes、SHA256 `1976989c7023af853f0b1da16673a73c3d0e93011d15814548a9f19f7ba232d9`。証拠root `../pitwall-local-evidence/build304-oct23/` の `public-final-verification.json`、`independent-public-check.json`、`public-server-verification.json`、promotion manifest/steps/raw公開物。
+
+**次はOwner Windows/iRacing実走 Gate6/8。** 公開 `desktop-latest/OMORAY-PITWALL-Setup-latest.exe` から上書きinstallし、表示/Bridgeログ304、起動/PTT/音声/overlay、同じAI raceの現在燃料＋周回・履歴燃料相談→訂正→同意→BOX→給油後→終了結果を確認。機械/実物/反映照合の合格であり、実機・実走成功やLUNA全体の完成とは呼ばない。完全同値LapLastLapTimeの計測欠落は未修復。製品有料API呼出/課金設定変更/追加購入0、scratch2保護。問題時はGate10に従って影響・回避/rollback候補を提示し、無断差替えしない。
+
+次のMDに指示書あり
+
+## 10/23 公開前履歴：Build304 private候補完成・Gate5独立確認PASS
 
 **候補SHA `75cb05643f03c475606897b24c980ff549924ce0`、branch `build/304`。** Owner16:55 Build GO。修復c0f957fへBridge/build-infoの番号2pathを304へ同期。Claude OAuth期限切れに対しOwnerが別Codex確認担当を明示承認。親作業、build304_review独立確認。公開/deploy GOは未取得。
 

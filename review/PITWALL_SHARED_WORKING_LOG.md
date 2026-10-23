@@ -28540,3 +28540,13 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |境界/次|private candidate完成。公開303/本番a69544f維持。Owner公開/本番反映GO→Gate7同SHA反映/verify-deploy→検査済みartifact昇格→Gate9取得照合→Owner Gate6/8。実機/実走未確認、完全同値lap計測未修復。private artifact保持1日。追加有料API0|
 
 次のMDに指示書あり
+
+### 2026-10-23 Build304 公開GO実行・Gate7/9照合
+
+|項目|結果|
+|---|---|
+|公開GO/本番|Owner GO後main75cb056へ反映。本番同SHA verify-deploy0/関連未認証401。Railway CLI認証切れはlive version/経路証拠で確認、実機検証とは分離|
+|公開物|両Release Build304/両tag同SHA、検査済み原artifact直接昇格・再build0。Desktop3/Bridge4の認証なし実取得全7 bytes/SHA一致。別担当も公開物再hash・manifest/asset digest/tag/server独立PASS|
+|証拠/次|build304-oct23/public-final-verification.json、independent-public-check.json。次Owner公開update経路でGate6/8。Windows/iRacing/実LLM意味未確認、完全同値lap計測未修復。製品有料API0、scratch2保持。無断rollbackしない|
+
+次のMDに指示書あり
