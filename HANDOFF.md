@@ -1,12 +1,16 @@
 # OMORAY PITWALL 引き継ぎ
 
-## 10/23 Build304 private候補：source合格、Windows artifact作成へ
+## 10/23 Build304 private候補完成・Gate5独立確認PASS（未公開／本番未反映）
 
-Owner 10/23 16:55「Build304 GO」。修復c0f957fへBuild番号2path（Bridge/build-info）だけを304へ同期。Claude OAuth期限切れに対しOwnerが別Codex担当の独立確認を承認、build304_reviewが実Bridge×全Renderer×server相談15条件と境界/配線を再検査しGate4 PASS・P0/P1=0。
+**候補SHA `75cb05643f03c475606897b24c980ff549924ce0`、branch `build/304`。** Owner16:55 Build GO。修復c0f957fへBridge/build-infoの番号2pathを304へ同期。Claude OAuth期限切れに対しOwnerが別Codex確認担当を明示承認。親作業、build304_review独立確認。公開/deploy GOは未取得。
 
-304 sourceで全preflight exit0／586.84秒、normal49/AI49、新相談各15・負例各10、runtime32modules/29scripts、WO00142/WO018122等PASS。外部有料APIattempt0、fixture変更0。driftは実行log2＋作業中の共有回覧MDだけ、製品source driftなし。証拠 `../pitwall-local-evidence/build304-oct23/preflight/result.json`、`independent-gate4.json`。
+**source Gate3/4：** 304で全preflight exit0/586.84秒、normal49/AI49、新相談各15/負例各10、runtime32modules/29scripts、WO00142/WO018122等PASS。外部有料APIattempt0、fixture変更0。driftは実行log2と実行中追記した共有回覧MDだけ。別担当も実Bridge×全Renderer×server相談15条件を再走しGate4 PASS/P0/P1=0、commit内容との製品drift0。証拠 `../pitwall-local-evidence/build304-oct23/preflight/result.json`、`independent-gate4.json`。
 
-次はbuild/304専用branchへ対象をpushし、Windows CIをpublish=falseで実行、完成installer/asar/Bridgeを取得・実測・独立確認する。公開/本番反映GOはまだない。公開Desktop/Bridge303・本番SHA a69544fは維持。server変更も含むため公開テスト前には同SHA反映とGate7照合が必要。Windows/実LLM意味/iRacing未検証、完全同値LapLastLapTime計測欠落も未修復。scratch2はstageしない。
+**Windows private実物 Gate5：** Desktop CI39924967741、Bridge CI39924967816、ともsuccess・対象SHA一致・Publish skipped。Desktop installer `OMORAY-PITWALL-Setup-20261023-0830.exe` 101108415 bytes、SHA256 `1976989c7023af853f0b1da16673a73c3d0e93011d15814548a9f19f7ba232d9`。親verify-artifact exit0、別担当も取得installer/asar/Bridgeを実測manifest一致。main/preload/store含む35JS/HTMLがcommit一致、Renderer29script・native32module欠落0、Build304/固有tag確認。両Bridgeのcompiled本体/32module bytecode一致（EXE container hashは独立生成のため別）。`independent-gate5.json`、`parent-desktop-artifact-result.json`、`parent-bridge-artifact-result.json`、両CI raw logsを同証拠rootへ保持。ローカルinstallerは同root `desktop-candidate/extracted/`、単体は `bridge-candidate/`。artifact保持1日なので恒久公開URLではない。
+
+**次：** Ownerが候補を確認して公開＋本番反映GOを出したら、server変更を含む同SHAをmain/Railwayへ反映しGate7/verify-deployを確認、合格後に検査済みartifactを再buildせず公開しGate9実取得照合。その後Ownerが公開update経路で上書きinstallしGate6/8実走確認。現公開Desktop/Bridge303・本番SHA a69544fは維持。今回のBuild GOだけで公開や本番反映へ進めない。
+
+**限界/既知残件：** Windows起動/installer実行/実音声/実LLM意味/iRacing実走は未確認。完全同値LapLastLapTime連続時の既存計測欠落は未修復。製品source以外のscratch2はSHA保護・stageなし。有料製品API0、課金設定/追加購入なし。
 
 次のMDに指示書あり
 

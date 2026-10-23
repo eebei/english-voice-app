@@ -28529,3 +28529,14 @@ WO021 親独立の最終検査結果（正式回覧/最後のfixture復元とSHA
 次のMDに指示書あり
 
 Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新相談各15/負例各10、runtime49/32modules/29scripts、WO00142/WO018122 PASS。外部attempt0/fixture変更0。review MDの追記以外に製品source driftなし。独立確認build304_reviewはGate4 PASS/P0/P1=0、independent-gate4.json。Windows private candidate artifact作成へ。
+
+### 2026-10-23 Build304 private完成・独立Gate5 PASS
+
+|項目|最終結果|
+|---|---|
+|対象|75cb05643f03c475606897b24c980ff549924ce0 / build304、Desktop39924967741・Bridge39924967816、両CI success/公開skipped|
+|実物/独立確認|親verify-artifact0、別担当build304_review Gate5 PASS。installer101108415bytes SHA1976989c7023af853f0b1da16673a73c3d0e93011d15814548a9f19f7ba232d9。asar/Bridge実測manifest一致、35JS/HTML commit一致、全29script/32native、同梱/単体compiled本体・modules一致、304番号確認|
+|証拠|build304-oct23/independent-gate5.json、parent-desktop-artifact-result.json、parent-bridge-artifact-result.json、raw両CI。Windows CRLF差は正規化して比較、内容差0。初回raw比較FAILも保持|
+|境界/次|private candidate完成。公開303/本番a69544f維持。Owner公開/本番反映GO→Gate7同SHA反映/verify-deploy→検査済みartifact昇格→Gate9取得照合→Owner Gate6/8。実機/実走未確認、完全同値lap計測未修復。private artifact保持1日。追加有料API0|
+
+次のMDに指示書あり
