@@ -70,6 +70,21 @@ function connectionGeneration(canonical){return typeof canonical.connectionGener
 // uses above (round4 ordinary-frame fix): a reply must not be discarded
 // just because a timer value ticked, only when the actual authorization
 // state changed.
+// Position forecasts refresh independently from the lap-based fuel plan.
+// Bind the spoken meaning, not polling timestamps, so normal frame advance
+// does not cut off an unchanged comparison halfway through the answer.
+function positionComparisonContent(s){const c=s.recommendations?.strategy_options?.value?.position_comparison;if(!c)return null;
+ // Keep the facts the router actually speaks. Raw C fuel thresholds and
+ // relative horizon durations can move without changing any spoken meaning.
+ const candidates=(c.ranked_candidates||[]).map(r=>Object.fromEntries(
+  ['plan_id','target_lap','expected_class_position','gain_vs_baseline','eligible_for_recommendation'].map(k=>[k,r[k]])));
+ return stable({available:c.available,selected_plan:c.selected_plan,gain_kind:c.gain_kind,candidates,
+  unavailable:c.unavailable_candidates,lap:s.current_facts.current_lap,pit:s.current_facts.on_pit_road});}
+function positionExplanationContent(s){const c=s.recommendations?.strategy_options?.value?.position_comparison,age=positionComparisonAge(s);return stable({present:!!c,fresh:age!==null&&age<=Math.min(10,c.valid_for_s||0),available:c?.available,has_forecasts:!!c?.ranked_candidates?.length,missing:c?.unavailable_candidates});}
+function positionComparisonAge(s){const c=s.recommendations?.strategy_options?.value?.position_comparison;
+ if(!c||c.race_instance_id!==s.race_instance_id||c.session_num!==s.session_num||!integer(c.source_frame_sequence)||c.source_frame_sequence>s.source_frame.sequence
+   ||!finite(c.generated_at_session_s)||c.generated_at_session_s<0||c.generated_at_session_s>s.source_frame.session_time_s)return null;
+ return s.source_frame.session_time_s-c.generated_at_session_s;}
 function criticalContent(s){const bf=s.race_facts.black_flag;
  return stable({active:s.lifecycle.active,pit_events:s.pit_ledger.events,black_flag:bf?{state:bf.state,freshness:bf.freshness}:null,awaiting:s.lifecycle.awaiting,
   execution:{allowed:s.execution.allowed,gate_reason:s.execution.gate_reason||null},
@@ -161,13 +176,13 @@ function create({canonical,now=()=>Date.now(),fuelEvidenceVersion=()=>null}){
   // anything about) changed under the SAME identity. Shares critical_context's
   // unavailable sentinel mechanism so an initial-unknown chat reply is held
   // to the identical "same unknown scope" contract (round4) as every other kind.
-  if(!usable(s))return ['critical_context','scope_continuity'].includes(kind)?immutable({kind,identity:null,unavailable:true,captured_scope:rawScopeSignature(canonical.current(),connectionGeneration(canonical))}):null;
+  if(!usable(s))return ['critical_context','scope_continuity','strategy_explanation'].includes(kind)?immutable({kind,identity:null,unavailable:true,captured_scope:rawScopeSignature(canonical.current(),connectionGeneration(canonical))}):null;
   const r=kind==='awaiting'?s.lifecycle.awaiting.find(r=>!decisionId||r.decision_id===decisionId)
    :kind==='terminal'?s.lifecycle.terminal_records.find(r=>decisionId&&r.decision_id===decisionId):s.lifecycle.active;
-  if(!r&&!['fuel_estimate','fuel_observation','facts','recommendation','critical_context','scope_continuity'].includes(kind))return null;
+  if(!r&&!['fuel_estimate','fuel_observation','facts','recommendation','strategy_comparison','strategy_explanation','critical_context','scope_continuity'].includes(kind))return null;
   const reference=r?.provisional_history?.contract==='provisional_history_v1'?r.provisional_history:null;
-  const deadline=kind==='fuel_estimate'?now()+30000:kind==='awaiting'&&reference?now()+Math.max(0,Math.min(30,reference.expires_session_time_s-s.source_frame.session_time_s))*1000:typeof canonical.expiresAt==='function'?canonical.expiresAt():seen.get(s.snapshot_id)+5000;
-  return immutable({kind,identity,fuel_estimate:kind==='fuel_estimate'?{critical:criticalContent(s),finish:stable(s.finish),fuel:s.current_facts.fuel_level_l,on_pit_road:s.current_facts.on_pit_road,evidence_version:fuelEvidenceVersion(),rate:s.recommendations.fuel_strategy?.value?.avg_fuel_per_lap??null,strict_rate:s.recommendations.fuel_strategy?.value?.strict_clean_avg_fuel_per_lap??null,strict_count:s.recommendations.fuel_strategy?.value?.strict_clean_laps_sampled??null}:null,bridge_process_epoch:s.bridge_process_epoch,canonical_snapshot_id:s.snapshot_id,canonical_snapshot_sequence:s.snapshot_sequence,
+  const deadline=['strategy_comparison','strategy_explanation'].includes(kind)?now()+30000:kind==='fuel_estimate'?now()+30000:kind==='awaiting'&&reference?now()+Math.max(0,Math.min(30,reference.expires_session_time_s-s.source_frame.session_time_s))*1000:typeof canonical.expiresAt==='function'?canonical.expiresAt():seen.get(s.snapshot_id)+5000;
+  return immutable({kind,identity,position_explanation_content:kind==='strategy_explanation'?positionExplanationContent(s):null,position_comparison_content:kind==='strategy_comparison'?positionComparisonContent(s):null,fuel_estimate:kind==='fuel_estimate'?{critical:criticalContent(s),finish:stable(s.finish),fuel:s.current_facts.fuel_level_l,on_pit_road:s.current_facts.on_pit_road,evidence_version:fuelEvidenceVersion(),rate:s.recommendations.fuel_strategy?.value?.avg_fuel_per_lap??null,strict_rate:s.recommendations.fuel_strategy?.value?.strict_clean_avg_fuel_per_lap??null,strict_count:s.recommendations.fuel_strategy?.value?.strict_clean_laps_sampled??null}:null,bridge_process_epoch:s.bridge_process_epoch,canonical_snapshot_id:s.snapshot_id,canonical_snapshot_sequence:s.snapshot_sequence,
    deadline_ms:deadline,reference_lap:reference?s.current_facts.current_lap:null,fuel_observation:kind==='fuel_observation'?{...fuelObservationEvidence(s),scope_generation:fuelObservationScope,increase_generation:fuelIncreaseGeneration}:null,fuel_observation_content:kind==='fuel_observation'?fuelObservationContent(s):null,record_content:r?stable(r):null,fact_content:kind==='facts'?factContent(s):null,critical_context_content:kind==='critical_context'?criticalContent(s):null,recommendation_content:kind==='recommendation'?JSON.stringify(s.recommendations):null,scope:s.continuity.stable_scope||s.continuity.custody_scope,decision_id:r?.decision_id??null,revision:r?.revision??null,record_ref:r?.record_ref??null});
  }
  // round5 (main複合fence): a caller that must fence on BOTH a precise
@@ -191,7 +206,7 @@ function create({canonical,now=()=>Date.now(),fuelEvidenceVersion=()=>null}){
   // long as canonical STAYS unavailable -- the instant real data arrives
   // (even under the same identity), the initial-unknown reply it fenced
   // must not keep being treated as current.
-  if(b&&['critical_context','scope_continuity'].includes(b.kind)&&b.unavailable===true)return !usable(source())&&rawScopeSignature(canonical.current(),connectionGeneration(canonical))===b.captured_scope;
+  if(b&&['critical_context','scope_continuity','strategy_explanation'].includes(b.kind)&&b.unavailable===true)return !usable(source())&&rawScopeSignature(canonical.current(),connectionGeneration(canonical))===b.captured_scope;
   const s=source();if(!b||!usable(s)||now()>=b.deadline_ms||identity!==b.identity||s.bridge_process_epoch!==b.bridge_process_epoch)return false;
   // round6: scope_continuity stops here -- identity/epoch/closure(usable)/TTL
   // (the common prefix just above) are the ONLY boundary a topic-independent
@@ -200,6 +215,8 @@ function create({canonical,now=()=>Date.now(),fuelEvidenceVersion=()=>null}){
   // reply that never claimed anything about Plan/pit/fuel must not be
   // discarded just because those facts changed under the SAME scope).
   if(b.kind==='scope_continuity')return true;
+  if(b.kind==='strategy_explanation')return b.position_explanation_content===positionExplanationContent(s);
+  if(b.kind==='strategy_comparison'){const age=positionComparisonAge(s),c=s.recommendations?.strategy_options?.value?.position_comparison;return age!==null&&age<=Math.min(10,c.valid_for_s||0)&&b.position_comparison_content===positionComparisonContent(s);}
   if(b.kind==='fuel_estimate'){
    const e=b.fuel_estimate,rate=s.recommendations.fuel_strategy?.value?.avg_fuel_per_lap??null;
    // A live cache is still mandatory above. Ordinary fuel burn/sequence
@@ -287,7 +304,7 @@ function create({canonical,now=()=>Date.now(),fuelEvidenceVersion=()=>null}){
    ||c.race_instance_id!==undefined&&c.race_instance_id!==s.race_instance_id||c.session_num!==undefined&&c.session_num!==s.session_num)return null;
   return s.source_frame.session_time_s-t;
  }
- function recommendations(s){return Object.fromEntries(Object.entries(s.recommendations||{}).map(([k,r])=>{const age=calculationAge(s,r);return [k,{...clone(r),role:r.role||'reference',age_s:age,source_valid:age!==null,diagnostic:age===null?'calculation_source_unavailable_or_inconsistent':null}];}));}
+ function recommendations(s){return Object.fromEntries(Object.entries(s.recommendations||{}).map(([k,r])=>{const age=calculationAge(s,r);const comparisonAge=k==='strategy_options'?positionComparisonAge(s):null;return [k,{...clone(r),role:r.role||'reference',age_s:age,source_valid:age!==null,position_comparison_age_s:comparisonAge,position_comparison_source_valid:comparisonAge!==null,diagnostic:age===null?'calculation_source_unavailable_or_inconsistent':null}];}));}
  function readPlaybook(){const s=source();if(!usable(s))return null;const a=s.lifecycle.active,recs=recommendations(s),options=recs.strategy_options?.value;
   const plans={};for(const id of ['A','B','C']){const candidate=options?.plans?.[id]||options?.['plan_'+id.toLowerCase()]||options?.[id];if(candidate&&recs.strategy_options.source_valid)plans[id]={...clone(candidate),role:'recommendation_not_execution',source:recs.strategy_options.calculation_source,age_s:recs.strategy_options.age_s};}
   if(a)plans[a.selected_plan]={available:true,first_pit_lap:a.target_lap,target_lap:a.target_lap,add_fuel_l:a.add_fuel_l,set_fuel_l:a.set_fuel_l,role:'canonical_active',record_ref:a.record_ref};

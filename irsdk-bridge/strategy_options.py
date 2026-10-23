@@ -120,6 +120,7 @@ def build_initial_plans(*, snapshot_id, current_lap, fuel_level_l,
         'clean_laps_sampled': clean_laps_sampled,
         'crossings_to_finish': crossings_to_finish,
         'reserve_l': round(reserve, 3),
+        'effective_capacity_l': effective_capacity_l,
         'total_required_l': round(total_required, 3),
     }
 
@@ -412,6 +413,307 @@ def decide_plan_c(options, *, fuel_save_recent_l_per_lap=None,
             'required_fuel_per_lap_l': target}
 
 
+# The positions below are PHYSICAL exits at each candidate's own stop time.
+# They neither model rivals' future pit intent nor predict final/cycle rank.
+POSITION_BASIS = 'physical_rejoin_class_position'
+POSITION_TIME_ROLE = 'each_candidate_exit_not_common_finish_or_pit_cycle'
+POSITION_VALID_FOR_S = 10
+
+
+def build_position_forecasts(*, snapshot, calibration, source, forecaster=None):
+    """One current SDK frame and one calibration for all candidate delays."""
+    import pit_exit_forecaster
+    predict = forecaster or pit_exit_forecaster.forecast_pit_after_laps
+    if not isinstance(source, dict) or not isinstance(snapshot, dict):
+        return None
+    if (not isinstance(source.get('race_instance_id'), str) or not source['race_instance_id']
+            or type(source.get('session_num')) is not int or source['session_num'] < 0
+            or type(source.get('source_frame_sequence')) is not int or source['source_frame_sequence'] < 0
+            or not _finite(source.get('generated_at_session_s'))
+            or source['generated_at_session_s'] < 0
+            or type(source.get('current_lap')) is not int or source['current_lap'] < 0
+            or not isinstance(snapshot.get('snapshot_id'), str) or not snapshot['snapshot_id']
+            or source['current_lap'] != snapshot.get('player_lap')
+            or type(snapshot.get('player_class_id')) is not int or snapshot['player_class_id']<=0):
+        return None
+    pct=snapshot.get('player_lap_dist_pct')
+    if not (_finite(pct) and 0<=pct<1):
+        return None
+    envelope=dict(source, snapshot_id=snapshot['snapshot_id'], class_id=snapshot['player_class_id'],
+        model_version=pit_exit_forecaster.DRIVER_MODEL_VERSION, forecasts={},cohort_car_idxs=sorted(
+            car['car_idx'] for car in snapshot.get('cars', [])
+            if type(car.get('car_idx')) is int and car.get('class_id') == snapshot['player_class_id']))
+    entry=calibration.get('pit_entry_pct') if isinstance(calibration,dict) else None
+    exit_pct=calibration.get('pit_exit_pct') if isinstance(calibration,dict) else None
+    # Persisted/legacy calibration can be marked ready with partial geometry.
+    # Validate before calling the predictor; modulo must not normalize bad data.
+    if not (_finite(entry) and _finite(exit_pct) and 0<=entry<1 and 0<=exit_pct<1
+            and 0<(exit_pct-entry)%1<.5):
+        reason=('calibration_geometry_unavailable' if isinstance(calibration,dict)
+                and calibration.get('prediction_ready') is True else 'calibration_not_ready')
+        return dict(envelope, available=False, unavailable_reason=reason)
+    first_target=source['current_lap'] + int(pct>entry)
+    forecasts={}
+    for delay in range(11):
+        target=first_target+delay
+        if target-source['current_lap']>10:
+            continue
+        prediction=predict(snapshot=snapshot,calibration=calibration,delay_laps=delay)
+        forecasts[target-source['current_lap']]=dict(prediction,candidate_target_lap=target)
+    # Compare at one future instant as well as at each stop's own exit.
+    # Otherwise merely waiting while catching slower cars masquerades as an
+    # overcut benefit. No future rival pit or tyre/clean-air pace gain is invented.
+    ready=[f for f in forecasts.values() if f.get('available') is True and _finite(f.get('time_to_entry_s')) and f['time_to_entry_s']>=0
+           and isinstance(f.get('lane_time_s'),dict) and all(_finite(f['lane_time_s'].get(k)) and 5<f['lane_time_s'][k]<300 for k in ('best','likely','worst'))]
+    pace=snapshot.get('player_last_lap_time')
+    segment=(exit_pct-entry)%1
+    if ready and _finite(pace) and pace>0 and 0<segment<.5:
+        horizon=max(f['time_to_entry_s']+f['lane_time_s']['worst'] for f in ready)
+        for f in ready:
+            projected={}
+            for case in ('best','likely','worst'):
+                exit_s=f['time_to_entry_s']+f['lane_time_s'][case]
+                progress=f['candidate_target_lap']+entry+segment+(horizon-exit_s)/pace
+                projected[case]=dict(pit_exit_forecaster._scenario(snapshot['cars'],progress,horizon,snapshot['player_class_id']),player_progress=progress)
+            f['common_horizon']={'elapsed_s':horizon,'pace_s':pace,'scenarios':projected,
+                'assumptions':'constant_measured_pace_no_future_rival_stops_no_unmeasured_tyre_gain'}
+    return dict(envelope, forecasts=forecasts,first_reachable_target_lap=first_target)
+
+
+def build_comparison_plans(options, inputs, *, first_target):
+    """Fresh advice using the execution authority's current-running-lap geometry.
+
+    This copy never changes an agreed/native plan. Legacy fuel options count to
+    the start of a lap; the physical entry is near its end. Also, current burn
+    must reduce remaining distance, rather than making a frozen fill look short.
+    Unsupported finish formats retain unavailable advice, not execution authority.
+    """
+    import fixed_target_authority as authority
+    if not isinstance(inputs, dict) or inputs.get('finish_kind') != 'lap_race':
+        return None
+    L,N,C=(inputs.get(k) for k in ('current_lap','total_laps','crossings_to_finish'))
+    q,F,mu,r,K=(inputs.get(k) for k in ('lap_dist_pct','fuel_level_l','avg_fuel_per_lap_l','reserve_l','effective_capacity_l'))
+    if (not all(type(v) is int for v in (L,N,C,first_target)) or not 1<=L<=N<3000
+            or C!=N-L+1 or first_target not in (L,L+1)
+            or not all(_finite(v) for v in (q,F,mu,r,K))
+            or not (0<=q<=1 and 0<=F<=K and mu>0 and r>=0 and K>0)):
+        return None
+    setting=math.ceil(max(0.,mu*(C-q)+r-F))
+    if setting==0:
+        return dict(options,available=True,plan_a=dict(available=True,action='stay_out',target_lap=None),
+            plan_b=dict(available=False,fuel_window_open=False),plan_c=dict(available=False,fuel_feasible=False))
+    def check(target, rate=mu):
+        return authority.evaluate(dict(inputs,avg_fuel_per_lap_l=rate),target,frozen_set=setting)
+    upper=min(N-1,L+math.floor((F-r)/mu+q-1))
+    a=None
+    for target in range(upper,first_target-1,-1):
+        verdict=check(target)
+        if verdict.get('available'):
+            a=(target,verdict);break
+    if a is None:
+        return None
+    def plan(target, verdict, action):
+        return dict(available=True,action=action,target_lap=target,target_in_laps=target-L,
+            add_fuel_l=round(max(0.,mu*(C-q)+r-F),3),set_fuel_l=setting,
+            fuel_at_stop_l=round(verdict['entry_fuel_lower_bound_l'],3),
+            current_authority_validated=True)
+    out=dict(options,current_lap=L,fuel_level_l=F,avg_fuel_per_lap_l=mu,
+        crossings_to_finish=C,reserve_l=r,effective_capacity_l=K,available=True,
+        plan_a=plan(a[0],a[1],'baseline_stop'))
+    b=next(((target,check(target)) for target in range(first_target,a[0]) if check(target).get('available')),None)
+    out['plan_b']=(dict(plan(b[0],b[1],'undercut'),available=False,fuel_window_open=True,
+        conditions_required=list(PLAN_B_CONDITIONS)) if b else dict(available=False,fuel_window_open=False,reason='no_undercut_room'))
+    out['fuel_window_open_in_laps']=b[0]-L if b else None
+    target=a[0]+1;distance=target-L+1-q
+    rate=math.floor(min(mu,(F-r)/distance)*1000)/1000 if distance>0 else 0
+    saving=(mu-rate)/mu
+    c=check(target,rate) if rate>0 and 0<=saving<=PLAN_C_MAX_SAVE_FRACTION and target<N else {}
+    # Reachability may assume the stated saving. After the stop, retain normal
+    # consumption for capacity/fill; never assume the saving continues forever.
+    capacity_ok=mu*(C-(target-L))+r<=K
+    out['plan_c']=(dict(plan(target,c,'fuel_save_extend'),available=False,fuel_feasible=True,
+        required_fuel_per_lap_l=rate,fuel_save_fraction=saving,conditions_required=list(PLAN_C_CONDITIONS))
+        if c.get('available') and capacity_ok else dict(available=False,fuel_feasible=False,
+            target_lap=target,reason='fuel_save_target_unreachable'))
+    return out
+
+
+def compare_position_strategies(options, *, current_lap, forecasts, source,
+                                relative_pace_advantage_s=None,
+                                fuel_save_recent_l_per_lap=None,
+                                rival_pitted_first=None, clean_air=None, fuel_state=None, authority_inputs=None):
+    """Compare physical exits and rank on one shared constant-pace horizon.
+
+    Missing/old/mixed forecasts cannot select an alternative. A conditions-only
+    overcut never outranks A/B; both alternatives need measured pace benefit,
+    strictly better likely common-horizon rank AND a worst case no worse than A.
+    This comparison is advice only and carries no execution/BOX authority.
+    """
+    result = dict(available=False, reason='position_prediction_unavailable', selected_plan='A',
+                  score_basis=POSITION_BASIS, gain_kind='physical_rejoin_only',
+                  comparison_time_role=POSITION_TIME_ROLE, valid_for_s=POSITION_VALID_FOR_S,
+                  rival_pit_intent='not_inferred',cycle_position_predicted=False,
+                  ranked_candidates=[], unavailable_candidates=[])
+    if not isinstance(options, dict) or options.get('available') is not True:
+        return dict(result, reason='options_unavailable')
+    if not isinstance(source, dict) or not isinstance(forecasts, dict):
+        return result
+    origin = ('race_instance_id', 'session_num', 'source_frame_sequence', 'generated_at_session_s', 'current_lap')
+    if (any(source.get(k) != forecasts.get(k) for k in origin)
+            or source.get('current_lap') != current_lap
+            or type(source.get('source_frame_sequence')) is not int
+            or not _finite(source.get('generated_at_session_s'))
+            or type(source.get('session_num')) is not int
+            or not isinstance(source.get('race_instance_id'), str) or not source['race_instance_id']
+            or not isinstance(forecasts.get('snapshot_id'), str) or not forecasts['snapshot_id']
+            or forecasts.get('model_version') != 4 or type(forecasts.get('model_version')) is not int
+            or type(forecasts.get('class_id')) is not int or forecasts['class_id']<=0
+            or not isinstance(forecasts.get('cohort_car_idxs'),list)
+            or any(type(v) is not int or v < 0 for v in forecasts['cohort_car_idxs'])
+            or len(set(forecasts['cohort_car_idxs'])) != len(forecasts['cohort_car_idxs'])
+            or not isinstance(forecasts.get('forecasts'), dict)):
+        return dict(result, reason='position_prediction_source_mismatch')
+    result.update({k:forecasts[k] for k in origin if k != 'current_lap'})
+    result.update(snapshot_id=forecasts['snapshot_id'], model_version=forecasts['model_version'])
+    if forecasts.get('available') is False and forecasts.get('unavailable_reason') in (
+            'calibration_geometry_unavailable','calibration_not_ready'):
+        reason=forecasts['unavailable_reason']
+        return dict(result,reason=reason,unavailable_candidates=[
+            dict(plan_id=label,reason=reason) for label in ('A','B','C')])
+    fresh_advice = authority_inputs is not None
+    if fresh_advice:
+        if (not isinstance(authority_inputs,dict) or any(authority_inputs.get(k)!=source.get(v) for k,v in (
+                ('race_instance_id','race_instance_id'),('session_num','session_num'),
+                ('source_frame_sequence','source_frame_sequence'),('session_time_s','generated_at_session_s'),('current_lap','current_lap')))):
+            return dict(result,reason='current_fuel_authority_source_mismatch')
+        advice=build_comparison_plans(options,authority_inputs,first_target=forecasts.get('first_reachable_target_lap',current_lap))
+        if advice is None:
+            return dict(result,reason='current_fuel_authority_unavailable')
+        options=advice;fuel_state=advice
+        result.update(candidate_basis='fresh_authority_advice_not_agreed_plan',fuel_geometry='coupled_current_running_lap')
+    live = fuel_state if isinstance(fuel_state,dict) else options if options.get('current_lap')==current_lap else {}
+    fuel, rate, capacity, reserve = [live.get(k) for k in ('fuel_level_l','avg_fuel_per_lap_l','effective_capacity_l','reserve_l')]
+    crossings=live.get('crossings_to_finish')
+    if not (all(_finite(v) for v in (fuel,rate,capacity,reserve)) and fuel>=0 and rate>0 and capacity>0 and reserve>=0
+            and type(crossings) is int and crossings>0):
+        return dict(result,reason='current_fuel_feasibility_unavailable')
+    predictions = {}
+    for label in ('A', 'B', 'C'):
+        plan = options.get('plan_' + label.lower()) or {}
+        target = plan.get('target_lap')
+        fuel_ok = plan.get('available') is True if label == 'A' else (
+            plan.get('fuel_window_open') is True if label == 'B' else plan.get('fuel_feasible') is True)
+        reason = None
+        if not fuel_ok or plan.get('action') == 'stay_out':
+            reason = 'candidate_not_fuel_feasible' if not fuel_ok else 'no_stop_required'
+        elif type(target) is int and target < forecasts.get('first_reachable_target_lap',current_lap):
+            reason = 'candidate_target_missed'
+        elif type(target) is not int or not 0 <= target - current_lap <= 10:
+            reason = 'candidate_target_outside_forecast_horizon'
+        else:
+            plan_rate = plan.get('required_fuel_per_lap_l') if label=='C' else rate
+            if fresh_advice and plan.get('current_authority_validated') is not True:
+                result['unavailable_candidates'].append(dict(plan_id=label,reason='candidate_not_fuel_feasible'))
+                continue
+            if not fresh_advice and (not _finite(plan_rate) or plan_rate<=0 or fuel-plan_rate*(target-current_lap)<reserve
+                    or plan_rate*max(1,crossings-(target-current_lap))+reserve>capacity
+                    or not _finite(plan.get('set_fuel_l')) or plan['set_fuel_l']<0
+                    or plan['set_fuel_l']>capacity
+                    or fuel+plan['set_fuel_l']+1e-9<plan_rate*crossings+reserve):
+                result['unavailable_candidates'].append(dict(plan_id=label,reason='candidate_not_fuel_feasible'))
+                continue
+            f = forecasts['forecasts'].get(target - current_lap)
+            if not isinstance(f, dict) or f.get('available') is not True:
+                reason = (f or {}).get('unavailable_reason') if isinstance(f, dict) else None
+                reason = reason or 'candidate_prediction_unavailable'
+            elif (f.get('snapshot_id') != forecasts['snapshot_id'] or f.get('model_version') != forecasts['model_version'] or f.get('candidate_target_lap') != target
+                    or f.get('delay_laps') != target-forecasts.get('first_reachable_target_lap',current_lap)):
+                reason = 'candidate_prediction_basis_mismatch'
+            else:
+                scenarios = [f.get(k) for k in ('best','likely','worst')]
+                positions = [s.get('position') if isinstance(s, dict) else None for s in scenarios]
+                count = [s.get('projected_car_count') if isinstance(s, dict) else None for s in scenarios]
+                if (not all(type(p) is int and p >= 1 for p in positions)
+                        or positions != sorted(positions)
+                        or not all(type(n) is int and n > 0 for n in count)
+                        or len(set(count)) != 1
+                        or count[0]>len(forecasts['cohort_car_idxs'])
+                        or any(p>count[0]+1 for p in positions)
+                        or any(not isinstance(s.get('excluded_car_idxs'),list) or any(type(v) is not int for v in s['excluded_car_idxs']) for s in scenarios)
+                        or any(s.get('invalid_same_class_position_car_idxs') for s in scenarios)):
+                    reason = 'candidate_prediction_invalid'
+                else:
+                    predictions[label] = dict(plan_id=label, target_lap=target,
+                        expected_class_position=positions[1], worst_class_position=positions[2],
+                        score_basis=POSITION_BASIS, projected_car_count=count[0],
+                        excluded_car_idxs=sorted(scenarios[1].get('excluded_car_idxs', [])),
+                        forecast=f, common_horizon=f.get('common_horizon'))
+        if reason:
+            result['unavailable_candidates'].append(dict(plan_id=label, reason=reason))
+    baseline = predictions.get('A')
+    if baseline is None:
+        return dict(result, reason='baseline_prediction_unavailable')
+    common=baseline.get('common_horizon')
+    if not isinstance(common,dict):
+        return dict(result,reason='common_horizon_comparison_unavailable')
+    for prediction in predictions.values():
+        c=prediction.get('common_horizon')
+        if not isinstance(c,dict) or c.get('elapsed_s')!=common.get('elapsed_s') or c.get('pace_s')!=common.get('pace_s'):
+            return dict(result,reason='common_horizon_comparison_mismatch')
+    result.update(gain_kind='same_horizon_constant_pace_model',score_basis='same_horizon_constant_measured_pace',common_horizon_elapsed_s=common['elapsed_s'],
+        comparison_assumptions=common['assumptions'])
+    eligible = []
+    for label, prediction in predictions.items():
+        if (prediction['projected_car_count'] != baseline['projected_car_count']
+                or prediction['excluded_car_idxs'] != baseline['excluded_car_idxs']):
+            result['unavailable_candidates'].append(dict(plan_id=label, reason='candidate_cohort_mismatch'))
+            continue
+        better_worst = prediction['worst_class_position'] <= baseline['worst_class_position']
+        if label == 'B':
+            verdict = decide_plan_b(options, relative_pace_advantage_s=relative_pace_advantage_s,
+                                    rejoin_clear=better_worst and prediction['expected_class_position'] <= baseline['expected_class_position'])
+            result['plan_b_evidence'] = verdict
+        elif label == 'C':
+            verdict = decide_plan_c(options, fuel_save_recent_l_per_lap=fuel_save_recent_l_per_lap,
+                rival_pitted_first=rival_pitted_first, clean_air=clean_air,
+                rejoin_not_worse=better_worst and prediction['expected_class_position'] <= baseline['expected_class_position'])
+            result['plan_c_evidence'] = verdict
+            if not (_finite(relative_pace_advantage_s) and relative_pace_advantage_s >= PLAN_B_MIN_PACE_ADVANTAGE_S):
+                verdict = dict(verdict, available=False, reason='measured_pace_benefit_unproven')
+        else:
+            verdict = dict(available=True)
+        if verdict.get('available') is not True:
+            result['unavailable_candidates'].append(dict(plan_id=label, reason=verdict.get('reason') or 'candidate_conditions_unproven'))
+        row = {k:v for k,v in prediction.items() if k not in ('forecast','excluded_car_idxs','common_horizon')}
+        row['eligible_for_recommendation'] = verdict.get('available') is True
+        row['conditions_reason'] = verdict.get('reason')
+        row['common_horizon_class_position']=prediction['common_horizon']['scenarios']['likely']['position']
+        row['common_horizon_worst_position']=prediction['common_horizon']['scenarios']['worst']['position']
+        row['gain_vs_baseline'] = common['scenarios']['likely']['position'] - row['common_horizon_class_position']
+        row['estimated_time_gain_s']=round((prediction['common_horizon']['scenarios']['likely']['player_progress']-common['scenarios']['likely']['player_progress'])*common['pace_s'],3)
+        row['measured_pace_advantage_s'] = relative_pace_advantage_s if _finite(relative_pace_advantage_s) else None
+        eligible.append(row)
+    ranked = sorted(eligible,key=lambda row:(row['common_horizon_class_position'],row['common_horizon_worst_position'],-row['estimated_time_gain_s'],row['plan_id'] != 'A',row['plan_id']))
+    result.update(available=True, reason='baseline_retained_no_proven_common_horizon_gain', ranked_candidates=ranked)
+    # Full comparison is explicitly unavailable if any fuel-feasible candidate
+    # lacks a forecast/basis; do not call a partial ordering an A/B/C ranking.
+    prediction_errors = [r for r in result['unavailable_candidates'] if r['reason'] not in (
+        'candidate_not_fuel_feasible','no_stop_required','conditions_unproven','fuel_window_not_open',
+        'measured_pace_benefit_unproven') and r['plan_id'] not in predictions]
+    if prediction_errors or any(r['reason']=='candidate_cohort_mismatch' for r in result['unavailable_candidates']):
+        return dict(result, available=False, reason='candidate_predictions_not_comparable', selected_plan='A')
+    gains = [row for row in ranked if row['plan_id'] != 'A' and row['eligible_for_recommendation'] and row['gain_vs_baseline'] > 0 and row['estimated_time_gain_s'] >= .3
+             and row['common_horizon_worst_position'] <= common['scenarios']['worst']['position']]
+    if gains:
+        winner=gains[0]
+        # Tied alternative outcomes are not evidence that one beats the other.
+        tied=[row for row in gains if (row['common_horizon_class_position'],row['common_horizon_worst_position']) ==
+              (winner['common_horizon_class_position'],winner['common_horizon_worst_position'])]
+        if len(tied)==1:
+            result.update(selected_plan=winner['plan_id'], reason='predicted_same_horizon_position_improvement')
+    return result
+
+
 def reevaluate_plans(*, previous, snapshot_id, trigger_reason, current_lap,
                      fuel_level_l, recent_fuel_per_lap_l, clean_laps_sampled,
                      crossings_to_finish, reserve_l=DEFAULT_RESERVE_L,
@@ -420,7 +722,7 @@ def reevaluate_plans(*, previous, snapshot_id, trigger_reason, current_lap,
                      pit_next_lap_forecast=None, rival_pitted_first=None,
                      clean_air=None, rejoin_not_worse=None,
                      fuel_save_recent_l_per_lap=None,
-                     relative_pace_advantage_s=None):
+                     relative_pace_advantage_s=None, position_forecasts=None, comparison_source=None):
     """Rebuild Plan A / B / C from the CURRENT measured numbers and choose one.
 
     Codex Build 266 差戻し#2：`recalculate_strategy()` に既存Planを渡して trace
@@ -488,18 +790,19 @@ def reevaluate_plans(*, previous, snapshot_id, trigger_reason, current_lap,
                              'reason': 'plan_b_conditions_proven'}
     rebuilt['plan_b_evidence'] = ab_decision.get('plan_b_evidence')
 
-    if plan_c_verdict.get('available'):
-        selected, reason = 'C', 'plan_c_conditions_proven'
-    elif ab_decision.get('available'):
-        selected = ab_decision.get('selected_plan') or 'A'
-        reason = ab_decision.get('reason') or 'plan_ab_decision'
-    else:
-        # A/B の比較材料が無い＝保守側。基準戦略に留まる。
-        selected, reason = 'A', ab_decision.get('reason') or 'plan_ab_comparison_unavailable'
+    comparison = compare_position_strategies(rebuilt, current_lap=current_lap,
+        forecasts=position_forecasts, source=comparison_source,
+        relative_pace_advantage_s=relative_pace_advantage_s,
+        fuel_save_recent_l_per_lap=fuel_save_recent_l_per_lap,
+        rival_pitted_first=rival_pitted_first, clean_air=clean_air)
+    rebuilt['position_comparison'] = comparison
+    rebuilt['plan_b_evidence'] = comparison.get('plan_b_evidence',rebuilt.get('plan_b_evidence'))
+    rebuilt['plan_c_evidence'] = comparison.get('plan_c_evidence',rebuilt.get('plan_c_evidence'))
+    selected, reason = comparison['selected_plan'], comparison['reason']
 
     rebuilt['selected_plan'] = selected
     rebuilt['decision_reason'] = reason
-    rebuilt['decision_evidence'] = ab_decision
+    rebuilt['decision_evidence'] = dict(ab_decision,selected_plan=selected,reason=reason,position_comparison=comparison)
     return {
         'available': True,
         'reason': reason,

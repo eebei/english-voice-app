@@ -103,7 +103,7 @@ check('alternate selected without same-frame evidence is held, never replaced by
   && /最新のペースと復帰位置を確認中/.test(result.reply), JSON.stringify(result));
 
 result = router.route({ text:'アンダーカットする？', lang:'ja', live:withAuthority('B') });
-check('missing strategy wiring fails closed to the existing conversation route', !result.handled);
+check('missing strategy wiring explains missing comparison without unrelated fallback', result.handled && result.intent==='strategy_consultation_unavailable' && /順位/.test(result.reply) && !result.action?.type);
 
 const renderer = fs.readFileSync('./desktop/renderer.html', 'utf8');
 check('product route injects read-only canonical evaluation and projection',

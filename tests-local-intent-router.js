@@ -143,9 +143,11 @@ r = route('俺たちのピットはピットロード 出口に近いところ�
 check('8/23 pit-location report gets a relevant acknowledgement rather than a refusal',
   r.handled&&r.intent==='pit_location_ack'&&/出口寄り/.test(r.reply));
 r = route('アンダーカットする？', live);
-check('strategy judgement remains with Luna, not local router', !r.handled);
+check('strategy room names missing comparison evidence without inventing a plan',
+  r.handled&&r.intent==='strategy_consultation_unavailable'&&!r.action?.type&&/比較/.test(r.reply));
 r = route('ピット入る？', live);
-check('ambiguous pit decision remains with Luna, not local router', !r.handled);
+check('ambiguous pit question stays advice without executing a stop',
+  r.handled&&r.intent==='strategy_consultation_unavailable'&&!r.action?.type);
 r = route('燃料は？', { fuel_strategy:{ avg_fuel_per_lap:2.5 } });
 check('insufficient fuel evidence is stated without guessing', r.handled && r.reply.includes('クリーン3周'));
 r = route('今ポジション何位？', { fuel:10 });

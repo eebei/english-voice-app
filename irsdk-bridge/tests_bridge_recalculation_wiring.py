@@ -391,7 +391,9 @@ class RecalculationActuallyRecomputes(unittest.TestCase):
         src = bridge_src()
         self.assertIn('def execute_recalculation(', src)
         i = src.index('def execute_recalculation(')
-        window = src[i:i + 3000]
+        node = next(n for n in ast.walk(ast.parse(src))
+                    if isinstance(n, ast.FunctionDef) and n.name == 'execute_recalculation')
+        window = ast.get_source_segment(src, node)
         self.assertIn('options_mod.reevaluate_plans(', window,
                       'the recalculation must rebuild Plan A/B/C')
         # ★2026-09-16 Codex MD#5差戻し（P1）：再計算は「推薦」だけを更新し、

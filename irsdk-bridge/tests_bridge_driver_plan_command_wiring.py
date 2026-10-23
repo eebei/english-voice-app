@@ -330,8 +330,19 @@ class DriverPlanCommandFullPollReplay(unittest.TestCase):
 class AwaitingProposalKilledInRealPollReplay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        frames = bc._plan_bc_accept_build_frames()
-        hold, _ = bc._plan_bc_accept_hold_frames(12, lap=21, fuel=40.0, start_time=700.0)
+        # Synthetic prediction-output positive for transport coverage; real
+        # same-horizon forecasting correctly retains A in its own tests.
+        from tests_strategy_position_comparison import synthetic_positive_b_forecast,assert_synthetic_b_targets
+        frames = bc._plan_bc_accept_clean_laps(8,start_fuel=26.)
+        for frame in frames:
+            frame['SessionLapsTotal']=28
+            frame['SessionLapsRemain']=28-frame['Lap']
+        hold, _ = bc._plan_bc_accept_hold_frames(12, lap=9, fuel=10.0, start_time=132.0)
+        for frame in hold:
+            frame['SessionLapsTotal']=28
+            frame['SessionLapsRemain']=28-frame['Lap']
+        info=bc.PLAN_BC_ACCEPT_SESSION_INFO.replace('SessionLaps: %s' % bc.PLAN_BC_ACCEPT_LAPS_TOTAL,'SessionLaps: 28')
+        forecast_evidence=[]
         frames += hold
         bridge._pending_driver_plan_commands = []
         bridge._pending_strategy_decision_responses = []
@@ -389,9 +400,9 @@ class AwaitingProposalKilledInRealPollReplay(unittest.TestCase):
             original = bridge.PIT_LOSS_PATH
             bridge.PIT_LOSS_PATH = fixture
             try:
-                cls.result = rh.replay(
-                    frames, session_info=bc.PLAN_BC_ACCEPT_SESSION_INFO,
-                    on_frame_ready=hook)
+                with synthetic_positive_b_forecast(evidence=forecast_evidence):
+                    cls.result = rh.replay(frames,session_info=info,on_frame_ready=hook)
+                cls.synthetic_checked_targets=assert_synthetic_b_targets(cls.result.broadcasts,forecast_evidence)
             finally:
                 bridge.PIT_LOSS_PATH = original
 

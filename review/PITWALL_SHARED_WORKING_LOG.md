@@ -28562,3 +28562,38 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |証拠/限界|field304-oct23/field304-deep-audit.txt、turn-audit-all32.json、router303-vs304.json、independent-field-audit.json等。原音声/完全provider入出力/local記憶本体なし。結果損失の反実仮想未証明。最後音声u124中断。公開物を無断rollbackしない|
 
 次のMDに指示書あり
+
+### 2026-10-23 戦略室の質問候補・A/B/C比較 実装回覧（未最終合格）
+
+|項目|現在の状態|
+|---|---|
+|Owner/担当|Driver言い方候補→データ戦略担当→LUNA発話、通常/アンダー/オーバーを比較して順位upを優先する仕組みの実装GO。親rootはRenderer/router/projection、repair_remainingはPython戦略/Bridge。build304_reviewが独立反証。Claude再試行もOAuth expiredでreview未実施|
+|入口→検索/計算|router共有catalog8種→通常A/underB/overC/比較要求。SDK同frame＋保存較正から実target周の11候補を計算。候補ごと燃料到達/容量/条件/復帰予測を照合。裸の何秒/何周による別質問への落下を遮断|
+|state→consumer→出力|Bridge position_comparisonをcanonical recommendationsへ。projectionは比較独自のframe/time/scopeを照合しfreshness10秒。routerは数値/根拠roleを維持して発話、候補ボタンは同catalogから通常入力欄へ入れるだけ。比較でcommand/合意/BOX実行しない|
+|更新/失効/証拠|3秒更新は燃料計算の古い時刻をrestampしない。scope/epoch/lap/pit/予測値変更/陳腐化で発話を遮断、同値の通常更新で長文を切らない。入口通過後1周ずれは独立発見→exacttarget補正/検証で修復。暫定JS52/純Python8/旧projection158/実Renderer361等PASS、fullpreflight・最終producttrace未|
+|結果/訂正/限界|比較はadvice-only。各自の物理復帰順位に加え、共通Hまで同じ実測paceで進めた順位を計算しcross-time見かけgainを排除。独立物理検算でも同pace/同laneは全案同値A。**現在の実モデルでB/Cが順位を上げる実益を示す能力は未実装。** synthetic positiveは配送/同意検査だけで予測能力に数えない。通常timed BOX/Driver22周申告/苦情記憶/純pit損失も未修復|
+|費用/保護|検査は有料API呼出0。製品の比較はlocal CPUで最大11予測/3秒、LLMへの再質問なし。実運用の発話長/TTS原価・CPU時間は未計測。Build/push/公開なし。既存scratch2stage禁止。証拠strategy-room-oct23/|
+
+次のMDに指示書あり
+
+|追補項目|現状と確認条件|
+|---|---|
+|追加独立反証/修復|rootがcross-time順位差の誤用を指摘しcommonHへ修正。reviewer独立検算PASS（independent-common-horizon-review.json）。rootがcommon_horizon_elapsed_s更新のみで音声中断を再現→意味bindingから除外、数値なし不足説明はscope bindingへ。旧shapeを変えず検査を通すのではなく、配送/同意専用positive fixtureを明示し実forecast能力と分離中|
+|全検査の途中結果/次|source固定初回preflight601.17秒exit1、外部attempt0、fixture復元true。旧router/static期待・reason名・proposal専用fixtureの不一致を検出。normal/AI各45/49、WO001 F06連動RED、runtime32/29/3・WO018122PASS。preflight-first/raw.log/result.jsonを保持。root修復、repair_remainingはTEST ONLY、build304_reviewは新real poll→canonical→全Renderer数値一致/音声completed/欠損負例を担当。最終source固定→全preflight再走・独立確認が合格条件|
+
+次のMDに指示書あり
+
+### 2026-10-24 戦略室比較回答：最終修復・独立確認・source全検査完了
+
+|項目|最終状態/次の確認対象|
+|---|---|
+|担当/対象/状態|base a3a3153、製品root・後半TEST repair_remaining・独立build304_review。local実装済み、未Build/未公開。最終source17path SHAはfinal-source-freeze-oct24-v3.json。公開75cb056/Gate8 FAILED維持|
+|変更箇所/目的|desktop/local-intent-router.js共有質問catalog/誤配送/比較理由、renderer.html入力例/専用binding、strategy-state-projection.js比較独自freshness/意味binding。bridge.py同frame→canonical、strategy_options.py実target予測/commonH/FA比較専用copy/較正座標validation。既存合意数量/authority境界は保持|
+|追加P1と修復|保存exit=nullのready較正→実Bridge TypeError停止を独立再現。finite/range/forwardsegmentを予測前に検証、scoped unavailable reason→全3案数値なし→具体理由発話。正常scope未確認のデータは採用しない|
+|TEST変更と反証|新tests_strategy_room_e2e.pyは予測本物/SDK配列scalar整合/実poll→全29Renderer、plan名＋target周＋P一致。保存null→poll継続/不足理由completedを追加。提案専用synthetic seamは予測能力から除外。P01は同decision/dispatch/utteranceのcompleted→同意→ACK照合、W04はscenario内uidでdrop/no playを確認、予算上限維持|
+|実行結果|最終全preflight747.74sec exit0、normal49/AI49、新通常6/AI2PASS、runtime32/29/3、WO00142/WO018122、JS58/Python13等PASS。fixture変更0/復元true、drift log2のみ、external attempt0。source/保護scratch SHA差分0|
+|独立確認/合否|build304_reviewが製品diffと実出力を確認、新P0/P1なし。新E2E作者は同reviewer、別担当rootが実行しreviewerがrawcanonical/utterance/outboundを再assert。独立ツール承認待ちで未実行だった別runをPASSに数えない。最終証拠independent-final-diff-review-oct24-v3.json|
+|不安点/未解決|実モデル同pace/同laneは共通Hで全案同値。B/Cの有利な戦略利益を計算できるとは言わない。通常timedBOX/22周申告の記憶訂正/苦情/沈黙/netpitlossも未修復。Windows/iRacing/実音声/実用性・運用CPU/TTS原価未確認|
+|次/費用/保護|候補別実測pace・交通・給油service差による実利益と結果照合が次の対象。検査有料API0/追加LLM検索なし。exactstageのみ、scratch2保持。Build/push/公開へ進む際は別途release gateとOwner GO。全証拠strategy-room-oct23/|
+
+次のMDに指示書あり

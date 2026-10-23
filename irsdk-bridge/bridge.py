@@ -847,7 +847,8 @@ def execute_recalculation(state, item, *, inputs, srs_mod, options_mod):
         clean_air=inputs.get('clean_air'),
         rejoin_not_worse=inputs.get('rejoin_not_worse'),
         fuel_save_recent_l_per_lap=inputs.get('fuel_save_recent_l_per_lap'),
-        relative_pace_advantage_s=inputs.get('relative_pace_advantage_s'))
+        relative_pace_advantage_s=inputs.get('relative_pace_advantage_s'),
+        position_forecasts=inputs.get('position_forecasts'),comparison_source=inputs.get('comparison_source'))
     if verdict.get('available') and isinstance(verdict.get('options'), dict):
         # ★2026-09-16 Codex MD#5差戻し（P1）：以前はここで`register_active_plan()`を
         #   無条件に呼んでいた。これはDriver合意より前——B推薦を作った直後、Desktop応答前
@@ -1056,54 +1057,27 @@ def decide_plan_at_target(strategy_options, *, current_lap, current_fuel_l,
                           avg_fuel_per_lap_l, pit_now_forecast, pit_next_lap_forecast,
                           relative_pace_advantage_s, options_mod,
                           battle_context=None, car_on_pitroad_all=None,
-                          fuel_save_recent_l_per_lap=None):
-    """Decide which Plan to PROPOSE when the decision-lock window arrives.
+                          fuel_save_recent_l_per_lap=None, position_forecasts=None,
+                          comparison_source=None, fuel_state=None, advice_authority_inputs=None):
+    """Fresh same-source A/B/C comparison; no conditions-only C priority.
 
-    ★2026-09-16 Codex MD#3差戻し：この呼び出しは元々`options_mod.decide_at_plan_a()`を
-    無条件に呼んでいた。`decide_at_plan_a()`はA/B専用（Plan Cの証拠を一切見ない）ため、
-    直前の再計算（`sync_desktop_strategy_options()`経由）がPlan Cを成立させ
-    `strategy_options.selected_plan == 'C'`になっていても、この呼び出しが黙ってA/Bへ
-    上書きしていた。
-
-    ★2026-09-16 Codex MD#4差戻し（P1-1）：MD#3の対応は`strategy_options['plan_c']`に
-    ラッチされた証拠（直前の再計算＝1frame前）をそのまま信じていた。poll loopの順序は
-    decision-lockが先・recalculation実行が後なので、それは常に1frame古い。交通が塞がった・
-    復帰予測が悪化した・燃費セーブが外れた場合でも古い証拠でCを確定・発話し得た。
-    ここでは`derive_plan_c_live_conditions()`（現在frameの`battle_context`/pit forecast）
-    と`fuel_save_recent_l_per_lap`（現在frameのクリーン燃費中央値）を使って
-    `decide_plan_c()`を**この瞬間**再実行し、ラッチされたフラグではなく現在frameの証拠で
-    Cを再検証する。再検証に失敗する（証拠が現在は崩れている）場合はA/Bへフォールバックする
-    ——古いCを確定・発話しない。
+    Physical exit rank is advice at each candidate's stop, not a promise of
+    undercut success or a pit-cycle/final position. Missing forecasts keep A.
+    Existing fuel authority and Driver acceptance still own execution.
     """
-    plan_c_now = strategy_options.get('plan_c') or {}
-    if strategy_options.get('selected_plan') == 'C' and plan_c_now.get('available') is True:
-        live_conditions = derive_plan_c_live_conditions(
-            battle_context=battle_context, car_on_pitroad_all=car_on_pitroad_all,
-            pit_now_forecast=pit_now_forecast, pit_next_lap_forecast=pit_next_lap_forecast)
-        fresh_verdict = options_mod.decide_plan_c(
-            strategy_options,
-            fuel_save_recent_l_per_lap=fuel_save_recent_l_per_lap,
-            rival_pitted_first=live_conditions['rival_pitted_first'],
-            clean_air=live_conditions['clean_air'],
-            rejoin_not_worse=live_conditions['rejoin_not_worse'])
-        if fresh_verdict.get('available'):
-            prior_decision_id = (
-                (strategy_options.get('decision_evidence') or {}).get('decision_id'))
-            return {
-                'available': True, 'selected_plan': 'C',
-                'reason': fresh_verdict.get('reason') or 'plan_c_conditions_proven',
-                'decision_id': prior_decision_id or ('%s:decision-lap:%s' % (
-                    strategy_options.get('snapshot_id'), current_lap)),
-                'plan_b_evidence': None,
-                'plan_c_evidence': fresh_verdict,
-            }
-        # 現在frameでは再検証に失敗した＝ラッチされた証拠は既に崩れている。
-        # 古いCを確定しない——A/Bへフォールバックする。
-    return options_mod.decide_at_plan_a(
-        strategy_options, current_lap=current_lap, current_fuel_l=current_fuel_l,
-        avg_fuel_per_lap_l=avg_fuel_per_lap_l, pit_now_forecast=pit_now_forecast,
-        pit_next_lap_forecast=pit_next_lap_forecast,
-        relative_pace_advantage_s=relative_pace_advantage_s)
+    live_conditions = derive_plan_c_live_conditions(
+        battle_context=battle_context,car_on_pitroad_all=car_on_pitroad_all,
+        pit_now_forecast=pit_now_forecast,pit_next_lap_forecast=pit_next_lap_forecast)
+    comparison = options_mod.compare_position_strategies(strategy_options,
+        current_lap=current_lap,forecasts=position_forecasts,source=comparison_source,
+        relative_pace_advantage_s=relative_pace_advantage_s,
+        fuel_save_recent_l_per_lap=fuel_save_recent_l_per_lap,
+        rival_pitted_first=live_conditions['rival_pitted_first'],clean_air=live_conditions['clean_air'],
+        fuel_state=fuel_state,authority_inputs=advice_authority_inputs)
+    return dict(available=True,selected_plan=comparison['selected_plan'],reason=comparison['reason'],
+        decision_id='%s:decision-lap:%s' % (strategy_options.get('snapshot_id'),current_lap),
+        position_comparison=comparison,plan_b_evidence=comparison.get('plan_b_evidence'),
+        plan_c_evidence=comparison.get('plan_c_evidence'),pit_cycle_position_used=False)
 
 
 def plan_conditions_from_options(options, selected_plan):
@@ -8496,6 +8470,11 @@ def poll_iracing():
             _pit_next_forecast = None
             _battle_context = None
             _pit_option_snapshot = None
+            _position_forecasts = None
+            _comparison_source = {'race_instance_id':_this_frame_race_instance_id,'session_num':cur_snum,
+                'source_frame_sequence':_source_frame_sequence,
+                'generated_at_session_s':_race_facts_snapshot['source_frame']['session_time_s'],
+                'current_lap':int(lap) if isinstance(lap,(int,float)) else None}
             _pit_now_flags = reader.read_int('SessionFlags') or 0
             _pit_now_caution = 'caution' if (_pit_now_flags & 0xC000) else 'green'
             _pit_now_calibration = pit_loss_calibrator.get_summary(
@@ -8549,6 +8528,8 @@ def poll_iracing():
                     snapshot=_pit_option_snapshot,
                     calibration=_pit_now_calibration,
                     delay_laps=1)
+                _position_forecasts = strategy_options_mod.build_position_forecasts(
+                    snapshot=_pit_option_snapshot,calibration=_pit_now_calibration,source=_comparison_source)
                 if (class_pos is not None and class_pos > 1
                         and _pit_now_cls_positions and _pit_now_last_laps
                         and len(lap_time_hist) >= 3):
@@ -8950,11 +8931,16 @@ def poll_iracing():
                         battle_context=_battle_context,
                         car_on_pitroad_all=car_on_pitroad_all,
                         fuel_save_recent_l_per_lap=session_race_state_mod.recent_median(
-                            clean_fuel_per_lap_hist))
+                            clean_fuel_per_lap_hist),position_forecasts=_position_forecasts,comparison_source=_comparison_source,
+                        fuel_state={'fuel_level_l':fuel,'avg_fuel_per_lap_l':session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+                            'reserve_l':(_fuel_strategy_live or {}).get('reserve_l',0.5),'effective_capacity_l':session_effective_fuel_capacity_l,
+                            'crossings_to_finish':(_fuel_strategy_live or {}).get('estimated_crossings_to_finish')
+                                or (_fuel_strategy_live or {}).get('provisional_laps_to_time_expiry')})
                     _selected_option = _option_decision.get('selected_plan') or 'A'
                     strategy_options['selected_plan'] = _selected_option
                     strategy_options['decision_reason'] = _option_decision.get('reason')
                     strategy_options['decision_evidence'] = _option_decision
+                    strategy_options['position_comparison'] = _option_decision['position_comparison']
                     # ★2026-09-16 Codex MD#4差戻し（P1-2・P1-3）：`build_strategy_decision()`
                     #   （本番関数）が凍結されたplanレコードを作る。'commit'（Plan A、変更なし
                     #   ＝合意往復不要）はここで即座に`active_decision_plan`へ昇格する。
@@ -9428,6 +9414,7 @@ def poll_iracing():
                     'effective_capacity_l': session_effective_fuel_capacity_l,
                     'pit_now_forecast': _pit_now_forecast,
                     'pit_next_lap_forecast': _pit_next_forecast,
+                    'position_forecasts':_position_forecasts,'comparison_source':_comparison_source,
                     # ★Plan C の成立条件は実測から埋める。示せないものは None のまま
                     #   ＝未証明。未証明は「満たされている」とは決して扱わない。
                     'rival_pitted_first': _recalc_rival_pitted,
@@ -9573,6 +9560,19 @@ def poll_iracing():
                 _plan_action, _plan_reason = 'hold', 'out_lap'
             if _plan_gate_reason:
                 _plan_action, _plan_reason, _plan_set_fuel = 'hold', _plan_gate_reason, None
+            if isinstance(strategy_options,dict):
+                _current_comparison = decide_plan_at_target(strategy_options,current_lap=int(lap),
+                    current_fuel_l=fuel,avg_fuel_per_lap_l=session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+                    pit_now_forecast=_pit_now_forecast,pit_next_lap_forecast=_pit_next_forecast,
+                    relative_pace_advantage_s=(_battle_context or {}).get('player_pace_advantage_s'),
+                    options_mod=strategy_options_mod,battle_context=_battle_context,car_on_pitroad_all=car_on_pitroad_all,
+                    fuel_save_recent_l_per_lap=session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+                    position_forecasts=_position_forecasts,comparison_source=_comparison_source,advice_authority_inputs=_wo008_inputs,
+                    fuel_state={'fuel_level_l':fuel,'avg_fuel_per_lap_l':session_race_state_mod.recent_median(clean_fuel_per_lap_hist),
+                        'reserve_l':(_fuel_strategy_live or {}).get('reserve_l',0.5),'effective_capacity_l':session_effective_fuel_capacity_l,
+                        'crossings_to_finish':(_fuel_strategy_live or {}).get('estimated_crossings_to_finish')
+                            or (_fuel_strategy_live or {}).get('provisional_laps_to_time_expiry')})
+                strategy_options['position_comparison'] = _current_comparison['position_comparison']
             _plan_physical = None
             _plan_cycle = None
             if isinstance(_pit_now_forecast, dict) and _pit_now_forecast.get('available'):

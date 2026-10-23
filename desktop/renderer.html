@@ -696,6 +696,10 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
         <button class="mic-btn" id="mic-btn" onclick="toggleMic()" data-i18n-title="tip_mic" title="クリックで話す（マイク）">🎤</button>
         <button class="send-btn" onclick="sendMsg()">↑</button>
       </div>
+      <details style="margin:4px 14px 8px;font-size:12px;color:#b8c9db">
+        <summary id="race-question-title">質問例（選ぶと入力できます）</summary>
+        <div id="race-question-candidates" style="display:flex;flex-wrap:wrap;gap:6px;padding-top:6px"></div>
+      </details>
       <div class="hint-text" id="hint-text"></div>
     </div>
   </div>
@@ -2684,6 +2688,22 @@ function handleLunaSelfMemoryInput(text){
 }
 
 // ── Send message ──
+// The displayed suggestions use the router's own catalog and the ordinary
+// composer/send path. Selecting a question is never consent to a pit action.
+function renderRaceQuestionCandidates(){
+  const host=document.getElementById('race-question-candidates');
+  if(!host)return;
+  host.replaceChildren();
+  for(const q of (window.PitwallLocalIntentRouter?.QUESTION_CANDIDATES||[])){
+    const button=document.createElement('button');button.type='button';button.className='back-btn';
+    button.textContent=q.label;button.title=[q.question,...q.examples].join(' / ');
+    button.onclick=()=>{
+      const input=document.getElementById('chat-input');if(!input)return;
+      input.value=q.question;autoResize(input);input.focus();
+    };
+    host.appendChild(button);
+  }
+}
 function onKey(e){ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();} }
 function autoResize(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; }
 function pendingConfirmationKinds(){
@@ -3151,6 +3171,8 @@ async function sendMsg(inputSource, entry){
       sendStrategyDecisionResponse(localIntent.resolvedProposal.decisionId,
         localIntent.resolvedProposal.accepted===true);
     }
+    if(localIntent.bindingKind)localIntent.strategyBinding=strategyProjection.binding(localIntent.bindingKind);
+    if(localIntent.intent==='strategy_definition')localIntent.strategyBinding=strategyProjection.binding('strategy_explanation');
     const localPriority=(localIntent.confidence==='confirmed'||(localIntent.fuelEstimate?.fuel_l!==null&&localIntent.fuelEstimate?.fuel_l<=localIntent.fuelEstimate?.rate_l_per_lap+2))
       ? SPEAK_PRIO.P2_PROCEDURE : SPEAK_PRIO.P3_INFO;
     // ★Codex差戻し：採用したraceの識別子を出口(trace/queue)まで追えるようにする。
@@ -11293,6 +11315,7 @@ if(window.speechSynthesis) speechSynthesis.onvoiceschanged=()=>{};
 // ── Electron native app: LPを飛ばして直接アプリ画面を開く ──
 // （Webブラウザ版ではLPを見せるが、デスクトップアプリ＝本体なので即起動）
 window.addEventListener('DOMContentLoaded', ()=>{
+  renderRaceQuestionCandidates();
   hydratePersistentSettings();
   const savedVolume=parseFloat(localStorage.getItem('pw_volume'));
   pwVolume=Number.isFinite(savedVolume)?Math.min(Math.max(savedVolume,0),1):1.0;

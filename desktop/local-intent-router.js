@@ -219,10 +219,43 @@
     };
   }
 
+  // Driver-facing phrases and the data-room request share one catalog. These
+  // classify the requested calculation, never consent or an execution command.
+  const QUESTION_CANDIDATES = Object.freeze([
+    {id:'fuel', label:'燃料', question:'燃料は最後まで持つ？', examples:['燃料は？','あと何周持つ？','最後まで足りる？']},
+    {id:'position', label:'順位', question:'今のクラス順位は？', examples:['今何位？','クラス順位は？']},
+    {id:'gap', label:'前車', question:'前の車との差は何秒？', examples:['前と何秒？','前車とのGAPは？']},
+    {id:'normal', label:'通常ピット', question:'通常ピットの作戦を教えて。', examples:['通常ピットは？','基準のピット案は？']},
+    {id:'undercut', label:'アンダーカット', question:'アンダーカットで順位を上げられる？', examples:['早めに入って前に出られる？','アンダーカットは使える？']},
+    {id:'overcut', label:'オーバーカット', question:'オーバーカットで順位を上げられる？', examples:['延ばして前に出られる？','オーバーカットは使える？']},
+    {id:'compare', label:'作戦比較', question:'通常ピット、アンダーカット、オーバーカットで順位を上げるならどれ？', examples:['何周目に入ると順位アップできる？','いつ入るのが得？']},
+    {id:'pit_loss', label:'ピット損失', question:'ピットで何秒失う？', examples:['ピットのロスタイムは？','次の給油で何秒ロスする？']},
+  ].map(x=>Object.freeze({...x,examples:Object.freeze(x.examples)})));
+
+  function matchQuestionCandidate(raw) {
+    const text=normalizeSttText(String(raw||'').trim());
+    if(/前回|前戦|昨日|前のレース|last race|previous race/i.test(text))return null;
+    const under=/アンダー\s*カット|under\s*cut/i.test(text);
+    const over=/オーバー\s*カット|over\s*cut/i.test(text);
+    const normal=/(?:通常|基準|予定通り).{0,8}(?:ピット|ボックス|プラン)|(?:normal|baseline|scheduled).{0,8}(?:pit|stop|plan)/i.test(text);
+    if((under||over||normal)&&/しない|やめ|取消|キャンセル|cancel|do not|don't/i.test(text))return {id:'strategy_request_clarification',kind:'clarification'};
+    if((under||over||normal)&&/知って|とは|どういう意味|意味(?:は|を)|説明|違い|what (?:is|are)|explain|difference/i.test(text))
+      return {id:'strategy_definition',kind:'definition',plans:[...(normal?['A']:[]),...(under?['B']:[]),...(over?['C']:[])]};
+    if(/(?:ピット|ボックス|給油|pit|box|refuel)/i.test(text)&&/(?:ロス|損失|何秒|何分|所要|loss|cost|how long)/i.test(text))return {id:'pit_loss',kind:'data'};
+    if(Number(under)+Number(over)+Number(normal)>1)return {id:'compare',kind:'strategy',plan:'recommendation'};
+    if(under)return {id:'undercut',kind:'strategy',plan:'B'};
+    if(over)return {id:'overcut',kind:'strategy',plan:'C'};
+    if(normal)return {id:'normal',kind:'strategy',plan:'A'};
+    const gain=/順位.{0,10}(?:上|アップ|改善|得)|ポジション.{0,8}(?:上|アップ)|前に出|追い抜|position gain|gain.{0,8}position/i.test(text);
+    const pit=/ピット|ボックス|pit|box/i.test(text);
+    if((pit&&gain)||/(?:いつ|何周).{0,12}(?:得|有利)|(?:戦略|作戦).{0,12}(?:どれ|比較|どう|得|順位)/.test(text))return {id:'compare',kind:'strategy',plan:'recommendation'};
+    if(/早め|先に入/.test(text)&&gain)return {id:'undercut',kind:'strategy',plan:'B'};
+    if(/延ば|伸ば|遅らせ/.test(text)&&gain)return {id:'overcut',kind:'strategy',plan:'C'};
+    return null;
+  }
   const strategyCallKind = text => {
-    if (/アンダー\s*カット|under\s*cut/i.test(text)) return 'B';
-    if (/オーバー\s*カット|over\s*cut/i.test(text)) return 'C';
-    if (/(?:通常|基準|予定通り).{0,8}(?:ピット|ボックス|プラン)|(?:normal|baseline|scheduled).{0,8}(?:pit|stop|plan)/i.test(text)) return 'A';
+    const request=matchQuestionCandidate(text);
+    if(request?.kind==='strategy')return request.plan;
     if (/(?:今|この周|次周|次の周)?.{0,8}(?:ピット|ボックス).{0,10}(?:入る|行く|どう|べき|判断)|(?:戦略|作戦).{0,10}(?:どう|どれ|判断)|(?:pit|box).{0,12}(?:now|this lap|next lap|should|strategy)/i.test(text)) return 'recommendation';
     return null;
   };
@@ -293,12 +326,44 @@
       ? input.strategyEvaluation : null;
     const engine = wiring && wiring.api;
     const playbook = wiring && wiring.playbook;
-    if (!engine || typeof engine.evaluateStrategies !== 'function' || !playbook) return null;
+    if (!engine || typeof engine.evaluateStrategies !== 'function' || !playbook) return answer('strategy_consultation_unavailable',isJP(lang)
+      ? '順位を上げるピット作戦の比較として受けた。現在の燃料・前車とのペース差・ピット後の復帰予測がまだ揃っていない。作戦や順位は確定していない。'
+      : 'This is a pit strategy comparison. Current fuel, relative pace and rejoin evidence are not all available yet. No strategy or position is confirmed.');
     const snapshot = engine.evaluateStrategies(playbook, live);
     if(snapshot?.source==='bridge_canonical'){
       const rec=snapshot.recommendations?.strategy_options,opts=rec?.value;
       const active=snapshot.active;
       if(!opts?.available||rec?.source_valid!==true)return answer('strategy_consultation_unavailable',isJP(lang)?'現在の戦略候補の計算根拠を確認できない。':'Current strategy comparison evidence is unavailable.',{sourceRef:snapshot.publication_ref});
+      const comparison=opts.position_comparison;
+      if(comparison){
+        const age=finite(rec.position_comparison_age_s),validFor=finite(comparison.valid_for_s);
+        const fresh=rec.position_comparison_source_valid===true&&age!==null&&validFor!==null&&validFor>0&&age<=Math.min(10,validFor);
+        const jp=isJP(lang),names=jp?{A:'通常ピット',B:'アンダーカット',C:'オーバーカット'}:{A:'normal stop',B:'undercut',C:'overcut'};
+        const reasons=jp?{candidate_prediction_unavailable:'復帰順位の計算根拠が不足',calibration_geometry_unavailable:'ピット入口・出口の実測位置が未確認',calibration_not_ready:'同条件のピット実測が不足',calibration_insufficient_samples:'同条件のピット実測が不足',candidate_not_fuel_feasible:'燃料条件を満たさない',candidate_target_missed:'その周のピット入口を通過済み',candidate_target_outside_forecast_horizon:'対象周が現在の予測範囲外',no_stop_required:'完走分の燃料があり、ピットは不要',conditions_unproven:'成立条件が未確認',fuel_window_not_open:'燃料窓がまだ開いていない',measured_pace_benefit_unproven:'有利な実測ペース差が未確認'}:{};
+        const ranked=Array.isArray(comparison.ranked_candidates)?comparison.ranked_candidates:[];
+        const wanted=requested==='recommendation'?['A','B','C']:[requested];
+        const lines=[];
+        for(const id of wanted){
+          const row=fresh?ranked.find(r=>r.plan_id===id):null;
+          const pos=integer(row?.expected_class_position),target=integer(row?.target_lap);
+          if(pos!==null&&pos>0&&target!==null){
+            lines.push(jp?`${names[id]}は${target}周目、復帰時点P${pos}予測。`:`${names[id]} on lap ${target}: predicted rejoin P${pos}.`);
+            const gain=integer(row.gain_vs_baseline);
+            if(requested!=='recommendation'&&id!=='A'&&gain!==null)lines.push(jp?(gain>0?`共通の比較時点で通常案より${gain}つ前の予測。`:'同じ時点で比べると、通常案より順位が上がる予測ではない。'):(gain>0?`Predicted ${gain} places ahead of the baseline at the shared comparison time.`:'No position advantage over the baseline is predicted at the shared comparison time.'));
+            if(row.eligible_for_recommendation===false)lines.push(jp?'ただし成立条件は未確認。':'Feasibility conditions are not confirmed.');
+          }
+          else {const unavailable=comparison.unavailable_candidates?.find(r=>r.plan_id===id);lines.push(jp?`${names[id]}は${!fresh?'比較データの更新待ち':reasons[unavailable?.reason]||'復帰順位または成立条件が未確認'}。`:`${names[id]}: ${!fresh?'waiting for fresh comparison':'rejoin or feasibility evidence is missing'}.`);}
+        }
+        const chosen=comparison.selected_plan;
+        const canRecommend=fresh&&comparison.gain_kind==='same_horizon_constant_pace_model'&&comparison.available===true&&ranked.some(r=>r.plan_id===chosen&&(chosen==='A'||r.eligible_for_recommendation===true&&integer(r.gain_vs_baseline)>0));
+        if(requested==='recommendation'){
+          const gain=integer(ranked.find(r=>r.plan_id===chosen)?.gain_vs_baseline);
+          lines.push(jp?(canRecommend?(chosen==='A'?'通常案より順位が上がる根拠はない。通常ピットを維持する案。':`同じ時点で通常案より${gain}つ前の予測。${names[chosen]}を優先する案。`):'順位改善を比較できないため、作戦変更は勧めない。'):(canRecommend?(chosen==='A'?'No position gain over the baseline is established. Keep the normal stop.':`Predicted ${gain} places ahead at the shared comparison time; favour the ${names[chosen]}.`):'A position-based change cannot be recommended yet.'));
+        }
+        if(fresh&&ranked.length)lines.push(jp?'他車の今後のピットは仮定していない。ピット一巡後や最終順位の予測ではない。':'Other cars’ future stops are not assumed; these are not cycle-complete or finishing positions.');
+        lines.push(jp?'まだ変更は確定していない。':'No change has been confirmed.');
+        return answer('strategy_position_comparison',lines.join(''),null,{confidence:(requested==='recommendation'?canRecommend:fresh&&ranked.some(r=>r.plan_id===requested))?'estimate':'unavailable',comparison: fresh?comparison:null,requestedPlan:requested,bindingKind:fresh&&ranked.length?'strategy_comparison':'strategy_explanation'});
+      }
       const id=requested==='recommendation'?opts.selected_plan:requested;
       const candidate=opts['plan_'+String(id).toLowerCase()];
       const age=rec.age_s;
@@ -550,6 +615,11 @@
       if(!matched)live={...live,last:null,best:null,driver_pace_median_s:null,driver_pace_sample_count:null,
         session_time_remaining_s:null,timed_finish_forecast:null,race_plan:null,laps_total:null};
     }
+    const questionRequest=matchQuestionCandidate(text);
+    if(questionRequest?.kind==='clarification')return answer('strategy_request_clarification',isJP(lang)?'その候補を比較から外したいのか、合意済みのピット予定を取り消したいのか確認して。まだ変更していない。':'Do you want to exclude that option from comparison or cancel the agreed pit plan? Nothing has changed yet.');
+    if(questionRequest?.kind==='definition')return answer('strategy_definition',isJP(lang)
+      ? '通常ピットは基準の補給案。アンダーカットは前車より先に入り、交換後のペースなどで前に出る狙い。オーバーカットは後まで走り、クリアな路面などを使って前に出る狙い。成立するかは別に比較する。'
+      : 'A normal stop is the baseline. An undercut stops before the rival to gain time after the stop. An overcut stays out longer to gain time in clear air. Their feasibility needs a separate comparison.');
     if (!text || !live) return { handled:false };
     const semantic=input.driverIntent||classifyDriverIntent(text);
     const reasonTarget=input.pendingDriverPlanCommand;
@@ -570,12 +640,22 @@
       return answer('penalty_consultation',(official?official+' ':jp?'ペナルティ対応の申告として受けた。':'I received a penalty report. ')+status+(jp?' 通常のピット変更は送っていない。':' No ordinary pit change was sent.'));
 
     }
+    if(questionRequest?.id==='pit_loss'&&!['command','negated','historical'].includes(semantic.kind)){
+      const state=input.strategy?.state;
+      const event=state?.available&&state.readonly_projection?state.pitEvents?.at(-1):null;
+      const lane=finite(event?.service?.lane_total_s);
+      return answer('pit_loss_estimate',isJP(lang)
+        ? (lane!==null?`今回のピット滞在実績は${lane.toFixed(1)}秒。コースを走り続けた場合との差は未計測なので、純損失はまだ見積もれない。`
+          :'ピットの損失時間を知りたいんだね。ピット滞在時間と、同じ区間をコース上で走る時間の比較がまだ揃っていない。秒数はまだ見積もれない。')
+        : (lane!==null?`The measured pit-lane time was ${lane.toFixed(1)} seconds. Net loss versus staying on track is not measured yet.`
+          :'Pit time loss needs measured pit-lane time versus the same distance on track. That comparison is not available yet.'),null,{confidence:'unavailable',basis:'pit_loss_comparison_missing'});
+    }
     if(semantic.kind==='window_cancel')return answer('fuel_window_cancel',isJP(lang)?'了解。ウィンドウのコールを取り消した。':'Copy. The window notification is cancelled.',{type:'cancel_fuel_window_watch'});
     if(semantic.kind==='window_watch')return answer('fuel_window_watch',isJP(lang)?'了解。ウィンドウが開いたら短くコールする。':'Copy. I will call when the window opens.',{type:'arm_fuel_window_watch'});
     if(semantic.kind==='window_status')return answer('fuel_window_status',fuelWindowStatus(live,lang).reply);
     // These turns continue through the existing conversation/LLM path. No
     // later legacy pattern may reinterpret them as a current pit operation.
-    if((['negated','conditional'].includes(semantic.kind)||semantic.kind==='historical'&&!PREVIOUS_FUEL_RE.test(text)||semantic.kind==='consultation'&&semantic.executionQuestion)&&semantic.topic)return {handled:false,driverIntent:semantic};
+    if((['negated',...(questionRequest?.kind==='strategy'?[]:['conditional'])].includes(semantic.kind)||semantic.kind==='historical'&&!PREVIOUS_FUEL_RE.test(text)||semantic.kind==='consultation'&&semantic.executionQuestion&&questionRequest?.kind!=='strategy')&&semantic.topic)return {handled:false,driverIntent:semantic};
 
     // ★Phase 3：過去レース記録への質問（「前回給油は？」等）
     // session-memory.answerPreviousFuel() へ delegate。raceHistory + currentUserId で照合。
@@ -682,7 +762,7 @@
     const canEstimatePit=pitTimingQuestion&&strategyState?.available&&!strategyState.pit_plan
       &&typeof input.sessionMemory?.fuelPlanningEstimate==='function'
       &&(finite(live.fuel_strategy?.avg_fuel_per_lap)>0||historyFuelEvidence(input,live,sessionAuthority,currentUserId));
-    if (canEstimatePit||/(?:燃料|給油|足りる|リットル|リッター|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
+    if (canEstimatePit||/(?:燃料|給油|足りる|リットル|リッター|何周.{0,4}(?:持つ|もつ|走れる)|何(?:リットル|リッター|L)|fuel|lit(?:er|re)|make it)/i.test(text)) {
       if(strategyState?.readonly_projection){
         const a=strategyModule.answerFuel(strategyState,{lang});
         const onlyRemaining=/(?:残量|残り何(?:リットル|リッター|L)|何(?:リットル|リッター|L).{0,8}入って)/i.test(text)
@@ -1151,7 +1231,7 @@
     // Nearest-car gaps are distinct from the class-leader gap.  This must be
     // evaluated first: a driver asking "後ろとの差" must never fall through
     // to an LLM/no-data template while the Bridge already has gap_behind.
-    if (/(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)|^(?:出ました[。.!！\s]*)?(?:前|後ろ|後方)(?:は|どう)[。.!！?？]*$/i.test(text)) {
+    if (/(?:前|前車|後ろ|後方).{0,8}何秒|(?:前|後ろ|後方|前後).{0,8}(?:ギャップ|差)|(?:ギャップ|差).{0,8}(?:前|後ろ|後方)|(?:ahead|behind).{0,12}(?:gap|difference)|(?:gap|difference).{0,12}(?:ahead|behind)|^(?:出ました[。.!！\s]*)?(?:前|後ろ|後方)(?:は|どう)[。.!！?？]*$/i.test(text)) {
       const wantsBoth = /前後|both/i.test(text);
       const wantsAhead = wantsBoth || /前|ahead/i.test(text);
       const wantsBehind = wantsBoth || /後ろ|後方|behind/i.test(text);
@@ -1230,7 +1310,7 @@
         ? (isJP(lang) ? `${wantsOverall ? '総合首位' : 'クラス首位'}まで${Math.abs(gap).toFixed(1)}秒。` : `${Math.abs(gap).toFixed(1)} seconds to the ${wantsOverall ? 'overall' : 'class'} leader.`)
         : (isJP(lang) ? `${wantsOverall ? '総合首位' : 'クラス首位'}とのGAPは取得できない。直前車のGAPでは代用しない。` : `Gap to the ${wantsOverall ? 'overall' : 'class'} leader is unavailable; I will not substitute the nearest-car gap.`));
     }
-    if (/(?:今|現在).{0,6}(?:順位|ポジション)|(?:順位|ポジション).{0,6}(?:何|どこ|いくつ)|current (?:position|place)/i.test(text)) {
+    if (/^(?:クラス)?順位は[？?。]*$|クラス何位|今何位|今何番手|(?:今|現在).{0,6}(?:順位|ポジション)|(?:順位|ポジション).{0,6}(?:何|どこ|いくつ)|current (?:position|place)/i.test(text)) {
       const position = integer(live.player_class_position ?? live.class_position ?? live.class_pos);
       return answer('current_position', position !== null && position > 0
         ? (isJP(lang) ? `現在P${position}。` : `Currently P${position}.`)
@@ -1274,7 +1354,7 @@
     'pit_plan_question', 'pit_plan_amend', 'pit_plan_cancel', 'pit_this_lap',
     'fuel_status', 'fuel_window_watch', 'fuel_window_cancel', 'fuel_window_status', 'penalty_consultation', 'race_format',
     'strategy_recommendation', 'strategy_normal', 'strategy_undercut', 'strategy_overcut',
-    'strategy_consultation_held', 'strategy_consultation_unavailable',
+    'strategy_request_clarification', 'strategy_position_comparison', 'strategy_consultation', 'strategy_definition', 'pit_loss_estimate', 'strategy_consultation_held', 'strategy_consultation_unavailable',
   ]);
   // ★2026-09-13 Codex第6回差戻し対応中に発見：意味判定待ち(awaiting_judgment)の
   //   間に来た裸の「了解」は resolvePendingProposal のゲートで弾かれ、
@@ -1367,6 +1447,6 @@
     return out;
   }
 
-  return { route, formatDuration, formatLapTime, fuelWindowStatus, normalizeLapWords,
+  return { route, QUESTION_CANDIDATES, matchQuestionCandidate, formatDuration, formatLapTime, fuelWindowStatus, normalizeLapWords,
     driverPlanCommand, classifyDriverIntent };
 }));

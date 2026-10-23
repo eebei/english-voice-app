@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import strategy_options as so
+from tests_strategy_position_comparison import ranking_input_fixture
 
 
 def long_stint_options(**overrides):
@@ -184,7 +185,8 @@ class PlanCTargetIsLatched(unittest.TestCase):
                                rival_pitted_first=True, clean_air=True,
                                rejoin_not_worse=True))
         self.assertTrue(later['plan_c_evidence']['available'])
-        self.assertEqual(later['selected_plan'], 'C')
+        self.assertEqual(later['selected_plan'], 'A')
+        self.assertFalse(later['options']['position_comparison']['available'], 'achieving fuel target alone is not a position forecast')
 
     def test_not_saving_still_fails_against_the_latched_target(self):
         first = so.reevaluate_plans(**self.base_kwargs())
@@ -209,6 +211,9 @@ class ReevaluationActuallyRecomputes(unittest.TestCase):
             fuel_level_l=35.0, recent_fuel_per_lap_l=3.5, clean_laps_sampled=4,
             crossings_to_finish=20, reserve_l=0.5, effective_capacity_l=60.0)
         params.update(overrides)
+        if all(params.get(k) is True for k in ('rival_pitted_first','clean_air','rejoin_not_worse')):
+            params.update(ranking_input_fixture(params,'C'))
+            params['relative_pace_advantage_s']=.8
         return params
 
     def test_plans_are_rebuilt_from_the_supplied_numbers(self):
@@ -249,7 +254,7 @@ class ReevaluationActuallyRecomputes(unittest.TestCase):
         self.assertFalse(result['plan_changed'])
 
     def test_plan_change_is_reported(self):
-        previous = long_stint_options()
+        previous = long_stint_options(current_lap=6)
         previous['selected_plan'] = 'A'
         result = so.reevaluate_plans(
             **self.base_kwargs(previous=previous,
@@ -269,7 +274,7 @@ class ReevaluationActuallyRecomputes(unittest.TestCase):
     def test_selection_falls_back_to_a_without_rejoin_evidence(self):
         result = so.reevaluate_plans(**self.base_kwargs())
         self.assertEqual(result['selected_plan'], 'A')
-        self.assertIn('unproven', result['reason'])
+        self.assertEqual(result['reason'],'position_prediction_unavailable')
 
     def test_trigger_reason_is_carried_into_the_result(self):
         result = so.reevaluate_plans(**self.base_kwargs(trigger_reason='fuel_deviation'))
@@ -306,6 +311,9 @@ class BridgeRecalculationExecution(unittest.TestCase):
             fuel_save_recent_l_per_lap=None,
             baseline_fuel_override=None, baseline_pace_override=None)
         params.update(overrides)
+        if all(params.get(k) is True for k in ('rival_pitted_first','clean_air','rejoin_not_worse')):
+            params.update(ranking_input_fixture(params,'C'))
+            params['relative_pace_advantage_s']=.8
         return params
 
     def run_one(self, state, reason='driver_reported_damage', **input_overrides):
@@ -532,7 +540,8 @@ class PlanBUndercutContract(unittest.TestCase):
             effective_capacity_l=60.0,
             pit_now_forecast=self.forecast(3, 4),
             pit_next_lap_forecast=self.forecast(4, 5),
-            relative_pace_advantage_s=0.8)
+            relative_pace_advantage_s=0.8,
+            **ranking_input_fixture(dict(session_num=1,current_lap=5,fuel_level_l=35.,recent_fuel_per_lap_l=3.5,clean_laps_sampled=4,crossings_to_finish=20,reserve_l=.5,effective_capacity_l=60.),'B'))
         self.assertEqual(result['selected_plan'], 'B')
         self.assertTrue(result['options']['plan_b']['available'])
 

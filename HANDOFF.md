@@ -1,6 +1,24 @@
 # OMORAY PITWALL 引き継ぎ
 
-## 10/23 Build304 実走 Gate8 FAILED — 会話/戦略の核心を再監査（未修復）
+## 10/24 質問候補→戦略室→LUNA：比較回答の修復・独立確認・全preflight完了（未Build／未公開）
+
+**現状態：** branch `build/304`、修復base `a3a3153`からのlocal変更。公開304/本番SHA `75cb056`と実走Gate8 FAILEDは維持。Owner 07:03続GOで再開。親rootが製品修復、repair_remainingは後半TEST ONLY、build304_reviewが製品diff/実artifactを独立確認。Claude CodeはOAuth期限切れでreview未実施（費用0）、Owner承認済みの別Codex分担で確認した。
+
+**以前できなかった回答：** 共通catalog8種類を画面入力例と音声テキストへ接続。実走の「何週目に入ると順位アップできる？」を残り時間へ落とさず、通常/under/overの比較へ配送。SDK同frame＋同条件保存較正→各候補の実target周/物理復帰順位→canonical→projection→LUNAへ接続。整合した実Bridge再生では「通常7周/P3、under5周/P3、over8周/P3、順位を上げる根拠はなく通常維持」と最後まで発話する。これは当該SDK fixtureの値で実走結果ではない。候補クリックは入力欄へ入れるだけ、相談で既存合意/target/給油量/BOXは変更しない。
+
+**今回閉じた欠陥：** 入口通過後のtarget1周ずれ、別々の復帰時刻の順位差をgainと誤認する比較、現在燃焼と旧残距離/凍結給油量の不整合を修復。比較専用copyを既存fixed_target_authorityのfull-current-lap幾何で計算しnative数量は保持。時刻や発話しない燃費閾値だけの更新で音声を切らない意味bindingを追加し、scope/epoch/closure/現在cache/10秒比較freshness/数値・条件変更の失効は維持。保存較正exit=nullで実pollがTypeError停止するP1も独立再現し、予測前に両座標のfinite/range/forwardsegmentを検証。不正時は全3案数値なしで「ピット入口・出口の実測位置が未確認」と発話完了する。
+
+**検証済みの範囲：** source17path固定の全preflight `747.74秒 exit0`、通常49/AI49、新実Bridge→全29Renderer→発話completedは通常6/AI2すべてPASS。各plan名＋target周＋Pを同じ発話で照合し、質問前後native ID/target/set不変、操作送信0/timer error0、較正なし/実保存null負例を確認。別担当が実canonical/utterance/生outboundも独立照合。runtime32module/29script/3workflow、WO00142、WO018122、候補JS58/位置比較Python13等PASS。fixture変更0/復元true、source driftは実行log2のみ、外部有料APIattempt0。最終diff独立確認で新P0/P1なし。
+
+**試験修復と限界：** synthetic positive B/Cは配送/同意検査専用。提案fixtureは容量38Lで起動無線と重ならない燃料窓へ移し、96frame観測・元の記録量上限を維持。P01は最初の中断試行と再送後完了試行を混同せず、同decision/dispatch/utteranceの発話完了→同意→native ACKを要求。W04は実dropをscenario＋uidで照合し、再生なし/terminal一致を維持。初回REDと修復履歴は証拠へ保持し、期待だけの緩和にしない。
+
+**未達と次：** 同pace/同pit laneの共通Hモデルでは全案同値になる。**実際に順位を上げるB/Cの利益を計算・推薦できる能力は未実装。** 次は候補別の実測pace/交通/給油service差が生む利益を計算し、予測と実結果を照合できる対象スライスへ進む必要がある。通常timed native BOX、Driver22周申告の記憶/訂正、苦情応答/沈黙希望、純pit損失数値も未修復。今回の合格をPITWALL全体や実走の成功と呼ばない。Windows/iRacing/実音声/実用性は未検証。
+
+**証拠/費用/保護：** `../pitwall-local-evidence/strategy-room-oct23/` の `preflight-final-oct24-v3/`、`final-source-freeze-oct24-v3.json`、`independent-final-diff-review-oct24-v3.json`、`parent-final-real-answers-oct24.json`。旧新誤配送4反例は `parent-field-routing-before-after.json`。10/23 Owner停止は `preflight-owner-stop-oct23/`、10/24途中REDは `preflight-resume-oct24/`、短時間停止v2は合格証拠から除外。製品比較はlocal計算・追加LLM検索なし。実運用CPU/発話長/TTS原価は未計測。scratch2保持/stage禁止。Build/push/deploy/公開は本GOへ含めず未実施。
+
+次のMDに指示書あり
+
+## 10/23 Build304 実走 Gate8 FAILED — 修復着手前の監査（残件は先頭参照）
 
 Owner実走後「全く改善なし」と指摘。原本 `eventresult-89577642.json` と `OMORAY-bridge-debug-20261023-1838.log` を `../pitwall-local-evidence/field304-oct23/` へ保全しbytes/SHA記録。実304起動・全29runtime loaded、公式sub89577642/本人315555/車Mercedes GT3/Montrealを確認。今回は公式IDありで303のfallback問題の再発として説明しない。**現在304を実用的な戦略engineer合格とは判定しない。** 公開/本番75cb056は変更せず、無断rollback/再Build/公開/有料APIなし。
 

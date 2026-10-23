@@ -125,6 +125,8 @@ if node tests-strategy-playbook.js >/dev/null 2>&1; then echo "   ✅ 全ケー�
 
 echo "── A/B/C常時比較→Driver戦略質問・単一推薦配線（次期Build）"
 if node tests-strategy-call-routing.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-strategy-call-routing.js 2>&1|tail -20; fail=1; fi
+echo "▶ 戦略室の質問候補・比較回答・freshness・実画面入力"
+if node tests-strategy-question-candidates.js; then echo "   ✅ 合格"; else echo "   ❌ 不合格"; fail=1; fi
 
 echo "── Memory Action Layer 履歴統合→自発戦略→3周更新（次期Build）"
 if node tests-memory-action-layer.js >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; node tests-memory-action-layer.js 2>&1|tail -20; fail=1; fi
@@ -215,6 +217,8 @@ if python3 irsdk-bridge/tests_practice_profile.py >/dev/null 2>&1; then echo "  
 
 echo "── Strategy Plan所有・Pit Loss配線（Build 255）"
 if python3 irsdk-bridge/tests_strategy_plan_wiring.py >/dev/null 2>&1 && python3 irsdk-bridge/tests_strategy_options.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_strategy_plan_wiring.py; python3 irsdk-bridge/tests_strategy_options.py; fail=1; fi
+echo "▶ 戦略室の通常/アンダー/オーバー順位比較と入口通過境界"
+if python3 irsdk-bridge/tests_strategy_position_comparison.py; then echo "   ✅ 合格"; else echo "   ❌ 不合格"; fail=1; fi
 
 echo "── Bridge再計算トリガー配線（静的検査・Build 266 Phase E）"
 if python3 irsdk-bridge/tests_bridge_recalculation_wiring.py >/dev/null 2>&1; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; python3 irsdk-bridge/tests_bridge_recalculation_wiring.py 2>&1|tail -15; fail=1; fi
@@ -403,6 +407,11 @@ if node tests-terminal-readback-binding.js; then echo "   ✅ 全ケース合格
 
 echo "▶ WO019 Road Atlanta一本の相談 E2E（実Bridge×全Renderer×実server、IOのみ模擬）"
 if out=$(python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格（exit2=HARNESS_ERROR）"; echo "$out"|grep -E "❌|HARNESS"|head -20; fail=1; fi
+echo "▶ 戦略室 実Bridge→全Renderer→数値一致/音声completed/較正欠損"
+if python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
+echo "▶ 戦略室 AI race fallback：比較3案と較正欠損"
+if WO019_AI_RACE=1 STRATEGY_ROOM_COMPARISON_ONLY=1 STRATEGY_ROOM_E2E_OUTPUT="${PREFLIGHT_HISTORY_EVIDENCE_DIR:-/tmp}/strategy-room-ai.json" python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
+
 echo "▶ WO019 guard cut anchor到達性（全cut anchorが現sourceで一意）"
 echo "▶ 同じ相談E2EをAI race fallback identityでも検証"
 if out=$(WO019_AI_RACE=1 python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then

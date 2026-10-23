@@ -13,15 +13,14 @@ checks = {
     "initial options use one snapshot": "strategy_options_mod.build_initial_plans(" in SOURCE,
     "initial options have proactive radio": "'trigger': 'initial_strategy_plans'" in SOURCE,
     "Plan A target has an automatic decision event": "'trigger': 'strategy_plan_decision'" in SOURCE,
-    # ★2026-09-16 Codex MD#3差戻し：この呼び出しは`decide_plan_at_target()`
-    #   （本番関数。Plan Cが証明済みの時はdecide_at_plan_aを迂回する）へ移った。
-    #   守りたい性質は変わらない——decide_at_plan_aがthis-lap/next-lapの物理復帰を
-    #   比較していること、poll loopがdecide_plan_at_targetへ同じforecastを渡すこと。
-    "Plan A/B compares this-lap and next-lap physical rejoin":
-        "options_mod.decide_at_plan_a(" in SOURCE
-        and "pit_next_lap_forecast=pit_next_lap_forecast" in SOURCE
+    # Compare actual candidate target laps from one frame and rank at a shared
+    # horizon. Comparing only each stop's different exit time is not causal gain.
+    "Plan A/B/C compares same-frame candidate forecasts":
+        "options_mod.compare_position_strategies(" in SOURCE
+        and "position_forecasts=_position_forecasts" in SOURCE
+        and "comparison_source=_comparison_source" in SOURCE
         and "decide_plan_at_target(" in SOURCE
-        and "pit_next_lap_forecast=_pit_next_forecast" in SOURCE,
+        and "strategy_options_mod.build_position_forecasts(" in SOURCE,
     "conditional pit-cycle is excluded by comparator unit":
         "pit_cycle_position_used" in Path(__file__).with_name("strategy_options.py").read_text(encoding="utf-8"),
     "Plan B has a mandatory next-lap box trigger":

@@ -33,6 +33,11 @@ Modes (exit 0 = every expectation met, 1 = expectation failed, 2 = HARNESS_ERROR
 WO019_AI_RACE=1 runs the same cases with both SDK session IDs removed at
 the reader boundary, and requires fallback canonical publications.
 
+The proposal_unheard/interrupted/heard scenarios additionally use an explicitly
+synthetic forecast-output seam solely to test delivery/consent. Their native
+comparator/lifecycle/authority remain real. They do NOT demonstrate real undercut
+profitability; tests_strategy_room_e2e.py leaves forecasting untouched.
+
 LLM meaning is a SAVED response: these cases prove the machine connection (what reaches the
 provider request and what is spoken), not the semantic quality of a real model.
 """
@@ -937,7 +942,11 @@ def scn_proposal(product_root, mode):
     """mode 'unheard': Luna is mid-answer when the proposal arrives; the Driver's "はい" before it
     becomes audible is refused, and "はい" after it was heard is applied (normal control).
     mode 'interrupted': the proposal starts, the Driver presses PTT (real barge-in), "はい" refused."""
+    from tests_strategy_position_comparison import synthetic_positive_b_forecast,assert_synthetic_b_targets
+    # Explicit synthetic prediction output: delivery/consent only. This does
+    # not establish a real undercut gain; untouched common-H model keeps A.
     bc = _plan_bc()
+    forecast_evidence=[]
     state = {'done': False}
 
     def busy_then_yes(t, cursor, frame, result):
@@ -971,10 +980,20 @@ def scn_proposal(product_root, mode):
         return True
 
     def yes_when_completed(t, cursor, frame, result):
-        done = [u for u in t.observe()['utterances']
-                if u.get('kind') == 'bridge_strategy_proposal' and 'completed' in (u.get('states') or [])]
-        if not done:
-            return False
+        observed=t.observe()
+        pending=(observed.get('strategyState') or {}).get('pending_proposal') or {}
+        done={u['uid']:u for u in observed['utterances']
+            if u.get('kind')=='bridge_strategy_proposal' and 'completed' in (u.get('states') or [])
+            and 'audible_interrupted' not in (u.get('states') or [])}
+        deliveries=[json.loads(x['raw']) for x in t.to_bridge]
+        completed=next((x for x in reversed(deliveries) if x.get('cmd')=='strategy_decision_delivery'
+            and x.get('outcome')=='audible_completed' and x.get('decision_id')==pending.get('decision_id')
+            and x.get('dispatch_id')==pending.get('dispatch_id') and x.get('utterance_id') in done),None)
+        if completed is None:return False
+        # A retry's old interrupted utterance is not the speech the Driver
+        # just heard. Bind this positive control to the CURRENT exact attempt.
+        t.notes['heard_completion_before_consent']={'frame':cursor,'pending':pending,
+            'delivery':completed,'utterance':done[completed['utterance_id']]}
         t.say('はい', 'yes_heard')
         return True
 
@@ -985,7 +1004,26 @@ def scn_proposal(product_root, mode):
     bridge.PIT_LOSS_PATH = _seeded_pit_loss(tmp)
     t = Thread(product_root, steps=steps, pre_steps=pre)
     try:
-        t.run(bc._plan_bc_accept_build_frames(), bc.PLAN_BC_ACCEPT_SESSION_INFO)
+        # The 38 L session tank delays the genuine fuel window until after
+        # opening speech. Hold the same valid lap long enough to observe all
+        # delivery terminals; no trace-volume budget is changed.
+        frames=bc._plan_bc_accept_clean_laps(8,start_fuel=26.)
+        tail,_=bc._plan_bc_accept_hold_frames(64,lap=9,fuel=10.,start_time=132.)
+        for frame in tail:frame['LapLastLapTime']=100.07
+        frames+=tail
+        for frame in frames:
+            frame['SessionLapsTotal']=28
+            frame['SessionLapsRemain']=28-frame['Lap']
+        info=bc.PLAN_BC_ACCEPT_SESSION_INFO.replace('SessionLaps: %s' % bc.PLAN_BC_ACCEPT_LAPS_TOTAL,'SessionLaps: 28').replace('DriverCarFuelMaxLtr: 60.000','DriverCarFuelMaxLtr: 38.000')
+        with synthetic_positive_b_forecast(evidence=forecast_evidence,capacity_l=38.):
+            t.run(frames,info)
+        completed=(t.notes.get('heard_completion_before_consent') or {}).get('delivery') or {}
+        t.notes['heard_matching_owner_ack']=[b for b in t.result.broadcasts
+            if b.get('type')=='strategy_decision_ack' and b.get('decision_id')==completed.get('decision_id')
+            and b.get('dispatch_id')==completed.get('dispatch_id') and b.get('outcome')=='accepted']
+        t.notes['synthetic_prediction_fixture']={'purpose':'delivery_consent_only_not_forecast_skill',
+            'checked_targets':assert_synthetic_b_targets(t.result.broadcasts,forecast_evidence),
+            'frames':len(forecast_evidence),'sdk_capacity_l':38.,'raw_frames':len(frames)}
         return collect(t)
     finally:
         bridge.PIT_LOSS_PATH = original
@@ -1609,11 +1647,22 @@ def c_proposal_unheard(R):
     acks = [b for b in h['broadcasts'] if b['type'] == 'strategy_decision_ack']
     pu = _utts(h, 'bridge_strategy_proposal')
     prios = {h['prio'].get(x['uid']) for x in pu}
+    completion=h['notes'].get('heard_completion_before_consent') or {}
+    delivery=completion.get('delivery') or {}
+    heard=next((x for x in pu if x['uid']==delivery.get('utterance_id')),{})
+    exact_response=any(x.get('accepted') is True and x.get('decision_id')==delivery.get('decision_id')
+        and x.get('dispatch_id')==delivery.get('dispatch_id') for x in heard_sent)
+    interrupted_dispatches={x.get('dispatch_id') for x in _cmds(h,'strategy_decision_delivery')
+        if x.get('outcome')=='audible_interrupted'}
+    accepted_interrupted=[x for x in _cmds(h,'strategy_decision_response')
+        if x.get('accepted') is True and x.get('dispatch_id') in interrupted_dispatches]
     return _ok(u['notes'].get('proposal_frame') is not None and not unheard_sent and not unheard_accepts
-               and pu and 'completed' in pu[0]['states'] and heard_sent and heard_sent[0].get('accepted') is True
-               and any(b['outcome'] == 'accepted' for b in acks) and prios == {2},
+               and 'completed' in heard.get('states',[]) and 'audible_interrupted' not in heard.get('states',[])
+               and exact_response and h['notes'].get('heard_matching_owner_ack')
+               and not accepted_interrupted and prios == {2},
                {'unheard_reply': _text(yes_u), 'unheard_sent': unheard_sent, 'unheard_accepts': len(unheard_accepts),
-                'heard_states': pu and pu[0]['states'], 'heard_sent': heard_sent,
+                'heard_states': heard.get('states'), 'heard_sent': heard_sent,
+                'completed_attempt':delivery,'accepted_interrupted':accepted_interrupted,
                 'decision_acks': [b['outcome'] for b in acks], 'proposal_prio': sorted(map(str, prios))})
 
 
@@ -1776,15 +1825,25 @@ def c_w04_terminal_truth(R):
     prop = [u for u in pi['desktop']['utterances'] if u.get('kind') == 'bridge_strategy_proposal']
     rec_term = {e['uid']: e['state'] for e in pi['obs']['events'] if e.get('k') == 'utterance' and e.get('state') in TERMINAL_STATES}
     per_uid = {u['uid']: ([st for st in u.get('states') or [] if st in TERMINAL_STATES][-1:] or [None])[0] for u in prop}
-    drops = [e for e in pi['obs']['events'] if e.get('state') == 'dropped_before_audible']
-    drop_played = [e for e in drops if any(x.get('uid') == e['uid'] and x.get('state') == 'play_started' for x in pi['obs']['events'])]
+    # A queue drop is an invariant across the existing replay records, not
+    # an incidental timing requirement of the proposal-interruption fixture.
+    # Renderer uid counters restart per scenario: never join different runs.
+    drops, drop_played = [], []
+    for name in detail:
+        events=R[name]['obs']['events']
+        for event in events:
+            if event.get('state')!='dropped_before_audible':continue
+            dropped={'scenario':name,'uid':event.get('uid')}
+            drops.append(dropped)
+            if any(x.get('uid')==event.get('uid') and x.get('state')=='play_started' for x in events):
+                drop_played.append(dropped)
     off = R['offline_export']['obs']
     return _ok(not bad and bool(per_uid) and all(rec_term.get(uid) == st for uid, st in per_uid.items())
                and 'audible_interrupted' in per_uid.values()
                and bool(drops) and not drop_played
                and off['counters']['open_without_terminal'] == len(off['open_utterances']),
                {'bad': bad, 'per_record': detail, 'proposal_terminal_product': per_uid,
-                'proposal_terminal_recorder': {u: rec_term.get(u) for u in per_uid}, 'drops': drops[:3]})
+                'proposal_terminal_recorder': {u: rec_term.get(u) for u in per_uid}, 'drops': drops[:3], 'dropped_with_play':drop_played})
 
 
 def c_w05_bounded_text_free(R):

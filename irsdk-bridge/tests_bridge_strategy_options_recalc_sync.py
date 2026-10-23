@@ -45,6 +45,30 @@ if HERE not in sys.path:
 import bridge  # noqa: E402  実際のbridge.py。execute_recalculation/sync_desktop_strategy_optionsはここに実装がある。
 import session_race_state as srs  # noqa: E402
 import strategy_options as so  # noqa: E402
+from tests_strategy_position_comparison import ranking_input_fixture
+
+
+def decision_with_ranked_fixture(options, **kwargs):
+    """Lifecycle tests supply a current measured-position scenario at the
+    forecast boundary. Production comparison/decision/consent functions run.
+    Existing None-forecast cases still receive no prediction and stay A.
+    """
+    if options.get('selected_plan')=='C' or (kwargs.get('pit_now_forecast') or {}).get('available'):
+        inputs=dict(session_num=1,current_lap=kwargs['current_lap'],fuel_level_l=kwargs['current_fuel_l'],
+            recent_fuel_per_lap_l=kwargs['avg_fuel_per_lap_l'],clean_laps_sampled=options.get('clean_laps_sampled',3),
+            crossings_to_finish=options['crossings_to_finish'],reserve_l=options.get('reserve_l',.5),
+            effective_capacity_l=options.get('effective_capacity_l',40))
+        desired=options.get('selected_plan')
+        if options.get('current_lap')!=kwargs['current_lap']:
+            fresh=so.build_initial_plans(snapshot_id=options['snapshot_id'],current_lap=inputs['current_lap'],
+                fuel_level_l=inputs['fuel_level_l'],avg_fuel_per_lap_l=inputs['recent_fuel_per_lap_l'],
+                clean_laps_sampled=inputs['clean_laps_sampled'],crossings_to_finish=inputs['crossings_to_finish'],
+                reserve_l=inputs['reserve_l'],effective_capacity_l=inputs['effective_capacity_l'])
+            options=dict(fresh,selected_plan=desired)
+        kwargs.update(ranking_input_fixture(inputs,'C' if desired=='C' else 'B'))
+        kwargs['fuel_state']=dict(fuel_level_l=inputs['fuel_level_l'],avg_fuel_per_lap_l=inputs['recent_fuel_per_lap_l'],
+            reserve_l=inputs['reserve_l'],effective_capacity_l=inputs['effective_capacity_l'],crossings_to_finish=inputs['crossings_to_finish'])
+    return bridge.decide_plan_at_target(options,**kwargs)
 
 
 def seeded_state_and_options():
@@ -72,6 +96,7 @@ def recalc_to_b(state, item):
                                 'worst': {'position': 10}},
         rival_pitted_first=None, clean_air=None, rejoin_not_worse=None,
         fuel_save_recent_l_per_lap=None, relative_pace_advantage_s=0.8)
+    inputs.update(ranking_input_fixture(inputs,'B'))
     return bridge.execute_recalculation(
         state, item, inputs=inputs, srs_mod=srs, options_mod=so)
 
@@ -83,7 +108,8 @@ def recalc_to_c(state, item):
         effective_capacity_l=40.0, recent_pace_s=None,
         pit_now_forecast=None, pit_next_lap_forecast=None,
         rival_pitted_first=True, clean_air=True, rejoin_not_worse=True,
-        fuel_save_recent_l_per_lap=3.25, relative_pace_advantage_s=None)
+        fuel_save_recent_l_per_lap=3.25, relative_pace_advantage_s=0.8)
+    inputs.update(ranking_input_fixture(inputs,'C'))
     return bridge.execute_recalculation(
         state, item, inputs=inputs, srs_mod=srs, options_mod=so)
 
@@ -300,23 +326,23 @@ class DecisionLockDoesNotDiscardPlanC(unittest.TestCase):
         matching_pitroad = [1]  # car idx 0 is on pit road -> rival_pitted_first=True
         matching_now = {'available': True, 'likely': {'position': 5}, 'worst': {'position': 8}}
         matching_next = {'available': True, 'likely': {'position': 5}, 'worst': {'position': 8}}
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=current_lap, current_fuel_l=17.0,
             avg_fuel_per_lap_l=3.5, pit_now_forecast=matching_now,
             pit_next_lap_forecast=matching_next,
-            relative_pace_advantage_s=None, options_mod=so,
+            relative_pace_advantage_s=0.8, options_mod=so,
             battle_context=matching_battle_context, car_on_pitroad_all=matching_pitroad,
             fuel_save_recent_l_per_lap=3.25)
         self.assertEqual(decision.get('selected_plan'), 'C',
             'Cが証明済みなのにdecision-lockがA/Bへ上書きした——Codex MD#3反例の再現')
-        self.assertEqual(decision.get('reason'), 'plan_c_conditions_proven')
+        self.assertEqual(decision.get('reason'), 'predicted_same_horizon_position_improvement')
         self.assertIsNotNone(decision.get('decision_id'))
 
     def test_a_still_decided_normally_when_c_not_proven(self):
         """回帰：Cが証明されていない通常のA/Bケースでは、従来どおり
         decide_at_plan_a()の毎frame再評価を通る（Cバイパスを誤って常時適用しない）。"""
         state, strategy_options = seeded_state_and_options()
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=7, current_fuel_l=5.0,
             avg_fuel_per_lap_l=3.5,
             pit_now_forecast={'available': True, 'snapshot_id': 'live:1:500',
@@ -327,7 +353,7 @@ class DecisionLockDoesNotDiscardPlanC(unittest.TestCase):
                                     'worst': {'position': 10}},
             relative_pace_advantage_s=0.8, options_mod=so)
         self.assertEqual(decision.get('selected_plan'), 'B')
-        self.assertEqual(decision.get('reason'), 'plan_b_undercut_conditions_proven')
+        self.assertEqual(decision.get('reason'), 'predicted_same_horizon_position_improvement')
 
     def test_c_not_bypassed_when_plan_c_not_actually_available(self):
         """回帰：selected_plan=='C'であっても、plan_c自体がavailable=Falseなら
@@ -336,7 +362,7 @@ class DecisionLockDoesNotDiscardPlanC(unittest.TestCase):
         state, strategy_options = seeded_state_and_options()
         tampered = {**strategy_options, 'selected_plan': 'C',
                     'plan_c': {**strategy_options['plan_c'], 'available': False}}
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             tampered, current_lap=7, current_fuel_l=5.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast=None, pit_next_lap_forecast=None,
             relative_pace_advantage_s=None, options_mod=so)
@@ -382,7 +408,7 @@ class PlanCFreshnessReverification(unittest.TestCase):
         # frame N+1：ライバルはピットしていない・ギャップも縮まった（クリーンエアではない）
         collapsed_battle_context = {'ahead_car_idx': 0, 'gap_ahead_s': 0.5}
         collapsed_pitroad = [0]  # car idx 0 is NOT on pit road -> rival_pitted_first=False
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=4, current_fuel_l=17.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast=None, pit_next_lap_forecast=None,
             relative_pace_advantage_s=None, options_mod=so,
@@ -405,10 +431,10 @@ class PlanCFreshnessReverification(unittest.TestCase):
         holding_battle_context = {'ahead_car_idx': 0, 'gap_ahead_s': 3.0}
         holding_pitroad = [1]
         holding_forecast = {'available': True, 'likely': {'position': 5}, 'worst': {'position': 8}}
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=4, current_fuel_l=17.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast=holding_forecast, pit_next_lap_forecast=holding_forecast,
-            relative_pace_advantage_s=None, options_mod=so,
+            relative_pace_advantage_s=0.8, options_mod=so,
             battle_context=holding_battle_context, car_on_pitroad_all=holding_pitroad,
             fuel_save_recent_l_per_lap=3.25)
         self.assertEqual(decision.get('selected_plan'), 'C')
@@ -432,7 +458,7 @@ class ProposalRequiresDriverAgreementBeforePromotion(unittest.TestCase):
             verdict=verdict, strategy_options=strategy_options,
             active_decision_plan=None,
             strategy_options_decision_sent=False, strategy_options_box_call_sent=False)
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=7, current_fuel_l=5.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast={'available': True, 'likely': {'position': 6}, 'worst': {'position': 9}},
             pit_next_lap_forecast={'available': True, 'likely': {'position': 8}, 'worst': {'position': 10}},
@@ -445,7 +471,7 @@ class ProposalRequiresDriverAgreementBeforePromotion(unittest.TestCase):
     def test_a_commits_immediately_no_agreement_needed(self):
         """A（変更を伴わない既定Plan）はDriver合意往復を要さず即座に確定する。"""
         state, strategy_options = seeded_state_and_options()
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=3, current_fuel_l=18.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast=None, pit_next_lap_forecast=None,
             relative_pace_advantage_s=None, options_mod=so)
@@ -660,7 +686,7 @@ class SignatureDriftAndDeclineMemory(unittest.TestCase):
         strategy_options, *_ = bridge.sync_desktop_strategy_options(
             verdict=verdict, strategy_options=strategy_options, active_decision_plan=None,
             strategy_options_decision_sent=False, strategy_options_box_call_sent=False)
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=7, current_fuel_l=5.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast={'available': True, 'likely': {'position': 6}, 'worst': {'position': 9}},
             pit_next_lap_forecast={'available': True, 'likely': {'position': 8}, 'worst': {'position': 10}},
@@ -688,7 +714,7 @@ class EvidenceBroadenedSignatureAndFrozenPromotion(unittest.TestCase):
         strategy_options, *_ = bridge.sync_desktop_strategy_options(
             verdict=verdict, strategy_options=strategy_options, active_decision_plan=None,
             strategy_options_decision_sent=False, strategy_options_box_call_sent=False)
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=7, current_fuel_l=5.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast={'available': True, 'likely': {'position': 6}, 'worst': {'position': 9}},
             pit_next_lap_forecast={'available': True, 'likely': {'position': 8}, 'worst': {'position': 10}},
@@ -917,7 +943,7 @@ class RaceInstanceIdPreventsCrossRaceCollision(unittest.TestCase):
         strategy_options, *_ = bridge.sync_desktop_strategy_options(
             verdict=verdict, strategy_options=strategy_options, active_decision_plan=None,
             strategy_options_decision_sent=False, strategy_options_box_call_sent=False)
-        decision = bridge.decide_plan_at_target(
+        decision = decision_with_ranked_fixture(
             strategy_options, current_lap=7, current_fuel_l=5.0, avg_fuel_per_lap_l=3.5,
             pit_now_forecast={'available': True, 'likely': {'position': 6}, 'worst': {'position': 9}},
             pit_next_lap_forecast={'available': True, 'likely': {'position': 8}, 'worst': {'position': 10}},
