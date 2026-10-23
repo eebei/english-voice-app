@@ -28550,3 +28550,15 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |証拠/次|build304-oct23/public-final-verification.json、independent-public-check.json。次Owner公開update経路でGate6/8。Windows/iRacing/実LLM意味未確認、完全同値lap計測未修復。製品有料API0、scratch2保持。無断rollbackしない|
 
 次のMDに指示書あり
+
+### 2026-10-23 Build304 実走 Gate8 FAILED／親・独立深掘り監査
+
+|項目|結果/次の確認対象|
+|---|---|
+|担当/対象|親root監査、build304_reviewが自身のGate4/5見逃しも独立再検査。公開75cb056、製品編集/Build/公開/有料API0。原本2件保全|
+|実結果|sub89577642 official・22laps/class20/overall24/inc0/best95.5426。304起動/29module読込。pit13/20、追加10.19/5.79L。lane32.6/29.1secはnet lossと区別|
+|確定重大指摘|pit順位相談→残周、pitloss→首位gap/燃料、苦情→直前GAP/切断発言の撤回。旧303対304実UMD同条件5件全同一誤答。暫定22周をLLMは理解したがtruth gateが消去。normal current-clean timedはactiveでもfinish authority未対応、snapshot13,729拒否/許可0。履歴専用成功経路と実運用に隔たり|
+|未解決/確認条件|全32turn文脈の目的/参照/Driver暫定申告と事実/提案/合意/実行を分離しつつ会話をつなぐ。次の週/低confidence命令、通常timed、校正不足の損失見積、苦情/沈黙希望/debrief横取りをまとめて再現。regex句追加だけで完了としない|
+|証拠/限界|field304-oct23/field304-deep-audit.txt、turn-audit-all32.json、router303-vs304.json、independent-field-audit.json等。原音声/完全provider入出力/local記憶本体なし。結果損失の反実仮想未証明。最後音声u124中断。公開物を無断rollbackしない|
+
+次のMDに指示書あり

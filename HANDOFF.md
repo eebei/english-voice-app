@@ -1,5 +1,22 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/23 Build304 実走 Gate8 FAILED — 会話/戦略の核心を再監査（未修復）
+
+Owner実走後「全く改善なし」と指摘。原本 `eventresult-89577642.json` と `OMORAY-bridge-debug-20261023-1838.log` を `../pitwall-local-evidence/field304-oct23/` へ保全しbytes/SHA記録。実304起動・全29runtime loaded、公式sub89577642/本人315555/車Mercedes GT3/Montrealを確認。今回は公式IDありで303のfallback問題の再発として説明しない。**現在304を実用的な戦略engineer合格とは判定しない。** 公開/本番75cb056は変更せず、無断rollback/再Build/公開/有料APIなし。
+
+**公式結果：** 22周、総合24位/クラス20位（0-basedから換算）、0incident、best95.5426s。LUNAの22周/1:35.543自体は一致。実pit13周10.19L/32.6秒lane、20周5.79L/29.1秒lane。lane時間を純loss・結果全体をLUNAの因果損失と断定しない。
+
+**確定破断：** (1) 順位upのpit相談2件→laps_remaining、pit損失→leader_gap/燃料、会話苦情→落ち着いて。実質問5件を旧303/304実UMDへ同条件入力し全5同一誤答。(2) Driver暫定22周をLLMは理解したがtruth gateが数字+周として遮断し了解へ置換。Driver申告/条件付き推定のroleが現在事実と混同。(3) 普通の当日clean3時間制planはactiveでもnative unsupported_finish_authority。race snapshots22,076中13,729が同理由、BOX許可0（操作要求件数ではない）。履歴専用timed例外だけを試験して普通の経路を残した。(4) 記憶無視の苦情をgap否定として直前3.1秒撤回、終了後も切断発言を誤撤回。(5) 次の週の正規化欠落でnative次周命令へ不達。(6) 内部18周予定を明示説明/合意と区別せずdebriefで早入り理由を問う。22周全体申告を22周pitとLLMが変質させた発話もあり。
+
+**関連失敗：** アンダー/オーバーカット概念質問を現strategy照会へ誤変換、説明途中終了（raw stop_reasonなし、55token上限は原因候補）。沈黙希望後も非安全通知継続。GAP5秒後に8秒以上へ変化しているため初発捏造とは断定しないが訂正を解決しない。Driver不満をdebrief質問票が横取り、保存readbackはあっても判断改善の証拠なし。最後u124音声はrenderer error3で中断、completed扱い禁止。原音声なし、STT『この種box』は低confidence0.502で命令を推測実行せず確認が必要。
+
+**試験見逃しと次：** 親/別担当build304_review双方が、履歴seed＋保存provider応答の専用成功経路、過去/現在の数値role、局所phraseへ偏った。接続/同梱のPASSは撤回しないがLUNAの意味理解・当日実測時間制・相談継続は証明していなかった。新語regexの追加だけで終えず、全32turnの目的/参照対象と申告/推定/提案/合意/実行を維持する経路、normal timed authorityとnative次周、結果訂正を一本で修復・旧新反証する。現turnは深掘り監査のみ、製品コード未編集。
+
+証拠：`field304-deep-audit.txt`（全32件の評価）、`turn-audit-all32.json`、`conversation-all32.txt`、`race-result-comparison.json`、`actual-pit-events.json`、`router303-vs304.json`、`authority-gates.json`、`independent-field-audit.json`、独立実関数再現2JSON。rawログ時刻とISO記録は1時間差があるためsub/session/frame/lapで対応、雑なUTC換算をしない。
+
+次のMDに指示書あり
+
+
 ## 10/23 Build304 本番反映・公開・公開物照合完了（実走候補）
 
 Owner公開GOにより、検査済み候補SHA `75cb05643f03c475606897b24c980ff549924ce0` をmainへ反映。本番 `/api/version` と `verify-deploy.sh` が同SHAで合格。記憶/seed/chief関連の未認証経路は401拒否。Railway CLI OAuthは期限切れだったが、live本番version/起動時刻/経路応答で反映を確認した。
