@@ -71,7 +71,7 @@ import box_authority_delivery as box_authority_delivery_mod
 import observability_trace as observability_trace_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 303 (strategy proposal agreement, delivery lifecycle, race-scoped decision IDs)"
+BUILD_VERSION = "Build 304 (live race facts and history-backed fuel consultations)"
 PORT = 8765
 connected_clients = set()
 loop = None

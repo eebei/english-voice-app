@@ -28513,3 +28513,19 @@ WO021 親独立の最終検査結果（正式回覧/最後のfixture復元とSHA
 最初の全走exit1は隠さず前dirへ保持、旧static/抽出VM依存/指定出力dir不足を修復して全再走。旧固定115秒fixtureの4.2証明は除外済み。現在実測を測ってhistory専用minimum1へ接続、通常clean3/公式finishは維持。完全同値lap time欠落は全lap集計cursor/遅着整合が必要な別残件として未修復。実LLM意味・Windows実音声/installer・実走成功は未証明、LUNA全体完成とは呼ばない。未Build/未公開、有料provider呼出0、公開303/a69544f/Gate8 FAILED不変。複合同意は1provider call・cap100、通常race55維持。詳細と次の境界はHANDOFF先頭。生成fixture1pathのみHEADへ復元、scratch2保持・stage禁止、検査済source＋既存docs2のみlocalcommit対象。
 
 次のMDに指示書あり
+
+
+### 2026-10-23 Build304 private candidate準備・独立回覧
+
+|項目|内容|
+|---|---|
+|Owner GO/担当|10/23 16:55 Build304 GO。Claude OAuth期限切れのためOwnerが別Codex独立確認を明示承認。作業者=root、確認者=build304_review。公開/deployは別境界|
+|対象/変更|修復commit c0f957f（base a69544f）。追加はirsdk-bridge/bridge.pyのBUILD_VERSIONとdesktop/build-info.jsonを304へ同期する2pathのみ。既存scratch2は保護。製品相談ロジックの追加変更なし|
+|検査|Oct22固定source全preflight/全Renderer証拠はHANDOFF先頭。Oct23版全preflight実行中、runtime coverage32local/29renderer/3workflowとBuild304整合、PTT18/18、diffcheck合格。外部有料APIは遮断|
+|独立合否条件|確認者が現diff、実走失敗/旧新比較、source経路・負例、package/workflowを独立検査しP0/P1=0。候補生成後はCIと実installerを再確認しGate5署名。自己報告だけでBuild完成としない|
+|既知リスク/境界|完全同値LapLastLapTime連続時の既存計測欠落は未修復。SDK/音声/providerは模擬検証。Windows/実LLM意味/iRacing実走は未確認。server変更を含むため公開前Gate7は別途必要。privateビルドはpublish=false|
+|証拠|../pitwall-local-evidence/build304-oct23/。公開Desktop/Bridge/本番SHAはa69544f、Build303のまま。Claude認証失敗もraw保持|
+
+次のMDに指示書あり
+
+Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新相談各15/負例各10、runtime49/32modules/29scripts、WO00142/WO018122 PASS。外部attempt0/fixture変更0。review MDの追記以外に製品source driftなし。独立確認build304_reviewはGate4 PASS/P0/P1=0、independent-gate4.json。Windows private candidate artifact作成へ。

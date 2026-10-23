@@ -1,5 +1,15 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/23 Build304 private候補：source合格、Windows artifact作成へ
+
+Owner 10/23 16:55「Build304 GO」。修復c0f957fへBuild番号2path（Bridge/build-info）だけを304へ同期。Claude OAuth期限切れに対しOwnerが別Codex担当の独立確認を承認、build304_reviewが実Bridge×全Renderer×server相談15条件と境界/配線を再検査しGate4 PASS・P0/P1=0。
+
+304 sourceで全preflight exit0／586.84秒、normal49/AI49、新相談各15・負例各10、runtime32modules/29scripts、WO00142/WO018122等PASS。外部有料APIattempt0、fixture変更0。driftは実行log2＋作業中の共有回覧MDだけ、製品source driftなし。証拠 `../pitwall-local-evidence/build304-oct23/preflight/result.json`、`independent-gate4.json`。
+
+次はbuild/304専用branchへ対象をpushし、Windows CIをpublish=falseで実行、完成installer/asar/Bridgeを取得・実測・独立確認する。公開/本番反映GOはまだない。公開Desktop/Bridge303・本番SHA a69544fは維持。server変更も含むため公開テスト前には同SHA反映とGate7照合が必要。Windows/実LLM意味/iRacing未検証、完全同値LapLastLapTime計測欠落も未修復。scratch2はstageしない。
+
+次のMDに指示書あり
+
 ## 10/22 最終：時間制の燃料相談を全経路接続、独立確認・全preflight・全Renderer自動検証PASS（未Build／未公開）
 
 **今回の完成単位は「履歴から始まる同一本の燃料相談」。** 履歴2件から4周目/追加約23.7L/設定24Lをnative候補として提示→3周目へ訂正→通常微減中に遅延した自然な複合同意を意味判定→Bridge durable commit/ACK後に確認音声→同IDのnative BOX24L→実補給24Lと同decisionを結合→「予定どおりではなかった」というDriver訂正をcanonical normalと並記して保存→別raceで根拠/予測/実績/訂正を実provider requestへ渡し、過去を振り返る回答の音声completedまで、親が独立再現した。旧sourceは同条件の同意に燃料の再計算だけを返しactiveなし、新sourceはactive＋ACK確認音声まで進む。件数だけを相談完成の代わりにしていない。
