@@ -1,10 +1,20 @@
 # OMORAY PITWALL 引き継ぎ
 
-## 10/24 Build305 作成・公開GO受領（検査中）
+## 10/24 Build305 公開・本番反映・全公開物照合完了（実走候補）
 
-Owner「Build & 公開 305？だね！GO!」でBuild/push/公開を明示承認。公開304/本番75cb056は現時点維持。修復7075f48を305へ製品番号同期（bridge.py/build-info.json）、branch build/305。親が作業、Owner承認済み別Codex build304_reviewが独立確認。まずpublish=false CI→Gate5実artifact検査→検査済み同一bytesをDesktop/Bridge双方へ公開→全公開URL実取得照合。Gate6/8は公開update経路でOwner確認、304の実走FAILEDを305の合格へ置換しない。
+**公開製品SHA `bada7b776d10086d23e317f4cfaca1923d5f4584`、Desktop/BridgeともBuild305。** Owner「Build & 公開305 GO」で作成・push・公開を承認。main/両rolling tag/本番 `/api/version` は同SHA。`verify-deploy.sh`もSHA一致・戦略API未認証401拒否で合格。server/auth/payment/public pageコードの変更はなく、main反映に伴う本番反映も実観測した。
 
-305sourceで全preflight再走中。server/auth/payment/public pageコード差分なし、追加有料APIなし。B/C実利益計算・通常timed BOX・22周申告訂正・苦情/沈黙等の未解決範囲は下記修復記録のまま。scratch2保持/stage禁止。証拠root ../pitwall-local-evidence/build305-oct24/。次は最終sourceSHA固定・独立Gate4→非公開CI、公開承認は取得済みなので必須検査通過後に再確認待ちを作らない。
+**何が入ったか：** 修復7075f48の質問候補8種、通常/under/overの実target周と物理復帰順位の比較回答、数字の意味を保った音声binding、較正保存データ欠損でのBridge停止修復。製品番号をBridge/build-infoの2pathで305へ同期。B/Cで実際に順位を上げる利益計算、通常timed native BOX、Driver申告の記憶/訂正、苦情/沈黙希望等は未達のまま（下記修復記録参照）。公開をPITWALL全体や実走の成功とは呼ばない。
+
+**Gate3/4：** 305番号の全preflight748.32秒exit0、normal49/AI49、新実Bridge→全29Rendererの通常6/AI2、runtime32module/29script/3workflow、WO00142/WO018122等PASS。fixture変更0/復元true、有料製品APIattempt0。実行中変更は実行log2と回覧MD2だけ、候補20pathの現在SHA一致は独立確認済み。root作業、Owner承認済み別Codex build304_review独立Gate4 PASS/P0/P1追加0。ClaudeはOAuth期限切れで未実施を維持。
+
+**Gate5実物：** Desktop CI40046550778、Bridge CI40046550903とも同SHA/success/Publish skipped。完成installer101124154 bytes、SHA256 `79109c78909989bb2f26bfb699b140576914e54a49c9b8e04e03db271415a189`。親verify-artifactと別担当が実installer/asarを検査、全35 JS/HTMLはcommit一致、全29script/32native欠落0。Desktop同梱とBridge単体のcompiled本体/32module一致、Build305/固有tag20261024-0046を確認（EXE container bytesは別生成のため異なる）。Windowsでの起動・installer実行を確認した意味ではない。
+
+**Gate9：** 検査済み原CI artifactを再buildせず公開へ昇格。両Release名305・両rolling tag同SHA。公開URLから認証なしでDesktop3/Bridge4の全7fileを実取得し、すべてGate5実物bytes/SHAと一致。最新/日付版/旧Desktop互換名も同内容。証拠root `../pitwall-local-evidence/build305-oct24/` の `candidate.json`、`preflight/`、`independent-gate4.json`、`independent-gate5.json`、`parent-*-artifact-result.json`、`public-promotion-steps.json`、`public-final-verification.json`、独立公開照合JSON。installerは同root `desktop-candidate/extracted/`、認証なし取得物は `public-downloads/`。
+
+**次はOwner Windows/iRacing実走 Gate6/8。** 公開 `desktop-latest/OMORAY-PITWALL-Setup-latest.exe` で上書きinstallし、画面/Bridgeログ305・起動/PTT/音声/overlayを確認。「通常ピットは？」「アンダーカットで順位を上げられる？」「オーバーカットは使える？」「何周目に入ると順位アップできる？」を、現在の同条件較正の有無とともに確認する。較正なしは不足理由を答え、数字を創作しない。質問で合意済みtarget/給油設定を変更しない。Gate8は305未確認、旧304の実走FAILEDを解消済みにしない。重大問題時はGate10で影響/回避/rollback候補を提示し、無断差替えしない。
+
+検査有料API0、追加LLM検索なし、実運用CPU/TTS原価未計測。scratch2保持・stageなし。公開済みsourceはbada7b7に固定し、この後の引き継ぎcommitは既存MD2のみ。
 
 次のMDに指示書あり
 

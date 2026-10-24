@@ -28609,3 +28609,16 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |未確認/費用/保護|Windows/iRacing Gate6/8は公開後、B/C実利益未実装、実運用CPU/TTS未計測。検査有料API0、scratch2保持。証拠build305-oct24/|
 
 次のMDに指示書あり
+
+### 2026-10-24 Build305 Gate3/4/5/9完了・公開実物照合
+
+|項目|最終結果・残る確認|
+|---|---|
+|担当/公開対象|root作業、build304_review独立。製品bada7b776d10086d23e317f4cfaca1923d5f4584、Desktop/Bridge305。Owner Build/公開GO済み、main/両tag/本番同SHA。server/auth/payment/public pageコード差分なし|
+|source Gate3/4|全preflight748.32sec exit0、normal49/AI49/new通常6AI2、fixture0/restoredtrue/paidattempt0。番号2path以外の製品は修復7075f48と同一、独立20pathSHA照合/重大追加指摘0。source検査中のdriftは実行log2＋既存MD2のみ|
+|private Gate5|Desktop40046550778/Bridge40046550903 success・Publishskipped・対象SHA。親と独立担当が実installer/asar/nativeを確認、35JSHTML/29script/32native一致、compiled両系統同一。installer101124154bytes/SHA79109c78909989bb2f26bfb699b140576914e54a49c9b8e04e03db271415a189|
+|公開 Gate9/本番観測|原CI実物を再buildせず昇格。全7publicURLから認証なし実取得しbytes/hash一致、Release両305/rollingtag同SHA。verify-deployで本番SHA一致と戦略API401拒否を確認。public-final-verification.jsonと独立公開再hash証拠を保存|
+|未確認/未達|Windows実機Gate6/iRacing実走Gate8は公開update経路でOwner確認待ち。旧304のGate8FAILEDは履歴として保持。B/C実利益計算・normaltimedBOX・申告記憶訂正・苦情/沈黙等は未達。実運用CPU/TTS費用未計測|
+|費用/次|検査paidAPI0、追加LLM検索0、scratch2保護。Ownerへ公開installerを案内し305表示/PTT/音声/質問→比較の実用性を確認。問題時Gate10、独断差替え禁止。完成物と全証拠はbuild305-oct24/。引き継ぎcommitは既存MD2のみで公開sourceを変えない|
+
+次のMDに指示書あり
