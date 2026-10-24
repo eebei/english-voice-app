@@ -28597,3 +28597,15 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |次/費用/保護|候補別実測pace・交通・給油service差による実利益と結果照合が次の対象。検査有料API0/追加LLM検索なし。exactstageのみ、scratch2保持。Build/push/公開へ進む際は別途release gateとOwner GO。全証拠strategy-room-oct23/|
 
 次のMDに指示書あり
+
+### 2026-10-24 Build305 source Gate4回覧（Owner Build/公開GOあり）
+
+|項目|状態・受入条件|
+|---|---|
+|担当/対象/状態|root作業、build304_review独立、修復7075f48＋番号同期2path。branch build/305、source最終SHAは直後commitで固定。Build/push/公開GO受領、現在未Build/未公開|
+|変更箇所|bridge.py BUILD_VERSION=305＋説明、desktop/build-info.json buildNum=305。修復17sourceは直前独立確認済みの比較回答版と同一（bridgeの番号行のみ変更）|
+|検査|番号identity22/純比較13/diffcheckPASS。305で全preflight中。Gate4はsourcehash/前回実走誤配送反証/欠損scope/既存gate証拠・manifest/workflow確認、P0/P1追加0を条件。元実走のtimed等既知未達を隠さない|
+|次/公開条件|親privateCI→実installer/asar/同梱と単体Bridgeを独立Gate5確認。publish=false、公開時再buildせず検査済みbytesを昇格、両Release/tag/全互換URL照合。serverコード変更なし。main反映後の本番versionも観測|
+|未確認/費用/保護|Windows/iRacing Gate6/8は公開後、B/C実利益未実装、実運用CPU/TTS未計測。検査有料API0、scratch2保持。証拠build305-oct24/|
+
+次のMDに指示書あり

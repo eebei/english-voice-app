@@ -1,5 +1,13 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/24 Build305 作成・公開GO受領（検査中）
+
+Owner「Build & 公開 305？だね！GO!」でBuild/push/公開を明示承認。公開304/本番75cb056は現時点維持。修復7075f48を305へ製品番号同期（bridge.py/build-info.json）、branch build/305。親が作業、Owner承認済み別Codex build304_reviewが独立確認。まずpublish=false CI→Gate5実artifact検査→検査済み同一bytesをDesktop/Bridge双方へ公開→全公開URL実取得照合。Gate6/8は公開update経路でOwner確認、304の実走FAILEDを305の合格へ置換しない。
+
+305sourceで全preflight再走中。server/auth/payment/public pageコード差分なし、追加有料APIなし。B/C実利益計算・通常timed BOX・22周申告訂正・苦情/沈黙等の未解決範囲は下記修復記録のまま。scratch2保持/stage禁止。証拠root ../pitwall-local-evidence/build305-oct24/。次は最終sourceSHA固定・独立Gate4→非公開CI、公開承認は取得済みなので必須検査通過後に再確認待ちを作らない。
+
+次のMDに指示書あり
+
 ## 10/24 質問候補→戦略室→LUNA：比較回答の修復・独立確認・全preflight完了（未Build／未公開）
 
 **現状態：** branch `build/304`、修復base `a3a3153`からのlocal変更。公開304/本番SHA `75cb056`と実走Gate8 FAILEDは維持。Owner 07:03続GOで再開。親rootが製品修復、repair_remainingは後半TEST ONLY、build304_reviewが製品diff/実artifactを独立確認。Claude CodeはOAuth期限切れでreview未実施（費用0）、Owner承認済みの別Codex分担で確認した。
