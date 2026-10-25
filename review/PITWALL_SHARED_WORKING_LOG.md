@@ -28639,3 +28639,34 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |費用/保護|Claude認証待ちはOwner指示で中止、review0ドル。検査製品paidAPI0。local履歴/GAPは呼出削減期待、完読分の発話時間/TTS増もあり実額未計測。scratch2元SHA保持・stage/commit除外|
 
 次のMDに指示書あり
+
+### 2026-10-25 Build306：Claude Build・公開担当の起動準備
+
+|項目|現状と担当|
+|---|---|
+|Owner承認|ClaudeにBuild & 公開GO。対象は修復e2657adを基に次番号306、必要なpush/本番反映を含む。新たな再承認待ちは作らない|
+|担当/ゲート|Claudeが番号同期・全検証・private Desktop/Bridge作成・公開操作。Codexが差分/完成artifact/公開取得物を独立照合。Gate0〜5/7と原artifact昇格は必須、実機実走は公開後|
+|準備/保護|既存release名は両305を再観測。build306-oct25/にClaude指示書と初期状態を準備。製品編集・Build・push・公開未着手、scratch2保持|
+|起動の障害|通常環境Claude未認証。CLIから既存サブスクリプション認証開始、ブラウザー本人承認待ち。ブラウザー操作権限なし。従量APIへ切替・Codexへの無断担当変更はしない|
+
+次のMDに指示書あり
+
+### 2026-10-25 Owner停止：Claude起動方法の調査を含め停止
+
+|項目|停止時の事実と次回の制約|
+|---|---|
+|Owner指示|一旦停止してメモ。5時間制限への懸念。自動再開/監視予約なし、再開GOまで調査/Build/公開を進めない|
+|Build306|OwnerのClaude担当Build/公開GOは既存、指示書のみrepo外に準備。Claude実作業/番号変更/private候補/push/公開未着手、公開305維持|
+|実試行|通常CLI認証false、通常環境PTY非bareの実最小応答もOAuth失敗exit1/費用0。既存Keychain項目はあるが観測時token空/期限0。Claudeアプリ起動だけではCLI実起動を証明しない|
+|試した別経路|--desktopはprompt未対応、引数なしPTYでもsign-in required。CUA Claude app操作2回timeout。引渡し成功なし。Chrome認証待ちCLIは停止済み、従量API切替なし|
+|繰返し防止|AGENTS.mdに恒久ルール追加。過去の成功経路→binary/config/HOME→sandbox/通常→既存認証→実応答の順で確認。既存成功方法を確かめずChromeへ誘導しない。原因/復旧法は未解決と正しく残す|
+|保護/次|修復e2657ad・全preflight-v4成功/実走305FAILEDを維持。scratch2保持、文書3file未commit。次回再開GO後に未解決のClaude起動経路から。起動指示を実作業と数えない|
+
+次のMDに指示書あり
+
+---
+
+# 2026-10-25 JST — Claude(release operator)：Build306 Gate0-3 完了・Codex Gate4/5前
+
+Owner Build＋公開GOに基づく作業。対象は修復e2657ad＋番号同期2行のみ（desktop/build-info.json 305→306、bridge.py BUILD_VERSION）。公開305(bada7b7)との差32ファイルを確認し、server.js・bridge.pyのGAP/multiclass budget・renderer/memory/speech修復が既記録の修復内容と一致、番号同期以外の追加変更なし。全preflightを新evidence `build306-oct25/preflight-v1/` でoffline-guard付き実行：exit0、841.88秒、147合格/0失敗、WO019 E2E 49/0、runtime coverage 32module/smoke32・Renderer29・workflow3、WO018 122/0、fixture変更0/復元true、外部有料API試行0。保護scratch2件未変更。Gate0-3は作業者(Claude)の確認でありGate4/5の自己承認ではない。Windows/iRacing/実音声は未確認。次：push→publish=false候補2本→Codexの完成artifact独立確認。
+

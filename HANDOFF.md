@@ -1,5 +1,32 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/25 Build306 Claude担当：Gate0-3完了・Codex独立確認前（push/private候補は本commit後）
+
+Owner停止は解除、Build/必要push/公開GOあり。**対象**＝修復e2657ad60a1eeec47ccfdd9864994c70954cbcda（fix/305-field-conversation、公開305 bada7b7からfast-forward可能）＋**番号同期のみ**（desktop/build-info.json buildNum 305→306、irsdk-bridge/bridge.py BUILD_VERSION=`Build 306 (field conversation continuity and saved-race recall)`）。機能追加なし。公開/本番は305のまま、Gate8 FAILED（実走sub89604371）を維持。
+
+**Gate0：** 変更領域=Desktop/Bridge/server(server.js)。公開305との差32ファイル（+1347/-133）を独立レビュー済み（server.jsの履歴recall判定、bridge.pyのGAP/multiclass共有予算とscope/latch、renderer/memory/speech）。server routingが変わるためmain反映後にverify-deploy.sh必須。**Gate3：** 全preflightを新evidence `../pitwall-local-evidence/build306-oct25/preflight-v1/` で実行、exit0・841.88秒、147合格/0失敗、WO019 E2E 49/0（normal/AI、全Renderer）、runtime coverage 32 Bridge module/smoke32・Renderer script29・workflow3、WO018 122/0。fixture変更0/復元true、外部有料API接続試行0（offline-guard、external-attempts空）、source drift=実行log2(bridge_log.txt/irsdk-bridge/bridge_log.txt)のみ。raw.log SHA256 `d88d02a6da2f0d1a0b2c455148eff165faae348018f6cd20db30d387f5e16406`。実行前source freezeは`source-freeze-before-preflight.json`。保護scratch2件（_wo015_debug_extract.js `39283f42…2390`、irsdk-bridge/_wo015_probe_scratch.py `d97c589a…7ebe`）は未変更・未stage。**実行後のHANDOFF/共有log追記は文書のみで、preflight対象の製品/test差分ではない。**
+
+**Source-onlyの限界：** Windows installer起動/実音声/iRacing実走は未確認。既知P2（同一Driver申告のQA/会話二重引用）、B/C順位利益計算・通常timed native BOX等の以前からの未達は維持。Claude CLIの通常環境認証・実LLM呼出なし、製品有料API attempt0。**次：** Codexへ本Gate0-3を回覧→main fast-forward push（Desktop/Bridge workflowはpush自動起動、publish=false）→private候補2本→完成artifactでCodex独立確認までSTOP。
+
+## 10/25 Owner指示で停止：Build306 Claude担当は未起動・未Build／未公開
+
+**ここで停止。Owner「一旦ここで停止してメモして！」。自動再開・監視予約なし。次回はOwnerの再開指示までBuild/公開/認証調査を進めない。** Ownerは5時間制限への懸念も表明した。
+
+Build/公開GO自体は既にあり、担当希望はClaude。対象修復はe2657ad60a1eeec47ccfdd9864994c70954cbcda、次番号306。公開/本番は305のまま。Claudeの実作業・番号変更・private Build・push・公開は一切未着手。指示書 ../pitwall-local-evidence/build306-oct25/claude-build306-task.txt は準備済み。Codexがprivate完成artifactを独立確認後、同じ原bytesを公開するGateは維持。scratch2は保持・stage禁止。
+
+**今回の起動調査と失敗を混同しない：**
+- Ownerの指摘どおり、以前はターミナル経由のClaude Code運用に成功した記録がある（共有logの10/15・10/17等）。以前はsandboxの未認証を誤診し、通常環境の既存認証で起動できた。過去の成功を今回の成功と数えない。
+- 今回は/usr/local/bin/claude（Claude Code2.1.285、実体npm配下claude.exe）、HOME=/Users/yuji.s、CLAUDE_CONFIG_DIRなし、auth環境変数なし。通常環境のauth statusもloggedIn=false。通常環境＋PTY＋非bare＋printの最小実応答確認もOAuth session expired/refresh失敗・exit1・費用0だった。アプリが開いていることをCLIの実起動成功と数えない。
+- Claudeアプリのプロセスは存在。調査時点でターミナルのClaude Code processは見つからなかった。Keychainの既存Claude Code項目は存在/読取可能だが、観測時access/refresh tokenは空、expiresAt=0。秘密値をログ・チャットへ出していない。この状態の原因や過去と同じ復旧手順は未解決。
+- CLI認証をChromeで何度もやり直すようOwnerへ案内したのは、既存成功経路の比較前に早合点した対応。Ownerはこの繰返しを明確に禁止。開始したauth login待ちはCtrl-Cで停止済み。次回勝手にChrome認証を再開しない。API従量契約への切替もしていない。
+- 公式--desktopも確認。redirected output不可、prompt引数未対応、PTYで引数なし起動してもCLI sign-in requiredと返り、指示は渡らなかった。ClaudeアプリのCUA操作は2回timeoutで成功せず。--desktopを有効な引渡し方法と称しない。
+
+**次回の始点：** AGENTS.mdへ今回の恒久ルールを追記済み。過去の成功したCLI経路と現在の違いを調べ、実応答/作業開始の証拠が取れるまで『Claude起動済み』と報告しない。Ownerへ同じChromeログイン操作を繰り返し依頼しない。起動手段は未解決なので推測で成功手順をメモしない。Ownerの停止中は追加調査しない。
+
+今回停止時の未commitはAGENTS.md/HANDOFF.md/共有作業logの文書変更だけ。製品修復e2657adと全preflight-v4成功は維持。新規のBuild306 evidenceはrepo外。起動準備や指示書作成はBuild実行ではない。
+
+次のMDに指示書あり
+
 ## 10/25 Build305実走修復：独立確認・全preflight・全Renderer完了（未Build／未公開）
 
 **現状：** 公開/本番はBuild305・bada7b7のまま、実走sub89604371のGate8 FAILEDを維持。branch fix/305-field-conversation、base4274c6dからの修復を本commitに収録。今回GOのローカル修復/検査を完了し、Build・push・公開・本番更新は行っていない。304は昨日sub89577642の実記録参照だけ。

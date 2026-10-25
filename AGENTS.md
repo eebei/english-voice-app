@@ -125,6 +125,12 @@ For changes that may affect LLM calls, prompt/token size, STT/TTS usage, generat
 
 Daily measured cost reports live outside this Git repository at `../OMORAY-PITWALL/reports/daily-cost/`. They are evidence inputs. Do not copy their full contents into the repository.
 
+## Claude Code起動時の恒久ルール（Owner 2026-10-25）
+
+- 認証エラーだけでChromeログインへ誘導しない。まず共有作業logの過去の成功手順、実行binary/config/HOME、sandboxと通常環境の違い、既存CLI認証を確認する。以前はsandbox内の未認証を誤診し、通常環境の既存契約で起動できた。
+- ブラウザー認証を開始する前に、過去の成功経路との差分と、同じ経路を試した実結果を確認する。未確認の推測で本人へ同じログイン操作を繰り返し依頼しない。認証情報はログ/チャットへ出さない。
+- Claudeの起動は実プロセスの正常応答で確認する。起動指示・認証ページ表示・指示書の準備を『Claude実行済み』と呼ばない。起動方法を解決したら具体的な再現手順と成功証拠を既存HANDOFF/共有logへ残す。
+
 ## Independent review
 
 現在のMemory→Strategy実戦版v1と、それに統合する過去天候・setup進化・Build 282回帰については、**Claude Codeを実装担当、Codexを独立確認担当**とする。担当変更は`HANDOFF.md`の現行scopeに従い、同一変更を作業者自身の報告だけで合格にしない。Codexは作業を重複実装せず、Tunnel Completion Ruleの入口→出口、fixture、trace、package、field evidenceを独立に反証する。
