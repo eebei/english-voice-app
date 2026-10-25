@@ -144,6 +144,7 @@ function makeContext(chunks, options = {}) {
     // fenceの一般化）。このテストは実canonical cacheを一切構築しないので、
     // binding()がnullを返す（＝canonical unavailable）のが正直な表現であり、
     // 「fenceがかかっていないふり」をするための偽装ではない。
+    canonicalLifecycleCache: {current: () => null},
     strategyProjection: { binding: () => null, validBinding: () => true, bindAll: () => null },
     // ★WO015：_replyBindingFor()は本文が燃料/周回の具体的数値を主張する時
     //   だけ既存strategyNumericFactBinding()を追加で呼ぶ（この関数自体は
@@ -346,7 +347,7 @@ if (ranOk) {
       //   （ハーネスの pushMsg は模造なので、それを見ても製品の契約にならない）
       const _pushSrc = (fs.readFileSync(path.join(__dirname,'desktop','renderer.html'),'utf8')
         .match(/function pushMsg\(m\)\{[\s\S]*?\n\}/) || [''])[0];
-      const _probeCtx = { messages: [], MAX_CLIENT_MESSAGES: 40, _msgSeq: 0, Object,
+      const _probeCtx = { autoPersistDebriefTurn: () => {}, messages: [], MAX_CLIENT_MESSAGES: 40, _msgSeq: 0, Object,
         currentMemoryUserId: () => 'Yuji', localStorage: { getItem: () => null }, diagnosticLog: () => {} };
       _probeCtx.globalThis = _probeCtx;
       WO017Scope.install(_probeCtx); vm.createContext(_probeCtx);

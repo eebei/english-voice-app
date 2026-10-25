@@ -81,6 +81,116 @@
     return matches.length ? matches[matches.length - 1] : null;
   }
 
+  const dayKey = value => {
+    const raw=String(value||'');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const d=new Date(raw);return Number.isFinite(d.getTime())
+      ? [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-'):null;
+  };
+  function isCurrentRecallQuestion(text){
+    return /今|いま|このレース|現在|これから|今日|次(?:の)?周|最後まで.{0,4}(?:持|も|足)|ウィンドウ|\bnow\b|\btoday\b|next lap|current|this (?:race|lap)/i.test(String(text||''));
+  }
+  function debriefFingerprint(review,captured=null){
+    const qa=Array.isArray(review?.qa)?review.qa:[];
+    let conversation=(Array.isArray(review?.conversation)?review.conversation:[]).map(x=>({role:x?.role,text:x?.text}));
+    if(captured!==null){
+      let prior;try{prior=JSON.parse(captured);}catch{return null;}
+      if(!prior||!Array.isArray(prior.qa)||!Array.isArray(prior.conversation))return null;
+      // The in-flight answer may append itself to the same saved debrief.
+      // Preserve every captured entry; ignore only new assistant suffix rows.
+      // Driver additions, edits/deletions in the prefix and QA corrections
+      // still change the fingerprint and revoke the old answer.
+      if(conversation.length>=prior.conversation.length&&conversation.slice(prior.conversation.length).every(x=>x.role==='assistant'))
+        conversation=conversation.slice(0,prior.conversation.length);
+    }
+    return JSON.stringify({qa,conversation,race_outcome:review?.race_outcome||null,
+      outcome_corrections:review?.outcome_corrections||[],driver_statement:review?.driver_statement??review?.driverStatement??null});
+  }
+  function historicalRequest(text, previous, nowMs=Date.now()) {
+    const raw=String(text||'');
+    if(/路面|路温|気温|温度|天気|weather|temperature/i.test(raw))return null;
+    const explicit=/昨日|前回|前戦|前のレース|この前|走ったレース|一緒に走った|yesterday|last race|previous race/i.test(raw);
+    const current=isCurrentRecallQuestion(raw);
+    if(explicit&&current&&/(?:昨日|前回|前のレース).{0,6}(?:じゃなく|ではなく)/.test(raw))return null;
+    const follow=/ピット|給油|燃料|何(?:回|位|週|周)|難易.{0,4}ゴール|サーキット|コース|反省|振り返|アドバイス|pit|fuel|finish|circuit|advice/i.test(raw);
+    if(!explicit&&(current||!follow||!previous||nowMs-previous.at>180000||nowMs<previous.at))return null;
+    if(!explicit&&/削除|消して|忘れて|delete|forget/i.test(raw))return null;
+    let requestedDay=explicit?null:previous.requestedDay;
+    if(/昨日|yesterday/i.test(raw)){const d=new Date(nowMs);d.setDate(d.getDate()-1);requestedDay=dayKey(d.toISOString());}
+    return {requestedDay,at:nowMs,sameConditions:/この(?:コース|車)|同じ(?:コース|車)|this (?:track|car)/i.test(raw),
+      recordId:explicit?null:previous.recordId||null,
+      deleteMemory:/(?:記憶|記録|データ|memory|record).{0,10}(?:削除|消して|忘れて|delete|forget)|(?:delete|forget).{0,12}(?:memory|record)/i.test(raw),
+      conversationOnly:/(?:前回|前のレース|前戦|last race).{0,15}(?:ピット|pit).{0,12}(?:どうだった|how (?:did|was)|how did|how was)/i.test(raw)&&!/何(?:周|週|回|位)|how many/i.test(raw),
+      pit:/ピット|給油|何回|pit|refuel/i.test(raw),fuel:/燃料|残量|fuel/i.test(raw),
+      result:/何位|難易|ゴール|結果|リザルト|finish|result/i.test(raw),
+      advice:/反省|振り返|アドバイス|デブリ|advice|debrief/i.test(raw),
+      trackOnly:/^(?:サーキット|コース)(?:は)?(?:どこ|何)[？?。]*$/i.test(raw)};
+  }
+  function personalPastRecord(record, identity, request, nowMs) {
+    if(!record||!identity||record.deleted||record.disputed||!record.raceRecordId||!isFreshRecord(record,nowMs))return false;
+    const cust=finite(identity.custId),rc=finite(record.custId??record.cust_id);
+    if(!(Number.isInteger(cust)&&cust>0&&cust===rc))return false;
+    if(record.owner_ref&&record.owner_ref!==identity.ownerRef)return false;
+    if(record.userId!=null&&String(record.userId)!==String(identity.userId??''))return false;
+    const raceId=record.race_instance_id||(record.subsessionId?'sub:'+record.subsessionId:null);
+    if(identity.currentRaceInstanceId&&raceId===identity.currentRaceInstanceId)return false;
+    const kind=norm(record.sessionType??record.session_type??record.event_type);
+    if(kind!=='race')return false;
+    if(request.requestedDay&&dayKey(record.recordedAt||record.date)!==request.requestedDay)return false;
+    if(request.recordId&&record.raceRecordId!==request.recordId)return false;
+    if(request.sameConditions&&(normTrack(record.track)!==normTrack(identity.track)||norm(record.car||record.carClass)!==norm(identity.car||identity.carClass)))return false;
+    return true;
+  }
+  function compactRaceRecord(record) {
+    const pits=Array.isArray(record.pitEvents)?record.pitEvents:[];
+    return {version:1,date:dayKey(record.recordedAt||record.date),track:String(record.track||''),
+      completed_laps:finite(record.completedLaps??record.totalLaps),finish_class_position:finite(record.finishPos),
+      finish_overall_position:finite(record.finishOverallPos),incidents:finite(record.incidents),
+      official_result_arrived:record.official_result_arrived===true,
+      pits:pits.map(p=>({entry_lap:finite(p.entry_lap??p.entry?.lap),fuel_added_l:finite(p.fuel_added_l??p.service?.fuel_added_l)})),
+      pit_count:Array.isArray(record.pitEvents)?pits.length:null,fuel_at_finish_l:finite(record.fuelAtFinish)};
+  }
+  function recallRace(history,identity,request,lang='ja',nowMs=Date.now(),debriefs=[]) {
+    if(!request)return null;
+    const records=(Array.isArray(history)?history:[]).filter(r=>personalPastRecord(r,identity,request,nowMs))
+      .sort((a,b)=>Date.parse(a.recordedAt||a.date)-Date.parse(b.recordedAt||b.date));
+    const record=records[records.length-1]||null,ja=isJP(lang);
+    if(!record)return {handled:true,intent:'historical_race_unavailable',record:null,
+      reply:ja?`${request.requestedDay||'前回'}の本人のレース記録を確認できない。現在の燃料や予定で置き換えず、保存記録の不足として扱う。`:'I cannot verify that personal race record. I will not substitute current fuel or plans.'};
+    if(request.deleteMemory)return {handled:true,intent:'historical_race_delete',record,
+      reply:ja?'選択したレース記録の削除を処理する。':'Deleting the selected race record.'};
+    const summary=compactRaceRecord(record);let reviewRef=null;const parts=[ja?`${summary.date}、${summary.track}の保存記録。`:`Saved race on ${summary.date} at ${summary.track}.`];
+    const all=!request.pit&&!request.fuel&&!request.result&&!request.advice;
+    if(!request.trackOnly){
+      if(request.pit||all){
+        const laps=summary.pits.map(p=>p.entry_lap).filter(p=>Number.isInteger(p)&&p>0);
+        parts.push(ja?(summary.pit_count===null?'ピット実績は未保存。':`ピットは${summary.pit_count}回。`)+(laps.length?`${laps.join('・')}周目。`:'')
+          :`Pit count: ${summary.pit_count??'unknown'}. Recorded entry laps: ${laps.join(', ')||'unknown'}.`);
+        if(request.pit&&request.fuel){const adds=summary.pits.map(p=>p.fuel_added_l).filter(v=>v!==null);if(adds.length)parts.push(ja?`実補給は${adds.map(v=>v.toFixed(2)).join('・')}L。`:`Measured additions: ${adds.join(', ')}L.`);}
+      }
+      if(request.result||all)parts.push(ja?(summary.finish_class_position>0?`クラスP${summary.finish_class_position}。`:'順位は未保存。')+(summary.completed_laps>0?`${summary.completed_laps}周完了。`:'')
+        :`Class finish ${summary.finish_class_position??'unknown'}, completed laps ${summary.completed_laps??'unknown'}.`);
+      if(request.fuel)parts.push(ja?(summary.fuel_at_finish_l!==null?`終了時残量${summary.fuel_at_finish_l.toFixed(2)}L。`:'終了時の残量は未保存。'):'Finish fuel: '+(summary.fuel_at_finish_l??'unknown')+'L.');
+      if(request.advice){
+        const race=record.race_instance_id||(record.subsessionId?'sub:'+record.subsessionId:null);
+        const review=(Array.isArray(debriefs)?debriefs:[]).filter(d=>!d.deleted&&!d.disputed&&race&&d.race_instance_id===race
+          &&d.owner_ref&&d.owner_ref===identity.ownerRef&&finite(d.custId)===finite(identity.custId)
+          &&(!Number.isInteger(record.sessionNum)||d.session_num===record.sessionNum)).slice(-1)[0];
+        reviewRef=review?{id:review.review_id,owner:review.owner_ref,fingerprint:debriefFingerprint(review)}
+          :{missing:true,raceInstanceId:race,owner:identity.ownerRef};
+        const notes=(review?.qa||[]).map(q=>q.answer).filter(Boolean).slice(-2);
+        const conversation=(review?.conversation||[]).filter(x=>x.role==='user').map(x=>x.text).slice(-2);
+        const userNotes=[...notes,...conversation].slice(-2).map(t=>String(t).replace(/[\r\n]+/g,' ').slice(0,150));
+        parts.push(userNotes.length?(ja?'当時のDriver申告：':'Driver reports from that race: ')+userNotes.map(t=>'「'+t+'」').join('。')+(ja?'。実測事実とは区別している。':' (not measured facts).')
+          :(ja?'振り返りの発言は保存記録で確認できない。今回の助言を昨日の反省として作らない。':'No saved debrief statements are available; I will not invent past advice.'));
+        const advice=(review?.conversation||[]).filter(x=>x.role==='assistant'&&!/[?？]/.test(x.text||'')&&/次回|優先|早め|意識|抑え|next time|avoid|keep/i.test(x.text||'')).slice(-1)[0]?.text;
+        if(advice)parts.push((ja?'当時のLUNAの助言（未検証）：':'Luna advice from that race (unverified): ')+String(advice).replace(/[\r\n]+/g,' ').slice(0,150));
+      }
+    }
+    return {handled:true,intent:'historical_race_recall',record,summary,reply:parts.join(''),
+      memoryFingerprint:JSON.stringify(summary),reviewRef,request:{...request,recordId:record.raceRecordId}};
+  }
+
   function hasWeather(record) {
     return !!record && (finite(record.trackTempC) !== null || finite(record.airTempC) !== null);
   }
@@ -529,6 +639,6 @@
     }
   }
 
-  return { normalizeTrack:normTrack,matchesIdentity, selectPrevious, answerHistoricalWeather, answerPreviousFuel, briefingFacts, briefingLine, strategyFuelEvidence, fuelPlanningEvidence, fuelPlanningEstimate, strategyLapEvidence, isFreshRecord,
+  return { isCurrentRecallQuestion, debriefFingerprint, historicalRequest, recallRace, compactRaceRecord, personalPastRecord, normalizeTrack:normTrack,matchesIdentity, selectPrevious, answerHistoricalWeather, answerPreviousFuel, briefingFacts, briefingLine, strategyFuelEvidence, fuelPlanningEvidence, fuelPlanningEstimate, strategyLapEvidence, isFreshRecord,
     setupComparison, setupComparisonLine, attachSetupDeclaration, mergeRaceRecord, persistRaceRecord };
 }));

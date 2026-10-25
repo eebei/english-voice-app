@@ -141,3 +141,67 @@ class GapCallPolicy:
         chosen = candidates[0]
         self.last_report_at[chosen['direction']] = now
         return chosen
+
+
+@dataclass
+class InformationalGapBudget:
+    """One delivery budget for nearest-gap and faster-class preparation.
+
+    Admission never spends credit. The Bridge commits it only after a socket
+    dispatch, so failed/held sends cannot silence a later real report.
+    """
+    interval_s: float = 60.0
+    scope: object = None
+    delivered_at: object = None
+
+    def ensure_scope(self, scope):
+        if scope != self.scope:
+            self.scope = scope
+            self.delivered_at = None
+
+    def allows(self, now):
+        return self.delivered_at is None or now - self.delivered_at >= self.interval_s
+
+    def delivered(self, now):
+        self.delivered_at = now
+
+
+@dataclass
+class MulticlassApproachLatch:
+    """A noisy closing sample is not a new approach encounter."""
+    scope: object = None
+    stages: Dict[object, int] = field(default_factory=dict)
+    absent_since: Dict[object, float] = field(default_factory=dict)
+    far_since: Dict[object, float] = field(default_factory=dict)
+
+    def ensure_scope(self, scope):
+        if self.scope != scope:
+            self.scope = scope
+            self.stages.clear()
+            self.absent_since.clear()
+            self.far_since.clear()
+
+    def delivered(self, class_name, stage):
+        self.stages[class_name] = max(stage, self.stages.get(class_name, 0))
+
+    def observe(self, observed_groups, now):
+        # observed_groups includes non-closing cars: a single false closing
+        # test must not rearm the preparation call.
+        for name in list(self.stages):
+            gaps = observed_groups.get(name)
+            if not gaps:
+                self.far_since.pop(name, None)
+                self.absent_since.setdefault(name, now)
+                reset = now - self.absent_since[name] >= 3.0
+            else:
+                self.absent_since.pop(name, None)
+                if min(gaps) > 8.0:
+                    self.far_since.setdefault(name, now)
+                    reset = now - self.far_since[name] >= 3.0
+                else:
+                    self.far_since.pop(name, None)
+                    reset = False
+            if reset:
+                self.stages.pop(name, None)
+                self.absent_since.pop(name, None)
+                self.far_since.pop(name, None)

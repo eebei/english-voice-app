@@ -2180,7 +2180,7 @@ def director_gate(event):
         if not race_lifecycle.director_active(_lifecycle_state) and kind not in DEBRIEF_ALLOWED_TRIGGERS:
             log("DIRECTOR drop: %s reason=debrief_state" % kind)
             return False
-        prio = PRIORITY.get(kind, DEFAULT_PRIORITY)
+        prio = 4 if _is_gap_information(event) else PRIORITY.get(kind, DEFAULT_PRIORITY)
         if (kind=='strategy_plan_proposal' and event.get('reason')==fuel_reference_mod.CONTRACT
                 and event.get('selected_plan')=='A'
                 and ((event.get('decision_plan') or {}).get('provisional_history') or {}).get('contract')==fuel_reference_mod.CONTRACT):
@@ -2371,6 +2371,44 @@ def dispatch_pending_summary(pending_summary, summary_sent, dispatch_fn):
     return pending_summary, False, result
 
 
+# Shared informational channel. Critical faster-class stage 2 and P0 spotters
+# never enter this budget. Scope is bound before canonical staging and checked
+# again at actual dispatch, including held-radio delivery.
+_gap_radio_budget = gap_call_policy_mod.InformationalGapBudget()
+_mc_approach_latch = gap_call_policy_mod.MulticlassApproachLatch()
+_mc_delivery_context = {}
+
+def _is_gap_information(event):
+    return event.get('type') == 'radio' and (event.get('trigger') == 'gap_trend'
+        or event.get('trigger') == 'multiclass' and event.get('stage') == 1)
+
+def _bind_gap_radio(event):
+    if _is_gap_information(event):
+        event.setdefault('gap_radio_scope', list(_gap_radio_budget.scope or ()))
+        event.setdefault('observed_at', time.time())
+    return event
+
+def _commit_gap_radio_delivery(event):
+    if _is_gap_information(event):_gap_radio_budget.delivered(time.time())
+    if event.get('type')=='radio' and event.get('trigger')=='multiclass':
+        _mc_approach_latch.delivered((event.get('class_name'),event.get('target_car_idx')),event.get('stage',0))
+        pending=_gate_state.get('pending')
+        if (event.get('stage')==2 and pending and pending.get('trigger')=='multiclass'
+                and pending.get('stage')==1 and pending.get('class_name')==event.get('class_name')
+                and pending.get('target_car_idx')==event.get('target_car_idx')):
+            _gate_state['pending']=None
+
+def _gap_information_fresh(event):
+    if not _is_gap_information(event):return True
+    if tuple(event.get('gap_radio_scope') or ()) != _gap_radio_budget.scope:return False
+    observed=event.get('observed_at')
+    if not isinstance(observed,(int,float)) or not 0<=time.time()-observed<=SPEAK_HOLD_MAX+.25:return False
+    if event.get('trigger')=='multiclass':
+        current=_mc_delivery_context.get((event.get('class_name'),event.get('target_car_idx')))
+        if not current or not current.get('approaching'):return False
+        if abs(current['gap']-event.get('delta',-999))>max(1.,current['gap']*.25):return False
+    return True
+
 def broadcast(event):
     """★v3 Codex P1：戻り値を 3値化。保留と破棄を区別できる契約。
 
@@ -2385,6 +2423,8 @@ def broadcast(event):
 
     戻り値は全て非空文字列なので truthy。呼び出し側は必ず定数と明示比較する。
     """
+    if _is_gap_information(event) and (not _gap_information_fresh(event) or not _gap_radio_budget.allows(time.time())):
+        return BROADCAST_DROPPED
     # ★2026-07-26 Unit E0（Codex指示）：使用者非搭乗中は本人向け自動発話を抑止（最優先ゲート）。
     if not _activity_allows_broadcast(event):
         return BROADCAST_DROPPED
@@ -2393,7 +2433,7 @@ def broadcast(event):
         return BROADCAST_DROPPED
     # ── 発話「間合い」ゲート ──
     try:
-        if (event.get('type') == 'radio' and event.get('trigger') in GATEABLE_TRIGGERS
+        if (event.get('type') == 'radio' and (event.get('trigger') in GATEABLE_TRIGGERS or _is_gap_information(event))
                 and not event.get('_admitted')
                 and _gate_active and not _gate_window_ok):
             event['_admitted'] = True
@@ -2418,6 +2458,7 @@ def broadcast(event):
         return BROADCAST_DROPPED
     msg = json.dumps(event)
     asyncio.run_coroutine_threadsafe(_broadcast_async(msg), loop)
+    _commit_gap_radio_delivery(event)
     return BROADCAST_DISPATCHED
 
 # ── 発話タイミング「間合い」ゲート（Version A）──
@@ -2540,12 +2581,13 @@ def flush_radio():
         return
     if _gate_window_ok:
         fresh, reason = _gap_candidate_is_fresh(p)
+        if fresh and not _gap_information_fresh(p):fresh,reason=False,'information_scope_or_target_changed'
         if not fresh:
             log('GAP_CANDIDATE_DISCARDED reason=%s' % reason)
             _gate_state['pending'] = None
             return
         _gate_state['pending'] = None
-        broadcast(p)                     # 通過済み扱い・戻り値は現状使わず
+        if broadcast(p)==BROADCAST_DISPATCHED:_commit_gap_radio_delivery(p)
     elif time.time() - _gate_state.get('since', 0.0) > SPEAK_HOLD_MAX:
         log("RADIO gate: dropped stale %s" % p.get('trigger'))
         _gate_state['pending'] = None
@@ -3630,7 +3672,10 @@ def poll_iracing():
     multiclass_warned = {}      # car_idx -> last warned time (5s stage)
     multiclass_2s_warned = {}   # car_idx -> last warned time (2s stage)
     multiclass_armed = {}       # car_idx -> bool（6秒より離れたら再武装。張り付き連呼防止）
-    multiclass_stage = {}       # car_idx -> 速いクラス接近の直近段階(0=未/1=5秒/2=2秒)。段階を跨いだ時だけ発火＝連呼防止
+    _gap_radio_budget.ensure_scope(None)
+    _mc_approach_latch.ensure_scope(None)
+    _mc_delivery_context.clear()
+    multiclass_stage = _mc_approach_latch.stages  # (class,target) -> delivered approach stage
     multiclass_gap_history = {} # car_idx -> (後方gap秒, wall time)。連続縮小した車だけ接近扱い
     last_mc_diag_ts = 0.0       # マルチクラス「コールゼロ」診断ログの最終出力時刻
     battle_warned = {}          # car_idx -> last warned time
@@ -3941,6 +3986,7 @@ def poll_iracing():
     _canonical_critical = frozenset(('initial_strategy_plans','strategy_plan_decision',
         'strategy_plan_proposal','fuel_strategy_warning','fuel_strategy_safe','fuel_margin_hold','fuel_warning'))
     def _publish_or_stage(event):
+        _bind_gap_radio(event)
         nonlocal _canonical_telemetry
         event_type=event.get('type')
         if event_type=='telemetry_live':
@@ -3970,7 +4016,9 @@ def poll_iracing():
             if origin:item['origin_record_ref']=origin['record_ref']
             _canonical_staged.append(item)
             return 'STAGED'
-        return broadcast(event)
+        dispatched=broadcast(event)
+        if dispatched==BROADCAST_DISPATCHED:_commit_gap_radio_delivery(event)
+        return dispatched
 
     def _recovery_continuity():
         return {'restored':_recovery_restored,'prior_history_available':_recovery_restored,'resume_old_plan_allowed':False,
@@ -4660,6 +4708,11 @@ def poll_iracing():
                     % (_this_frame_race_instance_id, cur_snum))
         # WO010: raw identity fence before any Plan/pit consumer; whole decode
         # and all cross-reference validation precede this atomic owner swap.
+        _gap_radio_scope=(_this_frame_race_instance_id,cur_snum,info.get('player_cust_id'),canonical_mod.PROCESS_EPOCH)
+        _gap_radio_budget.ensure_scope(_gap_radio_scope)
+        _mc_approach_latch.ensure_scope(_gap_radio_scope)
+        _mc_delivery_context.clear()
+        _mc_observed_targets = {}
         _fresh_recovery_scope=recovery_mod.custody_scope(info,_this_frame_race_instance_id,cur_snum,canonical_mod.PROCESS_EPOCH)
         if _fresh_recovery_scope is None:
             _recovery_status='identity_unsupported';_recovery_scope=None
@@ -5382,7 +5435,7 @@ def poll_iracing():
         _pending_radio = _gate_state.get('pending')
         _pending_is_gap = bool(
             isinstance(_pending_radio, dict)
-            and _pending_radio.get('trigger') == 'gap_trend')
+            and (_pending_radio.get('trigger') == 'gap_trend' or _is_gap_information(_pending_radio)))
         if _pending_is_gap and (
                 not onTrack or onPit or in_formation or is_qualifying_session):
             _invalidate_gap_live_context('gap_delivery_context_unavailable')
@@ -8195,6 +8248,8 @@ def poll_iracing():
                     #   行わない（"速いクラス"かどうかは自車のクラスが分かって初めて言える）。
                     if _ppct is not None and _ppct >= 0 and player_class_id != -1:
                         _mc_groups = {}     # 実接近中の車だけ。クラス単位の発話候補
+                        _mc_delivery_context.clear()
+                        _mc_observed_targets = {}
                         _mc_observed_groups = {}  # 後方に存在する全車。stage再武装判定用
                         for _mi in range(len(car_dist_pct)):
                             if _mi == player_car_idx:
@@ -8221,10 +8276,12 @@ def poll_iracing():
                                 continue                       # 前方 or 観測範囲外
                             _cn = _norm_class_name(car_class_name_map.get(_mi)) or 'faster class'
                             _mc_observed_groups.setdefault(_cn, []).append(_mcgap)
+                            _mc_observed_targets[(_cn,_mi)]=[_mcgap]
                             _mc_previous = multiclass_gap_history.get(_mi)
                             _approaching, _mc_sample, _mc_reason = evaluate_multiclass_approach(
                                 _mc_previous, _mcgap, now)
                             multiclass_gap_history[_mi] = _mc_sample
+                            _mc_delivery_context[(_cn,_mi)]={'gap':_mcgap,'approaching':_approaching}
                             if not _approaching:
                                 continue                       # 後方でも停止・減速・離脱中なら黙る
                             _closing_rate = None
@@ -8257,8 +8314,8 @@ def poll_iracing():
                                 continue                        # まだ引き金の距離に入っていない
                             _seen_classes.add(_cn)
                             _stg = 2 if _near <= MC_IMMINENT_SEC else 1
-                            if _stg > multiclass_stage.get(_cn, 0):
-                                multiclass_stage[_cn] = _stg
+                            if (_stg > multiclass_stage.get((_cn,_primary['car_idx']), 0)
+                                    and (_stg==2 or _gap_radio_budget.allows(time.time()))):
                                 _shape, _clusters = _describe_traffic(_gaps)
                                 log("MC fire class=%s nearest=%.1fs gaps=%s shape=%s clusters=%s stage=%d"
                                     % (_cn, _near, [round(g,1) for g in _gaps], _shape, _clusters, _stg))
@@ -8277,10 +8334,8 @@ def poll_iracing():
                         #   4.9↔5.1秒を揺れるだけで再発火できた。再武装は8秒超に離れた時だけにする。
                         # Build 245：接近判定が一瞬途切れても、後方8秒以内にまだ存在する限り
                         # stageを保持する。発話候補(_mc_groups)で再武装すると同じstageを連呼する。
-                        for _cn in list(multiclass_stage.keys()):
-                            _g2 = _mc_observed_groups.get(_cn)
-                            if _g2 is None or min(_g2) > MC_REARM_SEC:
-                                multiclass_stage.pop(_cn, None)     # 十分離れた/消えた＝再武装
+        # Observe exactly once per SDK frame, including genuine missing data.
+        _mc_approach_latch.observe(_mc_observed_targets,time.time())
 
         # ── クラス内・任意順位とのギャップ（項目：まーぼー要望「3rd/5thとのギャップ」2026-07-14）──
         # 今までは「直前直後の車」としか比較できず、離れた順位を聞かれると答えられなかった。

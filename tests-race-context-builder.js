@@ -736,7 +736,7 @@ function runCallApiCase() {
     // WO014 round3: callAPI()'s _replyStrategyBinding now always captures
     // strategyProjection.binding('facts') (the raceContext reply fence),
     // even on the branch where currentPlanReplyDependsOn() returns false.
-    strategyProjection: availProjection,
+    strategyProjection: availProjection,canonicalLifecycleCache:availCache,performance:{now:()=>0},
     lastQueuedSpeakItem: null, _msgSeq: 0,
     pushMsg(m){ if(m && typeof m==='object' && !m._mid){ Object.defineProperty(m,'_mid',{value:'m'+(++ctx._msgSeq),enumerable:false,writable:true,configurable:true}); } ctx.messages.push(m); return m && m._mid ? m._mid : null; },
     sel: 'LunaJP', selMode: 'race', userName: 'Yuji', messages: [],
@@ -794,7 +794,7 @@ function runCallApiCase() {
     let idx2 = 0;
     const chunks2 = ['了解、', REPLY];
     const ctx2 = Object.assign({}, ctx, {
-      strategyProjection: caProjection, buildCurrentRaceContext: () => caRealCtx,
+      strategyProjection: caProjection,canonicalLifecycleCache:caCache, buildCurrentRaceContext: () => caRealCtx,
       localStorage: { getItem: k => (k in store2 ? store2[k] : null), setItem: (k, v) => { store2[k] = String(v); } },
       messages: [], _msgSeq: 0,
       pushMsg(m){ if(m && typeof m==='object' && !m._mid){ Object.defineProperty(m,'_mid',{value:'m'+(++ctx2._msgSeq),enumerable:false,writable:true,configurable:true}); } ctx2.messages.push(m); return m && m._mid ? m._mid : null; },
@@ -852,7 +852,7 @@ function runCallApiCase() {
     const FUEL_REPLY = '現在の燃料は5L。';
     const chunks3 = [FUEL_REPLY];
     const ctx3 = Object.assign({}, ctx, {
-      strategyProjection: pfProjection, buildCurrentRaceContext: () => pfRealCtx,
+      strategyProjection: pfProjection,canonicalLifecycleCache:pfCache, buildCurrentRaceContext: () => pfRealCtx,
       localStorage: { getItem: k => (k in store3 ? store3[k] : null), setItem: (k, v) => { store3[k] = String(v); } },
       // ★独立反証補足：ctxはselMode='race'を継承していたため、FUEL_REPLYの
       // 燃料主張がhasTelemetryOwnedVehicleClaim経由のTelemetry Truth Gate
@@ -1159,5 +1159,7 @@ function runAutoBriefingCase() {
 function finish() {
   console.log(`\n[race-context-builder] 合格 ${pass} / 不合格 ${fail}`);
   console.log('※ 実Server HTTP route・実LLM意味品質・実Windows/iRacingはこのテストの対象外。');
-  process.exitCode = fail ? 1 : 0;
+  const missingCases=pass+fail!==118;
+  if(missingCases)console.error('Required 118 checks did not execute: '+(pass+fail));
+  process.exitCode = fail||missingCases||process.exitCode ? 1 : 0;
 }

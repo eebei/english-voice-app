@@ -13,7 +13,7 @@ const bridge=fs.readFileSync('irsdk-bridge/bridge.py','utf8');
 check('multiclass uses closing-motion gate', bridge.includes('evaluate_multiclass_approach('));
 check('pass jitter cannot become zero-second call', bridge.includes("'crossing_or_jitter'"));
 check('gap history resets at session boundaries', (bridge.match(/multiclass_gap_history\.clear\(\)/g)||[]).length>=3);
-check('brief closing dropout cannot rearm same stage', bridge.includes('_mc_observed_groups.get(_cn)'));
+check('brief closing dropout cannot rearm same stage', bridge.includes('_mc_approach_latch.observe(_mc_observed_targets,time.time())') && bridge.includes('multiclass_stage = _mc_approach_latch.stages'));
 check('multiclass prepare/imminent thresholds are 6s/3s',
   bridge.includes('MC_PREPARE_SEC = 6.0')
   && bridge.includes('MC_IMMINENT_SEC = 3.0')

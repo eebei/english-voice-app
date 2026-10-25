@@ -119,7 +119,7 @@ const sentBySendMsg=[];
 const input={value:'ピット入るぞ',style:{height:'x'}};
 const ctx2={criticalJournal,performance:{now:()=>0},canonicalLifecycleCache:CF.initialized(()=>0,canonicalSnapshot),console,Date,Math,globalThis:null,window:null,document:{getElementById:()=>input},
   isBusy:false,addMsg:()=>{},captureConfirmedFuelCapacity:()=>{},maybeQuietMode:()=>{},pushMsg:()=>{},
-  turns:0,sessionMsgCount:0,prepareMemoryBrain:()=>{},pendingConfirmationKinds:()=>[],
+  turns:0,sessionMsgCount:0,activeMemoryBrainTurn:null,prepareMemoryBrain:()=>{},pendingConfirmationKinds:()=>[],
   bareConfirmationAnswer:()=>null,pendingDrivingStyleAdvice:null,handleLunaSelfMemoryInput:()=>null,
   handleReflexDispute:()=>false,handleTeamPlanUtterance:()=>false,handleGapDispute:()=>false,
   handleRelativePaceQuestion:()=>false,ensureConversationBox:()=>null,ensureStrategyState:()=>null,

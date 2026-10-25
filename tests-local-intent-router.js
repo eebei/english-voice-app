@@ -159,9 +159,9 @@ const runtimeScript = renderer.indexOf('// API/TTS/STT の宛先');
 const localRoute = renderer.indexOf("diagnosticLog('LOCAL_INTENT_ROUTE'");
 const cloudRoute = renderer.indexOf("await callAPI(inputSource==='ptt'?'ptt':'typed', memoryStatus);");
 check('renderer loads the tested router before its inline runtime', routerScript >= 0 && runtimeScript > routerScript);
-// 2026-09-06 ② 構造置換で speak() の引数が増えたため窓を 350→700 へ広げた。
+// Verify the bounded local branch itself, without an arbitrary character-count window.
 // 契約（local route が callAPI より前に speak+return で終わる）は変えていない。
-check('local route returns before the cloud conversation route', localRoute >= 0 && cloudRoute > localRoute && /speak\(reply,[\s\S]{0,700}?return;/.test(renderer.slice(localRoute, cloudRoute)));
+check('local route returns before the cloud conversation route', localRoute >= 0 && cloudRoute > localRoute && /speak\(reply,[\s\S]*?\n\s*return;/.test(renderer.slice(localRoute, cloudRoute)));
 const debriefGate = renderer.indexOf('if(evidenceDebrief && evidenceDebrief.active){');
 check('8/24 GAP replay: live local facts run before an active debrief can intercept PTT',
   localRoute >= 0 && debriefGate > localRoute

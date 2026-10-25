@@ -1352,7 +1352,7 @@ function finalizeUtterance(item, outcome, finalText, reason){
     +' tts_text='+JSON.stringify(_tts)
     +' overlay_text='+JSON.stringify(_ovlText)
     +' box_text='+JSON.stringify(_boxText)
-    +' chat_text='+JSON.stringify(_chat));
+    +' chat_text='+JSON.stringify(_chat)+' reason='+String(reason||'none'));
 }
 // キューから未再生のまま取り除く時は必ずここを通す。
 function discardQueuedUtterances(items, reason){
@@ -1397,6 +1397,7 @@ function pushMsg(m){
       value:memoryTurnTag(), enumerable:false, writable:false, configurable:true });
   }
   messages.push(m);
+  autoPersistDebriefTurn(m);
   if(messages.length > MAX_CLIENT_MESSAGES) messages.splice(0, messages.length - MAX_CLIENT_MESSAGES);
   return m && m._mid ? m._mid : null;
 }
@@ -2950,7 +2951,7 @@ async function sendMsg(inputSource, entry){
     diagnosticLog('DRIVING_STYLE_CONFIRM',JSON.stringify({accepted,reason:out.reason}));
     addMsg('ai',reply);pushMsg({role:'assistant',content:reply});speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'driving_style_confirmation'});return;
   }
-  const selfMemoryReply=priorityDriverIntent?null:handleLunaSelfMemoryInput(text);
+  const selfMemoryReply=priorityDriverIntent||activeMemoryBrainTurn?.historicalRequest?null:handleLunaSelfMemoryInput(text);
   if(selfMemoryReply){
     usageCount(inputSource==='ptt'?'ptt':'typed');
     addMsg('ai',selfMemoryReply);pushMsg({role:'assistant',content:selfMemoryReply});
@@ -2990,7 +2991,7 @@ async function sendMsg(inputSource, entry){
   }
   // ★F1/F2：相対ペースの問いは相対ペースの実測で答え、GAP訂正はソースを
   //   保留にする。どちらも燃料経路へ落とさない（RBRの pit now 誤答の再発防止）。
-  if(typeof handleGapDispute==='function' && handleGapDispute(text) && !priorityDriverIntent){
+  if(!activeMemoryBrainTurn?.historicalRequest && typeof handleGapDispute==='function' && handleGapDispute(text) && !priorityDriverIntent){
     usageCount(inputSource==='ptt'?'ptt':'typed');
     return;
   }
@@ -3007,10 +3008,11 @@ async function sendMsg(inputSource, entry){
   //   訂正16/68の正答率が0%で、`measurement_disputed` は実走4本で発火0件だった。
   //   **dispute は軸判定より前に走る**（設計 §B）。localIntent より手前に置くのはそのため。
   const cmBox=(typeof ensureConversationBox==='function')?ensureConversationBox():null;
+  const historicalRecallTurn=!!activeMemoryBrainTurn?.historicalRequest;
   if(cmBox && typeof window.PitwallConversationMemoryBox!=='undefined'){
     window.PitwallConversationMemoryBox.addTurn(cmBox,{who:'driver',text,at:Date.now()});
   }
-  const disputeHit=(cmBox && window.PitwallDisputeDetector)
+  const disputeHit=(!historicalRecallTurn && cmBox && window.PitwallDisputeDetector)
     ? window.PitwallDisputeDetector.detect(text,{
         lunaTurns:window.PitwallConversationMemoryBox.turnContext(cmBox,Date.now())
           .filter(t=>t.who==='luna'),
@@ -3070,6 +3072,8 @@ async function sendMsg(inputSource, entry){
         car_model:lastTelemetry.car_model||lastCarModel||null}),
       sessionAuthority:(typeof lastSessionAuthority!=='undefined'?lastSessionAuthority:null),
       raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[]),
+      historicalRequest:activeMemoryBrainTurn?.historicalRequest||null,
+      debriefRecords:(typeof loadEvidenceRecords==='function'?loadEvidenceRecords():[]),
       fuelHistory:(typeof loadFuelPlanningHistory==='function'?loadFuelPlanningHistory():(typeof loadRaceHistory==='function'?loadRaceHistory():[])),
       currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null),
       // ★2026-09-14 Codex差戻しP1：履歴燃費の同条件照合には series・session種別・
@@ -3114,7 +3118,7 @@ async function sendMsg(inputSource, entry){
     }) : null;
   if(localIntent && localIntent.handled){
     let reply=localIntent.reply;
-    if(localIntent.source!=='local_authority'){
+    if(localIntent.source!=='local_authority'&&!(localIntent.source==='race_history'&&localIntent.bindingKind==='conversation_scope')){
       diagnosticLog('LOCAL_INTENT_REJECTED','unexpected_source='+String(localIntent.source||'missing'));
       return;
     }
@@ -3171,13 +3175,21 @@ async function sendMsg(inputSource, entry){
       sendStrategyDecisionResponse(localIntent.resolvedProposal.decisionId,
         localIntent.resolvedProposal.accepted===true);
     }
+    if(localIntent.action?.type==='delete_race_memory'){
+      const deleted=deleteRaceRecord(localIntent.action.raceRecordId);
+      reply=isJapaneseEngineer()?(deleted?'そのレースの保存記録と振り返りを削除した。':'そのレース記録の削除を確認できない。')
+        :(deleted?'I deleted that race record and its debrief.':'I could not verify deletion of that race record.');
+      localIntent.raceRecordId=null;localIntent.memoryFingerprint=null;localIntent.action=null;
+    }
     if(localIntent.bindingKind)localIntent.strategyBinding=strategyProjection.binding(localIntent.bindingKind);
+    if(localIntent.bindingKind==='conversation_scope'&&!localIntent.strategyBinding)localIntent.strategyBinding=Object.freeze({kind:'conversation_scope',deadline_ms:0});
     if(localIntent.intent==='strategy_definition')localIntent.strategyBinding=strategyProjection.binding('strategy_explanation');
     const localPriority=(localIntent.confidence==='confirmed'||(localIntent.fuelEstimate?.fuel_l!==null&&localIntent.fuelEstimate?.fuel_l<=localIntent.fuelEstimate?.rate_l_per_lap+2))
       ? SPEAK_PRIO.P2_PROCEDURE : SPEAK_PRIO.P3_INFO;
     // ★Codex差戻し：採用したraceの識別子を出口(trace/queue)まで追えるようにする。
     //   route()が渡すaction.raceRecordId（前回給油recordのrecordedAt）を必ずログへ残す。
-    const _ansRaceRecordId=(localIntent.action&&localIntent.action.raceRecordId)||null;
+    const _ansRaceRecordId=localIntent.raceRecordId||(localIntent.action&&localIntent.action.raceRecordId)||null;
+    const _ansMemoryRef=_ansRaceRecordId?{id:String(_ansRaceRecordId),fingerprint:localIntent.memoryFingerprint||null,review:localIntent.memoryReviewRef||null}:null;
     diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=${localIntent.source||'bridge_local'} confidence=${localIntent.confidence||'unknown'} race_record_id=${_ansRaceRecordId||'-'}`);
     if(localIntent.fuelEstimate)diagnosticLog('FUEL_ESTIMATE',JSON.stringify(localIntent.fuelEstimate));
     if(localIntent.action&&localIntent.action.type==='cancel_fuel_window_watch'){
@@ -3218,9 +3230,9 @@ async function sendMsg(inputSource, entry){
       dedupeKey:'local|'+localIntent.intent+'|'+reply,
       gapIdentities:(Array.isArray(localIntent.gapIdentities)&&localIntent.gapIdentities.length)
         ?localIntent.gapIdentities:null,
-      raceRecordId:_ansRaceRecordId,
+      raceRecordId:_ansRaceRecordId, memoryRecordRef:_ansMemoryRef,
       strategyBinding:localIntent.strategyBinding||null,
-      precheck:localIntent.strategyBinding?()=>strategyProjection.validBinding(localIntent.strategyBinding):null});
+      precheck:()=> (!localIntent.strategyBinding||strategyProjection.validBinding(localIntent.strategyBinding))&&raceMemorySpeechValid(_ansMemoryRef)});
     return;
   }
   if(pendingDriverPlanFollowup) pendingDriverPlanFollowup=null;
@@ -3499,7 +3511,7 @@ function telemetryTruthFallback(live, userText, isJP){
 
 function currentPlanReplyDependsOn(text,pending){
   const value=String(text);
-  const historical=/前回|過去|以前|previous|historical|last race/i.test(value);
+  const historical=/前回|過去|以前|昨日|一昨日|昨夜|前日|先週|先月|昨年|previous|historical|last race|yesterday|last night|last week/i.test(value);
   const current=/今(?:の|は|も|回|足り|入|必要)|現在|今回|このレース|current|currently|now|this race/i.test(value);
   if(historical&&!current)return false;
   const strategy=/ピット|ボックス|燃料|給油|作戦|戦略|プラン|残り.{0,4}(?:周|時間)|何周|アンダーカット|オーバーカット|plan|pit|box|fuel|strategy|laps? left|undercut|overcut/i.test(value);
@@ -3544,7 +3556,7 @@ function _hasUnqualifiedCurrentNumericMention(text,keywordRe){
   const _pieces=_segments.length?_segments:[value];
   return _pieces.some(seg=>{
     if(!keywordRe.test(seg)||!_numDigitRe.test(seg)) return false;
-    const historical=/前回|過去|以前|previous|historical|last race/i.test(seg);
+    const historical=/前回|過去|以前|昨日|一昨日|昨夜|前日|先週|先月|昨年|previous|historical|last race|yesterday|last night|last week/i.test(seg);
     const current=/今(?:の|は|も|回|足り|入|必要|[、,]|$)|現在|今回|このレース|current|currently|now|this race/i.test(seg);
     return !(historical&&!current);
   });
@@ -3656,7 +3668,7 @@ function verifiedAuxFieldsStillFresh(text,auxAtRequest,unchangedFrom){
   const _assertedFields=new Set();
   const _segments=_value.split(/[.．](?!\d)|[。！？!?\n]/).map(s=>s.trim()).filter(Boolean);
   const _pieces=_segments.length?_segments:[_value];
-  const _histRe=/前回|過去|以前|previous|historical|last race/i;
+  const _histRe=/前回|過去|以前|昨日|一昨日|昨夜|前日|先週|先月|昨年|previous|historical|last race|yesterday|last night|last week/i;
   const _currRe=/今(?:の|は|も|回|足り|入|必要|[、,]|$)|現在|今回|このレース|current|currently|now|this race/i;
   const _gapOccRe=/(前との|後ろとの)?\s*(?:ギャップ|gap)(?:\s*(ahead|behind))?/gi;
   const _posOccRe=/(クラス|総合)?\s*(?:順位|ポジション|position)/gi;
@@ -3701,7 +3713,7 @@ function verifiedAuxFieldsStillFresh(text,auxAtRequest,unchangedFrom){
 function strategyReplyBindingValid(binding,text,auxAtRequest,bindingUnchangedFrom,auxUnchangedFrom){
   const bindingOk=(bindingUnchangedFrom!==undefined && binding===bindingUnchangedFrom)
     || !binding || strategyProjection.validBinding(binding);
-  return bindingOk && verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom);
+  return bindingOk && (!binding?.memory_record_ref||raceMemorySpeechValid(binding.memory_record_ref)) && verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom);
 }
 
 async function callAPI(inputSource, memoryStatus=''){
@@ -3833,36 +3845,22 @@ async function callAPI(inputSource, memoryStatus=''){
   //   （strategy-state-projection.js round6で新設）はこの境界のみを見る。
   //   domain-dependent（Plan/fuel/pit言及あり）の時は、この新kindを使わず
   //   round5のcritical_context AND構成を一切変更しない。
+  const _replyMemoryRefAtRequest=typeof activeMemoryBrainTurn!=='undefined'&&activeMemoryBrainTurn?.memoryRef?JSON.parse(JSON.stringify(activeMemoryBrainTurn.memoryRef)):null;
   const _replyCriticalBinding=strategyProjection.binding('critical_context');
-  const _replyScopeBinding=strategyProjection.binding('scope_continuity');
-  // ★WO014 round6 REVISE（監査差戻し二回・三欠陥一括修復）：
-  //   (1) 質問だけの分類でscope_continuityへ丸ごと切替えた初版は、質問が
-  //   非依存と判定されても返信本文がcurrent Plan/pit/fuelを主張する場合
-  //   （例「現在のプランは20周でボックス。」）にその古いPlan/box情報を
-  //   discardせず漏らした（/tmp/wo014-independent-history-current-leak.js）。
-  //   (2) その場当て修正（OR型の素朴なcurrent/strategy語彙チェックを返信
-  //   本文へ適用）は、返信が過去の文脈を保った発話（例「前回のレースでは
-  //   20周でピットに入った。」——historical修飾付きでstrategy語彙'ピット'
-  //   を含むだけ）まで無差別にcriticalへ倒し、純過去のrole自体を破壊した。
-  //   さらに質問自体が未分類（例「状況教えて」、historical/current/
-  //   strategy/setupのどれにも当たらない）の時にcurrentPlanReplyDependsOn()
-  //   の既定false（lenient）へそのまま乗ったため、旧case4（Plan revision
-  //   変化で discard が必須）を破壊した（/tmp/wo014-independent-reply-
-  //   role-matrix.js）。
-  //   修復：緩和(scope_continuity)の**入口**は質問側だけの判定とし、
-  //   historical&&!current、またはsetup/chat/weather語彙の**明示一致**
-  //   だけを合格とする（_isConcretelyNonCurrentText——未分類・判定不能な
-  //   質問はこの入口で不合格＝保守的にcritical側）。入口を通った場合のみ、
-  //   配信する各文（sentence/tail/full）自身の本文を**既存の**
-  //   currentPlanReplyDependsOn()（historical&&!currentの早期falseを含む
-  //   既存ロジックそのまま）でエスカレーション判定する——historical修飾
-  //   付きの過去発話はそこでfalseに留まり緩和を維持し、current/strategy語
-  //   を実際に主張する文だけがtrueでcriticalへ戻る。質問側の入口さえ
-  //   通らない（状況教えて等）場合はこのエスカレーション判定自体を評価
-  //   せず常にcritical——旧71 case4/8/9等の期待を変更しない。
+  const _conversationSnapshot=canonicalLifecycleCache.current();
+  const _liveRaceConversation=selMode==='race'&&iracingLive&&_conversationSnapshot?.telemetry_available===true&&_conversationSnapshot?.execution?.scope_closed!==true;
+  const _legacyConversationScope=!_liveRaceConversation?strategyProjection.binding('scope_continuity'):null;
+  const _replyScopeBinding=_liveRaceConversation
+    ?(strategyProjection.binding('conversation_scope')||Object.freeze({kind:'conversation_scope',deadline_ms:0}))
+    :(_legacyConversationScope?Object.freeze({..._legacyConversationScope,deadline_ms:performance.now()+30000}):null);
+  // Build305 field repair: current vehicle/strategy assertions keep their
+  // critical/domain/numeric bindings. Ordinary conversation and dated history
+  // own their scope, with a fixed 30s speech/queue budget and continuously
+  // fresh canonical identity checks. An ambiguous request does not make every
+  // answer clause depend on the first telemetry snapshot's five-second clock.
   const _isConcretelyNonCurrentText=(text)=>{
     const value=String(text);
-    const historical=/前回|過去|以前|previous|historical|last race/i.test(value);
+    const historical=/前回|過去|以前|昨日|一昨日|昨夜|前日|先週|先月|昨年|previous|historical|last race|yesterday|last night|last week/i.test(value);
     // ★WO014 round6 REVISE（最小追加反例）：既存currentPlanReplyDependsOn()の
     //   「今」判定は直後に特定の助詞（の/は/も等）が続く形だけを見るため、
     //   「今、」のような読点区切りの自然な言い回しを素通りさせる。この新規
@@ -3904,10 +3902,10 @@ async function callAPI(inputSource, memoryStatus=''){
   //   維持／setup等）はこの分解後も個別の文に対して変わらず適用される。
   const _chunkRequiresCriticalFence=(text)=>{
     const _requiresFence=(value)=>{
-      const historical=/前回|過去|以前|previous|historical|last race/i.test(value);
+      const historical=/前回|過去|以前|昨日|一昨日|昨夜|前日|先週|先月|昨年|previous|historical|last race|yesterday|last night|last week/i.test(value);
       const current=/今(?:の|は|も|回|足り|入|必要|[、,]|$)|現在|今回|このレース|current|currently|now|this race/i.test(value);
       if(historical&&!current) return false;
-      if(current) return true;
+      // A temporal cue alone ("今の質問") is not a vehicle-state claim.
       // 未分類（時制cue無し）：既存のstrategy語彙判定に加え、役割未分類の
       // race fact語彙（順位/周回/ラップ/ギャップ等）自体も保守的にcritical。
       if(/順位|ポジション|position\b|周目|周回|ラップ(?:数)?|\blap\b|ギャップ|gap\b/i.test(value)) return true;
@@ -3929,9 +3927,10 @@ async function callAPI(inputSource, memoryStatus=''){
     const pieces=segments.length?segments:[String(text)];
     return pieces.some(_requiresFence);
   };
-  const _replyBindingFor=(text)=>{
+  const _replyContentBindingFor=(text)=>{
     if(_referenceJudgeBuffering)return strategyProjection.bindAll([_judgeProposalBindingAtRequest,_replyCriticalBinding]);
-    if(!_requestProvesNonCurrent||_chunkRequiresCriticalFence(String(text))){
+    const _textIsNonCurrent=_isConcretelyNonCurrentText(text);
+    if(_chunkRequiresCriticalFence(String(text))||(_replyDomainBinding&&!_textIsNonCurrent)){
       // ★WO015：_replyDomainBindingは**入力質問**のPlan/fuel依存性だけから
       //   静的に決まる（round3〜6）。質問が燃料/Planに依存しないと判定されても
       //   「このチャンク」自身が燃料/周回の具体的な数値を主張していれば、
@@ -3958,6 +3957,10 @@ async function callAPI(inputSource, memoryStatus=''){
       return _chunkDomainBinding?strategyProjection.bindAll([_chunkDomainBinding,_replyCriticalBinding]):_replyCriticalBinding;
     }
     return _replyScopeBinding;
+  };
+  const _replyBindingFor=(text)=>{
+    const binding=_replyContentBindingFor(text);
+    return _replyMemoryRefAtRequest?Object.freeze({...binding,memory_record_ref:_replyMemoryRefAtRequest}):binding;
   };
   const telemetry = iracingLive?'live':(bridgeConnected?'bridge':'off');
   const profile = hydrateLegacyStrategyObjective()||loadProfile()||{};
@@ -4202,8 +4205,16 @@ async function callAPI(inputSource, memoryStatus=''){
         }
         diagnosticLog('TELEMETRY_TRUTH_GATE','blocked LLM vehicle-state claim: '
           + full.replace(/\s+/g,' ').trim());
-      } else if(!truthBlocked && bubble) {
-        bubble.textContent = stripProposalJudgeTag(full.replace(/\[JA:[\s\S]*\]$/,'')).text.trim();
+      } else if(!truthBlocked) {
+        // The first received chunk may introduce a Plan dependency that the
+        // empty response could not classify before reader.read(). Revalidate
+        // the decoded content before creating any display/speech item.
+        if(!strategyReplyBindingValid(_replyBindingFor(full),full,_replyAuxAtRequest)){
+          try{const pendingCancel=reader.cancel?.();pendingCancel?.catch?.(()=>{});}catch{}
+          if(bubble)bubble.textContent='';
+          diagnosticLog('STRATEGY_PROJECTION','stale_decoded_reply_discarded');return;
+        }
+        if(bubble)bubble.textContent = stripProposalJudgeTag(full.replace(/\[JA:[\s\S]*\]$/,'')).text.trim();
       }
       // ★2026-08-30 修正2：安全コールの発生源は決定論経路ひとつだけ。
       //   LLM が「左に車」「イエロー」等を書いたら、その文だけを落とす
@@ -4827,7 +4838,8 @@ function speak(text, opts){
                 // ★Codex差戻し：previous_fuel等の過去record参照発話が、どのraceを
                 //   元に答えたかをqueue itemに保持する（gapIdentitiesと同じ「出口まで
                 //   識別子を持ち歩く」契約）。
-                raceRecordId:o.raceRecordId||null,
+                raceRecordId:o.raceRecordId||o.strategyBinding?.memory_record_ref?.id||null,
+                memoryRecordRef:o.memoryRecordRef||o.strategyBinding?.memory_record_ref||null,
                 strategyBinding:o.strategyBinding||null,
                 // ★2026-09-13：実際に耳へ届いた時だけ動かしたい下流処理（提案の記録等）の
                 //   ためのフック。finalizeUtterance の 'spoken' 確定点でのみ呼ばれる。
@@ -4932,7 +4944,7 @@ function speakReplyChunk(text, strategyBinding=null, auxAtRequest=undefined){
   //   request時点auxAtRequestで別途fail-closedする（strategyReplyBindingValid、
   //   main callAPIと同じ一本化判定）。
   const item={text, prio:SPEAK_PRIO.P2_PROCEDURE, kind:'reply_chunk', ts:Date.now(), dedupeKey:null, immediate:false, queuedAt:Date.now(), costId:chunkId,
-    strategyBinding, source:_source, textHash:_hash, utteranceId:_uid,
+    strategyBinding, memoryRecordRef:strategyBinding?.memory_record_ref||null,raceRecordId:strategyBinding?.memory_record_ref?.id||null,source:_source, textHash:_hash, utteranceId:_uid,
     precheck:()=>strategyReplyBindingValid(strategyBinding,text,auxAtRequest)};
   lastQueuedSpeakItem = item;
   if(typeof speechLatencyTrace==='function') speechLatencyTrace('queued',item);
@@ -5991,7 +6003,8 @@ function oishiRadio(d, forSpeech=false){
       const options=d.strategy_options||{}, a=options.plan_a||{}, b=options.plan_b||{};
       if(!a.available) return null;
       const timing=n=>Number(n)===0?'この周':`あと${Math.trunc(Number(n))}周走って`;
-      const baseline=`燃料タイミング。基準は${timing(a.target_in_laps)}ピット、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。`;
+      const target=Number.isInteger(a.target_lap)&&a.target_lap>0?`${a.target_lap}周目にピット`:'ピット周は未確定';
+      const baseline=`燃料タイミングの基準案。${target}、給油設定${Math.trunc(Number(a.set_fuel_l)||0)}リットル。`;
       if(!b.fuel_window_open) return baseline;
       return `${baseline}アンダーカットの窓は${timing(b.target_in_laps)}。前走車とのペース差と復帰位置が揃えば出す。`;
     }
@@ -6001,7 +6014,8 @@ function oishiRadio(d, forSpeech=false){
       const fuel=Math.trunc(Number(plan.set_fuel_l)||0);
       if(selected==='B') return `アンダーカットで決定。今周はペースキープ、次周ピット。給油設定${fuel}リットル。`;
       if(selected==='C') return `延長する。燃費目標を維持して、${Math.trunc(Number(plan.target_in_laps)||0)}周後にピット。給油設定${fuel}リットル。`;
-      return `燃料タイミングは基準。今周はペースキープ、予定周にピット。給油設定${fuel}リットル。`;
+      const target=Number.isInteger(plan.target_lap)&&plan.target_lap>0?`${plan.target_lap}周目にピット`:'ピット周は未確定';
+      return `燃料タイミングの基準案。${target}、給油設定${fuel}リットル。`;
     }
     case 'strategy_plan_box_call': {
       const sel=(d.selected_plan==='B'||d.selected_plan==='C')?d.selected_plan.toLowerCase():'a';
@@ -6426,13 +6440,14 @@ function syncCanonicalStrategyProjection(){
   }
   // A snapshot is never kept alive by an alias, a UI timer or a radio receipt.
   for(const item of [...speakQueue]){
-    if(item.strategyBinding&&!strategyProjection.validBinding(item.strategyBinding)){
-      finalizeUtterance(item,'dropped',null,'canonical_strategy_invalidated');
+    const memoryValid=raceMemorySpeechValid(item.memoryRecordRef||item.strategyBinding?.memory_record_ref);
+    if((item.strategyBinding&&!strategyProjection.validBinding(item.strategyBinding))||!memoryValid){
+      finalizeUtterance(item,'dropped',null,memoryValid?'canonical_strategy_invalidated':'memory_source_invalidated');
       speakQueue.splice(speakQueue.indexOf(item),1);
     }
   }
-  if(currentSpeakItem?.strategyBinding&&!strategyProjection.validBinding(currentSpeakItem.strategyBinding)){
-    stopCurrentAudio('canonical_strategy_invalidated');
+  if(currentSpeakItem&&((currentSpeakItem.strategyBinding&&!strategyProjection.validBinding(currentSpeakItem.strategyBinding))||!raceMemorySpeechValid(currentSpeakItem.memoryRecordRef||currentSpeakItem.strategyBinding?.memory_record_ref))){
+    stopCurrentAudio(raceMemorySpeechValid(currentSpeakItem.memoryRecordRef||currentSpeakItem.strategyBinding?.memory_record_ref)?'canonical_strategy_invalidated':'memory_source_invalidated');
   }
   const scope=state.available?JSON.stringify(state.scope_ref||state.scope||{}):null;
   for(const [id,entry] of bridgeStrategyDecisions){
@@ -6467,7 +6482,8 @@ function injectRadio(data){
   if(strategyRadio&&(!canonicalLifecycleCache.matches(data)||!ensureStrategyState().available)){
     diagnosticLog('STRATEGY_PROJECTION','radio_held missing_current_publication trigger='+data.trigger);return;
   }
-  const strategyBinding=strategyRadio?(strategyProjection.binding()||strategyProjection.binding('facts')):null;
+  const strategyBinding=strategyRadio?(['initial_strategy_plans','strategy_plan_decision'].includes(data.trigger)
+    ?strategyProjection.binding('plan_explanation'):(strategyProjection.binding()||strategyProjection.binding('facts'))):null;
 
   if(data.trigger==='strategy_plan_box_call'){ handleStrategyPlanBoxCall(data); return; }
   if(selMode!=='race') return;
@@ -6506,8 +6522,8 @@ function injectRadio(data){
   //   candidate だけ作って無言で消えることを禁止する。
   if(LAP_READOUT_KINDS.has(data.trigger)){
     const readout = lapReadoutPolicyAllows(data.trigger, data, lastTelemetry);
-    const _lapReadoutLapTag = Number.isFinite(Number(lastTelemetry&&lastTelemetry.lap))
-      ? (' lap='+Math.trunc(Number(lastTelemetry.lap))) : '';
+    const _lapReadoutLapTag = typeof lastTelemetry?.lap==='number'&&Number.isFinite(lastTelemetry.lap)
+      ? (' lap='+Math.trunc(lastTelemetry.lap)) : '';
     if(!readout.allow){
       diagnosticLog('LAP_READOUT_SUPPRESSED',
         'trigger='+data.trigger+' policy='+readout.policy
@@ -7968,6 +7984,7 @@ function recordEvidenceAnswer(text){
   if(applyEvidenceCorrection(text)) return 'correction';
   if(!isEvidenceAnswerCandidate(text)) return 'not_answer';
   evidenceDebrief.answers[evidenceDebrief.index]=text;
+  autoSaveEvidenceMemory();
   if(evidenceDebrief.index===evidenceDebrief.feedbackIndex) usageCount('feedback_answered');
   evidenceDebrief.index++;
   if(evidenceDebrief.index<evidenceDebrief.questions.length){ askEvidenceQuestion(); return 'recorded'; }
@@ -8007,7 +8024,8 @@ function loadEvidenceRecords(){
   try{
     const parsed=JSON.parse(localStorage.getItem(key)||'[]');
     if(!Array.isArray(parsed)) throw new Error('not_array');
-    return parsed;
+    const deleted=JSON.parse(localStorage.getItem('pw_session_evidence_deleted_v1')||'[]');
+    return parsed.filter(r=>r&&typeof r==='object'&&!deleted.some(t=>t&&t.review_id===r.review_id&&t.owner_ref===r.owner_ref));
   }catch(e){
     // 破損データで保存・起動のたびに失敗し続けないよう、その領域だけ自動復旧する。
     try{ localStorage.removeItem(key); }catch(_){}
@@ -8137,7 +8155,7 @@ function buildEvidenceRecord(confidence='driver_reported'){
     evidence:{finish_pos:validFinishPosition(evidenceDebrief.data.finish_pos),total_laps:evidenceDebrief.data.total_laps||0,
       best_lap:evidenceDebrief.data.best_lap||null,avg_lap:evidenceDebrief.data.avg_lap||null,
       avg_fuel_per_lap:evidenceDebrief.data.avg_fuel_per_lap??null,incidents:evidenceDebrief.data.incidents??null},
-    qa:evidenceDebrief.questions.map((question,i)=>({question,answer:String(evidenceDebrief.answers[i]||'').trim()})),
+    qa:evidenceDebrief.questions.map((question,i)=>({question,answer:String(evidenceDebrief.answers[i]||'').trim()})).filter(x=>x.answer),
     // WO018：Bridge確定のPlan結果・pit分類と、canonicalを上書きしないDriver訂正。
     race_outcome:_om?_om.storable(evidenceDebrief.outcome):null,
     outcome_corrections:_om?_om.sanitizeCorrections(evidenceDebrief.outcomeCorrections,evidenceDebrief.outcome):[],
@@ -8146,30 +8164,61 @@ function buildEvidenceRecord(confidence='driver_reported'){
 }
 function upsertEvidenceRecord(record){
   if(!record) return {saved:false,created:false};
-  if(!Array.isArray(record.qa)||!record.qa.length||record.qa.some(pair=>!String(pair&&pair.question||'').trim()||!String(pair&&pair.answer||'').trim())){
-    return {saved:false,created:false,verified:false,reason:'empty_qa'};
-  }
+  const validQA=Array.isArray(record.qa)&&record.qa.length&&record.qa.every(pair=>String(pair?.question||'').trim()&&String(pair?.answer||'').trim());
+  const validConversation=Array.isArray(record.conversation)&&record.conversation.length&&record.conversation.every(x=>['user','assistant'].includes(x.role)&&String(x.text||'').trim());
+  if(!validQA&&!validConversation)return {saved:false,created:false,verified:false,reason:'empty_qa'};
+  if(evidenceMemoryDeleted(record.review_id,record.owner_ref))return {saved:false,created:false,verified:false,reason:'deleted'};
   try{
     const records=loadEvidenceRecords();
     const index=records.findIndex(r=>r.review_id&&r.review_id===record.review_id);
     const created=index<0;
-    if(created) records.push(record);
-    else records[index]={...record,created_at:records[index].created_at||record.created_at};
+    const stored=created?record:{...records[index],...record,created_at:records[index].created_at||record.created_at,
+      conversation:record.conversation||records[index].conversation,
+      qa:record.qa?.length?record.qa:(records[index].qa||[])};
+    if(created)records.push(stored);else records[index]=stored;
     records.sort((a,b)=>Date.parse(a&&a.created_at||0)-Date.parse(b&&b.created_at||0));
     while(records.length>40) records.shift();
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
     const readBack=loadEvidenceRecords().find(r=>r&&r.review_id===record.review_id);
-    const expected=JSON.stringify({...record,created_at:created?record.created_at:(readBack&&readBack.created_at)});
+    const expected=JSON.stringify(stored);
     const actual=JSON.stringify(readBack||null);
     if(!readBack || actual!==expected) return {saved:false,created:false,verified:false,reason:'readback_mismatch'};
-    const receipt={review_id:record.review_id,verified_at:new Date().toISOString(),qa_count:record.qa.length};
+    const receipt={review_id:record.review_id,verified_at:new Date().toISOString(),qa_count:(stored.qa||[]).length};
     localStorage.setItem('pw_memory_last_receipt_v2',JSON.stringify(receipt));
     const receiptBack=JSON.parse(localStorage.getItem('pw_memory_last_receipt_v2')||'null');
-    const verified=receiptBack&&receiptBack.review_id===record.review_id&&receiptBack.qa_count===record.qa.length;
+    const verified=receiptBack&&receiptBack.review_id===record.review_id&&receiptBack.qa_count===(stored.qa||[]).length;
     if(!verified) return {saved:false,created:false,verified:false,reason:'receipt_mismatch'};
-    diagnosticLog('MEMORY_COMMIT',`review_id=${record.review_id} qa=${record.qa.length} readback=verified`);
+    enforceMemorySpeechReferences();
+    diagnosticLog('MEMORY_COMMIT',`review_id=${record.review_id} qa=${(stored.qa||[]).length} readback=verified`);
     return {saved:true,created,verified:true,receipt};
   }catch(e){ return {saved:false,created:false,verified:false,reason:String(e&&e.message||e)}; }
+}
+const EVIDENCE_DELETED_KEY='pw_session_evidence_deleted_v1';
+function evidenceMemoryDeleted(id,owner){
+  try{return JSON.parse(localStorage.getItem(EVIDENCE_DELETED_KEY)||'[]').some(x=>x.review_id===id&&x.owner_ref===owner);}
+  catch{return true;}
+}
+function autoPersistDebriefTurn(message){
+  try{
+    if(selMode!=='debrief'||!['user','assistant'].includes(message?.role)||!String(message.content||'').trim())return false;
+    const data=ownedSessionSummary(),owner=localMemoryOwnerRef(),race=currentMemoryRaceScope();
+    if(!race||race.race_instance_id!==data?.race_instance_id||race.driver_id!==data?.cust_id)return false;
+    if(!data?.race_instance_id||!Number.isInteger(data.session_num)||!owner||!Number.isInteger(data.cust_id)||data.cust_id<=0)return false;
+    const id=evidenceReviewId(data);if(evidenceMemoryDeleted(id,owner))return false;
+    const records=loadEvidenceRecords(),existing=records.find(r=>r.review_id===id&&r.owner_ref===owner);
+    const at=new Date().toISOString();
+    const record=existing||{version:2,review_id:id,created_at:at,owner_ref:owner,userId:currentMemoryUserId(),custId:data.cust_id,
+      race_instance_id:data.race_instance_id,session_num:data.session_num,driver:userName,
+      scope:{track:data.track||lastTrack,car:data.car_model||lastCarModel,session_type:data.event_type||'Race'},
+      evidence:{finish_pos:data.finish_pos,total_laps:data.total_laps},qa:[],confidence:'driver_reported'};
+    const conversation=(record.conversation||[]).slice();
+    if(conversation.some(x=>x.message_id===message._mid))return true;
+    conversation.push({role:message.role,text:String(message.content).slice(0,1000),message_id:message._mid,at});
+    while(conversation.length>20||conversation.reduce((n,x)=>n+x.text.length,0)>8000)conversation.shift();
+    const compressed={driver_reported:conversation.filter(x=>x.role==='user').slice(-3).map(x=>x.text.slice(0,160)),
+      luna_statements_unverified:conversation.filter(x=>x.role==='assistant').slice(-2).map(x=>x.text.slice(0,160))};
+    return upsertEvidenceRecord({...record,conversation,compressed,updated_at:at}).saved===true;
+  }catch(e){diagnosticLog('MEMORY_AUTO_DEBRIEF','failed='+String(e.message||e));return false;}
 }
 function autoSaveEvidenceMemory(){
   if(!evidenceDebrief) return false;
@@ -8179,7 +8228,7 @@ function autoSaveEvidenceMemory(){
   evidenceDebrief.recordId=record.review_id;
   evidenceDebrief.autoSaved=true;
   if(result.created&&sessionPurpose==='practice') usageCount('practice_review_saved');
-  saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
+  if(evidenceDebrief.index>=evidenceDebrief.questions.length)saveStrategyObjectiveFromDebrief(evidenceDebrief.answers);
   return true;
 }
 function confirmEvidenceMemory(){
@@ -8212,9 +8261,13 @@ function discardEvidenceMemory(){
   const recordId=evidenceDebrief.recordId||evidenceReviewId(evidenceDebrief.data);
   const owner=localMemoryOwnerRef();
   try{
+    const tombs=JSON.parse(localStorage.getItem(EVIDENCE_DELETED_KEY)||'[]');
+    if(!tombs.some(x=>x.review_id===recordId&&x.owner_ref===owner))tombs.push({review_id:recordId,owner_ref:owner,at:new Date().toISOString()});
+    localStorage.setItem(EVIDENCE_DELETED_KEY,JSON.stringify(tombs));
     const records=loadEvidenceRecords().filter(r=>!r.review_id||r.review_id!==recordId||(r.owner_ref&&r.owner_ref!==owner));
     localStorage.setItem('pw_session_evidence',JSON.stringify(records));
     if(loadEvidenceRecords().some(r=>r&&r.review_id===recordId)) throw new Error('delete_readback_mismatch');
+    enforceMemorySpeechReferences();
     diagnosticLog('MEMORY_DELETE',`review_id=${recordId} readback=verified`);
     addMsg('sys',c.discarded);
   }catch(e){ addMsg('sys',c.failed); return; }
@@ -8971,11 +9024,17 @@ function findCarTrackMemory(mem,track,carModel,carClass){
 function saveSessionSummary(data){
   data=sanitizeSessionEvidence(data);
     const _sameScope=!!(data.race_instance_id&&lastTelemetry&&data.race_instance_id===lastTelemetry.race_instance_id
-      &&data.session_num===lastTelemetry.session_num&&(!data.cust_id||!lastTelemetry.cust_id||data.cust_id===lastTelemetry.cust_id));
+      &&data.session_num===(lastTelemetry.session_num??canonicalLifecycleCache.current()?.session_num)&&(!data.cust_id||!lastTelemetry.cust_id||data.cust_id===lastTelemetry.cust_id));
     const _summaryTrack=data.track_display||data.track||(_sameScope?lastTrack:'')||'';
     const _summaryCar=data.car_model||(_sameScope?lastCarModel:'')||data.car_class||(_sameScope?lastCarClass:'')||'';
     const _summaryClass=data.car_class||(_sameScope?lastCarClass:'')||'';
   try{
+    const tombs=JSON.parse(localStorage.getItem('pw_fuel_deleted')||'[]');
+    if(tombs.some(t=>t&&t.race_instance_id&&t.race_instance_id===data.race_instance_id
+      &&t.sessionNum===data.session_num&&Number(t.custId)>0&&Number(t.custId)===Number(data.cust_id??data.customer_id)
+      &&(!data.owner_ref||!t.owner_ref||data.owner_ref===t.owner_ref))){
+      diagnosticLog('MEMORY_AUTO_SUMMARY','reason=deleted_session');return;
+    }
     const history=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
     // ★スライス1（2026-08-25）：Bridgeが既に持っていた identity と当日条件をここで初めて残す。
     //   これが無いと「昨日の路面温度」「前回のsetup」「何番手スタート」に答える材料が存在しない。
@@ -9027,10 +9086,14 @@ function saveSessionSummary(data){
     const _strictValid=_strictCount>0&&Number.isFinite(_strictFuel)&&_strictFuel>0;
     const _fuelAverage=_strictValid?_strictFuel:(Number.isFinite(Number(data.avg_fuel_per_lap))?Number(data.avg_fuel_per_lap):null);
     const _fuelBasis=_strictValid?'strict_clean':data.fuel_sample_basis||'legacy_unverified';
-    history.push({raceRecordId:_raceRecordId,date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:data.userId??((_sameScope||_legacy)?currentMemoryUserId():null),owner_ref:data.owner_ref??((_sameScope||_legacy)?localMemoryOwnerRef():null),race_instance_id:(typeof data.race_instance_id==='string'&&data.race_instance_id)?data.race_instance_id:null,sessionNum:Number.isInteger(data.session_num)?data.session_num:null,custId:data.cust_id??data.customer_id??null,subsessionId:data.subsession_id??null,track:_summaryTrack,car:_summaryCar,carClass:_summaryClass,bestLap:data.best_lap||'',bestLapBasis:data.best_lap_basis||'legacy_unverified',measuredBestLap:data.measured_best_lap??null,strictCleanBestLap:data.strict_clean_best_lap??null,avgLap:data.avg_lap||'',avgLapBasis:data.avg_lap_basis||'recorded_samples',strictCleanAvgLap:data.strict_clean_avg_lap??null,completedLaps:data.completed_laps??null,recordedLapCount:data.recorded_lap_count??null,totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,startOverallPos:Number.isInteger(data.start_overall_position)?data.start_overall_position:null,finishOverallPos:Number.isInteger(data.finish_overall_position)?data.finish_overall_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||(_sameScope?lastSessionType:null)||null,raceFormat:_raceFormat,configuredDurationS:_duration!=null&&Number.isFinite(Number(_duration))&&Number(_duration)>0?Number(_duration):null,totalLapsRule:_totalRule!=null&&Number.isInteger(Number(_totalRule))&&Number(_totalRule)>0?Number(_totalRule):null,fuelRule:data.fuel_rule||(_summaryAuthority&&_summaryAuthority.fuel_rule)||null,tyreRule:data.tyre_rule||(_summaryAuthority&&_summaryAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:_fuelAverage,fuelSampleBasis:_fuelBasis,fuelSampleCount:_strictValid?_strictCount:(Number(data.measured_laps_sampled)||null),iratingBefore:Number.isFinite(Number(data.irating_before))?Number(data.irating_before):null,iratingAfter:Number.isFinite(Number(data.irating_after))?Number(data.irating_after):(lastIrating||null),iratingDelta:Number.isFinite(Number(data.irating_delta))?Number(data.irating_delta):null,sof:Number.isFinite(Number(data.sof))?Number(data.sof):null,planName:data.plan_name||null,planSuccess:data.plan_success===true,pitEntryLap:_pitEntryLap,pitExitLap:_pitExitLap,fuelAtPitEntry:_fuelAtPitEntry,fuelAtFinish:_fuelAtFinish,driverStatement:data.driver_statement||null,irating:lastIrating||null,sr:lastSr||null,official_result_arrived:_official,raceOutcome:(debriefOutcomeModule()?debriefOutcomeModule().storable(debriefOutcomeModule().fromSummary(data)):null)});
-    // Retain the driver's evidence; retrieval chooses applicable records.
-    // A new race must not silently erase an older track's only fuel sample.
+    history.push({raceRecordId:_raceRecordId,date:new Date().toISOString().slice(0,10),recordedAt:new Date().toISOString(),userId:data.userId??((_sameScope||_legacy)?currentMemoryUserId():null),owner_ref:data.owner_ref??((_sameScope||_legacy)?localMemoryOwnerRef():null),race_instance_id:(typeof data.race_instance_id==='string'&&data.race_instance_id)?data.race_instance_id:null,sessionNum:Number.isInteger(data.session_num)?data.session_num:null,custId:data.cust_id??data.customer_id??null,subsessionId:data.subsession_id??null,track:_summaryTrack,car:_summaryCar,carClass:_summaryClass,bestLap:data.best_lap||'',bestLapBasis:data.best_lap_basis||'legacy_unverified',measuredBestLap:data.measured_best_lap??null,strictCleanBestLap:data.strict_clean_best_lap??null,avgLap:data.avg_lap||'',avgLapBasis:data.avg_lap_basis||'recorded_samples',strictCleanAvgLap:data.strict_clean_avg_lap??null,completedLaps:data.completed_laps??null,recordedLapCount:data.recorded_lap_count??null,totalLaps:data.total_laps||0,incidents:Number.isInteger(data.incidents)?data.incidents:null,finishPos:validFinishPosition(data.finish_pos),startPos:(Number.isInteger(data.start_class_position)&&data.start_class_position>0)?data.start_class_position:null,startOverallPos:Number.isInteger(data.start_overall_position)?data.start_overall_position:null,finishOverallPos:Number.isInteger(data.finish_overall_position)?data.finish_overall_position:null,setupFingerprint:data.setup_fingerprint||null,seriesId:Number.isInteger(data.series_id)?data.series_id:null,sessionType:data.session_type||(data.is_race===true?'Race':/^(?:Race|Practice|Qualify)$/i.test(data.event_type||'')?data.event_type:(_sameScope?lastSessionType:null))||null,raceFormat:_raceFormat,configuredDurationS:_duration!=null&&Number.isFinite(Number(_duration))&&Number(_duration)>0?Number(_duration):null,totalLapsRule:_totalRule!=null&&Number.isInteger(Number(_totalRule))&&Number(_totalRule)>0?Number(_totalRule):null,fuelRule:data.fuel_rule||(_summaryAuthority&&_summaryAuthority.fuel_rule)||null,tyreRule:data.tyre_rule||(_summaryAuthority&&_summaryAuthority.tyre_rule)||null,trackTempC:_w&&Number.isFinite(Number(_w.track_temp_c))?Number(_w.track_temp_c):null,airTempC:_w&&Number.isFinite(Number(_w.air_temp_c))?Number(_w.air_temp_c):null,humidity:_w&&Number.isFinite(Number(_w.humidity))?Number(_w.humidity):null,trackWetnessCode:_w&&Number.isInteger(_w.track_wetness_code)?_w.track_wetness_code:null,pitEvents:Array.isArray(data.pit_events)?data.pit_events:null,avgFuelPerLap:_fuelAverage,fuelSampleBasis:_fuelBasis,fuelSampleCount:_strictValid?_strictCount:(Number(data.measured_laps_sampled)||null),iratingBefore:Number.isFinite(Number(data.irating_before))?Number(data.irating_before):null,iratingAfter:Number.isFinite(Number(data.irating_after))?Number(data.irating_after):(lastIrating||null),iratingDelta:Number.isFinite(Number(data.irating_delta))?Number(data.irating_delta):null,sof:Number.isFinite(Number(data.sof))?Number(data.sof):null,planName:data.plan_name||null,planSuccess:data.plan_success===true,pitEntryLap:_pitEntryLap,pitExitLap:_pitExitLap,fuelAtPitEntry:_fuelAtPitEntry,fuelAtFinish:_fuelAtFinish,driverStatement:data.driver_statement||null,irating:lastIrating||null,sr:lastSr||null,official_result_arrived:_official,raceOutcome:(debriefOutcomeModule()?debriefOutcomeModule().storable(debriefOutcomeModule().fromSummary(data)):null)});
+    const savedRace=history[history.length-1];
+    if(savedRace){
+      if(window.PitwallSessionMemory?.compactRaceRecord)savedRace.compactSummary=window.PitwallSessionMemory.compactRaceRecord(savedRace);
+    }
+    // Facts and their compact recall copy save automatically, before adoption.
     localStorage.setItem('pw_raceHistory',JSON.stringify(history));
+    diagnosticLog('MEMORY_AUTO_SUMMARY',JSON.stringify({race_record_id:savedRace?.raceRecordId,race_instance_id:savedRace?.race_instance_id,readback:loadRaceHistory().some(r=>r.raceRecordId===savedRace?.raceRecordId)}));
   }catch{}
   // ── 1階記憶：コース×車種ごとのベスト・平均燃料を蓄積（全キャラ共有＝走行データは事実）──
   try{
@@ -9370,7 +9433,7 @@ for(const e of criticalJournal.entries('driver_plan_command'))driverPlanCommandO
 const fuelReferenceOutbox=new Map();
 for(const e of criticalJournal.entries('fuel_reference_request'))fuelReferenceOutbox.set(e.key,{envelope:e.payload,attempts:0,nextSendAt:0});
 const canonicalLifecycleCache=globalThis.PitwallCanonicalLifecycleCache.create({now:()=>performance.now()});
-const strategyProjection=globalThis.PitwallStrategyStateProjection.create({canonical:canonicalLifecycleCache,now:()=>performance.now(),fuelEvidenceVersion:()=>fuelPlanningHistoryStamp()});
+const strategyProjection=globalThis.PitwallStrategyStateProjection.create({canonical:canonicalLifecycleCache,now:()=>performance.now(),fuelEvidenceVersion:()=>fuelPlanningHistoryStamp(),conversationOwner:()=>memoryBindingKey()});
 setInterval(syncCanonicalStrategyProjection,250);
 const boxAuthorityTransport=globalThis.PitwallBoxAuthorityTransport.create({
   canonical:canonicalLifecycleCache,journal:criticalJournal,
@@ -10622,6 +10685,7 @@ function currentMemoryIdentity(){
   const _weather=(lastTelemetry&&typeof lastTelemetry.weather==='object')?lastTelemetry.weather:{};
   return {
     userId:currentMemoryUserId(),
+    currentRaceInstanceId:lastTelemetry?.race_instance_id||null,
     // WO017：記憶の持ち主（認証本人）。不明なら記憶を使わない（memory-brainがfail closed）。
     ownerRef:localMemoryOwnerRef(),
     custId:(lastTelemetry&&(lastTelemetry.cust_id??lastTelemetry.customer_id??lastTelemetry.driver_cust_id))??null,
@@ -10645,6 +10709,7 @@ function currentMemoryIdentity(){
 }
 const MEMORY_BRAIN_EVALUATIONS_KEY='pw_memory_brain_evaluations_v1';
 let activeMemoryBrainTurn=null;
+let historicalMemoryFocus=null;
 function loadMemoryBrainEvaluations(){
   try{const rows=JSON.parse(localStorage.getItem(MEMORY_BRAIN_EVALUATIONS_KEY)||'[]');return Array.isArray(rows)?rows:[];}
   catch{return [];}
@@ -10657,6 +10722,12 @@ function prepareMemoryBrain(question){
     return null;
   }
   const identity=currentMemoryIdentity();
+  const recallScope=JSON.stringify([identity.ownerRef,identity.custId,lastTelemetry?.race_instance_id,lastSessionNum,lastTelemetry?.bridge_process_epoch]);
+  const prior=historicalMemoryFocus?.scope===recallScope?historicalMemoryFocus:null;
+  const historicalRequest=window.PitwallSessionMemory?.historicalRequest?.(question,prior,Date.now())||null;
+  const recalled=historicalRequest?window.PitwallSessionMemory?.recallRace?.(loadRaceHistory(),identity,historicalRequest,evidenceLanguage(),Date.now(),loadEvidenceRecords()):null;
+  if(historicalRequest)historicalMemoryFocus={...(recalled?.request||historicalRequest),scope:recallScope};
+  else if(window.PitwallSessionMemory?.isCurrentRecallQuestion?.(question))historicalMemoryFocus=null;
   const matches=brain.search({raceHistory:loadRaceHistory(),
     debriefRecords:(typeof loadEvidenceRecords==='function'?loadEvidenceRecords():[]),
     // WO018：判断台帳の実store（未定義helperで常に空だった）。異議・訂正中の判断で成功を断定しない。
@@ -10665,8 +10736,20 @@ function prepareMemoryBrain(question){
   // WO018：本人が削除した判断（墓標）と現在時刻（Plan結果copyの90日失効）を同じ正本から渡す。
   const owner=identity.ownerRef||null;
   const tombstones=loadDecisionTombstones().filter(t=>t&&owner&&String(t.owner_ref||'')===owner);
-  const result=brain.derive(matches,{nowMs:Date.now(),tombstones});
-  activeMemoryBrainTurn={question:String(question||''),identity,result,prompt:brain.promptBlock(result)};
+  // Personal factual recall uses the explicitly selected race/date. Legacy
+  // local race rows need a verified cust_id, not a guessed account owner.
+  const selected=historicalRequest?(recalled?.record?[{kind:'race',memory_id:recalled.record.raceRecordId,row:recalled.record},
+    ...brain.search({debriefRecords:loadEvidenceRecords(),decisionRecords:loadDecisions()},
+      {...identity,track:null,trackCandidates:[],car:recalled.record.car||recalled.record.carClass})
+      .filter(x=>x.row.race_instance_id===recalled.record.race_instance_id
+        &&(!Number.isInteger(recalled.record.sessionNum)||(x.row.session_num??x.row.sessionNum)===recalled.record.sessionNum))]:[]):matches;
+  const result=brain.derive(selected,{nowMs:Date.now(),tombstones});
+  const usedSources=selected.filter(x=>(result.memory_ids||[]).includes(x.memory_id));
+  const sourceReviews=usedSources.filter(x=>x.kind==='debrief').map(x=>({id:x.row.review_id,owner:x.row.owner_ref,
+    fingerprint:window.PitwallSessionMemory.debriefFingerprint(x.row)}));
+  const sourceDecisions=usedSources.filter(x=>x.kind==='decision').map(x=>({id:x.row.decision_id,
+    race:x.row.race_instance_id,owner:decisionModule()?.ownerRefOf(x.row),fingerprint:JSON.stringify(x.row)}));
+  activeMemoryBrainTurn={question:String(question||''),identity,result,historicalRequest:recalled?.request||historicalRequest,memoryRef:recalled?.record?{id:recalled.record.raceRecordId,fingerprint:recalled.memoryFingerprint,review:recalled.reviewRef||null,reviews:sourceReviews,decisions:sourceDecisions}:null,prompt:brain.promptBlock(result)||(historicalRequest?'指定された過去レースの保存記録は取得できない。別の日や現在の数値で置き換えるな。':'')};
   diagnosticLog('MEMORY_BRAIN',JSON.stringify({phase:'search',available:result.available,
     reason:result.reason||null,memory_ids:result.memory_ids||[],user_id:identity.userId,cust_id:identity.custId,
     track:identity.track,car:identity.car}));
@@ -10719,8 +10802,11 @@ function answerHistoricalWeatherLocally(text, lang){
 //   次回の読込でまた移行を試みられる状態を保つ。
 function loadRaceHistory(){
   try{
-    const h=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
-    if(!Array.isArray(h)) return [];
+    const raw=JSON.parse(localStorage.getItem('pw_raceHistory')||'[]');
+    if(!Array.isArray(raw))return [];
+    const deleted=JSON.parse(localStorage.getItem('pw_fuel_deleted')||'[]');
+    const h=raw.filter(r=>r&&typeof r==='object'&&!deleted.some(t=>t&&(t.raceRecordId&&t.raceRecordId===r.raceRecordId
+      ||t.race_instance_id&&t.race_instance_id===r.race_instance_id&&t.sessionNum===r.sessionNum&&t.custId>0&&Number(t.custId)===Number(r.custId??r.cust_id)&&(!r.owner_ref||!t.owner_ref||r.owner_ref===t.owner_ref))));
     const needsMigration=h.some(r=>r&&typeof r==='object'&&!r.raceRecordId);
     if(!needsMigration) return h;
     const migrated=h.map(r=>{
@@ -10755,6 +10841,46 @@ function loadRaceHistory(){
 // WO017：出所は「どの本人のどのrace中に喋ったか」と一緒に持つ。別race・別本人へ移った後の
 //   「それ違う」を、前raceで喋った記録へ向けない（＝聞き返す）。decisionはrace_instance_idも持つ。
 let lastMemoryUtterance=null;
+function decisionMemorySpeechValid(refs){
+  if(!refs?.length)return true;
+  const rows=loadDecisions(),dm=decisionModule();
+  if(!dm)return false;
+  const tombstones=loadDecisionTombstones();
+  return refs.every(ref=>{
+    const row=rows.find(r=>r&&String(r.decision_id)===String(ref.id)&&r.race_instance_id===ref.race&&dm.ownerRefOf(r)===ref.owner);
+    return !!row&&!row.deleted&&!row.disputed&&!row.invalidated&&JSON.stringify(row)===ref.fingerprint
+      &&!tombstones.some(t=>String(t.decision_id)===String(ref.id)&&t.race_instance_id===ref.race&&dm.ownerRefOf(t)===ref.owner);
+  });
+}
+function enforceMemorySpeechReferences(){
+  const ref=item=>item?.memoryRecordRef||item?.strategyBinding?.memory_record_ref||null;
+  for(const item of [...speakQueue])if(ref(item)&&!raceMemorySpeechValid(ref(item))){
+    finalizeUtterance(item,'dropped',null,'memory_source_invalidated');
+    const index=speakQueue.indexOf(item);if(index>=0)speakQueue.splice(index,1);
+  }
+  if(currentSpeakItem&&ref(currentSpeakItem)&&!raceMemorySpeechValid(ref(currentSpeakItem)))stopCurrentAudio('memory_source_invalidated');
+}
+
+function raceMemorySpeechValid(ref){
+  if(!ref)return true;
+  const record=loadRaceHistory().find(r=>r&&String(r.raceRecordId)===ref.id);
+  if(!record||record.disputed||record.deleted||record.invalidated)return false;
+  const memory=typeof window!=='undefined'?window.PitwallSessionMemory:null;
+  if(ref.fingerprint&&(!memory?.compactRaceRecord||JSON.stringify(memory.compactRaceRecord(record))!==ref.fingerprint))return false;
+  if(ref.decisions&&!(typeof decisionMemorySpeechValid==='function'&&decisionMemorySpeechValid(ref.decisions)))return false;
+  if(ref.reviews&&!Array.isArray(ref.reviews))return false;
+  const refs=[...(ref.review?[ref.review]:[]),...(ref.reviews||[])];
+  if(!refs.length)return true;
+  const reviews=loadEvidenceRecords();
+  return refs.every(rr=>{
+    if(!rr||typeof rr!=='object')return false;
+    if(rr.missing)return !reviews.some(r=>r&&String(r.race_instance_id||'')===String(rr.raceInstanceId||'')&&String(r.owner_ref||'')===String(rr.owner||''));
+    const review=reviews.find(r=>r&&String(r.review_id||'')===String(rr.id||'')&&String(r.owner_ref||'')===String(rr.owner||''));
+    return !!review&&!review.disputed&&!review.deleted&&!review.invalidated&&typeof memory?.debriefFingerprint==='function'
+      &&memory.debriefFingerprint(review,rr.fingerprint)===rr.fingerprint;
+  });
+}
+
 function noteMemoryUtterance(kind,id,raceInstanceId){
   lastMemoryUtterance={kind:String(kind),id:(id===undefined?null:id),
     raceInstanceId:raceInstanceId||null,binding:memoryBindingKey(),at:Date.now()};
@@ -10783,6 +10909,7 @@ function disputeRaceRecord(raceRecordId,lang){
   target.disputedAt=new Date().toISOString();
   try{ localStorage.setItem(RACE_DISPUTE_KEY,JSON.stringify(history)); }
   catch{ diagnosticLog('RACE_MEMORY','reason=persist_failed'); return null; }
+  enforceMemorySpeechReferences();
   diagnosticLog('RACE_MEMORY','stage=dispute date='+String(target.date)+' id='+String(target.raceRecordId));
   const ja=String(lang||'').toLowerCase().startsWith('ja');
   return {date:target.date,
@@ -10790,20 +10917,34 @@ function disputeRaceRecord(raceRecordId,lang){
                :`I have suspended the ${target.date} ${target.track||''} record. Is that the right one?`};
 }
 function deleteRaceRecord(raceRecordId){
-  const history=loadRaceHistory();
+  const history=loadRaceHistory(),identity=currentMemoryIdentity();
+  const target=history.find(r=>r&&String(r.raceRecordId)===String(raceRecordId));
+  if(!target||!identity.custId||Number(target.custId??target.cust_id)!==Number(identity.custId)
+      ||target.owner_ref&&target.owner_ref!==identity.ownerRef
+      ||target.userId!=null&&String(target.userId)!==String(identity.userId??''))return false;
   const kept=history.filter(r=>!(r&&r.raceRecordId&&String(r.raceRecordId)===String(raceRecordId)));
   if(kept.length===history.length) return false;
   try{
     const removed=history.filter(r=>r&&String(r.raceRecordId)===String(raceRecordId));
     const deleted=JSON.parse(localStorage.getItem('pw_fuel_deleted')||'[]');
     for(const r of removed)deleted.push({raceRecordId:r.raceRecordId,race_instance_id:r.race_instance_id||null,
-      sessionNum:r.sessionNum??null,track:r.track,car:r.car||r.carClass,deleted:true});
+      sessionNum:r.sessionNum??null,custId:r.custId??r.cust_id??null,owner_ref:r.owner_ref||localMemoryOwnerRef(),track:r.track,car:r.car||r.carClass,deleted:true});
     localStorage.setItem('pw_fuel_deleted',JSON.stringify(deleted));
     const samples=JSON.parse(localStorage.getItem('pw_fuel_history')||'[]');
     localStorage.setItem('pw_fuel_history',JSON.stringify(samples.filter(r=>!removed.some(x=>
       x.race_instance_id&&x.race_instance_id===r.race_instance_id&&x.sessionNum===r.sessionNum))));
     localStorage.setItem(RACE_DISPUTE_KEY,JSON.stringify(kept));
+    const owner=localMemoryOwnerRef(),reviews=loadEvidenceRecords();
+    const related=reviews.filter(r=>r.owner_ref===owner&&removed.some(x=>x.race_instance_id&&x.race_instance_id===r.race_instance_id&&x.sessionNum===r.session_num));
+    const tombs=JSON.parse(localStorage.getItem(EVIDENCE_DELETED_KEY)||'[]');
+    for(const r of related)if(!tombs.some(x=>x.review_id===r.review_id&&x.owner_ref===owner))tombs.push({review_id:r.review_id,owner_ref:owner,at:new Date().toISOString()});
+    localStorage.setItem(EVIDENCE_DELETED_KEY,JSON.stringify(tombs));
+    localStorage.setItem('pw_session_evidence',JSON.stringify(reviews.filter(r=>!related.includes(r))));
   }catch{ return false; }
+  const evaluations=loadMemoryBrainEvaluations().filter(r=>!(r.source_memory_ids||[]).includes(String(raceRecordId)));
+  localStorage.setItem(MEMORY_BRAIN_EVALUATIONS_KEY,JSON.stringify(evaluations));
+  if(activeMemoryBrainTurn?.memoryRef?.id===String(raceRecordId))activeMemoryBrainTurn=null;
+  enforceMemorySpeechReferences();
   diagnosticLog('RACE_MEMORY','stage=delete id='+String(raceRecordId));
   return true;
 }

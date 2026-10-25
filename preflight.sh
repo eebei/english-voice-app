@@ -412,6 +412,15 @@ if python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケー�
 echo "▶ 戦略室 AI race fallback：比較3案と較正欠損"
 if WO019_AI_RACE=1 STRATEGY_ROOM_COMPARISON_ONLY=1 STRATEGY_ROOM_E2E_OUTPUT="${PREFLIGHT_HISTORY_EVIDENCE_DIR:-/tmp}/strategy-room-ai.json" python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
 
+# Build305 field repair: saved race conversation and audio lifetime through the complete Renderer.
+echo "▶ 実走305修復：履歴会話・発話寿命・GAP予算"
+for check in tests-historical-race-recall.js tests-historical-chat-http.js tests-speech-conversation-continuity.js; do
+  if out=$(node "$check" 2>&1); then echo "   ✅ $check"; else echo "   ❌ $check"; echo "$out"|tail -25; fail=1; fi
+done
+for check in tests_gap_radio_budget.py tests_gap_frequency_e2e.py tests_historical_recall_e2e.py tests_speech_conversation_e2e.py; do
+  if out=$(python3 "irsdk-bridge/$check" 2>&1); then echo "   ✅ $check"; else echo "   ❌ $check"; echo "$out"|tail -25; fail=1; fi
+done
+
 echo "▶ WO019 guard cut anchor到達性（全cut anchorが現sourceで一意）"
 echo "▶ 同じ相談E2EをAI race fallback identityでも検証"
 if out=$(WO019_AI_RACE=1 python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then

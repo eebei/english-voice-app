@@ -126,6 +126,7 @@ function contextFor(entries) {
     // (strategy-state-projection.js) -- this suite's scope is conversation
     // memory/history replay, not strategy freshness (validBinding() staying
     // a blanket `true` keeps that scope intact).
+    canonicalLifecycleCache: {current: () => null},
     strategyProjection: { binding: () => null, validBinding: () => true,
       bindAll: (parts) => { const list = (Array.isArray(parts) ? parts : []).filter(Boolean);
         return list.length === 0 ? null : list.length === 1 ? list[0] : { kind: 'and', parts: list }; } },

@@ -1118,13 +1118,21 @@ function buildAccountChangeReply(lang) {
     : 'I cannot change subscription status here. I can point you to the cancellation process.';
 }
 
+function isHistoricalRaceRecall(text, previous='') {
+  const raw=String(text||''),past=/昨日|前回|前戦|前のレース|この前|走ったレース|yesterday|last race|previous race/i;
+  const current=/今|いま|このレース|現在|今日|これから|次(?:の)?周|\bnow\b|\btoday\b|current|next lap|this (?:race|lap)/i;
+  if(past.test(raw))return !(/(?:昨日|前回|前のレース).{0,6}(?:じゃなく|ではなく)/.test(raw)&&current.test(raw));
+  return !current.test(raw)&&past.test(String(previous))&&/ピット|給油|燃料|何(?:回|位|周|週)|反省|アドバイス|pit|fuel|finish/i.test(raw);
+}
+
 function isSessionFormatQuestion(text) {
+  if(isHistoricalRaceRecall(text))return false;
   return /(?:レース.{0,10})?(?:フォーマット|フォーマー|形式)|何分\s*(?:制|製)(?:の)?(?:レース)?|session format|race format/i.test(String(text || ''));
 }
 
 function isRaceRuleQuestion(text) {
   const raw = String(text || '');
-  if (isSessionFormatQuestion(raw)) return false;
+  if (isHistoricalRaceRecall(raw) || isSessionFormatQuestion(raw)) return false;
   return /(?:レース|race).{0,12}(?:何分|時間|何周|laps?)|(?:何分|何周|laps?).{0,12}(?:レース|race)|残り.{0,8}(?:何周|\d+\s*周)|(?:何周|laps?).{0,8}(?:残り|left|remaining)/i.test(raw);
 }
 
@@ -1257,14 +1265,15 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const _lastUser = [..._msgs].reverse().find(m => m && m.role === 'user');
       const _lastText = _lastUser && typeof _lastUser.content === 'string'
         ? _lastUser.content : '';
-      const _historicalPitReview=/前回|前のレース|前戦|previous race|last race/i.test(_lastText)
-        &&/ピット|給油|pit|refuel/i.test(_lastText);
+      const _recentUserText = _msgs.slice(0, -1).reverse()
+        .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
+      const _historicalPitReview=isHistoricalRaceRecall(_lastText,_recentUserText);
       _strategyQ = _lastText && !_historicalPitReview
         ? strategyGuard.classifyStrategyQuestion(_lastUser.content, {
           activePitObjective: req.body.strategyObjective?.kind === 'pit_total_race_outcome'
             && req.body.strategyObjective?.status === 'active',
         }) : null;
-      _directPitCommand = _lastText
+      _directPitCommand = _lastText && !_historicalPitReview
         ? strategyGuard.classifyDirectRaceCommand(_lastUser.content) : null;
       const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
       if (isAccountChangeRequest(_lastText)) {
@@ -1278,13 +1287,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           return sendGuardReply(req, res, _directReply, 100, 'deterministic', _directPitCommand.topic);
         }
       }
-      if (mode === 'race' && !_pendingJudgeTurn && isRaceRuleQuestion(_lastText)) {
+      if (mode === 'race' && !_pendingJudgeTurn && !_historicalPitReview && isRaceRuleQuestion(_lastText)) {
         console.log('[INTENT_ROUTE] intent=race_distance confidence=1 handler=fired');
         return sendGuardReply(req, res, buildRacePlanReply(_canonicalLiveData, _lang), 110,
           'deterministic', engineerCard.TOPIC.RACE_DISTANCE);
       }
-      const _recentUserText = _msgs.slice(0, -1).reverse()
-        .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
       const _engineerLive = {
         ..._canonicalLiveData,
         session_type: req.body.sessionType || _canonicalLiveData.session_type,
@@ -1293,7 +1300,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       //   セットアップ相談は本来 Practice で起きる。race mode でしかカードを引かないと、
       //   相談が決定論ハンドラに届かず温度読み上げで終わる。
       //   影響範囲を広げないため、race 以外で採用するのは setup 相談だけに限定する。
-      const _cardRoute = engineerCard.route(_lastText, _engineerLive, _lang, {
+      const _cardRoute = _historicalPitReview ? null : engineerCard.route(_lastText, _engineerLive, _lang, {
         race: mode === 'race', recentText: _recentUserText,
       });
       // Internal pace probes are not driver questions. Routing the literal

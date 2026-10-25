@@ -1,5 +1,30 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/25 Build305実走修復：独立確認・全preflight・全Renderer完了（未Build／未公開）
+
+**現状：** 公開/本番はBuild305・bada7b7のまま、実走sub89604371のGate8 FAILEDを維持。branch fix/305-field-conversation、base4274c6dからの修復を本commitに収録。今回GOのローカル修復/検査を完了し、Build・push・公開・本番更新は行っていない。304は昨日sub89577642の実記録参照だけ。
+
+**今回できるようにした相談：**
+- 普通の会話と保存レースの説明を、最初のsnapshotの5秒失効から分離。同race/本人/epoch、現cache、最大30秒を守り、現在数値の5秒制約・危険通知の割込・session切替での失効は維持。初期Plan Aは実target周と給油設定を発話。返答待ち中にPlanが変わる場合は、本文受信直後にも確認し表示・音声候補・履歴へ古いPlanを進めない。
+- 昨日のレース→『何周目にピット？』『何回で何位？』を同じ保存記録へ結び、現在燃料への誤配送を修復。結果とdebriefの回答/会話を採用ボタンなしで自動保存。翌日起動後も本人・race/session・日付を照合し、Driver申告と実測を区別して取り出す。race削除の墓標、reviewだけの訂正/削除により待機/再生中/LLM応答の古い内容も失効。known sessionへの不明session混入、JST日付、現在話題への復帰、欠損日の別記録混入、owner上書きも閉じた。
+- 通常GAPとMC準備通知に共通60秒予算、実socket送信時だけ消費。同じ車の接近の再通知を抑え、緊急MC stage2/P0は維持。同入力fixtureの実socket→Renderer比較は準備5回→1回、urgent1回とspotter完了。実走41件を1件へ減らした証拠ではない。
+
+**最終検査：** field305-oct24/preflight-final-oct25-v4/ が820.05秒・exit0。normal49/AI49、全29Renderer/Bridge32module/3workflow、発話20場面の全個別、履歴27check、GAP6check、履歴pure38（日時指定なし91日拒否/89日採用）、WO018 after58＋guard cut計122/0、既存回帰すべてPASS。fixture変更0/復元true、外部有料API接続試行0、検査中のsource driftはruntime log2だけ。固定32pathとscratch2のSHAは親＋独立担当一致。
+
+実走304由来の13/20周・pit2回・P20/22周の連続回答、実Bridge終了→summary/部分debrief自動保存→翌日起動→Driver申告取得、削除後の古cache復帰防止まで実経路で検証。公開305との同条件比較ではu8/u10の待機失効を再現、新版では保存応答6件を完了。実走の全切断原因を同定した意味ではなく、原音声はない。SDK/provider/TTS・DOM/audio I/Oは模擬、実LLMの意味品質や実音声の証明に使わない。
+
+**独立確認：** root実装memory/server、repair_remaining実装speech、build304_review実装GAP。memory/speechは別担当、GAPは親が独立確認。最終追加P0/P1=0。証拠は同field305-oct24/のindependent-final-verification-oct25-v4.json、independent-memory-speech-final-review-oct25.json、parent-independent-gap-review-oct25.json、parent-final-verification-v4.json、final-source-freeze-oct25-v4.json。
+
+**途中失敗も保全：** v1は既存test依存不足/旧文字列assertion、G01の受信時失効漏れ、test通信cancel計数で不合格。v2は前半の既知失敗を260.94秒で停止しfixture復元。v3は820.09秒でC44の検査入口衝突だけ不合格。製品を変えず旧general outcome expiryと新90日recallを分離、元のexpiry assertと独立負例を維持してv4で全完走。通信I/O修復も実HTTP status/body/chunk/cancelを保持することを独立反証済み。
+
+**残件/次：** P2として同じDriver申告をQAとconversationから二度引用する箇所が残る。Windows/iRacing/実音声・実用性、実機の旧保存payloadの復元は未確認。B/C順位利益計算・通常timed native BOX等の以前からの未達を今回完了としない。新Build/公開へ進む場合はOwnerの明示GOを受け、release gateで候補を作成しWindows実走へ。公開305を無断差替えしない。
+
+公式結果は22laps/class17/overall19/inc6。14L案/Owner Auto16L申告/後刻実測17.77Lは別値で、精度優位を断定しない。原本log/公式JSONはfield305-oct24/保全。
+
+**費用/保護：** Claudeは通常環境でも未認証でreview0ドル、Owner指示で認証待ちCLIを中止しCodex独立確認へ戻した。製品paidAPI0・追加の実LLM呼出0。履歴のlocal回答と通常GAP削減は呼出削減を期待する一方、会話を完読する分の発話時間・TTS使用は増える可能性があり実運用CPU/費用は未計測。scratch2は元SHAを保って未追跡のまま保持しcommitへ含めない。
+
+次のMDに指示書あり
+
 ## 10/24 Build305 公開・本番反映・全公開物照合完了（実走候補）
 
 **公開製品SHA `bada7b776d10086d23e317f4cfaca1923d5f4584`、Desktop/BridgeともBuild305。** Owner「Build & 公開305 GO」で作成・push・公開を承認。main/両rolling tag/本番 `/api/version` は同SHA。`verify-deploy.sh`もSHA一致・戦略API未認証401拒否で合格。server/auth/payment/public pageコードの変更はなく、main反映に伴う本番反映も実観測した。

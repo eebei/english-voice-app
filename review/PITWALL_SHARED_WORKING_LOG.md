@@ -28622,3 +28622,20 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 |費用/次|検査paidAPI0、追加LLM検索0、scratch2保護。Ownerへ公開installerを案内し305表示/PTT/音声/質問→比較の実用性を確認。問題時Gate10、独断差替え禁止。完成物と全証拠はbuild305-oct24/。引き継ぎcommitは既存MD2のみで公開sourceを変えない|
 
 次のMDに指示書あり
+
+### 2026-10-25 Build305実走修復：最終回覧（ローカル修復・検査完了、未Build／未公開）
+
+|項目|最終結果・担当・残件|
+|---|---|
+|対象/状態|公開305 bada7b7・実走Gate8FAILEDは維持。branch fix/305-field-conversation/base4274c6dから本commitへ修復収録。Build/push/公開/本番更新なし|
+|memory/server：root|session-memoryの日付/目的/追質問、router race_history、memory-brainの報告role、renderer prepare/summary・debrief自動保存/削除墓標/source失効、server過去質問優先。同本人/race/known sessionの出所を維持し現在の合意へ昇格しない|
+|speech：repair_remaining＋親|projection会話/初期説明30秒、renderer各chunk同scope/freshcache＋memory source、実target発話。親がdecode後Plan失効確認を追加。現在値5秒/BOX/緊急割込は維持|
+|GAP：build304_review|通常＋MC準備共通60秒/dispatch時消費、scope/target鮮度/接近latch。緊急stage2/P0維持。親がsourceと実socket/発話を独立確認|
+|全検査|最終preflight-v4 820.05秒exit0、normal49/AI49、全29Renderer/32module/3workflow、speech20全個別/history27/GAP6、履歴pure38/WO018計122/0、既存回帰PASS。fixture変更0/restoredtrue、paidattempt0、drift runtime log2だけ|
+|旧新/実証|旧305同条件u8/u10待機失効→新版保存応答6件完了。実終了→結果/部分debrief自動保存→翌日起動→申告取得→race/単独review削除訂正でqueue/playing/LLM失効を実経路確認。GAP同fixture準備5→1＋urgent/P0維持。原実走全41件のSDK再生や実LLM/実音声の証明とは分ける|
+|独立|build304_reviewがroot memory/speechと実証を反証、親がGAPを独立確認。固定32hash/scratch2一致、追加P0/P1=0。independent-final-verification-oct25-v4.json全12check真、parent-final-verification-v4.json全10check真|
+|途中の不合格|v1失敗、v2既知失敗で停止、v3はC44の新90日lookupと旧general expiry入口衝突で不合格を保持。元expiry assertを維持し入力分離、91日拒否/89日controlを日付指定なしで追加、v4全再検証。test I/O/依存DIの補完も製品判定の偽装なしと独立確認|
+|残件/次|P2申告の重複引用。実機旧payload復元/Windows/iRacing/実音声・実用性は未確認。B/C実利益・normaltimedBOX等既存未達を解消済みにしない。Ownerの新Build/公開GO後にrelease gateとWindows実走へ|
+|費用/保護|Claude認証待ちはOwner指示で中止、review0ドル。検査製品paidAPI0。local履歴/GAPは呼出削減期待、完読分の発話時間/TTS増もあり実額未計測。scratch2元SHA保持・stage/commit除外|
+
+次のMDに指示書あり

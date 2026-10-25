@@ -615,6 +615,17 @@
       if(!matched)live={...live,last:null,best:null,driver_pace_median_s:null,driver_pace_sample_count:null,
         session_time_remaining_s:null,timed_finish_forecast:null,race_plan:null,laps_total:null};
     }
+    const memory=input?.sessionMemory;
+    const historyRequest=input?.historicalRequest||memory?.historicalRequest?.(text,null,Date.now());
+    const legacyFuelOnly=PREVIOUS_FUEL_RE.test(text)&&!/昨日|データ|何(?:周|週|回|位)|ゴール|反省/.test(text);
+    if(historyRequest&&!historyRequest.conversationOnly&&!legacyFuelOnly&&memory?.recallRace){
+      const recalled=memory.recallRace(raceHistory,{...(input.memoryIdentity||{}),userId:currentUserId,
+        custId:live?.cust_id??input.memoryIdentity?.custId},historyRequest,lang,Date.now(),input.debriefRecords||[]);
+      if(recalled)return answer(recalled.intent,recalled.reply,historyRequest.deleteMemory&&recalled.record
+        ?{type:'delete_race_memory',raceRecordId:recalled.record.raceRecordId}:null,{source:'race_history',
+        raceRecordId:recalled.record?.raceRecordId||null,memoryFingerprint:recalled.memoryFingerprint||null,memoryReviewRef:recalled.reviewRef||null,
+        bindingKind:'conversation_scope'});
+    }
     const questionRequest=matchQuestionCandidate(text);
     if(questionRequest?.kind==='clarification')return answer('strategy_request_clarification',isJP(lang)?'その候補を比較から外したいのか、合意済みのピット予定を取り消したいのか確認して。まだ変更していない。':'Do you want to exclude that option from comparison or cancel the agreed pit plan? Nothing has changed yet.');
     if(questionRequest?.kind==='definition')return answer('strategy_definition',isJP(lang)
@@ -1326,7 +1337,7 @@
     if (!/[?？]/.test(text) && /(?:無事.{0,6}完走|完走.{0,6}目指|インシデント.{0,6}ゼロ|bring it home|finish clean)/i.test(text)) {
       return answer('race_goal_ack', isJP(lang) ? '了解。完走を優先しよう。' : 'Copy. Let us prioritise bringing it home.');
     }
-    if (!/(?:改善|返答|回答|答え|エンジニア|engineer|your answer|not improved)/i.test(text)&&!/[?？]/.test(text) && /(?:全く|ひどい|荒れて|めちゃくちゃ|ばっか|祭り|危なすぎ|what a mess|this is chaos)/i.test(text)) {
+    if (!/(?:改善|会話|返答|回答|答え|エンジニア|君|あなた|ルナ|LUNA|engineer|your answer|not improved)/i.test(text)&&!/[?？]/.test(text) && /(?:全く|ひどい|荒れて|めちゃくちゃ|ばっか|祭り|危なすぎ|what a mess|this is chaos)/i.test(text)) {
       return answer('race_comment_ack', isJP(lang) ? '了解。落ち着いていこう。' : 'Copy. Stay calm and keep it clean.');
     }
     return { handled:false };

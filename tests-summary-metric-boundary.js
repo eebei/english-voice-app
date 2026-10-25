@@ -8,6 +8,8 @@ const storage=new Map();const ctx={Date,Math,Number,String,JSON,crypto:require('
  lastIrating:null,lastSr:null,currentMemoryUserId:()=> 'new-account',localMemoryOwnerRef:()=> 'new-owner',
  saveMemory:()=>{},diagnosticLog:()=>{},debriefOutcomeModule:()=>null,
  evidenceCopy:()=>({classPos:'P',average:'平均',fuel:'燃費',incidents:'Incidents'}),fmtLap:n=>String(n),debriefOutcomeLines:()=>[]};
+ctx.window={PitwallSessionMemory:Memory};
+ctx.loadRaceHistory=()=>JSON.parse(storage.get('pw_raceHistory')||'[]');
 vm.createContext(ctx);vm.runInContext(['validFinishPosition','sanitizeSessionEvidence','evidenceLines','saveSessionSummary'].map(extract).join('\n'),ctx);
 const source={race_instance_id:'old-race',session_num:1,cust_id:315555,track:'Monza Grand Prix',car_model:'Mercedes-AMG GT3',
  car_class:'GT3',event_type:'Race',completed_laps:9,recorded_lap_count:8,total_laps:8,laps_basis:'sdk_completed',
@@ -51,4 +53,8 @@ for(const mode of ['race','debrief']){
  const prompt=built.prefix+built.suffix;
  check(prompt.includes('CURRENT UNAVAILABLE DOES NOT MEAN NEVER RECEIVED')&&prompt.includes('dated conversation observations')&&prompt.includes('Do not diagnose data-loss causes without supplied diagnostic evidence'),'postrace/current-unavailable inference prohibition reaches '+mode+' prompt');
 }
+const beforeDeletedSummary=storage.get('pw_raceHistory');
+storage.set('pw_fuel_deleted',JSON.stringify([{race_instance_id:source.race_instance_id,sessionNum:source.session_num,custId:source.cust_id,owner_ref:'old-owner'}]));
+ctx.saveSessionSummary({...source,official_result_arrived:true});
+check(storage.get('pw_raceHistory')===beforeDeletedSummary,'late official summary cannot resurrect a deleted source session with a fresh record ID');
 console.log('Summary metric boundary '+checks+' checks PASS; actual Renderer storage/labels and prompt builder, paid API calls 0');

@@ -93,6 +93,7 @@ class FakeDate extends Date {
 }
 
 const sandbox = {
+  autoPersistDebriefTurn: () => {}, activeMemoryBrainTurn:null, raceMemorySpeechValid:ref=>!ref,
   console, setTimeout, clearTimeout, Date: FakeDate, JSON, Math, Number, String,
   Array, Object, Set, Map, Boolean, RegExp, Promise, Error, isNaN, parseFloat, parseInt,
   // ── speak / drainQueue の状態（本番と同じ初期値）──

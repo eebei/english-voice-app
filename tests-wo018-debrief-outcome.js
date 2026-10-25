@@ -55,7 +55,7 @@ const FNS = ['memoryTrackCandidates', 'validFinishPosition', 'sanitizeSessionEvi
   'sanitizeOwnFollowupQuestion', 'buildMemoryAwareDebriefFollowup', 'buildEvidenceQuestions', 'beginEvidenceDebrief',
   'reconcileEvidenceSummary', 'askEvidenceQuestion', 'parseExplicitLapTime', 'applyEvidenceCorrection',
   'isEvidenceAnswerCandidate', 'recordEvidenceAnswer', 'restartEvidenceDebrief', 'dismissEvidenceDebrief',
-  'loadEvidenceRecords', 'evidenceReviewId', 'buildEvidenceRecord', 'upsertEvidenceRecord', 'autoSaveEvidenceMemory',
+  'loadEvidenceRecords', 'evidenceMemoryDeleted', 'evidenceReviewId', 'buildEvidenceRecord', 'upsertEvidenceRecord', 'autoSaveEvidenceMemory',
   'discardEvidenceMemory', 'buildCurrentSessionFactNote', 'buildSessionEvidenceNote', 'currentMemoryIdentity',
   'currentMemoryUserId', 'localMemoryOwnerRef', 'currentMemoryRaceScope', 'decisionModule', 'loadDecisions',
   'saveDecisions', 'currentDecisionIdentity', 'decisionRaceScopeOf', 'knownOwnerGeneration',
@@ -73,10 +73,10 @@ const DECLS = [/const memoryRaceScope=[\s\S]*?:null;/, /const EVIDENCE_COPY=\{[\
   /const DEBRIEF_QUESTION_HISTORY_KEY=.*;/, /const DEBRIEF_FOLLOWUP_HISTORY_KEY=.*;/,
   /const PRODUCT_FEEDBACK_CADENCE_KEY=.*;/, /const DECISION_STORE_KEY=.*;/, /const DECISION_OWNER_GEN_KEY=.*;/,
   /const SPEAK_PRIO = .*;/, /const DECISION_TOMBSTONE_KEY=.*;/, /const DECISION_SYNC_OPTIN_KEY=.*;/,
-  /const MEMORY_BRAIN_EVALUATIONS_KEY=.*;/];
+  /const MEMORY_BRAIN_EVALUATIONS_KEY=.*;/, /const EVIDENCE_DELETED_KEY=.*;/];
 const MODULES = [['race-memory-scope.js', 'PitwallRaceMemoryScope'], ['decision-memory.js', 'PitwallDecisionMemory'],
   ['memory-action-layer.js', 'PitwallMemoryActionLayer'], ['debrief-outcome.js', 'PitwallDebriefOutcome'],
-  ['memory-brain.js', 'PitwallMemoryBrain']];
+  ['memory-brain.js', 'PitwallMemoryBrain'], ['session-memory.js', 'PitwallSessionMemory']];
 
 function makeWorld(root, cut) {
   let renderer = fs.readFileSync(path.join(root, 'desktop', 'renderer.html'), 'utf8');
@@ -101,6 +101,7 @@ function makeWorld(root, cut) {
     localStorage: { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: k => store.delete(k) },
     document: { getElementById: el, createElement: () => ({ style: {}, appendChild() {} }), querySelectorAll: () => [] },
     addMsg: (role, text) => log.msgs.push([role, String(text)]), pushMsg: () => {},
+    enforceMemorySpeechReferences: () => {},
     speak: text => log.spoken.push(String(text)), usageCount: () => {}, switchMode: () => {},
     diagnosticLog: (tag, text) => log.diag.push([tag, String(text)]),
     saveStrategyObjectiveFromDebrief: () => null, currentStrategyStateAPI: () => null, ensureStrategyState: () => null,
@@ -142,7 +143,7 @@ function makeWorld(root, cut) {
     usageBuild='t',isSpeaking=false,speakQueue=[],lastTelemetry=null,lastSessionAuthority=null,sessionBestLapSeconds=null,
     sessionBestLapStr='',evidenceDebrief=null,autoDebriefData=null,autoDebriefStarted=false,autoDebriefTimer=null,
     lastSessionSummary=null,canonicalHistoryPending=new Map(),lastIrating=null,lastSr=null,_convoBox=null,
-    lastMemoryUtterance=null,pendingDecisionDispute=null,activeMemoryBrainTurn=null,lastSessionSummaryOwner=null,
+    lastMemoryUtterance=null,pendingDecisionDispute=null,activeMemoryBrainTurn=null,historicalMemoryFocus=null,lastSessionSummaryOwner=null,
     lastWeekendAuthority=null;
     // 実callAPIのprofileNote文が呼ぶ非対象builder（profile・燃料・契約・live facts・保存状態）はIO扱いで空。
     function buildProfileNote(){return '';} function buildCarTrackMemory(){return '';} function buildPracticeProfileNote(){return '';}
@@ -750,7 +751,9 @@ const CASES = {
     const h = w.ctx.loadRaceHistory(); h[h.length - 1].recordedAt = new Date(Date.now() - 91 * 86400000).toISOString();
     w.store.set('pw_raceHistory', JSON.stringify(h));
     w.ctx.evidenceDebrief = null; w.observeRace('sub:next-race');
-    w.ctx.prepareMemoryBrain('前回は？');
+    // Exercise the outcome-copy expiry within the existing general debrief path.
+    // Explicit past-race lookup separately rejects the whole record at 90 days.
+    w.ctx.prepareMemoryBrain('走行の振り返りを相談したい。');
     const facts = (JSON.parse((w.ctx.currentMemoryBrainPrompt().split('\n').find(l => l.startsWith('{')) || '{}')).facts) || {};
     return ok(facts.plan_outcomes === null && facts.plan_success === null && facts.plan_success_basis === 'outcome_expired', { facts });
   } },

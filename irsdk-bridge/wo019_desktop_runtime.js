@@ -253,15 +253,27 @@ async function sandboxFetch(url, init) {
   let res;
   try { res = await fetch(u, init); } catch (e) { finish(); throw e; }
   if (!res.body) { finish(); return res; }
-  if (route !== '/api/chat') {
-    // Non-streaming routes: read the whole real server response, then hand back an identical one
+  let streamingChat=false;
+  try { streamingChat=route==='/api/chat'&&JSON.parse(init.body||'{}').stream===true; } catch (_) {}
+  if (!streamingChat || !res.ok) {
+    // Non-streaming/error responses: preserve the real HTTP body/status even when
+    // the product correctly returns on !res.ok without consuming that body.
+    // Counting its unconsumed stream as inflight would fabricate a perpetual wait.
+    // Read the whole real server response, then hand back an identical one
     // (a consumer that only checks res.ok must not keep the runtime "busy").
     let buf;
     try { buf = await res.arrayBuffer(); } finally { finish(); }
     return new Response(buf, { status: res.status, statusText: res.statusText, headers: res.headers });
   }
   // /api/chat stays chunk-for-chunk (judge transport/NDJSON boundaries are product behaviour).
-  const body = res.body.pipeThrough(new TransformStream({ flush() { finish(); } }));
+  const reader=res.body.getReader();
+  const body=new ReadableStream({
+    async pull(controller){
+      try{const part=await reader.read();if(part.done){finish();controller.close();}else controller.enqueue(part.value);}
+      catch(error){finish();controller.error(error);}
+    },
+    cancel(reason){finish();return reader.cancel(reason);}
+  });
   const out = new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
   // A consumer that abandons the body (abort/cancel) must not leave the runtime "busy" forever.
   if (init && init.signal) init.signal.addEventListener('abort', finish, { once: true });
@@ -320,7 +332,8 @@ function drainOutbound() { return outbound.splice(0, outbound.length); }
         store.set('pw_auth_token', 'wo019-local-token');
         store.set('pw_ui_lang', 'ja');
         const built = buildRuntime('http://127.0.0.1:' + port);
-        ev('userName=' + JSON.stringify(msg.user.name) + ';selectEng("LunaJP");selectMode("race_weekend");startSession();');
+        const purpose=msg.purpose==='practice'?'practice':'race_weekend';
+        ev('userName=' + JSON.stringify(msg.user.name) + ';selectEng("LunaJP");selectMode('+JSON.stringify(purpose)+');startSession();');
         await settle();
         return { ok: true, journalDir: built.journalDir, sockets: sockets.length, sel: ev('sel'), selMode: ev('selMode') };
       }
@@ -436,10 +449,17 @@ function drainOutbound() { return outbound.splice(0, outbound.length); }
         if (file) fs.unlinkSync(file);
         return { ok: true, file: file ? path.basename(file) : null, text, outbound: drainOutbound() };
       }
+      case 'debrief_guide_start': {
+        // Actual Driver button: no mode/authority fields assigned by the harness.
+        const button=ev("document.getElementById('debrief-guide-question').children.find(x=>typeof x.onclick==='function')");
+        if(!button)return {ok:false,error:'no debrief guide start button'};
+        const before=traceMark();button.onclick();await settle();
+        return {ok:true,outbound:drainOutbound(),utterances:utterances(before),selMode:ev('selMode')};
+      }
       case 'history_store_write': {
         // Historical storage is an external I/O boundary. No canonical,
         // proposal, permission or execution state can be assigned here.
-        const keys=new Set(['pw_raceHistory','pw_fuel_history','pw_fuel_deleted']);
+        const keys=new Set(['pw_raceHistory','pw_fuel_history','pw_fuel_deleted','pw_session_evidence','pw_session_evidence_deleted_v1']);
         if(!keys.has(msg.key)||typeof msg.value!=='string'||!Array.isArray(JSON.parse(msg.value)))return {ok:false,error:'invalid historical storage input'};
         store.set(msg.key,msg.value);
         return {ok:true};
@@ -449,7 +469,7 @@ function drainOutbound() { return outbound.splice(0, outbound.length); }
         // output -> source backtrack (e.g. the LLM debrief context the real builder produces).
         const allowed = new Set(['buildCurrentSessionFactNote', 'buildSessionEvidenceNote', 'buildActiveRaceFactsNote',
           'buildCurrentRaceContext', 'loadEvidenceRecords', 'loadDecisions', 'currentDriverPlanAuthority', 'localMemoryOwnerRef',
-          'currentMemoryRaceScope', 'loadRaceHistory', 'currentMemoryBrainPrompt', 'currentCanonicalStrategyLive']);
+          'currentMemoryRaceScope', 'currentMemoryIdentity', 'loadRaceHistory', 'currentMemoryBrainPrompt', 'currentCanonicalStrategyLive']);
         if (!allowed.has(msg.fn)) return { ok: false, error: 'not an allowed read-only getter: ' + msg.fn };
         const v = ev(msg.fn)(...(msg.args || []));
         return { ok: true, value: JSON.parse(JSON.stringify(v === undefined ? null : v)) };

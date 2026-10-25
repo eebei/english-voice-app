@@ -405,7 +405,7 @@ if (fail) process.exit(1);
         { raceRecordId: 'rr-c', date: '2026-08-24', track: 'Fuji' },
       ]),
       localStorage: { setItem: (_k, v) => { stored = JSON.parse(v); } },
-      diagnosticLog: () => {}, RACE_DISPUTE_KEY: 'pw_raceHistory',
+      diagnosticLog: () => {}, enforceMemorySpeechReferences: () => {}, RACE_DISPUTE_KEY: 'pw_raceHistory',
       Date, JSON, String,
     };
     vm.createContext(box);

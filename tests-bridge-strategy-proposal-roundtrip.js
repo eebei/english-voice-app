@@ -73,6 +73,7 @@ function freshSandbox() {
   const sandbox = {
     console, setTimeout, clearTimeout, Date: FakeDate, JSON, Math, Number, String,
     Array, Object, Set, Map, Boolean, RegExp, Promise, Error, isNaN, parseFloat, parseInt,
+    autoPersistDebriefTurn: () => {},
     utteranceTraceLog: [], UTTERANCE_TRACE_MAX:200,
   speakQueue: [], draining: false, isSpeaking: false, speakWatchdog: null,
     ttsAudio: null, currentSpeakPrio: 9, speakGeneration: 0, speakFetchCtrl: null,

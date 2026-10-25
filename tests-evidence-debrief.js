@@ -72,7 +72,7 @@ check('回答完了時にドライバー申告記憶を自動保存',
   && renderer.includes("buildEvidenceRecord('driver_reported')"));
 check('確認操作は新規保存ではなく同一記憶を昇格',
   renderer.includes("buildEvidenceRecord('confirmed_by_driver')")
-  && renderer.includes('records[index]={...record,created_at:records[index].created_at||record.created_at};'));
+  && renderer.includes('records[index]=stored;') && renderer.includes('created_at:records[index].created_at||record.created_at'));
 check('記憶削除は自動保存済みレコードを明示的に除去',
   renderer.includes('onclick="discardEvidenceMemory()"')
   && renderer.includes('function discardEvidenceMemory()'));
@@ -198,6 +198,7 @@ if(memoryStart>=0&&memoryEnd>memoryStart){
     sanitizeSessionEvidence:d=>d,validFinishPosition:v=>v||null,
     localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},
     loadEvidenceRecords:()=>JSON.parse(store.get('pw_session_evidence')||'[]'),
+    enforceMemorySpeechReferences:()=>{},
     usageCount:k=>usage.push(k),saveStrategyObjectiveFromDebrief:()=>null,
     evidenceCopy:()=>({missing:'missing',failed:'failed',saved:'saved',discarded:'discarded'}),
     evidenceLanguage:()=> 'en',addMsg:()=>{},dismissEvidenceDebrief:()=>{},diagnosticLog:()=>{},

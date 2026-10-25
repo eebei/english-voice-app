@@ -11,6 +11,10 @@ const ctx={localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.
  currentMemoryIdentity:()=>({...identity}),currentMemoryUserId:()=>null,localMemoryOwnerRef:()=>null,
  diagnosticLog:()=>{},saveMemory:()=>{},lastIrating:null,lastSr:null,validFinishPosition:()=>null,debriefOutcomeModule:()=>null,
  crypto:require('crypto'),Date,Math,console};
+ctx.window={PitwallSessionMemory:Memory};
+ctx.enforceMemorySpeechReferences=()=>{};ctx.loadMemoryBrainEvaluations=()=>[];ctx.MEMORY_BRAIN_EVALUATIONS_KEY='pw_memory_brain_evaluations_v1';ctx.activeMemoryBrainTurn=null;
+ctx.loadEvidenceRecords=()=>JSON.parse(storage.get('pw_session_evidence')||'[]');
+ctx.EVIDENCE_DELETED_KEY='pw_session_evidence_deleted_v1';
 vm.createContext(ctx);
 vm.runInContext(['sanitizeSessionEvidence','saveSessionSummary','rememberLiveFuelEvidence','loadRaceHistory','loadFuelPlanningHistory','currentCanonicalStrategyLive'].map(extract).join('\n'),ctx);
 const yesterday=new Date(Date.now()-86400000).toISOString();
