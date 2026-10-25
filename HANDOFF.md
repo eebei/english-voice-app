@@ -1,5 +1,11 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/25 Build306 公開済み（Desktop/Bridge・field-test candidate）：独立artifact確認なし・Owner判断で公開
+
+**公開SHA `896f47d2d8eabb629c8de12ebc86f31be61a67d8`、Desktop/BridgeともBuild306**（両Release名306・両rolling tag=同SHA・prerelease/draftなし・desktop-latestがLatest）。Codexが5時間制限で独立artifact確認（Gate4/5）を取れず、Ownerが公開GO。**Gate4/5の独立署名は無い**＝Claude(release operator)の検査のみ（`operator-gate5-readback.json`）。私側検査：全preflight 147/0（exit0・offline guard・有料API0）、Desktop verify-artifact（installer/asar/bridge hashがmanifest一致・Build306がBridgeに実在・旧305なし）、全35 JS/HTMLがcommit一致、renderer script29/29、native32module（Desktop同梱=単体Bridge同一・compiled entry同一）、標準Bridgeのpackaged runtime coverage合格。`verify-artifact.sh`のasar展開工程は@electron/asar未導入で失敗、同等検査をPythonで代替した。
+**昇格：** 検査済み原artifactを**再buildせず**そのままアップロード（Desktop3/Bridge4）。1回目はgh実行場所の誤り（gitリポジトリ外）でアップロード前に失敗し公開側は無変更、リポジトリ内で再実行して成功。公開URLから**認証なし**で全7fileを取得し、bytes/SHA256が昇格元と全一致（Desktop installer 101,135,386 bytes `fc6a66ad…2287`＝latest/日付版/旧Desktop互換名、Bridge exe 17,276,795 `57a2be92…ed488`、Bridge Setup 16,559,248 `3c6d4fc3…64f5`）。`verify-deploy.sh 896f47d…`：本番SHA一致・戦略API未認証401。ロールバック用に旧tag shaを`public-*-previous-tag.json`に保存（公開305=bada7b7へ戻せる）。保護scratch2件未変更・未stage。証拠＝`../pitwall-local-evidence/build306-oct25/`。
+**未確認（Gate6/8）：** Windows installer上書き・起動・同梱Bridge・PTT/TTS/overlay、iRacing実走（昨日のレース質問、GAP/MC通知頻度）。**「Windows/iRacing/実音声確認済み」「独立確認済み」とは言わない。** 既知P2＝Driver申告のQA/会話二重引用。停止条件に該当すれば独断で差し替えずOwnerへ305戻し案を提示。
+
 ## 10/25 Build306 private候補2本完成：Codex独立artifact確認待ち（未公開）
 
 対象SHA `896f47d2d8eabb629c8de12ebc86f31be61a67d8`（main fast-forward bada7b7→896f47d、server.js含むため本番も896f47d・`verify-deploy.sh`SHA一致/戦略API未認証401）。Desktop run **40184201403**／Bridge run **40184201405**、ともにsuccess・Publish skipped・push自動起動の各1本（重複なし）。保存先 `../pitwall-local-evidence/build306-oct25/`（`candidate.json`、`desktop-candidate/`、`bridge-candidate/`、`preflight-v1/`、`source-freeze-before-preflight.json`）。

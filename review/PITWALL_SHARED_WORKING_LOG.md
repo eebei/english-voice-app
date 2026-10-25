@@ -28676,3 +28676,9 @@ Owner Build＋公開GOに基づく作業。対象は修復e2657ad＋番号同期
 
 対象SHA `896f47d2d8eabb629c8de12ebc86f31be61a67d8`（e2657ad＋番号同期2行＋文書）。main fast-forward後、Desktop run 40184201403・Bridge run 40184201405が各1本自動起動しsuccess/Publish skipped。本番はserver.js変更によりmain反映で更新され、verify-deploy.shがSHA一致・戦略API未認証401を確認。Desktop installer 101,135,386 bytes SHA256 `FC6A66ADCE5D424F9E8DFFB4F29B01BE3B37222AF4C9151C385B785AE0822287`（manifest一致）、app.asar 5,199,991 bytes `6C9B9B183FBDF98364932160D49E343825AECC5FCC3F3A803B0497F469A258D1`、同梱Bridge 17,277,309 bytes `14A208C4969BBDB1B1E08AEB5B0C6B685C32B02D76AF2F372EFA642A75AD76EE`。Bridge単体：exe `57a2be92fd7f11ca5956712e94ae08abeb1c41d3d0607bec0d6e0c30dc2ed488`、Setup `3c6d4fc374d4e512dade975d419238377996e34e04145157498946351b5c64f5`。ダウンロード先 `../pitwall-local-evidence/build306-oct25/{desktop-candidate,bridge-candidate}`、詳細 `candidate.json`。Claude側readbackはbuildNum306・renderer script29/29のみで、compiled Bridge本体の番号・32module、全JS/HTMLのcommit一致、Gate4の独立判定はCodexに残す。P0/P1：Claude側で未検出（独立確認ではない）。公開は未実施・Codex PASS待ち。Windows/iRacing/実音声は未確認。
 
+---
+
+# 2026-10-25 JST — Claude(release operator)：Build306 公開（Owner判断・独立Gate4/5なし）と公開後照合
+
+Codexが5時間制限中のため、Ownerが公開GO（独立artifact確認の代替としてOwner判断）。公開物は検査済み原artifact（SHA `896f47d2d8eabb629c8de12ebc86f31be61a67d8`、Desktop run 40184201403／Bridge run 40184201405）を再buildせず昇格。公開URLから無認証で全7file（Desktop3/Bridge4）を取得し、bytes/SHA256が昇格元と一致、Release名306・rolling tag同SHA、`verify-deploy.sh`SHA一致・戦略API401。Claude側検査＝preflight147/0、35 JS/HTML commit一致、renderer29/29、native32module、compiled Bridge Build306（旧305なし）、runtime coverage合格。**これはGate4/5の独立署名ではない。** Codexには、復帰後に公開済みartifactの事後独立確認（hash・asar・native module）を依頼する。Windows/iRacing/実音声は未確認。1回目の昇格はgh実行場所の誤りでupload前に失敗（公開側無変更）。
+
