@@ -28670,3 +28670,9 @@ Build304 source最終追記：全preflight exit0/586.84秒、normal49/AI49、新
 
 Owner Build＋公開GOに基づく作業。対象は修復e2657ad＋番号同期2行のみ（desktop/build-info.json 305→306、bridge.py BUILD_VERSION）。公開305(bada7b7)との差32ファイルを確認し、server.js・bridge.pyのGAP/multiclass budget・renderer/memory/speech修復が既記録の修復内容と一致、番号同期以外の追加変更なし。全preflightを新evidence `build306-oct25/preflight-v1/` でoffline-guard付き実行：exit0、841.88秒、147合格/0失敗、WO019 E2E 49/0、runtime coverage 32module/smoke32・Renderer29・workflow3、WO018 122/0、fixture変更0/復元true、外部有料API試行0。保護scratch2件未変更。Gate0-3は作業者(Claude)の確認でありGate4/5の自己承認ではない。Windows/iRacing/実音声は未確認。次：push→publish=false候補2本→Codexの完成artifact独立確認。
 
+---
+
+# 2026-10-25 JST — Claude(release operator)：Build306 private候補完成・Codex Gate4/5独立確認依頼
+
+対象SHA `896f47d2d8eabb629c8de12ebc86f31be61a67d8`（e2657ad＋番号同期2行＋文書）。main fast-forward後、Desktop run 40184201403・Bridge run 40184201405が各1本自動起動しsuccess/Publish skipped。本番はserver.js変更によりmain反映で更新され、verify-deploy.shがSHA一致・戦略API未認証401を確認。Desktop installer 101,135,386 bytes SHA256 `FC6A66ADCE5D424F9E8DFFB4F29B01BE3B37222AF4C9151C385B785AE0822287`（manifest一致）、app.asar 5,199,991 bytes `6C9B9B183FBDF98364932160D49E343825AECC5FCC3F3A803B0497F469A258D1`、同梱Bridge 17,277,309 bytes `14A208C4969BBDB1B1E08AEB5B0C6B685C32B02D76AF2F372EFA642A75AD76EE`。Bridge単体：exe `57a2be92fd7f11ca5956712e94ae08abeb1c41d3d0607bec0d6e0c30dc2ed488`、Setup `3c6d4fc374d4e512dade975d419238377996e34e04145157498946351b5c64f5`。ダウンロード先 `../pitwall-local-evidence/build306-oct25/{desktop-candidate,bridge-candidate}`、詳細 `candidate.json`。Claude側readbackはbuildNum306・renderer script29/29のみで、compiled Bridge本体の番号・32module、全JS/HTMLのcommit一致、Gate4の独立判定はCodexに残す。P0/P1：Claude側で未検出（独立確認ではない）。公開は未実施・Codex PASS待ち。Windows/iRacing/実音声は未確認。
+

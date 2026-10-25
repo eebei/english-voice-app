@@ -1,5 +1,12 @@
 # OMORAY PITWALL 引き継ぎ
 
+## 10/25 Build306 private候補2本完成：Codex独立artifact確認待ち（未公開）
+
+対象SHA `896f47d2d8eabb629c8de12ebc86f31be61a67d8`（main fast-forward bada7b7→896f47d、server.js含むため本番も896f47d・`verify-deploy.sh`SHA一致/戦略API未認証401）。Desktop run **40184201403**／Bridge run **40184201405**、ともにsuccess・Publish skipped・push自動起動の各1本（重複なし）。保存先 `../pitwall-local-evidence/build306-oct25/`（`candidate.json`、`desktop-candidate/`、`bridge-candidate/`、`preflight-v1/`、`source-freeze-before-preflight.json`）。
+Desktop installer `OMORAY-PITWALL-Setup-20261025-1019.exe` 101,135,386 bytes SHA256 `FC6A66ADCE5D424F9E8DFFB4F29B01BE3B37222AF4C9151C385B785AE0822287`（artifact ZIP 101,139,296 bytes digest `ad037417…2661`）。app.asar 5,199,991 bytes `6C9B9B18…58D1`、同梱Bridge 17,277,309 bytes `14A208C4…76EE`。Bridge単体artifact `OMORAY-PITWALL-Phase-BC-shadow-20261025`（ZIP 33,073,085 bytes）：Bridge exe `57a2be92…ed488`、Setup `3c6d4fc3…64f5`。runtime coverage artifact 2件（source import graph／packaged EXE）success。
+**operator readback（Claude、独立確認ではない）：** installerのSHAはmanifestと一致、展開したapp.asar／同梱Bridgeもmanifest一致、`build-info.json` buildNum=306、rendererの参照localスクリプト29/29存在。PyInstaller圧縮のためcompiled Bridge本体の製品番号文字列は未確認＝Codex独立確認に残す。
+**STOP：** Gate4/5はCodexの独立確認まで未承認。PASS後に、検査済み原artifactを再buildせず昇格（両Release名/rolling tagを306・同SHAへ、Desktop3/Bridge4の全公開fileを無認証取得しhash照合、verify-deploy再実行）。Windows/iRacing/実音声は公開後のGate6/8で未確認のまま。保護scratch2件未変更・未stage。
+
 ## 10/25 Build306 Claude担当：Gate0-3完了・Codex独立確認前（push/private候補は本commit後）
 
 Owner停止は解除、Build/必要push/公開GOあり。**対象**＝修復e2657ad60a1eeec47ccfdd9864994c70954cbcda（fix/305-field-conversation、公開305 bada7b7からfast-forward可能）＋**番号同期のみ**（desktop/build-info.json buildNum 305→306、irsdk-bridge/bridge.py BUILD_VERSION=`Build 306 (field conversation continuity and saved-race recall)`）。機能追加なし。公開/本番は305のまま、Gate8 FAILED（実走sub89604371）を維持。
