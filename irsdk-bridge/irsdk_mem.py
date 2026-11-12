@@ -111,6 +111,23 @@ def get_buf_offset(ptr):
     return best_off, best_tick
 
 
+def get_buf_slot(ptr):
+    """get_buf_offset と同じ選び方で、(varBufオフセット, tick, そのスロットのtick位置) を返す。
+
+    U1（全車snapshot）：配列を読み終えた後に同じスロットのtickを読み直し、読取中に上書きされていないか
+    （＝全配列が同一世代か）を確かめるために、スロット位置を返す。iRSDK公式の読み方（コピー後にtick再確認）と同じ。
+    """
+    num_buf = read_int_at(ptr, H_NUM_BUF)
+    best_tick, best_off, best_base = -1, 0, None
+    for i in range(min(max(num_buf, 0), 4)):
+        base = VARBUF_BASE + i * VARBUF_STRIDE
+        tick = read_int_at(ptr, base)
+        off = read_int_at(ptr, base + 4)
+        if tick > best_tick:
+            best_tick, best_off, best_base = tick, off, base
+    return best_off, best_tick, best_base
+
+
 def build_index(ptr):
     """変数名 -> (type, offset, count) の索引を作る。"""
     idx = {}

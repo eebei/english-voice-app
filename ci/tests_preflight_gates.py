@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='preflight-gates-') as tmp:
     src=(ROOT/'preflight.sh').read_text()
     start=src.index('for f in prompts.js');end=src.index('echo "── renderer.html',start);block=src[start:end]
     (work/'desktop').mkdir()
-    for f in ['prompts.js','server.js','engineer-card.js','desktop/memory-action-layer.js','desktop/strategy-playbook.js']:
+    for f in ['prompts.js','server.js','engineer-card.js','desktop/memory-action-layer.js','desktop/strategy-playbook.js','desktop/field-snapshot.js']:
         (work/f).write_text('const valid=1;\n')
     def shell(block):
         return run(['bash','-c','set -uo pipefail; fail=0;\n'+block+'\nexit "$fail"'],cwd=work).returncode

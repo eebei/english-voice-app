@@ -52,6 +52,7 @@ import session_race_state as session_race_state_mod
 import session_authority as session_authority_mod
 import gap_authority
 import pit_loss_calibrator as pit_loss_calibrator_mod
+import field_snapshot as field_snapshot_mod
 import pit_exit_forecaster as pit_exit_forecaster_mod
 import pit_cycle_tracker as pit_cycle_tracker_mod
 import endurance_handoff as endurance_handoff_mod
@@ -71,7 +72,7 @@ import box_authority_delivery as box_authority_delivery_mod
 import observability_trace as observability_trace_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 306 (field conversation continuity and saved-race recall)"
+BUILD_VERSION = "Build 307 (all-car field snapshot recording U1)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -1827,6 +1828,8 @@ ACTIVITY_ALLOWED_META_TYPES = frozenset({
     # activity gate で落とすと desktop が「停止」と誤認する。音声イベントではない。
     'telemetry_live',
     'pit_loss_calibration',
+    # U1：全車snapshot（データのみ・音声化されない）。非搭乗中も記録・受信を止めない。
+    'field_snapshot',
     # session_summary は呼び出し側で should_fire_race_summary() ガード。
     # broadcast() は素通しし、broadcast() の戻り値で送信成功を確認する契約。
     'session_summary',
@@ -2606,6 +2609,7 @@ class IRacingReader:
     H_STATUS = irsdk_mem.H_STATUS
     H_SESSION_INFO_LEN = 16
     H_SESSION_INFO_OFFSET = 20
+    H_SESSION_INFO_UPDATE = 12     # iRSDK header: sessionInfoUpdate（YAMLが更新されるたびに増える）。隣接16/20/24は実走確認済み、12自体は未確認
     H_NUM_VARS = irsdk_mem.H_NUM_VARS
     H_VAR_HEADER_OFFSET = irsdk_mem.H_VAR_HEADER_OFFSET
     H_NUM_BUF = irsdk_mem.H_NUM_BUF
@@ -2656,6 +2660,15 @@ class IRacingReader:
 
     def _read_int(self, off):
         return struct.unpack('i', self._bytes(off, 4))[0]
+
+    def session_info_update(self):
+        """U1：SessionInfo更新番号（header offset 12）。読めなければ None。"""
+        try:
+            if not self._ptr:
+                return None
+            return self._read_int(self.H_SESSION_INFO_UPDATE)
+        except Exception:
+            return None
 
     def is_active(self):
         if not self._ptr:
@@ -2799,6 +2812,71 @@ class IRacingReader:
                 return None
             data = self._bytes(self.get_buf_offset() + info[1], 4 * count)
             return list(struct.unpack('i' * count, data))
+        except Exception:
+            return None
+
+    # U1（全車snapshot）：CarIdx*配列を「同じ1世代」から読む。
+    #   従来の read_*_array は呼ぶたびに最新tickのスロットを選び直すため、配列ごとに世代が違い得る。
+    #   ここでは1スロットを選び、全配列を宣言された型・要素数どおりに読み、最後に同スロットのtickが変わっていないか確認する
+    #   （変わっていれば読取中に上書き＝混在。3回まで再試行し、それでもダメなら consistent=False を返す）。
+    #   型は宣言（vtype）どおり：bool配列(CarIdxOnPitRoad等)は1バイト/要素。4バイト固定で読むと隣の車の値が混ざる。
+    #   要素数も変数ヘッダの宣言どおり（64未満なら残りは None＝欠測。隣の変数を読まない）。宣言は `declared` で返し、記録に残す。
+    _FIELD_TYPE_FMT = {1: ('B', 1), 2: ('i', 4), 3: ('I', 4), 4: ('f', 4), 5: ('d', 8)}
+
+    def _field_var_info(self, name):
+        """(vtype, offset, count)。var_cache に同居させる（接続し直しの var_cache.clear() で一緒に消える）。"""
+        key = '\x00field:' + name
+        if key in self.var_cache:
+            return self.var_cache[key]
+        try:
+            num_vars = self._read_int(self.H_NUM_VARS)
+            var_hdr_off = self._read_int(self.H_VAR_HEADER_OFFSET)
+            for i in range(min(num_vars, 600)):
+                base = var_hdr_off + i * self.VAR_HEADER_SIZE
+                vh = self._bytes(base, self.VAR_HEADER_SIZE)
+                if len(vh) < self.VAR_HEADER_SIZE:
+                    break
+                vname = vh[self.VAR_NAME_OFF:self.VAR_NAME_OFF + 32].split(b'\x00')[0].decode('utf-8', errors='ignore')
+                if vname == name:
+                    result = (struct.unpack_from('i', vh, 0)[0], struct.unpack_from('i', vh, 4)[0], struct.unpack_from('i', vh, 8)[0])
+                    self.var_cache[key] = result
+                    return result
+        except Exception:
+            pass
+        return None
+
+    def read_field_arrays(self, names, count=64):
+        try:
+            if not self._ptr:
+                return None
+            for _attempt in range(3):
+                off, tick, slot_base = irsdk_mem.get_buf_slot(self._ptr)
+                if slot_base is None or tick <= 0:
+                    return None
+                arrays = {}
+                declared = {}
+                for name in names:
+                    info = self._field_var_info(name)
+                    if info:
+                        declared[name] = [info[0], info[2]]
+                    spec = self._FIELD_TYPE_FMT.get(info[0]) if info else None
+                    n = min(count, info[2]) if info else 0
+                    if not spec or n <= 0:
+                        arrays[name] = None
+                        continue
+                    fmt, size = spec
+                    data = self._bytes(off + info[1], size * n)
+                    arrays[name] = list(struct.unpack(fmt * n, data)) if len(data) == size * n else None
+                session_time = None
+                st_info = self._field_var_info('SessionTime')
+                if st_info:
+                    declared['SessionTime'] = [st_info[0], st_info[2]]
+                    if st_info[0] == self.IRSDK_DOUBLE:
+                        session_time = struct.unpack('d', self._bytes(off + st_info[1], 8))[0]
+                tick_after = irsdk_mem.read_int_at(self._ptr, slot_base)
+                if tick_after == tick:
+                    return {'tick': tick, 'arrays': arrays, 'session_time': session_time, 'consistent': True, 'attempts': _attempt + 1, 'declared': declared}
+            return {'tick': tick, 'arrays': arrays, 'session_time': session_time, 'consistent': False, 'attempts': 3, 'declared': declared}
         except Exception:
             return None
 
@@ -3071,6 +3149,21 @@ def analyze_session_info_extent(raw_bytes, cap=200000, si_len_reported=None):
         result['cap_verdict'] = 'truncated_at_cap'
 
     return result
+
+
+def _field_roster_refresh(reader, fallback_id):
+    """U1：名簿(と race_instance_id)だけを読み直す。更新番号→YAML→更新番号の2回読みが一致した時だけ採用（読取中に更新されたら None）。
+    既存の SessionInfo 解析（poll の約10秒ごと）の状態には一切触れない。"""
+    u0 = reader.session_info_update()
+    yaml_str = reader.read_session_info()
+    u1 = reader.session_info_update()
+    if not yaml_str:
+        return None
+    if u0 is not None and u1 != u0:
+        return None
+    inf = parse_session_info(yaml_str)
+    return {'drivers': inf.get('drivers'), 'race_id': resolve_race_instance_id(inf, fallback_id),
+            'session_num': reader.read_int('SessionNum'), 'update': u0}
 
 
 def parse_session_info(yaml_str):
@@ -3843,6 +3936,23 @@ def poll_iracing():
     pit_stall_start_time = None
     pit_stall_total_s = 0.0
     pit_loss_calibrator = pit_loss_calibrator_mod.PitLossCalibrator(PIT_LOSS_PATH)
+    # U1：全車snapshot記録。保存先は Desktop が環境変数で渡す（無ければ永続フォルダ配下 field_logs）。
+    #   PITWALL_FIELD_LOG=0 で無効化できる。生成に失敗しても安全コールの経路には影響しない（None のまま走る）。
+    field_pipeline = None
+    field_stat_log_at = 0.0
+    field_roster = field_snapshot_mod.RosterTracker(log=log)   # 名簿・race id・SessionNum印・更新番号を同じ解析1回分として持つ
+    try:
+        if os.environ.get('PITWALL_FIELD_LOG', '1') != '0':
+            _field_dir = os.environ.get('PITWALL_FIELD_LOG_DIR') or os.path.join(_config_dir, 'field_logs')
+            _field_stamp = os.environ.get('PITWALL_FIELD_LOG_STAMP') or datetime.now().strftime('%Y%m%d-%H%M%S')
+            field_pipeline = field_snapshot_mod.FieldPipeline(
+                field_snapshot_mod.FieldRecorder(_field_dir, _field_stamp),
+                on_declared=lambda _d: log("SDK TYPE DIAG(field): " + ", ".join("%s=type%s/count%s" % (_k, _v[0], _v[1]) for _k, _v in sorted(_d.items())) + " (types: 1=bool 2=int 3=bitField 4=float 5=double)"))
+            globals()['_FIELD_PIPELINE_LAST'] = field_pipeline   # テスト/診断用の参照（終了時のflush用）
+            log("FIELD LOG: dir=%s stamp=%s" % (_field_dir, _field_stamp))
+    except Exception as _field_err:
+        field_pipeline = None
+        log("FIELD LOG: disabled (%s)" % repr(_field_err)[:120])
     pit_exit_forecast_shadow = None
     pit_exit_forecast_live = None
     pit_exit_forecast_live_at = None
@@ -4183,7 +4293,9 @@ def poll_iracing():
         session_check_counter += 1
         if not session_info_sent or session_check_counter >= 100:
             session_check_counter = 0
+            _field_u0 = reader.session_info_update()      # U1：名簿の世代印（更新番号→YAML→更新番号の2回読みが一致した時だけ）
             yaml_str = reader.read_session_info()
+            _field_u1 = reader.session_info_update()
             if yaml_str:
                 info = parse_session_info(yaml_str)
                 _authority_session_num = reader.read_int('SessionNum')
@@ -4196,6 +4308,9 @@ def poll_iracing():
                 session_details_map = info.get('session_details') or {}
                 latest_qualifying_result = info.get('qualifying_result')
                 latest_session_results = info.get('session_results') or {}
+                # U1：全車snapshotの名簿。この解析1回分で作り直し、どのSessionNumの名簿かを一緒に持つ。
+                field_roster.set_from(info.get('drivers'), resolve_race_instance_id(info, race_instance_fallback_id), _authority_session_num,
+                                      _field_u0 if _field_u0 == _field_u1 else None, 'parse')
                 # ★2026-07-21 Codex指示R2「原因修正」：read-only診断。DriverInfoから解析できた人数と、
                 #   実テレメトリ上に car_idx が見えている数を突き合わせる。大きく食い違えば
                 #   YAML解析側（parse_session_info）の問題、一致していれば「iRatingフィルタで
@@ -5574,6 +5689,27 @@ def poll_iracing():
         car_on_pitroad_all = reader.read_int_array('CarIdxOnPitRoad', 64)
         car_surface_all = reader.read_int_array('CarIdxTrackSurface', 64)
         car_last_laps_all = reader.read_float_array('CarIdxLastLapTime', 64)
+        # U1：全車snapshot（1Hz＋イベント）。配列は従来の読取とは別に「同一世代」で読み直す。失敗しても以降の処理は続ける。
+        if field_pipeline is not None:
+            try:
+                _fr = field_roster.step(time.time(), cur_snum, reader.session_info_update(),
+                                        lambda: _field_roster_refresh(reader, race_instance_fallback_id))
+                field_pipeline.step(
+                    reader, now=time.time(),
+                    ctx={'race_instance_id': _fr['race_id'], 'session_num': cur_snum,
+                         'epoch': canonical_mod.PROCESS_EPOCH, 'frame_sequence': _source_frame_sequence},
+                    roster=_fr['roster'], roster_session_num=_fr['roster_session_num'], roster_update=_fr['roster_update'],
+                    roster_confirmed=_fr['confirmed'], player_idx=player_car_idx,
+                    send=_publish_or_stage)
+                # 60秒ごとに記録の健全性を既存のデバッグログへ1行（書込み失敗・間引き・キュー溢れ・停止を後から読めるように）
+                if time.time() - field_stat_log_at >= 60.0:
+                    field_stat_log_at = time.time()
+                    _fs = field_pipeline.summary()
+                    log("FIELD LOG stats: emitted=%s sent=%s invalid_not_used=%s lines=%s bytes=%s files=%s dropped_queue=%s decimated=%s write_failures=%s stopped=%s" % (
+                        _fs.get('emitted'), _fs.get('sent'), _fs.get('invalid_not_used'), _fs.get('lines'), _fs.get('run_bytes'), len(_fs.get('files') or []),
+                        _fs.get('dropped_queue_full'), _fs.get('dropped_decimated'), _fs.get('write_failures'), _fs.get('stopped')))
+            except Exception as _field_step_err:
+                log("FIELD LOG: step failed (%s)" % repr(_field_step_err)[:120])
         # Final Lap authorityは総合順位1位のみ。クラス順位や
         # max(CarIdxLap)フォールバックを混ぜると時間制混走で1周早くなる。
         overall_leader_idx = None

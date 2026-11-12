@@ -18,7 +18,7 @@ else
 fi
 
 echo "── JavaScript: 構文"
-for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js; do
+for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js desktop/field-snapshot.js; do
   if node --check "$f" 2>&1 | head -3; then echo "   ✅ $f"; else echo "   ❌ $f"; fail=1; fi
 done
 
@@ -448,6 +448,11 @@ echo "▶ WO001 Road Atlanta fixture（現契約regression、characterization廃
 if out=$(node tests-wo001-road-atlanta-fixture.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep -E "❌|HARNESS"|head -10; fail=1; fi
 echo "▶ WO018 debrief outcome（after＋guard cut、旧treeは不在なら比較不能として数えない）"
 if out=$(node tests-wo018-debrief-outcome.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+
+echo "▶ U1 全車snapshot：Bridge側（実IRacingReaderの型どおり読取・世代検証／実poll_iracing再生／実ファイル記録／上限・回転・書込み失敗・詰まり）。bridge.py/field_snapshot.py/irsdk_mem.pyはBridge build出荷対象"
+if python3 -m py_compile irsdk-bridge/field_snapshot.py irsdk-bridge/bridge.py irsdk-bridge/irsdk_mem.py && out=$(python3 irsdk-bridge/tests_u1_field_snapshot.py 2>&1); then echo "   ✅ $(echo "$out"|tail -3|tr '\n' ' ')"; else echo "   ❌ 不合格"; echo "$out"|grep -E "FAIL|ERROR"|head -10; fail=1; fi
+echo "▶ U1 全車snapshot：通し（実bridge→実ファイル→実renderer受信→読み戻し一致・偽造拒否・旧rendererへ無害）"
+if out=$(node tests-u1-field-snapshot-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ source preflight合格（artifact・Windows・実走は別ゲート）"; else echo "❌ 出荷不可（上記を直すこと）"; fi

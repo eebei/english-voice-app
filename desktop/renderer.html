@@ -726,6 +726,7 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="luna-self-memory.js"></script>
 <script src="driving-style-v1.js"></script>
 <script src="team-plan.js"></script>
+<script src="field-snapshot.js"></script>
 <script src="relative-pace.js"></script>
 <script src="reflex-events.js"></script>
 <script src="conversation-memory-box.js"></script>
@@ -5648,6 +5649,8 @@ function connectBridge(){
         //   boxAuthorityTransportと同じ「生きている間ずっと再送を試みる」
         //   出口へ、strategyResponseOutbox/strategyDeliveryOutboxも揃える。
         flushStrategyResponseOutbox();flushStrategyDeliveryOutbox();}if(typeof syncCanonicalStrategyProjection==='function')syncCanonicalStrategyProjection();boxAuthorityTransport.tick();return;}
+      // U1：全車snapshot。検証して保持するだけ（音声・LLM・戦略計算には渡さない）。世代混在/未知キー/重複は採用しない。
+      if(data.type==='field_snapshot'){try{fieldSnapshotReceiver.receive(data);}catch(_){}return;}
       if(['telemetry_live','box_authority_snapshot'].includes(data.type)||data.trigger==='strategy_plan_box_call'){if(!canonicalLifecycleCache.matches(data))return;}
       if(['driver_plan_command_ack','box_delivery_ack','strategy_decision_ack','strategy_delivery_ack'].includes(data.type)&&!canonicalLifecycleCache.epochMatches(data))return;
       if(data.type==='iracing_status'){
@@ -6428,6 +6431,10 @@ function buildCurrentRaceContext(){
     now: ()=>Date.now(),
   });
 }
+// U1：全車snapshotの受信（field-snapshot.js）。採用できたものだけ currentFieldSnapshot() が返す。
+const fieldSnapshotReceiver=PitwallFieldSnapshot.createReceiver();
+function currentFieldSnapshot(expect){return fieldSnapshotReceiver.current(expect);}
+function fieldSnapshotStats(){return fieldSnapshotReceiver.stats();}
 function syncCanonicalStrategyProjection(){
   const state=strategyProjection.state();
   const el=document.getElementById('canonical-strategy-view');

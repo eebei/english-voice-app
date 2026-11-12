@@ -113,6 +113,15 @@ function ipcDiagnosticsSetup() {
       let observabilitySection = '';
       try { observabilitySection = require('./observability-trace.js').buildSupportSection({ renderer: observability, bridgeLogText: raw }); }
       catch (e) { observabilitySection = '\n=== PITWALL OBSERVABILITY unavailable: ' + String(e && e.message || e).slice(0, 120) + ' ===\n'; }
+      // U1：全車snapshot記録の所在と大きさ（本文は載せない。サイズが大きいため。ファイル自体は同フォルダから回収する）。
+      let fieldSection = '';
+      try {
+        const fdir = fieldLogDir();
+        const names = fs.existsSync(fdir) ? fs.readdirSync(fdir).filter(n => /^OMORAY-field-.*\.jsonl$/.test(n)).sort() : [];
+        fieldSection = '\n=== FIELD LOGS dir=' + fdir + ' files=' + names.length + ' ===\n' +
+          names.slice(-40).map(n => { let sz = -1; try { sz = fs.statSync(path.join(fdir, n)).size; } catch (_) {} return n + ' ' + sz + 'B'; }).join('\n') + '\n';
+      } catch (e) { fieldSection = '\n=== FIELD LOGS unavailable ===\n'; }
+      observabilitySection += fieldSection;   // 既存の書出し行は変えない（WO019 K23 anchor）
       fs.writeFileSync(destination, header + redactDiagnosticText(raw) + redactDiagnosticText(observabilitySection));
       try { shell.showItemInFolder(destination); } catch (_) {}
       log('diagnostic package exported: ' + destination);
@@ -291,6 +300,16 @@ function registerOverlayShortcuts() {
 
 // ── テレメトリbridgeを自動起動（ユーザーが手動でexeを立ち上げる必要をなくす）──
 // 必ず「古いbridgeを掃除→最新の同梱bridgeを起動」する。古い壊れたbridgeを再利用しない。
+// U1：全車snapshot記録の保存先。Desktopのログと同じ場所（デスクトップ）の専用フォルダ＋起動ごとのstamp。
+//   フォルダ名・stampは固定規則（診断エクスポートが同じ規則で一覧する）。容量上限・ローテーションはBridge側(field_snapshot.py)。
+function fieldLogDir() { return path.join(app.getPath('desktop'), 'OMORAY-field-logs'); }
+function fieldLogStamp() { return (LOG_FILE.match(/OMORAY-bridge-debug-(.+)\.log$/) || [])[1] || ''; }
+function bridgeEnv() {
+  const env = Object.assign({}, process.env);
+  try { env.PITWALL_FIELD_LOG_DIR = fieldLogDir(); const st = fieldLogStamp(); if (st) env.PITWALL_FIELD_LOG_STAMP = st; } catch (e) {}
+  return env;
+}
+
 async function startBridge() {
   try {
     await killStaleBridges();   // ★まず古いbridgeを全部消す（前回ゾンビ・旧バージョンの再利用を防ぐ）
@@ -304,7 +323,7 @@ async function startBridge() {
     const exePath = candidates.find(p => p && fs.existsSync(p));
 
     if (process.platform === 'win32' && exePath) {
-      bridgeProc = spawn(exePath, [], { windowsHide: true });
+      bridgeProc = spawn(exePath, [], { windowsHide: true, env: bridgeEnv() });
       log('bridge started (exe): ' + exePath);
     } else {
       // 開発フォールバック：bridge.py を探して python3 で起動
@@ -314,7 +333,7 @@ async function startBridge() {
       ];
       const py = pyCandidates.find(p => fs.existsSync(p));
       if (py) {
-        bridgeProc = spawn('python3', [py], {});
+        bridgeProc = spawn('python3', [py], { env: bridgeEnv() });
         log('bridge started (py dev): ' + py);
       } else {
         log('bridge not found — telemetry disabled (expected on Mac dev)');
