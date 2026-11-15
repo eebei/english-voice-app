@@ -210,6 +210,11 @@ sandbox.strategyProjection=require('./desktop/strategy-state-projection').create
 sandbox.memoryRaceScope=require('./desktop/race-memory-scope').createTracker();
 sandbox.PitwallRaceMemoryScope=require('./desktop/race-memory-scope');
 sandbox.pendingDriverPlanFollowup=null;
+// STR-001（戦略比較）は本検査の関心外：計算パケット無し＝従来経路のまま、という中立スタブ。
+sandbox.currentPitStrategyCompare=()=>({packet:null,valid:false,reasons:['test_stub']});
+sandbox.notePitCompareOpinion=()=>null;
+sandbox.pitCompareConsultingNow=()=>false;
+sandbox.latestUserTextForPitCompare=()=>'';
 sandbox.localStorage.setItem('pw_auth_user',JSON.stringify({id:'u1'}));
 vm.runInContext(productionCode, sandbox, { filename: 'renderer.html' });
 

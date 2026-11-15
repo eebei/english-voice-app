@@ -168,6 +168,7 @@ function makeContext(chunks, options = {}) {
     captureVerifiedAuxBinding: () => null,
     strategyReplyBindingValid: () => true,
     currentCanonicalStrategyLive: (live) => live,
+    currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
     // WO014: raceContext builder is out of scope for this memory-focused test;
     // prompts.js already treats a null raceContext as "no additional authority"
     // (falls back to liveData), so a no-op stub keeps this test's concern narrow.

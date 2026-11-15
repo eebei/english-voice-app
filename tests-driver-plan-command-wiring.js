@@ -125,7 +125,7 @@ const ctx2={criticalJournal,performance:{now:()=>0},canonicalLifecycleCache:CF.i
   handleRelativePaceQuestion:()=>false,ensureConversationBox:()=>null,ensureStrategyState:()=>null,
   selMode:'race',iracingLive:true,lastTelemetry:{...live},lastTelemetryAt:Date.now(),
   lastTrack:null,lastCarClass:null,lastCarModel:null,lastSessionNum:0,sel:'Kanbe',
-  currentCanonicalStrategyLive:x=>x,currentStrategyPlaybook:()=>null,pendingDriverPlanFollowup:null,driverPlanCommandOutbox:new Map(),
+  currentCanonicalStrategyLive:x=>x,currentPitStrategyCompare:()=>({packet:null,valid:false,reasons:['test_stub']}),notePitCompareOpinion:()=>null,pitCompareConsultingNow:()=>false,latestUserTextForPitCompare:()=>'',currentStrategyPlaybook:()=>null,pendingDriverPlanFollowup:null,driverPlanCommandOutbox:new Map(),
   irBridge:{readyState:1,send:s=>sentBySendMsg.push(JSON.parse(s))},diagnosticLog:()=>{},
   nextUtteranceId:()=> 'actual-sendmsg-u1',crypto:{randomUUID:()=> 'actual-sendmsg-cmd'},
   SPEAK_PRIO:{P2_PROCEDURE:2},speak:()=>{},bridgeStrategyDecisions:new Map(),

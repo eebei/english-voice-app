@@ -38,7 +38,7 @@ function check(label, ok) {
   ok ? pass++ : fail++;
 }
 
-const claimFn = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text, includeStrategyNumbers=false\)\{[\s\S]*?\n\}/);
+const claimFn = renderer.match(/function hasTelemetryOwnedVehicleClaim\(text, includeStrategyNumbers=false(?:, packetNumbers=null)?\)\{[\s\S]*?\n\}/);
 check('車両状態claim検出関数を抽出', !!claimFn);
 if(claimFn){
   const context={};
@@ -157,7 +157,7 @@ if(speechFns){
 }
 
 check('stream発話前にtruth gateを適用',
-  renderer.includes("selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, true)")
+  renderer.includes("selMode==='race' && iracingLive && (hasTelemetryOwnedVehicleClaim(full, true, _pitCompareNumbers)")
   && renderer.includes("diagnosticLog('TELEMETRY_TRUTH_GATE'"));
 check('bridgeがピット状態のSDK証拠を配信',
   bridge.includes("'on_pit_road': bool(onPit)")

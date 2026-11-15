@@ -163,6 +163,7 @@ class FakeReader:
         self.frames_served = 0
         # 本番 reader が持つキャッシュ。poll ループが毎フレーム clear() する。
         self.var_cache = {}
+        self._si_ids = {}
         self._last_si_len = len(session_info or '')
         # ★WO-005 REVISE 1 R1/R2：`replay()`の`on_frame_ready`フックを保持する。
         #   `poll_iracing()`本体は一切変更せず、外界境界（reader）だけを
@@ -208,6 +209,17 @@ class FakeReader:
     def read_session_info(self):
         return self.session_info
 
+    def session_info_update(self):
+        """U1：SessionInfo更新番号。frame の `_si_update`（固定値）か `_si_update_none`（読めない）で上書き可。無指定なら、
+        read_session_info() の内容が初めて現れた順に 1,2,3…（＝内容が変わったら増える）。"""
+        fr = self.frame
+        if fr.get('_si_update_none'):
+            return None
+        if '_si_update' in fr:
+            return fr['_si_update']
+        content = self.read_session_info()
+        return self._si_ids.setdefault(content, len(self._si_ids) + 1)
+
     def find_var(self, name):
         # 本番と同じ (vtype, voffset) タプルを返す。5=double。
         if name in self.frame or name in self.frame.get('_arrays', {}):
@@ -239,6 +251,24 @@ class FakeReader:
 
     def read_int_array(self, name, count=64):
         return [int(v) for v in self.frame.get('_arrays', {}).get(name, [])]
+
+    def read_field_arrays(self, names, count=64):
+        """U1：本番 IRacingReader.read_field_arrays と同じ戻り形。frame の印で世代の乱れ・欠測を再現する。
+          `_field_inconsistent`=True → 読取中に世代が変わった(consistent=False) / `_field_unverified`=True → 世代を保証できない(None)
+          `_field_missing`=[配列名] → その配列が取れない(None) / `_field_read_none`=True → 読取自体が失敗(None)"""
+        fr = self.frame
+        if fr.get('_field_read_none'):
+            return None
+        missing = set(fr.get('_field_missing') or ())
+        arrays = {}
+        for n in names:
+            arr = fr.get('_arrays', {}).get(n)
+            arrays[n] = None if (n in missing or arr is None) else list(arr)
+        consistent = None if fr.get('_field_unverified') else (False if fr.get('_field_inconsistent') else True)
+        st = fr.get('SessionTime')
+        declared = fr.get('_field_declared') or {n: [(1 if n == 'CarIdxOnPitRoad' else (4 if n in ('CarIdxLapDistPct', 'CarIdxF2Time', 'CarIdxEstTime', 'CarIdxLastLapTime') else 2)), 64] for n in names}
+        return {'tick': 1000 + self.cursor, 'arrays': arrays, 'consistent': consistent, 'attempts': 1,
+                'session_time': float(st) if isinstance(st, (int, float)) else None, 'declared': declared}
 
 
 class _ReplayClock:
@@ -274,6 +304,10 @@ class ReplayResult:
         self.broadcasts = []
         self.logs = []
         self.frames_served = 0
+        self.field_log_dir = None
+        self.field_summary = None
+        self.field_files = []
+        self.field_tmp = None
 
     # ── convenience queries ───────────────────────────────────────────
     def triggers(self):
@@ -291,7 +325,7 @@ class ReplayResult:
 
 
 def replay(frames, *, session_info=SESSION_INFO, dispatch_result=None,
-           seconds_per_frame=1.0, on_frame_ready=None, recovery_path=None):
+           seconds_per_frame=1.0, on_frame_ready=None, recovery_path=None, keep_field_logs=False):
     """Run the REAL `bridge.poll_iracing()` over saved frames.
 
     Returns a `ReplayResult` with every broadcast and log line the production
@@ -348,6 +382,15 @@ def replay(frames, *, session_info=SESSION_INFO, dispatch_result=None,
         shutil.copyfile(original["pit_loss_path"], calibration_path)
     bridge.PIT_LOSS_PATH = calibration_path
     bridge.RECOVERY_PATH = recovery_path or os.path.join(calibration_tmp.name,"strategy_recovery_v1.json")
+    # U1：全車snapshotの保存先は必ず一時フォルダ（開発機の永続フォルダへ書かない）。テスト側が env で指定していればそれを使う。
+    field_tmp = None
+    _prev_field_env = {k: os.environ.get(k) for k in ('PITWALL_FIELD_LOG_DIR', 'PITWALL_FIELD_LOG_STAMP')}
+    if not os.environ.get('PITWALL_FIELD_LOG_DIR'):
+        field_tmp = tempfile.TemporaryDirectory(prefix="pitwall-field-")
+        os.environ['PITWALL_FIELD_LOG_DIR'] = field_tmp.name
+    os.environ.setdefault('PITWALL_FIELD_LOG_STAMP', 'replay')
+    result.field_log_dir = os.environ['PITWALL_FIELD_LOG_DIR']
+    bridge._FIELD_PIPELINE_LAST = None
     bridge.reader = fake
     bridge.broadcast = capture_broadcast
     bridge.log = capture_log
@@ -360,6 +403,26 @@ def replay(frames, *, session_info=SESSION_INFO, dispatch_result=None,
     except ReplayComplete:
         pass
     finally:
+        _fp = getattr(bridge, '_FIELD_PIPELINE_LAST', None)
+        if _fp is not None:
+            try:
+                _fp.recorder.flush_wait(2.0)
+                _fp.recorder.close()
+                result.field_summary = _fp.summary()
+            except Exception:
+                pass
+        if field_tmp is not None:
+            result.field_files = sorted(os.listdir(field_tmp.name))
+            # 受入側が読み戻したい時だけ keep_field_logs=True（呼び出し側が result.field_tmp.cleanup()）。既定は片付ける。
+            if keep_field_logs:
+                result.field_tmp = field_tmp
+            else:
+                field_tmp.cleanup()
+        for _k, _v in _prev_field_env.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
         bridge.reader = original['reader']
         bridge.broadcast = original['broadcast']
         bridge.log = original['log']

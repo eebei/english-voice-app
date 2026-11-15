@@ -1,0 +1,159 @@
+{
+ "schema": "u2.suzuka.own_inputs.v1",
+ "source": {
+  "file": "OMORAY-bridge-debug-20261113-1039.log",
+  "sha256_16": "7b88a0a5ce3c39a6",
+  "lines": 42842
+ },
+ "race_instance_id": "sub:90078233",
+ "session_num": 2,
+ "own_car_idx": 22,
+ "tank_start_l": 53.0,
+ "note": "各Lap先頭の観測（ピット外の最初のDATA CHECK行）。time_remaining_sはFINAL LAP DIAGのtimeRem（無いLapは未観測＝null）。結果は含めない。",
+ "laps": [
+  {
+   "lap": 1,
+   "wall": "10:51:47",
+   "fuel_l": 49.6,
+   "pos": 0,
+   "last_lap_s": null,
+   "log_line": 6794,
+   "time_remaining_s": null
+  },
+  {
+   "lap": 2,
+   "wall": "10:53:47",
+   "fuel_l": 46.1,
+   "pos": 8,
+   "last_lap_s": 119.20950317382812,
+   "log_line": 8009,
+   "time_remaining_s": 1930.53
+  },
+  {
+   "lap": 3,
+   "wall": "11:08:52",
+   "fuel_l": 49.5,
+   "pos": 50,
+   "last_lap_s": 155.40890502929688,
+   "log_line": 19538,
+   "time_remaining_s": 1644.87
+  },
+  {
+   "lap": 4,
+   "wall": "11:10:54",
+   "fuel_l": 45.9,
+   "pos": 50,
+   "last_lap_s": 119.37210083007812,
+   "log_line": 20692,
+   "time_remaining_s": 1524.83
+  },
+  {
+   "lap": 5,
+   "wall": "11:12:56",
+   "fuel_l": 42.3,
+   "pos": 45,
+   "last_lap_s": 120.03880310058594,
+   "log_line": 21863,
+   "time_remaining_s": 1404.98
+  },
+  {
+   "lap": 6,
+   "wall": "11:14:52",
+   "fuel_l": 38.8,
+   "pos": 45,
+   "last_lap_s": 118.63670349121094,
+   "log_line": 22977,
+   "time_remaining_s": 1286.97
+  },
+  {
+   "lap": 7,
+   "wall": "11:16:50",
+   "fuel_l": 35.3,
+   "pos": 44,
+   "last_lap_s": 118.63670349121094,
+   "log_line": 25017,
+   "time_remaining_s": 1167.03
+  },
+  {
+   "lap": 8,
+   "wall": "11:18:49",
+   "fuel_l": 31.7,
+   "pos": 43,
+   "last_lap_s": 119.30259704589844,
+   "log_line": 27124,
+   "time_remaining_s": 1048.13
+  },
+  {
+   "lap": 9,
+   "wall": "11:20:48",
+   "fuel_l": 28.0,
+   "pos": 43,
+   "last_lap_s": 119.12190246582031,
+   "log_line": 29244,
+   "time_remaining_s": 929.18
+  },
+  {
+   "lap": 10,
+   "wall": "11:22:49",
+   "fuel_l": 24.4,
+   "pos": 40,
+   "last_lap_s": 119.03829956054688,
+   "log_line": 31459,
+   "time_remaining_s": 810.12
+  },
+  {
+   "lap": 11,
+   "wall": "11:24:49",
+   "fuel_l": 20.8,
+   "pos": 40,
+   "last_lap_s": 118.82340240478516,
+   "log_line": 32770,
+   "time_remaining_s": 691.22
+  },
+  {
+   "lap": 12,
+   "wall": "11:26:48",
+   "fuel_l": 17.1,
+   "pos": 40,
+   "last_lap_s": 119.34600067138672,
+   "log_line": 33940,
+   "time_remaining_s": 572.35
+  },
+  {
+   "lap": 13,
+   "wall": "11:28:49",
+   "fuel_l": 13.5,
+   "pos": 39,
+   "last_lap_s": 119.11129760742188,
+   "log_line": 35185,
+   "time_remaining_s": 453.2
+  },
+  {
+   "lap": 14,
+   "wall": "11:30:44",
+   "fuel_l": 10.1,
+   "pos": 39,
+   "last_lap_s": 119.11129760742188,
+   "log_line": 37208,
+   "time_remaining_s": 332.33
+  },
+  {
+   "lap": 15,
+   "wall": "11:33:29",
+   "fuel_l": 12.4,
+   "pos": 38,
+   "last_lap_s": 124.33529663085938,
+   "log_line": 39571,
+   "time_remaining_s": 208.28
+  },
+  {
+   "lap": 16,
+   "wall": "11:35:34",
+   "fuel_l": 9.2,
+   "pos": 38,
+   "last_lap_s": 163.24679565429688,
+   "log_line": 40746,
+   "time_remaining_s": 45.62
+  }
+ ]
+}

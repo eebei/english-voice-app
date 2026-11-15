@@ -579,6 +579,8 @@ function buildCtx(extra) {
         isSessionEndingLifecycle: () => false,
         localStorage: { getItem: () => null },
         currentCanonicalStrategyLive: (live) => live,
+    currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
+        currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
         buildCurrentRaceContext: () => realCtx,
         // WO014 round3: deliverOperationalFollowUp now captures
         // strategyProjection.binding('facts') alongside raceContext and
@@ -729,6 +731,7 @@ function runCallApiCase() {
     speak: (t) => { spoken.push(t); }, applyProposalJudgeTag: () => {},
     currentStrategyStateAPI: () => null,
     currentCanonicalStrategyLive: (live) => live,
+    currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
     // The one line that differs from tests-callapi-stream-memory.js: a REAL
     // race-context-builder output, not a null stub -- this is the point of
     // this section.

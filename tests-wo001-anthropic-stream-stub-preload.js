@@ -191,7 +191,9 @@ function captureSystemIfRequested(req) {
   const text = Array.isArray(sys) ? sys.map(b => (b && typeof b.text === 'string') ? b.text : '').join('')
     : (typeof sys === 'string' ? sys : '');
   const fs = require('fs');
-  fs.appendFileSync(file, JSON.stringify({ system: text, messages: (req && req.messages) || [],
+  // STR-001：ブロックごとのcache_control有無（毎Lap変わる塊がキャッシュ対象のprefixに入っていないことの検査用。追加フィールドのみ）
+  const blocks = Array.isArray(sys) ? sys.map(b => ({ cached: !!(b && b.cache_control), text: (b && typeof b.text === 'string') ? b.text : '' })) : [];
+  fs.appendFileSync(file, JSON.stringify({ system: text, system_blocks: blocks, messages: (req && req.messages) || [],
     stream: !!(req && req.stream), max_tokens: req && req.max_tokens, model: req && req.model }) + '\n');
 }
 

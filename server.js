@@ -10,6 +10,7 @@ const strategyGuard = require('./strategy-guard');
 const engineerCard = require('./engineer-card');
 const { buildSystem } = require('./prompts');
 const raceContextBuilder = require('./desktop/race-context-builder');
+const pitStrategyCompare = require('./desktop/pit-strategy-compare');   // STR-001：毎Lapの戦略比較パケットの検証・LUNAへの受け渡し
 const auth = require('./auth');
 
 const app = express();
@@ -1258,6 +1259,24 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       && _raceContext.pending_proposal.canonical_awaiting_records?.some(r=>r.decision_id===req.body.pendingJudgment.decision_id));
 
 
+    // ── STR-001：戦略比較パケット（クライアントの計算結果）を検証する ──
+    //   サーバは再計算しない。canonicalに検証済みのraceContext（race/session/Lap）と一致し、計算版・出所ラベルが正しい時だけ
+    //   LUNAのプロンプトへ入れる。一致しない（古い計算版・別race/session・raceContext無し）ものは使わず、固定応答も見送らない。
+    const _pitT0 = Date.now();
+    let _pitCompare = null;
+    if (req.body.pitStrategyCompare && typeof req.body.pitStrategyCompare === 'object') {
+      const _rid = _raceContext && _raceContext.race_identity;
+      if (!_raceContext) console.log('[pit_compare] rejected: no_valid_race_context');
+      else if (!_rid || typeof _rid.race_instance_id !== 'string' || !Number.isInteger(_rid.session_num)) console.log('[pit_compare] rejected: no_race_identity');
+      else {
+        const _v = pitStrategyCompare.validatePacket(req.body.pitStrategyCompare, {
+          race_instance_id: _rid.race_instance_id, session_num: _rid.session_num,
+          lap: _raceContext.current_facts && _raceContext.current_facts.available ? _raceContext.current_facts.current_lap : null, requireLap: true });   // Lapが分からない時は通さない（fail-closed）
+        if (_v.ok && pitStrategyCompare.packetUsable(req.body.pitStrategyCompare)) { _pitCompare = req.body.pitStrategyCompare; console.log(`[pit_compare] accepted calc_id=${_pitCompare.calc_id} lap=${_pitCompare.observed_at && _pitCompare.observed_at.lap}${_pitCompare.undercut_forecast ? ' undercut=' + _pitCompare.undercut_forecast.calc_id + ' rec=' + (_pitCompare.undercut_forecast.decision ? _pitCompare.undercut_forecast.decision.recommendation.option_id : 'none') : ''}`); }
+        else console.log('[pit_compare] rejected: ' + _v.reasons.join(','));
+      }
+    }
+
     let _strategyQ = null;
     let _directPitCommand = null;
     try {
@@ -1267,7 +1286,39 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         ? _lastUser.content : '';
       const _recentUserText = _msgs.slice(0, -1).reverse()
         .find(m => m && m.role === 'user' && typeof m.content === 'string')?.content || '';
-      const _historicalPitReview=isHistoricalRaceRecall(_lastText,_recentUserText);
+      const _historicalPitReview=isHistoricalRaceRecall(_lastText,_recentUserText)
+        || (mode==='race' && pitStrategyCompare.isRetrospectivePitQuestion(_lastText));
+      // A same-race lookup uses the recorded stop, never the current Plan A
+      // target or a lap number inferred from the conversation.
+      if (mode === 'race' && !_pendingJudgeTurn && pitStrategyCompare.isRecordedPitLapQuestion(_lastText)
+          && !isHistoricalRaceRecall(_lastText,_recentUserText)) {
+        const event = _raceContext?.last_pit_event;
+        const currentLap = _raceContext?.current_facts?.current_lap;
+        const lap = event?.lap;
+        const verified = _raceContext?.current_facts?.available === true &&
+          Number.isInteger(currentLap) && Number.isInteger(lap) && lap >= 1 && lap <= currentLap;
+        const jp = /JP$|Kanbe|Oishi/.test(String(character || ''));
+        const penalty = event?.execution_relation === 'penalty';
+        const target = pitStrategyCompare.requestedPitSequence(_lastText);
+        const sequence = event?.event_ref?.driver_pit_sequence;
+        const requested = target.kind === 'ordinal';
+        const matches = target.kind === 'latest' || (requested && target.sequence === sequence);
+        let reply;
+        if (!matches) {
+          reply = jp ? '直近の停止だけを照会できます。指定されたピットの周は確認できません。'
+            : 'Only the latest stop can be looked up. I cannot verify the lap of the requested stop.';
+        } else if (!verified) {
+          reply = jp ? 'このレースの直近のピット周は、記録から確認できない。'
+            : 'I cannot verify the lap of the last pit stop in this race.';
+        } else {
+          const stop = jp ? (penalty ? 'ペナルティ停止' : 'ピット') : (penalty ? 'penalty stop' : 'pit stop');
+          const label = jp ? (requested ? target.sequence + '回目の' : '直近の')
+            : (requested ? 'recorded ' : 'last recorded ');
+          reply = jp ? `記録では${label}${stop}は${lap}周目でした。`
+            : `The ${label}${stop}${requested ? ' number ' + target.sequence : ''} was on lap ${lap}.`;
+        }
+        return sendGuardReply(req, res, reply, 100, 'deterministic', 'recorded_pit_lap');
+      }
       _strategyQ = _lastText && !_historicalPitReview
         ? strategyGuard.classifyStrategyQuestion(_lastUser.content, {
           activePitObjective: req.body.strategyObjective?.kind === 'pit_total_race_outcome'
@@ -1275,6 +1326,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         }) : null;
       _directPitCommand = _lastText && !_historicalPitReview
         ? strategyGuard.classifyDirectRaceCommand(_lastUser.content) : null;
+      // STR-001：有効な計算パケットがある戦略相談は、固定の復帰/校正応答で終端させずLUNAへ渡す（数値は計算パケットが持つ）。
+      if (_pitCompare && _strategyQ) { console.log(`[pit_compare] strategy question passes to LLM topic=${_strategyQ.topic}`); _strategyQ = null; }
       const _lang = /JP$|Kanbe|Oishi/.test(String(character || '')) ? 'ja' : 'en';
       if (isAccountChangeRequest(_lastText)) {
         console.log('[account_guard] conversational account change blocked');
@@ -1315,7 +1368,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       // Keep the established Phase-C path for the exact "pit now -> where"
       // contract: it carries calibration reasons, traffic and blend evidence.
       // Broader undercut/cycle language is handled by the new runtime card.
-      if (!_pendingJudgeTurn && !_historicalPitReview && _engineerRoute && !(_engineerRoute.card.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
+      const _pitCompareTopics = [engineerCard.TOPIC.PIT_DECISION, engineerCard.TOPIC.REJOIN, engineerCard.TOPIC.STRATEGY_SWITCH, engineerCard.TOPIC.PIT_LAP_QUERY];
+      const _pitComparePasses = !!(_pitCompare && _engineerRoute && _pitCompareTopics.includes(_engineerRoute.card.topic));
+      if (_pitComparePasses) console.log(`[pit_compare] engineer card ${_engineerRoute.card.topic} passes to LLM`);
+      if (!_pendingJudgeTurn && !_historicalPitReview && _engineerRoute && !_pitComparePasses && !(_engineerRoute.card.topic === engineerCard.TOPIC.REJOIN && _strategyQ)) {
         const _intent = _engineerRoute.card.topic;
         console.log(`[INTENT_ROUTE] intent=${_intent} confidence=${_engineerRoute.card.confidence ?? 0} handler=${_engineerRoute.status}`);
         // WO014 round4 residual ("reference role/age"), audit-corrected:
@@ -1435,6 +1491,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           { type: 'text', text: built.prefix, cache_control: { type: 'ephemeral' } }
         ];
         if (built.suffix) system.push({ type: 'text', text: built.suffix });
+        // STR-001：毎Lap・毎訂正で変わる計算パケットは、キャッシュ対象のprefixへ入れず、非キャッシュの別ブロックで末尾に付ける（戦略相談のrequestだけ）。
+        if (_pitCompare) system.push({ type: 'text', text: pitStrategyCompare.promptBlock(_pitCompare) });
         console.log(`[buildSystem] suffix length=${built.suffix.length}, has fuel=${built.suffix.includes('fuel')}`);
       }
     }
@@ -1470,6 +1528,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const usageContext = deriveUsageContext(req.body, usageSource);
     const logUsage = (usage) => {
       if (!usage) return;
+      // STR-001：戦略相談（計算パケット付き）1ターンのLLM実行の記録（入力/出力token・キャッシュ・応答時間）。
+      if (_pitCompare) console.log(`[pit_compare] usage calc_id=${_pitCompare.calc_id} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0} ms=${Date.now() - _pitT0}`);
       console.log(`[USAGE] user=${userName || '?'} char=${character || '?'} mode=${mode || '?'} model=${model} source=${usageSource} in=${usage.input_tokens ?? 0} out=${usage.output_tokens ?? 0} cache_read=${usage.cache_read_input_tokens ?? 0} cache_write=${usage.cache_creation_input_tokens ?? 0}`);
       if (auth.isReady()) {
         auth.recordApiUsage({
