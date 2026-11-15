@@ -751,6 +751,17 @@
     // path; the current plan evaluator cannot answer what happened last race.
     if(/前回|前のレース|前戦|previous race|last race/i.test(text)
         &&/ピット|給油|pit|refuel/i.test(text)&&!PREVIOUS_FUEL_RE.test(text))return {handled:false};
+    // STR-001：計算パケット(pit-strategy-compare)が有効なら、戦略相談・ピット時期の質問は固定応答で終端させずLUNA(LLM)へ渡す。
+    //   数値と条件は送信payloadの計算パケットが持つ。ここで答えると、その計算版と無関係な固定文が相談を終わらせる。
+    if(input&&input.pitStrategyCompare&&input.pitStrategyCompare.valid===true
+        &&(strategyCallKind(text)||/(?:ピット|ボックス).{0,16}(?:何周(?:目|年)?|いつ|予定)|(?:何周目|いつ).{0,8}(?:ピット|ボックス)|(?:pit|box).{0,10}(?:which lap|what lap|when)/i.test(text)))
+      return {handled:false,passthrough:'pit_strategy_compare',calcId:input.pitStrategyCompare.calc_id||null};
+    // Commands and confirmations above keep their own authority. The
+    // calculation reply also owns the fallback when the comparison is missing.
+    if(input?.pitStrategyCompare?.retrospective)
+      return {handled:false,passthrough:'pit_retrospective'};
+    if(input?.pitStrategyCompare?.calculatedAnswer)
+      return {handled:false,passthrough:'pit_calculated_reply'};
     const strategyCall = strategyCallAnswer(input, live, text, lang);
     if (strategyCall) return strategyCall;
     // A race-side "how is my driving?" asks about the driver, including

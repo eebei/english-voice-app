@@ -18,7 +18,7 @@ else
 fi
 
 echo "── JavaScript: 構文"
-for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js desktop/field-snapshot.js; do
+for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js desktop/pit-strategy-compare.js desktop/field-snapshot.js desktop/undercut-forecast.js; do
   if node --check "$f" 2>&1 | head -3; then echo "   ✅ $f"; else echo "   ❌ $f"; fail=1; fi
 done
 
@@ -407,10 +407,10 @@ if node tests-terminal-readback-binding.js; then echo "   ✅ 全ケース合格
 
 echo "▶ WO019 Road Atlanta一本の相談 E2E（実Bridge×全Renderer×実server、IOのみ模擬）"
 if out=$(python3 irsdk-bridge/tests_wo019_road_atlanta_e2e.py 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格（exit2=HARNESS_ERROR）"; echo "$out"|grep -E "❌|HARNESS"|head -20; fail=1; fi
-echo "▶ 戦略室 実Bridge→全Renderer→数値一致/音声completed/較正欠損"
-if python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
+echo "▶ 戦略室 実Bridge→全Renderer→数値一致/音声completed/較正欠損（旧のlocal回答の検査。全車snapshot(U1)を無効にして旧経路を固定。U1有効時は計算パケットが有効なら戦略相談はLUNAへ渡る＝U2のE2Eが検査）"
+if PITWALL_FIELD_LOG=0 python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
 echo "▶ 戦略室 AI race fallback：比較3案と較正欠損"
-if WO019_AI_RACE=1 STRATEGY_ROOM_COMPARISON_ONLY=1 STRATEGY_ROOM_E2E_OUTPUT="${PREFLIGHT_HISTORY_EVIDENCE_DIR:-/tmp}/strategy-room-ai.json" python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
+if PITWALL_FIELD_LOG=0 WO019_AI_RACE=1 STRATEGY_ROOM_COMPARISON_ONLY=1 STRATEGY_ROOM_E2E_OUTPUT="${PREFLIGHT_HISTORY_EVIDENCE_DIR:-/tmp}/strategy-room-ai.json" python3 irsdk-bridge/tests_strategy_room_e2e.py; then echo "   ✅ 全ケース合格"; else echo "   ❌ 不合格"; fail=1; fi
 
 # Build305 field repair: saved race conversation and audio lifetime through the complete Renderer.
 echo "▶ 実走305修復：履歴会話・発話寿命・GAP予算"
@@ -448,11 +448,21 @@ echo "▶ WO001 Road Atlanta fixture（現契約regression、characterization廃
 if out=$(node tests-wo001-road-atlanta-fixture.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep -E "❌|HARNESS"|head -10; fail=1; fi
 echo "▶ WO018 debrief outcome（after＋guard cut、旧treeは不在なら比較不能として数えない）"
 if out=$(node tests-wo018-debrief-outcome.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ STR-001 戦略比較の計算器（手計算対照・合成の交通反転・保存レース再生・未来情報の非混入）"
+if out=$(node tests-str001-compare.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ STR-001 Bridge competitors[].on_pit の契約（車ID・同一frame・観測時刻・不明はNone。実ソースの式を偽の配列で評価）。Bridge(bridge.py)の変更はBridge buildの出荷対象"
+if python3 -m py_compile irsdk-bridge/bridge.py && out=$(python3 irsdk-bridge/tests_str001_competitor_on_pit.py 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|tail -10; fail=1; fi
+echo "▶ STR-001 実入口の通し（実renderer→実router→実server.js→実speak。SDK/Audio/Bridge本体は偽。旧Build306は固定応答で終端する対照を別に持つ）"
+if out=$(node tests-str001-entry-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 
 echo "▶ U1 全車snapshot：Bridge側（実IRacingReaderの型どおり読取・世代検証／実poll_iracing再生／実ファイル記録／上限・回転・書込み失敗・詰まり）。bridge.py/field_snapshot.py/irsdk_mem.pyはBridge build出荷対象"
 if python3 -m py_compile irsdk-bridge/field_snapshot.py irsdk-bridge/bridge.py irsdk-bridge/irsdk_mem.py && out=$(python3 irsdk-bridge/tests_u1_field_snapshot.py 2>&1); then echo "   ✅ $(echo "$out"|tail -3|tr '\n' ' ')"; else echo "   ❌ 不合格"; echo "$out"|grep -E "FAIL|ERROR"|head -10; fail=1; fi
 echo "▶ U1 全車snapshot：通し（実bridge→実ファイル→実renderer受信→読み戻し一致・偽造拒否・旧rendererへ無害）"
 if out=$(node tests-u1-field-snapshot-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ U2/U3 全車snapshotからの「今／次周／燃料の限界」比較（手計算・交通・実U1ログ=鈴鹿決勝・富士再現・拒否。実U1ログが無い環境ではC節を『未実施』と表示）"
+if out=$(node tests-u2-undercut-forecast.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ U2/U3 通し（実field_snapshot→実renderer→実server→LUNA提案/質問/「じゃあ次周なら？」→Truth Gate・偽造拒否。実U1ログが無い環境は『未実施』）"
+if out=$(node tests-u2-undercut-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ source preflight合格（artifact・Windows・実走は別ゲート）"; else echo "❌ 出荷不可（上記を直すこと）"; fi

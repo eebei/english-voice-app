@@ -131,6 +131,7 @@ function contextFor(entries) {
       bindAll: (parts) => { const list = (Array.isArray(parts) ? parts : []).filter(Boolean);
         return list.length === 0 ? null : list.length === 1 ? list[0] : { kind: 'and', parts: list }; } },
     currentCanonicalStrategyLive: (live) => live,
+    currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
     // WO015 residual ("verifiedaux GAP/position"): strategyReplyBindingValid()
     // now independently fail-closes a GAP/position-asserting reply whenever
     // captureVerifiedAuxBinding(buildCurrentRaceContext()).available is false

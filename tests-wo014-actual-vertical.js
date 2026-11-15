@@ -181,6 +181,8 @@ function makeCallApiContext(cache, port, extraLiveData) {
     hasTelemetryOwnedVehicleClaim: () => false, normalizeLunaSpeech: (t) => t,
     speak: (t) => { spoken.push(t); }, applyProposalJudgeTag: () => {},
     currentStrategyStateAPI: () => null,
+    // STR-001（戦略比較）は本検査の関心外：計算パケット無し＝従来経路のまま、という中立スタブ。
+    currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
     // The REAL globals currentCanonicalStrategyLive()/buildCurrentRaceContext()
     // (injected below via vm.runInContext, not stubbed) read directly.
     canonicalLifecycleCache: cache,

@@ -706,6 +706,9 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 </div>
 
 <script src="memory-action-layer.js"></script>
+<script src="field-snapshot.js"></script>
+<script src="undercut-forecast.js"></script>
+<script src="pit-strategy-compare.js"></script>
 <script src="strategy-playbook.js"></script>
 <script src="fuel-plan-guard.js"></script>
 <script src="fuel-safety-override-guard.js"></script>
@@ -726,7 +729,6 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="luna-self-memory.js"></script>
 <script src="driving-style-v1.js"></script>
 <script src="team-plan.js"></script>
-<script src="field-snapshot.js"></script>
 <script src="relative-pace.js"></script>
 <script src="reflex-events.js"></script>
 <script src="conversation-memory-box.js"></script>
@@ -2933,6 +2935,9 @@ async function sendMsg(inputSource, entry){
   syncFuelReferenceEvidence();
   prepareMemoryBrain(text);
   const driverIntent=window.PitwallLocalIntentRouter?.classifyDriverIntent(text)||{kind:'other'};
+  // STR-001：Driverの条件の訂正（「前に詰まってる」等）は仮定として計算器へ戻し、再計算してから応答へ進む。
+  //   Plan操作の発話（command/reason_followup）は既存経路が扱うので、ここでは仮定にしない。
+  if(!['command','reason_followup'].includes(driverIntent.kind)){try{notePitCompareOpinion(text);}catch(e){diagnosticLog('PIT_COMPARE_ERROR',String(e&&e.message||e));}}
   const priorityDriverIntent=driverIntent.priority===true;
   if(pendingDriverPlanFollowup&&!(driverIntent.kind==='reason_followup'||driverIntent.kind==='command'&&driverIntent.explanationContinuation))pendingDriverPlanFollowup=null;
   const pendingKinds=pendingConfirmationKinds();
@@ -3108,6 +3113,10 @@ async function sendMsg(inputSource, entry){
         ? pendingDriverPlanFollowup:null),
       // ★2026-09-06：合意Plan・pit実績の唯一の正本。質問ごとに別前提で
       //   答えていた実走（18:43「ステイアウト」／18:44「Plan A継続」）を塞ぐ。
+      // STR-001：有効な戦略比較パケットがある時、戦略相談は固定応答で終端せずLUNA(LLM)へ渡す。
+      pitStrategyCompare:(()=>{const c=currentPitStrategyCompare();return {valid:c.valid,calc_id:c.packet&&c.packet.calc_id||null,
+        calculatedAnswer:window.pitCalculatedQuestion?.(text)===true,
+        retrospective:window.PitwallPitStrategyCompare?.isRetrospectivePitQuestion(text)===true};})(),
       strategy:(_strategyState
         ? { state:_strategyState, api:currentStrategyStateAPI(),binding:strategyProjection.binding()||strategyProjection.binding('facts') } : null),
       // Driver questions and proactive radio consume one A/B/C comparison.
@@ -3347,7 +3356,7 @@ async function sendMsg(inputSource, entry){
 // LLMの会話は自由にするが、ピット境界・リミッター・サービス状態はSDKで成立した時だけ
 // deterministic radioが発話する。プロンプトで抑えるだけではstream途中の誤発話を止められないため、
 // TTSより前にクライアントでも遮断する。
-function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false){
+function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false, packetNumbers=null){
   // Judge each sentence's time role. A saved previous-race number is not
   // a current vehicle claim; a later current or unqualified claim still is.
   const scoped=String(text||'').split(/[.．](?!\d)|[。！？!?\n；;]/).filter(piece=>{
@@ -3375,6 +3384,8 @@ function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false){
     /\b(?:refuelling|refueling|fueling|service)\s+(?:now|underway|complete|started)\b/i,
     /\b(?:limit|limiter)\s+line\b/i,
   ].some(re=>re.test(s));
+  // STR-001：有効な計算パケットに載っている数値は「パケット由来」。それ以外の数値だけが捏造として止める対象。
+  const sNum=packetNumbers&&window.PitwallPitStrategyCompare?window.PitwallPitStrategyCompare.maskPacketNumbers(s,packetNumbers):s;
   const pitContext=/(?:ボックス|ピット|\bbox\b|\bpit\b)/i.test(s);
   const pitCountdown=/(?:100|50|20)\s*(?:メートル|m\b|metres?\b|meters?\b)/i.test(s);
   // Strategy numbers are telemetry-owned too.  Streaming LLM text must not
@@ -3384,7 +3395,7 @@ function hasTelemetryOwnedVehicleClaim(text, includeStrategyNumbers=false){
     /\bP\s*\d+\b/i,
     /\b\d+:\d{2}\.\d{1,3}\b/,
     /(?:前|後ろ|後方|ahead|behind|gap(?:\s+is)?)\s*(?:は|が|まで)?\s*\d+(?:\.\d+)?/i,
-  ].some(re=>re.test(s));
+  ].some(re=>re.test(sNum));
   return stateClaim || (includeStrategyNumbers && strategyNumber) || (pitContext && pitCountdown);
 }
 function telemetryTruthFallback(live, userText, isJP){
@@ -4003,6 +4014,30 @@ async function callAPI(inputSource, memoryStatus=''){
     //   role/content 以外は出さない、と一箇所で宣言する。
     const outboundMessages = currentRaceConversation()
       .map(m => ({ role:m.role, content:m.content }));
+    // STR-001：このrequestに載せた計算パケットを凍結する（返答の数値検査も同じパケットに対して行う）。
+    //   戦略相談（質問・Driverの意見・その直後の2発話）の時だけ載せる。それ以外のchatには載せない（費用・キャッシュ・Truth Gateの範囲を相談に限る）。
+    let _pitAnswer = window.pitCalculatedQuestion?.(latestUserText)===true;
+    const _pitFollowUp = window.pitCalculationFollowUp?.(latestUserText)===true;
+    let _pitConsulting=pitCompareConsultingNow(latestUserTextForPitCompare())||_pitAnswer||_pitFollowUp;
+    // 初版の暫定上限：戦略相談は1 Driverターンにつきwith-packetのLLM実行1回。同じターンの2回目以降はパケットを載せない（従来経路）。周回更新はローカル計算でLLMを呼ばない。
+    if(_pitConsulting){
+      const L=pitCompareState.llm;
+      if(L.turn===turns) L.calls+=1; else {L.turn=turns;L.calls=1;}
+      if(L.calls>1){_pitConsulting=false;diagnosticLog('PIT_COMPARE_LLM_CAP','turn='+turns+' calls='+L.calls+' packet_withheld');}
+    }
+    const _pitReqT0=Date.now();
+    if(_pitConsulting && lastTelemetry && pitCompareState.packet?.undercut_forecast
+       && !undercutAnswerCurrent(pitCompareState.packet)){
+      updatePitStrategyCompare(lastTelemetry,'driver_opinion_refresh');
+    }
+    const _pitCompareAtRequest=_pitConsulting?currentPitStrategyCompare():{packet:null,valid:false,reasons:['not_a_strategy_consultation']};
+    // A race-side pit consultation consumes the adopted calculation. Provider
+    // text must never reach the bubble, speech queue or conversation history.
+    const _pitAnswerPacket = (_pitAnswer||_pitFollowUp) && _pitCompareAtRequest.reasons.length===0 ? _pitCompareAtRequest.packet : null;
+    const _pitAnswerScope = (_pitAnswer||_pitFollowUp) ? pitCompareScopeKey(lastTelemetry) : null;
+    const _pitAnswerEpoch = (_pitAnswer||_pitFollowUp) ? lastTelemetry?.bridge_process_epoch : null;
+    let _pitReplyIsCurrent = null;
+    const _pitCompareNumbers=_pitCompareAtRequest.valid&&window.PitwallPitStrategyCompare?window.PitwallPitStrategyCompare.numberSets(_pitCompareAtRequest.packet):null;
     const chatBody = {
         messages: outboundMessages,
         character:sel,
@@ -4013,6 +4048,7 @@ async function callAPI(inputSource, memoryStatus=''){
         sectors:lastSectors,
         liveData:currentCanonicalStrategyLive(lastTelemetry),
         raceContext:buildCurrentRaceContext(),
+        pitStrategyCompare:_pitCompareAtRequest&&_pitCompareAtRequest.valid?_pitCompareAtRequest.packet:null,   // STR-001：有効な計算パケットだけを渡す
         sessionType:lastSessionType,
         sessionAuthority:lastSessionAuthority,
         driverState, driverActivity,
@@ -4194,8 +4230,9 @@ async function callAPI(inputSource, memoryStatus=''){
       } else {
         full += decoder.decode(value, {stream:true});
       }
-      if(_referenceJudgeBuffering)continue; // No speculative consent/body reaches speech or UI.
-      if(!truthBlocked && responseAuthority!=='deterministic' && selMode==='race' && iracingLive && hasTelemetryOwnedVehicleClaim(full, true)){
+      if(_pitAnswer||_referenceJudgeBuffering)continue;
+      if(_pitFollowUp)continue; // Inspect the full reply before any sentence reaches an output. // No speculative consent/body reaches speech or UI.
+      if(!truthBlocked && responseAuthority!=='deterministic' && selMode==='race' && iracingLive && (hasTelemetryOwnedVehicleClaim(full, true, _pitCompareNumbers)||(_pitCompareNumbers&&window.PitwallPitStrategyCompare.hasUncoveredPositionClaim(full,_pitCompareNumbers))||(_pitCompareAtRequest&&_pitCompareAtRequest.valid&&window.PitwallPitStrategyCompare.hasUnobservedClearClaim(full,_pitCompareAtRequest.packet)))){
         truthBlocked=true;
         truthFallback=telemetryTruthFallback(lastTelemetry, latestUserText, isJP);
         if(bubble) bubble.textContent=truthFallback;
@@ -4250,11 +4287,50 @@ async function callAPI(inputSource, memoryStatus=''){
       else if(_referenceJudgeFinalKind==='unavailable')full=isJP?'提案への応答を確認できない。まだ確定していない。':'I cannot confirm the proposal response; it remains unconfirmed.';
       _referenceJudgeBuffering=false;
       if(bubble)bubble.textContent=full;
-      if(hasTelemetryOwnedVehicleClaim(full,true)&&!['confirm','decline'].includes(_referenceJudgeFinalKind)){
+      if((!_pitAnswer||_referenceJudgeFinalKind==='unavailable')&&(hasTelemetryOwnedVehicleClaim(full,true,_pitCompareNumbers)||(_pitCompareNumbers&&window.PitwallPitStrategyCompare.hasUncoveredPositionClaim(full,_pitCompareNumbers))||(_pitCompareAtRequest&&_pitCompareAtRequest.valid&&window.PitwallPitStrategyCompare.hasUnobservedClearClaim(full,_pitCompareAtRequest.packet)))&&!['confirm','decline'].includes(_referenceJudgeFinalKind)){
         truthBlocked=true;truthFallback=telemetryTruthFallback(lastTelemetry,latestUserText,isJP);
       }
     }
-    flushSentences(true);
+    if(_pitFollowUp && (pitCompareScopeKey(lastTelemetry)!==_pitAnswerScope
+        || lastTelemetry?.bridge_process_epoch!==_pitAnswerEpoch || !iracingLive || selMode!=='race')) return;
+    if(_pitFollowUp && !_referenceJudgeFinalKind && window.PitwallPitStrategyCompare.hasBlendTopic(full)) _pitAnswer=true;
+    if(_pitFollowUp && !_pitAnswer && !_referenceJudgeFinalKind){
+      if(!strategyReplyBindingValid(_replyBindingFor(full),full,_replyAuxAtRequest)) return;
+      if(responseAuthority!=='deterministic' && (hasTelemetryOwnedVehicleClaim(full,true,_pitCompareNumbers)
+          || (_pitCompareNumbers && window.PitwallPitStrategyCompare.hasUncoveredPositionClaim(full,_pitCompareNumbers)))){
+        full=telemetryTruthFallback(lastTelemetry,latestUserText,isJP);
+      }
+      if(window.PitwallReflexEvents?.containsReflexClaim(full)) full=window.PitwallReflexEvents.stripReflexClaims(full).text;
+    }
+    // Coverage, rather than the wording of the reply, requires this caveat.
+    // Queue it with the reply as a single item so it cannot expire separately.
+    const _pitNeedsCaveat = _pitFollowUp && !_pitAnswer && !_referenceJudgeFinalKind
+      && !(undercutAnswerCurrent(_pitAnswerPacket) && _pitAnswerPacket.undercut_forecast.coverage?.clear_claim_allowed===true);
+    if((_pitAnswer||_pitNeedsCaveat) && !['confirm','decline','unavailable'].includes(_referenceJudgeFinalKind)){
+      const u = _pitAnswerPacket?.undercut_forecast;
+      const canUse = undercutAnswerCurrent(_pitAnswerPacket);
+      const expectedCalcId = canUse ? _pitAnswerPacket.calc_id : null;
+      _pitReplyIsCurrent = () => selMode==='race' && iracingLive && pitCompareScopeKey(lastTelemetry)===_pitAnswerScope
+        && lastTelemetry?.bridge_process_epoch===_pitAnswerEpoch
+        && (expectedCalcId === null || undercutAnswerCurrent(_pitAnswerPacket));
+      if(!_pitReplyIsCurrent()) return;
+      if(_pitNeedsCaveat){
+        const body=stripProposalJudgeTag(full).text.replace(/\[JA:[\s\S]*\]$/,'').trim();
+        full=[body,isJP?'見えていない車がいる可能性があり、復帰先が空いているとは言えない。':
+          'Some cars may be out of view, so I cannot say the blend is clear.'].filter(Boolean).join(' ');
+      } else {
+        full=PitwallUndercutForecast.consultationReply(canUse ? u : null,isJP);
+      }
+      const sourceRef=canUse ? {calc_id:u.calc_id,calc_version:u.version,race:u.race,observed_at:u.observed_at} : null;
+      const replyText=normalizeLunaSpeech(full);
+      speak(replyText,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:_pitNeedsCaveat?'pit_reply_with_caveat':'pit_calculated_reply',
+        precheck:_pitReplyIsCurrent,displayEl:bubble,auxAtRequest:sourceRef?{role:'pit_calculation',source_ref:sourceRef}:null});
+      _ownReplyItem=lastQueuedSpeakItem;
+      if(_ownReplyItem)_replyQueuedItems.push(_ownReplyItem);
+      diagnosticLog('PIT_CALCULATED_REPLY',JSON.stringify({source:sourceRef,action:canUse?u.action?.kind:null,text:replyText}));
+    } else {
+      flushSentences(true);
+    }
     // ★2026-10-08 WO013 r2差戻し：global lastQueuedSpeakItemを最終フラッシュ
     //   「後」に読むのではなく、このreply自身がspeak()/speakReplyChunk()を
     //   呼んだ**その場**で既に_ownReplyItemへ捕まえてある（tailが空で
@@ -4319,17 +4395,19 @@ async function callAPI(inputSource, memoryStatus=''){
     //   Truth Gate経路、本修復の対象外）はこの新しい判定を迂回し従来通り
     //   無条件で確定する。
     const _finalReplyBinding = _replyBindingFor(display);
-    const _finalReplyValid = truthBlocked || strategyReplyBindingValid(_finalReplyBinding,display,_replyAuxAtRequest);
+    const _finalReplyValid = _pitReplyIsCurrent ? _pitReplyIsCurrent() : truthBlocked || strategyReplyBindingValid(_finalReplyBinding,display,_replyAuxAtRequest);
     if(_finalReplyValid){
       if(bubble) bubble.textContent = display;
-      convoLog('ai', display);   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
+      if(_pitCompareAtRequest&&_pitCompareAtRequest.valid){const rec={turn:turns,calc_id:_pitCompareAtRequest.packet.calc_id,calls:pitCompareState.llm.calls,ms:Date.now()-_pitReqT0,reply_chars:String(display||'').length};pitCompareState.llm.log.push(rec);if(pitCompareState.llm.log.length>100)pitCompareState.llm.log.shift();diagnosticLog('PIT_COMPARE_LLM',JSON.stringify(rec));}
+      const _replyOverlayId=convoLog('ai', display);
+      if(_pitReplyIsCurrent&&bubble){bubble._ovlId=_replyOverlayId; bubble._ovlText=display;}   // 完成した返答全文をデバッグログへ（空初期化分の代わり）
       // ★2026-09-03 Codex差戻し③：ストリーミング回答は `addMsg('ai','')` で
       //   **空文字**の吹き出しを先に作り、中身を後から入れる。そのため addMsg 側の
       //   記録（`if(text && type==='ai')`）では **通常回答が一度も保存されない**。
       //   保存されるのは直接 addMsg('ai', 完成文) を呼ぶ定型応答だけだった。
       //   ストリーム完了はこの1箇所しか無いので、ここで一度だけ記録する。
       //   （`convoLog('ai', display)` と同じ出口＝二重記録も取りこぼしも起きない）
-      if(typeof recordLunaTurn==='function') recordLunaTurn(display, 'streamed_reply');
+      if(typeof recordLunaTurn==='function'){const _replyTurn=recordLunaTurn(display, 'streamed_reply');if(_pitReplyIsCurrent&&bubble)bubble._turnId=_replyTurn;}
       completeMemoryBrainTurn(display);
       const _replyMid = pushMsg({role:'assistant',content:display});
       // ★WO015残条件「IDtrace／generated-completed role逆追跡」修復：この
@@ -5650,7 +5728,7 @@ function connectBridge(){
         //   出口へ、strategyResponseOutbox/strategyDeliveryOutboxも揃える。
         flushStrategyResponseOutbox();flushStrategyDeliveryOutbox();}if(typeof syncCanonicalStrategyProjection==='function')syncCanonicalStrategyProjection();boxAuthorityTransport.tick();return;}
       // U1：全車snapshot。検証して保持するだけ（音声・LLM・戦略計算には渡さない）。世代混在/未知キー/重複は採用しない。
-      if(data.type==='field_snapshot'){try{fieldSnapshotReceiver.receive(data);}catch(_){}return;}
+      if(data.type==='field_snapshot'){try{const _fr=fieldSnapshotReceiver.receive(data);if(_fr&&_fr.accepted)onFieldSnapshotAccepted(data);}catch(_){}return;}
       if(['telemetry_live','box_authority_snapshot'].includes(data.type)||data.trigger==='strategy_plan_box_call'){if(!canonicalLifecycleCache.matches(data))return;}
       if(['driver_plan_command_ack','box_delivery_ack','strategy_decision_ack','strategy_delivery_ack'].includes(data.type)&&!canonicalLifecycleCache.epochMatches(data))return;
       if(data.type==='iracing_status'){
@@ -5823,6 +5901,7 @@ function connectBridge(){
         // Strategy views are read on demand; no stale alias is written into telemetry.
         evaluateLiveStrategySwitch(lastTelemetry);
         observeRelativePace(lastTelemetry);
+        try{maybeUpdatePitStrategyCompare(lastTelemetry);}catch(e){diagnosticLog('PIT_COMPARE_ERROR',String(e&&e.message||e));}
         captureTeamStintLap(lastTelemetry);
         evaluateTeamPlanLiveEvidence(lastTelemetry);
         maybeDeliverFuelWindowWatch(lastTelemetry);
@@ -6435,6 +6514,236 @@ function buildCurrentRaceContext(){
 const fieldSnapshotReceiver=PitwallFieldSnapshot.createReceiver();
 function currentFieldSnapshot(expect){return fieldSnapshotReceiver.current(expect);}
 function fieldSnapshotStats(){return fieldSnapshotReceiver.stats();}
+// ══ U2/U3：全車snapshotから「今／次周／燃料の限界」を毎Lap比較（undercut-forecast.js・決定論）══════════════
+//   後ろ2台が先に入る場合も試算し、給油後の共通地点でどちらが前に出そうかを返す。計算結果は STR-001 のパケットへ付き、
+//   走行中のLUNA提案（決定論の文面・LLM 0回）と、Driverの質問/「じゃあ次周なら？」（LLM 1回/ターン）の両方が同じ計算版を使う。
+//   名簿の全車を同時に観測できない間は、復帰先を「空いている」と言わない。相手の給油予定は仮定。提案は実行指示ではない（採用は既存のPlan/ACK）。
+const undercutTracker=PitwallUndercutForecast.createTracker();
+const undercutState={lastEventAt:0,proposalKey:null,proposalLapKey:'',proposals:[],skips:{}};
+function undercutSkip(reason){undercutState.skips[reason]=(undercutState.skips[reason]||0)+1;return null;}
+function onFieldSnapshotAccepted(msg){
+  undercutTracker.update(msg);
+  // 相手のピットIN/OUT・ピット状態の変化は、Lapの途中でも再計算する（2秒に1回まで）。毎標本は計算しない。
+  if(Array.isArray(msg.events)&&msg.events.some(e=>e==='pit_in'||e==='pit_out'||e==='pit')&&lastTelemetry&&Date.now()-undercutState.lastEventAt>2000&&pitCompareState.packet){
+    undercutState.lastEventAt=Date.now();
+    try{updatePitStrategyCompare(lastTelemetry,'field_pit_event');}catch(e){diagnosticLog('PIT_COMPARE_ERROR',String(e&&e.message||e));}
+  }
+}
+function buildUndercutSection(live,input,opinions){
+  const U=window.PitwallUndercutForecast;
+  if(!U||!input||!live) return null;
+  // 有効な（採用済み・同じrace/session・新しい）snapshotだけ。無ければ計算しない（前のsessionの全車情報を使わない）。
+  const snap=currentFieldSnapshot({race_instance_id:live.race_instance_id,session_num:live.session_num,max_age_s:8,now_s:Date.now()/1000});
+  if(!snap) return undercutSkip('no_current_field_snapshot');
+  const opts={normal_pit_lap:input.baseline_pit_lap,normal_source:input.baseline_source?.startsWith('plan_a')?'plan_a':'provisional_even_split',
+    rival_stops:Object.fromEntries(input.field.filter(c=>c.declared_pit||Number.isInteger(c.stop_lap)).map(c=>[
+      c.id.slice(3),{lap:c.declared_pit?input.meta.lap:c.stop_lap,source:c.declared_pit?'driver_declared':c.stop_lap_source}]))};
+  const lap=Number(input.meta.lap);
+  const fo=[...(opinions||[])].reverse().find(o=>o&&o.kind==='undercut_focus'&&o.at_lap===lap);   // 焦点は、その質問をしたLapの間だけ
+  if(fo) opts.focus=fo.focus;
+  const tr=[...(opinions||[])].reverse().find(o=>o&&o.kind==='traffic'&&o.extra_s);
+  if(tr){opts.traffic_extra_s=tr.extra_s;const ids=(tr.plan_ids||[]).join(',');opts.traffic_extra_option_ids=/under|undercut/.test(ids)?['now']:(/over/.test(ids)?['next','limit']:null);}
+  const rejected=(opinions||[]).filter(o=>o&&o.kind==='reject_plan').map(o=>o.plan);
+  if(rejected.length) opts.declined_option_ids=[].concat(rejected.includes('undercut')?['now']:[],rejected.includes('overcut')?['limit']:[]);
+  const sec=U.compute({meta:{race_instance_id:live.race_instance_id,session_num:live.session_num,observed_wall:new Date(snap.observed_at*1000).toISOString()},
+    own:{fuel_l:input.own.fuel_l,fuel_per_lap_l:input.own.fuel_per_lap_l,tank_l:input.own.tank_l,reserve_l:input.own.reserve_l,lap_time_s:input.own.lap_time_s},
+    total_laps:input.total_laps,pit:input.pit,snapshot:snap,tracker:undercutTracker,options:opts,driver_assumptions:input.driver_assumptions});
+  // 標本の自車Lapと、いま見ているtelemetryのLapが2周以上ずれていれば別物として使わない
+  if(sec&&sec.observed_at&&Number.isFinite(sec.observed_at.lap)&&Math.abs(sec.observed_at.lap-lap)>1){diagnosticLog('UNDERCUT_FORECAST_SKIP','lap_mismatch snapshot_lap='+sec.observed_at.lap+' telemetry_lap='+lap);return undercutSkip('lap_mismatch');}
+  return sec;
+}
+function undercutAnswerCurrent(packet){
+  const u=packet?.undercut_forecast;
+  if(!u || !lastTelemetry || !iracingLive || selMode!=='race'
+     || u.observed_at?.bridge_process_epoch!==lastTelemetry.bridge_process_epoch) return false;
+  const now=Date.now(), observed=Date.parse(u.observed_at?.wall);
+  if(!(now-observed>=0 && now-observed<=8000 && now-lastTelemetryAt<=8000)) return false;
+  if(Math.abs(Number(lastTelemetry.lap)-u.observed_at.lap)>1) return false;
+  const current=currentPitStrategyCompare();
+  return current.packet?.calc_id===packet.calc_id && current.reasons.length===0;
+}
+// 走行中のLUNA提案（能動）：変化があった時だけ、1Lapに1回まで。決定論の文面でLLMを呼ばない。Final Lap／チェッカー／デブリーフ中は出さない。
+function maybeProposeUndercut(packet,reason){
+  const U=window.PitwallUndercutForecast;
+  if(!U||!packet||!packet.undercut_forecast||reason==='driver_opinion'||String(reason||'').startsWith('driver_opinion')) return;
+  if(selMode!=='race'||!iracingLive||!lastTelemetry||lastTelemetry.on_track!==true||lastTelemetry.on_pit_road===true) return;
+  if(typeof isSessionEndingLifecycle==='function'&&isSessionEndingLifecycle()) return;
+  const sec=packet.undercut_forecast;
+  const lapKey=pitCompareScopeKey(lastTelemetry)+'|'+Number(lastTelemetry.lap);
+  if(undercutState.proposalLapKey===lapKey) return;   // 1Lapに1回まで
+  const pr=U.proposal(sec,undercutState.proposalKey);
+  diagnosticLog('UNDERCUT_PROPOSAL',JSON.stringify({calc_id:sec.calc_id,reason,spoken:!!(pr&&pr.text),why:pr&&pr.reason||'none'}));
+  if(!pr||!pr.text){if(pr) undercutState.proposalKey=pr.key;return;}
+  undercutState.proposalKey=pr.key;undercutState.proposalLapKey=lapKey;
+  const text=pr.text;
+  undercutState.proposals.push({lap:Number(lastTelemetry.lap),calc_id:sec.calc_id,text});
+  if(undercutState.proposals.length>50) undercutState.proposals.shift();
+  addMsg('ai',text);pushMsg({role:'assistant',content:text});
+  speak(text,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pit_undercut_proposal',dedupeKey:'pit_undercut_'+pr.key,precheck:()=>undercutAnswerCurrent(packet),
+    auxAtRequest:{role:'pit_calculation',source_ref:{calc_id:sec.calc_id,calc_version:sec.version,race:sec.race,observed_at:sec.observed_at}}});
+}
+// ══ STR-001：毎Lapの戦略比較（通常／アンダーカット／オーバーカット）══════════════════════
+//   計算は pit-strategy-compare.js（決定論）。ここは入力の組み立て・再計算の契機・LUNAへの受け渡しだけを持つ。
+//   観測（Bridge）・Driver申告・仮定を区別して渡し、古い計算版（別race/別session/Lapが進んだもの）は送らない。
+//   提案は実行指示ではない：採用は既存のPlan/ACK経路で行う。
+const pitCompareState={packet:null,lapKey:'',opinions:[],scope:'',hadUndercut:false,updatedAt:0,reason:null,history:[],fuelByLap:{},consultTurnsLeft:-1,consultSeenText:null,neighbors:'',llm:{turn:-1,calls:0,log:[]}};
+function pitCompareScopeKey(live){return live?String(live.race_instance_id||'')+'|'+String(live.session_num??''):'';}
+function pitCompareInputFromLive(live){
+  const C=window.PitwallPitStrategyCompare;
+  if(!C||!live||!live.race_instance_id) return null;
+  const lap=Number(live.lap);
+  if(!Number.isInteger(lap)||lap<1) return null;
+  const obs=(v,low,high,note)=>({value:v,low:low??v,high:high??v,source:'observed',note:note||null});
+  const asm=(v,low,high,note)=>({value:v,low:low??v,high:high??v,source:'assumed',note:note||null});
+  const lapTime=Number(live.driver_pace_median_s)>0?Number(live.driver_pace_median_s):(Number(live.last)>0?Number(live.last):null);
+  const fs=live.fuel_strategy&&typeof live.fuel_strategy==='object'?live.fuel_strategy:null;
+  // 燃費：Lapごとに観測した残燃料の減少（ピット周は除外）の中央値を第一に使う。無ければBridgeの燃費。
+  const burns=[];const fl=pitCompareState.fuelByLap;
+  for(const k of Object.keys(fl).map(Number).sort((x,y)=>x-y)){if(fl[k-1]!==undefined){const d=fl[k-1]-fl[k];if(d>1&&d<8)burns.push(d);}}
+  burns.sort((x,y)=>x-y);
+  const burnObserved=burns.length>=2?burns[Math.floor(burns.length/2)]:null;
+  const burn=burnObserved||(Number(fs?.strict_clean_avg_fuel_per_lap)>0?Number(fs.strict_clean_avg_fuel_per_lap):(Number(fs?.avg_fuel_per_lap)>0?Number(fs.avg_fuel_per_lap):null));
+  // 総周回：検証済みの laps_total、無ければ時間制の残り時間÷ペース（最終周回は±1の幅）
+  let total=null;
+  if(Number.isInteger(Number(live.laps_total))&&Number(live.laps_total)>lap) total=obs(Number(live.laps_total));
+  else if(Number(live.session_time_remaining_s)>0&&lapTime){const left=Math.ceil(Number(live.session_time_remaining_s)/lapTime);total=asm(lap+left,lap+left-1,lap+left+1,'時間制: 残り時間÷最近のペース。最終周回は±1');}
+  const tank=Number(strategyStartingFuelL)>0?Number(strategyStartingFuelL):null;
+  // ピット作業：Bridgeの校正（観測）。無ければ出所付きの暫定値と幅（assumed）。
+  const cal=live.pit_loss_calibration&&typeof live.pit_loss_calibration==='object'?live.pit_loss_calibration:null;
+  const svc=cal&&cal.fuel_service&&cal.fuel_service.available===true?cal.fuel_service:null;
+  const fixed=svc&&Number(svc.fixed_stall_s)>0?obs(Number(svc.fixed_stall_s),Number(svc.fixed_stall_s)-2,Number(svc.fixed_stall_s)+2,'Bridge校正 n='+svc.sample_count):asm(10,6,14,'暫定（校正なし）');
+  const rate=svc&&Number(svc.fuel_rate_s_per_l)>0?obs(Number(svc.fuel_rate_s_per_l),Number(svc.fuel_rate_s_per_l)*0.9,Number(svc.fuel_rate_s_per_l)*1.25,'Bridge校正 n='+svc.sample_count):asm(0.4,0.3,0.5,'暫定（校正なし）');
+  let transit;
+  if(cal&&Number(cal.observed_loss_median_s)>0&&tank){
+    const typicalAdd=tank*0.5;
+    const mid=Math.max(0,Number(cal.observed_loss_median_s)-fixed.value-rate.value*typicalAdd);
+    const q1=Number.isFinite(Number(cal.observed_loss_q1_s))?Number(cal.observed_loss_q1_s):Number(cal.observed_loss_median_s)-4,q3=Number.isFinite(Number(cal.observed_loss_q3_s))?Number(cal.observed_loss_q3_s):Number(cal.observed_loss_median_s)+4;
+    transit=obs(mid,Math.max(0,mid-(Number(cal.observed_loss_median_s)-q1)),mid+(q3-Number(cal.observed_loss_median_s)),'校正の総損失中央値−作業時間(給油量は半タンクと仮定)');
+  } else transit=asm(12,8,16,'暫定（校正なし）：ピットレーン走行−本線同区間');
+  // 同クラスの隣接車（Bridgeの competitors：gap_s は「正＝自車より後ろ」。計算器は 自車到達−相手到達 なので符号を反転）
+  const comps=(Array.isArray(live.competitors)?live.competitors:[]).filter(c=>c&&Number.isFinite(Number(c.gap_s))).slice().sort((a,b)=>Math.abs(a.gap_s)-Math.abs(b.gap_s)).slice(0,4);
+  const field=comps.map(c=>{
+    const lt=Number(c.last_lap_s);
+    const usable=lapTime&&Number.isFinite(lt)&&Math.abs(lt-lapTime)<=15;
+    return {id:'car'+c.car_idx,label:c.car_number?('#'+c.car_number):(c.name||('car'+c.car_idx)),class_rel:'same',gap_s:obs(-Number(c.gap_s)),
+      lap_time_s:usable?obs(lt,lt-0.5,lt+0.5,'相手の前Lapタイム'):(lapTime?asm(lapTime,lapTime-0.5,lapTime+0.5,'未観測→自車の最近ペースを仮定'):null),
+      stops_done:0,on_pit:(c.on_pit===true&&Number.isInteger(c.on_pit_frame)&&c.on_pit_frame===Number(live.source_frame_sequence)),is_target:Number(c.gap_s)<0&&comps.filter(x=>Number(x.gap_s)<0).sort((a,b)=>b.gap_s-a.gap_s)[0]===c};
+  });
+  // 通常案の基準：現行の燃料計画（canonicalの strategy_options.plan_a）が示す有効な通常ピット周。使えなければ出所つきの暫定基準（総周回の半分）。総周回も無ければ比較を保留する。
+  const pa=live.strategy_options&&live.strategy_options.available===true?live.strategy_options.plan_a:null;
+  const planLap=pa&&pa.available===true&&Number.isInteger(Number(pa.target_lap))&&Number(pa.target_lap)>=lap?Number(pa.target_lap):null;
+  const baselineLap=planLap!==null?planLap:(total?C.provisionalBaselineLap(lap,total.value):null);
+  const baselineSource=planLap!==null?'plan_a(現行の燃料計画)':(total?'provisional_even_split(暫定・assumed)':null);
+  return {
+    meta:{race_instance_id:live.race_instance_id,session_num:live.session_num,lap,position:Number(live.class_pos)||Number(live.pos)||null,observed_wall:new Date().toISOString(),
+      series:lastCarClass||null,track:lastTrack||null,car:lastCarModel||null},
+    total_laps:total,
+    own:{fuel_l:Number.isFinite(Number(live.fuel))?obs(Number(live.fuel)):null,fuel_per_lap_l:burn?(burnObserved?obs(burn,burns[0],burns[burns.length-1],'観測'+burns.length+'Lapの燃料減少の中央値'):obs(burn,burn*0.95,burn*1.05,'Bridgeの燃費')):null,
+      tank_l:tank?obs(tank,tank,tank,'レース開始時の燃料'):null,reserve_l:asm(0.5,0.5,0.5,'予備燃料（仮定）'),
+      lap_time_s:lapTime?obs(lapTime,lapTime-0.5,lapTime+0.5,'最近のペース'):null,best_clean_lap_s:Number(live.best)>0?obs(Number(live.best)):null},
+    pit:{transit_extra_s:transit,fixed_stall_s:fixed,fuel_rate_s_per_l:rate},
+    baseline_pit_lap:baselineLap,baseline_source:baselineSource,   // 通常案＝現行の燃料計画(Plan A)の有効な周。無ければ出所つきの暫定基準。燃料の限界周は使わない
+    field,field_complete:false,
+    driver_assumptions:[],options:{},
+  };
+}
+function updatePitStrategyCompare(live,reason){
+  const C=window.PitwallPitStrategyCompare;
+  if(!C||!live) return null;
+  const scope=pitCompareScopeKey(live);
+  if(scope!==pitCompareState.scope){pitCompareState.scope=scope;pitCompareState.hadUndercut=false;pitCompareState.consultTurnsLeft=-1;pitCompareState.consultSeenText=null;pitCompareState.opinions=[];pitCompareState.packet=null;pitCompareState.lapKey='';}   // 別race/sessionへ前の申告・計算を持ち越さない
+  const input=pitCompareInputFromLive(live);
+  if(!input){pitCompareState.packet=null;return null;}
+  let next=input;
+  for(const op of pitCompareState.opinions) next=C.applyDriverOpinion(next,op,{lap:input.meta.lap,total_laps:input.total_laps&&input.total_laps.value});
+  let packet=C.compute(next);
+  try{const uc=buildUndercutSection(live,next,pitCompareState.opinions);if(uc){packet=C.attachUndercut(packet,uc);pitCompareState.hadUndercut=true;}}catch(e){diagnosticLog('UNDERCUT_FORECAST_ERROR',String(e&&e.message||e));}
+  pitCompareState.packet=packet;pitCompareState.lapKey=scope+'|'+input.meta.lap;pitCompareState.updatedAt=Date.now();pitCompareState.reason=reason||null;
+  pitCompareState.history.push({calc_id:packet.calc_id,lap:input.meta.lap,reason:reason||null,rec:packet.recommendation&&packet.recommendation.case_id||null});
+  if(pitCompareState.history.length>200) pitCompareState.history.shift();
+  diagnosticLog('PIT_COMPARE',JSON.stringify({calc_id:packet.calc_id,lap:input.meta.lap,reason:reason||null,comparable:packet.comparable,
+    rec:packet.recommendation?{case:packet.recommendation.case_id,pit_lap:packet.recommendation.pit_lap,decide_by:packet.recommendation.decide_by_lap}:null,blocking:packet.blocking||null,opinions:pitCompareState.opinions.length}));
+  if(packet.undercut_forecast){const u=packet.undercut_forecast,d=u.decision;
+    diagnosticLog('UNDERCUT_FORECAST',JSON.stringify({calc_id:u.calc_id,pkt:packet.calc_id,lap:u.observed_at&&u.observed_at.lap,reason:reason||null,comparable:u.comparable,blocking:u.blocking||null,
+      coverage:u.coverage&&{roster:u.coverage.roster_competitors,observed:u.coverage.observed_now,dead_reckoned:u.coverage.dead_reckoned,unknown:u.coverage.unknown},
+      rivals:(u.rivals||[]).map(r=>r.no),rec:d?{option:d.recommendation.option_id,pit_lap:d.recommendation.pit_lap,decide_by:d.recommendation.decide_by_lap,threats:d.rival_first_threats.length,flips:d.flips_when.length}:null,focus:u.focus&&u.focus.option_id||null}));
+  }
+  maybeProposeUndercut(packet,reason);
+  return packet;
+}
+// 毎Lap：Lapが進んだ時・別race/sessionに入った時に再計算する（毎frameは計算しない）。
+function maybeUpdatePitStrategyCompare(live){
+  if(!live||!live.race_instance_id||!Number.isInteger(Number(live.lap))) return;
+  const key=pitCompareScopeKey(live)+'|'+Number(live.lap);
+  // 近くの車の顔ぶれ（前後それぞれ最も近い車）が変わった／相手のピット状態が変わった時も再計算する（しきい値なし：抜いた・抜かれた・相手が入った）。
+  const comps=(Array.isArray(live.competitors)?live.competitors:[]).filter(c=>c&&Number.isFinite(Number(c.gap_s)));
+  const ahead=comps.filter(c=>c.gap_s<0).sort((a,b)=>b.gap_s-a.gap_s)[0],behind=comps.filter(c=>c.gap_s>0).sort((a,b)=>a.gap_s-b.gap_s)[0];
+  const neighbors=[ahead&&ahead.car_idx,behind&&behind.car_idx,comps.filter(c=>c.on_pit===true&&Number.isInteger(c.on_pit_frame)&&c.on_pit_frame===Number(live.source_frame_sequence)).map(c=>c.car_idx).sort().join(',')].join('/');
+  if(key===pitCompareState.lapKey){
+    if(neighbors!==pitCompareState.neighbors&&pitCompareState.packet){pitCompareState.neighbors=neighbors;updatePitStrategyCompare(live,'neighbors_changed');}
+    return;
+  }
+  pitCompareState.neighbors=neighbors;
+  if(pitCompareScopeKey(live)!==pitCompareState.scope) pitCompareState.fuelByLap={};   // 別race/sessionの燃費を持ち越さない
+  if(Number.isFinite(Number(live.fuel))&&!live.on_pit_road) pitCompareState.fuelByLap[Number(live.lap)]=Number(live.fuel);
+  updatePitStrategyCompare(live,'lap');
+}
+// 戦略相談かどうか。質問・意見の発話、およびその直後の2発話（「なんで？」等の続き）まで。
+function latestUserTextForPitCompare(){
+  const m=(Array.isArray(messages)?messages:[]).slice().reverse().find(x=>x&&x.role==='user');
+  return m&&typeof m.content==='string'?m.content:'';
+}
+function pitCalculationFollowUp(text){
+  return selMode==='race' && iracingLive && pitCompareState.consultTurnsLeft>0
+    && pitCompareState.hadUndercut
+    && !window.PitwallPitStrategyCompare.isRetrospectivePitQuestion(text);
+}
+function pitCalculatedQuestion(text){
+  if(selMode!=='race'||!iracingLive) return false;
+  const C=window.PitwallPitStrategyCompare;
+  if(!C || C.isRetrospectivePitQuestion(text)) return false;
+  const inConsult=pitCompareState.consultTurnsLeft>0;
+  const followUp=/(?:出たら|出ると|戻ったら|戻ると).{0,18}(?:前|後ろ|空い|車列|詰ま|混)|(?:when|after|if).{0,18}(?:exit|come out|come back out).{0,25}(?:clear|traffic|ahead|behind)/i.test(text);
+  if(inConsult && (followUp || /(?:合流|ピット出口|復帰).{0,16}(?:どうなる|どう|前|後ろ|空い|詰ま|混)|(?:what happens|how).*\b(?:rejoin|blend)\b/i.test(text))) return true;
+  if(inConsult && pitCompareState.hadUndercut && /^(?:じゃあ|それなら)?\s*(?:なぜ|なんで|理由は|why)[？?。.! ]*$/i.test(text)) return true;
+  if(!C.isStrategyConsultation(text)) return false;
+  return pitCompareState.hadUndercut || !!pitCompareState.packet?.undercut_forecast
+    || /合流|blend|(?:復帰|ピット出口|rejoin|pit exit).{0,18}(?:交通|ギャップ|gaps?|traffic)|(?:gaps?|traffic).{0,18}(?:rejoin|pit exit)|ピット.{0,4}交通/i.test(text);
+}
+function pitCompareConsultingNow(text){
+  const C=window.PitwallPitStrategyCompare;
+  if(!C) return false;
+  const st=pitCompareState;
+  const key=String(text||'');
+  if(st.consultSeenText===key) return st.consultTurnsLeft>=0;   // 同じ発話の再評価（再送・再検証）は同じ判定
+  st.consultSeenText=key;
+  if(C.isRetrospectivePitQuestion(key)){st.consultTurnsLeft=-1;return false;}
+  if(C.isStrategyConsultation(key)){st.consultTurnsLeft=2;return true;}
+  if(st.consultTurnsLeft>0){st.consultTurnsLeft-=1;return true;}
+  st.consultTurnsLeft=-1;return false;
+}
+// 現在有効な計算パケット（race/session/Lapが今と合わなければ送らない＝古い計算版の提案をしない）
+function currentPitStrategyCompare(){
+  const C=window.PitwallPitStrategyCompare,pkt=pitCompareState.packet;
+  if(!C||!pkt||!lastTelemetry) return {packet:null,valid:false,reasons:['no_packet']};
+  const v=C.validatePacket(pkt,{race_instance_id:lastTelemetry.race_instance_id,session_num:lastTelemetry.session_num,lap:Number(lastTelemetry.lap)});
+  return {packet:pkt,valid:v.ok&&C.packetUsable(pkt),reasons:v.reasons};
+}
+// Driverの意見（条件の訂正）→仮定として記録→再計算。意見は観測にしない。
+function notePitCompareOpinion(text){
+  const C=window.PitwallPitStrategyCompare;
+  if(!C||!lastTelemetry) return null;
+  const op=C.parseDriverOpinion(text);
+  if(!op) return null;
+  if(pitCompareScopeKey(lastTelemetry)!==pitCompareState.scope) updatePitStrategyCompare(lastTelemetry,'scope');
+  op.at_lap=Number(lastTelemetry.lap);   // 焦点・申告が「どのLapの質問か」
+  pitCompareState.opinions.push(op);
+  if(pitCompareState.opinions.length>8) pitCompareState.opinions.shift();
+  const before=pitCompareState.packet&&pitCompareState.packet.calc_id;
+  const pkt=updatePitStrategyCompare(lastTelemetry,'driver_opinion:'+op.kind);
+  diagnosticLog('PIT_COMPARE_OPINION',JSON.stringify({kind:op.kind,before,after:pkt&&pkt.calc_id}));
+  return {op,before,after:pkt&&pkt.calc_id};
+}
 function syncCanonicalStrategyProjection(){
   const state=strategyProjection.state();
   const el=document.getElementById('canonical-strategy-view');

@@ -162,7 +162,7 @@ function makeAudioCallApiContext(cache, projection, port, auxSourceRef, auxRaw) 
     currentMemoryBrainPrompt: () => '', completeMemoryBrainTurn: () => null,
     buildRaceHistoryContext: () => '', buildNamedRivalNote: () => '',
     hasTelemetryOwnedVehicleClaim: () => false, normalizeLunaSpeech: (t) => t,
-    applyProposalJudgeTag: () => {}, currentStrategyStateAPI: () => null,
+    applyProposalJudgeTag: () => {}, currentStrategyStateAPI: () => null, currentPitStrategyCompare: () => ({ packet: null, valid: false, reasons: ['test_stub'] }), notePitCompareOpinion: () => null, pitCompareConsultingNow: () => false, latestUserTextForPitCompare: () => '',
     canonicalLifecycleCache: cache, strategyProjection: projection,
     lastTelemetryAuxRef: auxSourceRef, lastTelemetry: Object.assign({}, auxRaw),
     PitwallRaceContextBuilder: RaceContextBuilder,

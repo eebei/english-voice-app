@@ -72,7 +72,7 @@ import box_authority_delivery as box_authority_delivery_mod
 import observability_trace as observability_trace_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 307 (all-car field snapshot recording U1)"
+BUILD_VERSION = "Build 308 (all-car field snapshot recording U1 + undercut forecast U2)"
 PORT = 8765
 connected_clients = set()
 loop = None
@@ -8543,6 +8543,15 @@ def poll_iracing():
                                 'name': car_name_map.get(_si),
                                 'car_number': car_number_map.get(_si),
                                 'class_pos': _spos,
+                                # STR-001：この車がピットレーン上か。車ID（car_idx）・同一frame（source_frame_sequence）・観測時刻に
+                                # 紐付ける。配列が取れない／範囲外／想定外の値は None（＝不明。「入っていない」ではない）。
+                                # Driverの申告はここには入れない（Desktop側の別経路）。
+                                'on_pit': (bool(car_on_pitroad_all[_si])
+                                           if (car_on_pitroad_all and _si < len(car_on_pitroad_all)
+                                               and isinstance(car_on_pitroad_all[_si], (int, bool))
+                                               and int(car_on_pitroad_all[_si]) in (0, 1)) else None),
+                                'on_pit_frame': ((_race_facts_snapshot or {}).get('source_frame') or {}).get('sequence'),
+                                'on_pit_observed_at': round(time.time(), 3),
                                 # Positive=behind the player; negative=ahead.
                                 'gap_s': round(_f2_arr[_si] - _player_f2, 1),
                                 'lap': (car_laps_all[_si]
