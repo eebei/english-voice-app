@@ -43,11 +43,21 @@ const M = [
   ['FW40', 'desktop/undercut-forecast.js', "c.state !== 'observed' && !evaluatedIds.has(c.i));", "c.state !== 'observed');", 'unit', '評価できている車が評価外にも載る（認識範囲の矛盾）'],
   ['FW41', 'desktop/undercut-forecast.js', "(inferredRival ? 'が給油済みなら' : 'は給油済みで')", "(inferredRival ? 'が未給油なら' : 'は給油済みで')", 'unit', '給油済みの仮定でも「未給油なら」と言う'],
   ['FW42', 'desktop/renderer.html', "  if(R&&pol&&pol.source==='driver_setting'){const L=R.marginLiters(pol,burn);if(L!==null) return L;}", "", 'rules', '直接L指定がDriverの周数訂正を上書きする'],
+  ['FW43', 'desktop/race-rules.js', '/[?？]|何分|何周|どれ|教えて|かな|だっけ|前回', '/何分|何周|どれ|教えて|かな|だっけ|前回', 'rules', '質問(？)を形式の訂正にする（検査X2）'],
+  ['FW44', 'desktop/race-rules.js', '|前回|昨日|昨夜|先週|さっき|過去|だった|でした|記録|履歴|残り|あと', '|昨日|昨夜|先週|さっき|過去|でした|記録|履歴|残り|あと', 'rules', '過去の話を形式の訂正にする（検査X3）'],
+  ['FW45', 'desktop/race-rules.js', 'v >= 5 && v <= 1440', 'v >= 0 && v <= 99999', 'rules', '4分・1441分のような範囲外を形式にする（検査X4）'],
+  ['FW46', 'desktop/race-rules.js', '|残り|あと|まだ|終わ|', '|', 'rules', '残り時間を形式として採用する'],
+  ['FW47', 'desktop/race-rules.js', '|じゃ?ない|ではない|でない|じゃなく|ではなく|違う|違って|ちがう|', '|', 'rules', '否定の発話を形式として採用する'],
+  ['FW48', 'desktop/race-rules.js', '|予選|プラクティス|練習|フリー|ウォーム|', '|', 'rules', '予選・練習の分数を形式にする'],
+  ['FW49', 'desktop/race-rules.js', 'if (!ob || !fo) return false;', 'if (!ob || !fo) return false;\n    return false;', 'rules', '観測と食い違う訂正を確認せず採用する'],
+  ['FW50', 'desktop/renderer.html', "if(stated) reply+=jp?'給油回数は言い直しでは変えない。':' The refuel count is not changed by conversation.';", '', 'rules', '混在発話で給油回数を変えないことを返答に含めない'],
   ['FW8', 'desktop/fuel-window.js', "if (target <= cap + 1e-9) {", "if (target <= cap + 1e9) {", 'unit', '容量に収まらなくても開き扱いにする'],
   ['FW9', 'desktop/renderer.html', "if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;", "if(postPitFuel.pendingFor===0) return;", 'e2e', '給油後の同じ結論を繰り返す'],
 ];
 let surv = 0;
+const ONLY = process.argv.slice(2);
 for (const [id, file, from, to, suite, note] of M) {
+  if (ONLY.length && !ONLY.includes(id)) continue;
   const p = path.join(ROOT, file), orig = fs.readFileSync(p, 'utf8');
   const froms = Array.isArray(from) ? from : [from], tos = Array.isArray(to) ? to : [to];
   if (froms.some(f => orig.split(f).length !== 2)) { console.log('ANCHOR?', id); surv++; continue; }

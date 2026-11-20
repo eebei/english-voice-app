@@ -65,25 +65,70 @@
     if (stated === req) return jp ? `給油${req}回の設定どおり。済んだのは${done}回。` : `That matches the ${req}-refuel setting. ${done} done.`;
     return jp ? `このレースは給油${req}回の設定のまま、言い直しでは変えない。足りない時は、不足量と追加の停止が要る条件を伝える。` : `This race stays at ${req} refuel(s); restating does not change it. If fuel runs short I will give the shortfall and the conditions for another stop.`;
   }
-  // レース形式の明示訂正：「このレースは45分のタイムレース」「今回は周回レース」。質問・過去の話・曖昧な発話は対象外。
-  //   形式だけを変える。給油回数の設定そのものは会話で変えない（Owner設定が新しい形式の範囲に入るかだけが変わる）。
+  // レース形式の明示訂正：「このレースは45分のタイムレース」「今回は周回レース」。
+  //   採用するのは「このレース／今回」と「N分＋形式語」が同じ節にある断定だけ。質問・過去・否定・残り時間・確認文・予選/練習などは採用しない（Build 310 検査R-B310-1）。
+  //   形式だけを変える。給油回数の設定そのものは会話で変えない。
+  const FMT_SUBJECT = '(?:このレース|今回(?:の)?(?:レース|セッション)?|今日(?:の)?レース|今(?:の)?レース|このセッション)';
+  const FMT_EXCLUDE = /[?？]|何分|何周|どれ|教えて|かな|だっけ|前回|昨日|昨夜|先週|さっき|過去|だった|でした|記録|履歴|残り|あと|まだ|終わ|じゃ?ない|ではない|でない|じゃなく|ではなく|違う|違って|ちがう|合って|あってる|もたせ|もつ|走った|走る|前に|予選|プラクティス|練習|フリー|ウォーム|[0-9０-９]\s*回|周回数|何度/;
   function parseFormatStatement(text) {
-    const t = String(text || '');
-    if (/[?？]|何分|何周|どれ|教えて|かな|だっけ/.test(t)) return null;
-    if (/前回|昨日|昨夜|先週|さっき|過去|だった|でした|記録|履歴/.test(t)) return null;
-    if (!/(?:このレース|今回|今日の?レース|今のレース|このセッション)/.test(t)) return null;
-    const m = t.match(/(?<![0-9０-９.])([0-9０-９]{1,3})\s*分(?:間)?(?:の)?(?:タイム)?(?:レース|耐久|スプリント)?/);
-    if (m && /レース|耐久|スプリント|タイム/.test(t) && !/周回|ラップレース/.test(t)) {
+    const t = String(text || '').replace(/(?:給油|補給|ピット(?:ストップ)?)[^。、]{0,6}[0-9０-９一二三]\s*回[^。、]*/g, '');   // 同じ発話の給油回数の部分は形式の判定から外す（回数は別に扱う）
+    if (FMT_EXCLUDE.test(t)) return null;
+    const m = t.match(new RegExp(FMT_SUBJECT + '(?:は|って|が|も)?[^。、0-9０-９]{0,3}(?<![0-9０-９.])([0-9０-９]{1,3})\\s*分(?:間)?(?:の)?(?:タイム)?(?:レース|耐久|スプリント)'));
+    if (m) {
       const v = Number(m[1].replace(/[０-９]/g, c => String(c.charCodeAt(0) - 0xFF10)));
       if (Number.isFinite(v) && v >= 5 && v <= 1440) return { kind: 'timed', duration_s: v * 60 };
+      return null;
     }
-    if (/周回(?:数)?(?:の)?レース|ラップレース|周回制/.test(t) || /[0-9０-９]{1,3}\s*周(?:の)?レース/.test(t)) return { kind: 'laps', duration_s: null };
+    if (new RegExp(FMT_SUBJECT + '(?:は|って|が)?[^。、]{0,3}(?:周回(?:数)?(?:の)?レース|ラップレース|周回制)').test(t)) return { kind: 'laps', duration_s: null };
     return null;
+  }
+  // 観測した形式と食い違うか（食い違う訂正は、採用の前に一度確認する）。観測が不明なら食い違いではない。
+  function observedFormat(plan) {
+    const p = plan || {}, dur = fin(p.configured_duration_s);
+    if (p.kind === 'timed' && dur !== null) return { kind: 'timed', duration_s: dur };
+    if (p.kind && p.kind !== 'timed') return { kind: 'laps', duration_s: null };
+    return null;
+  }
+  function formatConflicts(plan, fo) {
+    const ob = observedFormat(plan);
+    if (!ob || !fo) return false;
+    if (ob.kind !== fo.kind) return true;
+    return ob.kind === 'timed' && Math.abs(ob.duration_s - fo.duration_s) > 120;
+  }
+  function formatName(f, lang) {
+    const jp = lang !== 'en';
+    if (!f) return jp ? '形式不明' : 'unknown format';
+    if (f.kind === 'timed') { const m = mins(f.duration_s); const lbl = m >= 60 && m % 60 === 0 ? (m / 60) + '時間' : m + '分'; return jp ? lbl + 'のタイムレース' : m + '-minute timed race'; }
+    return jp ? '周回レース' : 'lap race';
+  }
+  function formatConfirmQuestion(plan, fo, lang) {
+    const jp = lang !== 'en';
+    return jp ? `観測では${formatName(observedFormat(plan), lang)}。${formatName(fo, lang)}として見る？` : `Observed: ${formatName(observedFormat(plan), lang)}. Treat it as ${formatName(fo, lang)}?`;
+  }
+  // 確認への返答（直前の確認質問への「はい／いいえ」だけ）。
+  function parseConfirmation(text) {
+    const t = String(text || '').trim();
+    if (/^(?:いや|いえ|違う|ちがう|だめ|やめ|そのまま|観測のまま)|(?:しない|やめて|違う|いらない)/.test(t)) return 'no';
+    if (/^(?:はい|うん|そう|そうして|それで|お願い|OK|オーケー|ok|頼む|見て)/.test(t)) return 'yes';
+    return null;
+  }
+  // 「今のレース形式は？」への読み戻し（形式の出所を添える）。
+  function isFormatQuestion(text) {
+    const t = String(text || '');
+    if (/前回|昨日|昨夜|先週|さっき|過去|だった|記録|履歴/.test(t)) return false;
+    return /(?:レース)?形式|何分(?:の)?レース|何分(?:の)?(?:耐久|スプリント)|どんなレース|何周(?:の)?レース/.test(t) && /[?？]|教えて|何|どう/.test(t);
+  }
+  function formatReadback(res, lang) {
+    const jp = lang !== 'en';
+    if (!res || !res.kind) return jp ? 'レース形式はまだ確認できていない。' : 'The race format is not confirmed yet.';
+    const f = { kind: res.kind === 'timed' ? 'timed' : 'laps', duration_s: res.duration_s };
+    const src = res.format_source === 'driver_correction' ? (jp ? '、あなたの訂正' : ', your correction') : (jp ? '、観測' : ', observed');
+    return jp ? `今は${formatName(f, lang)}${src}。` : `Now: ${formatName(f, lang)}${src}.`;
   }
   function formatReply(res, fo, done, lang) {
     const jp = lang !== 'en';
     if (!fo) return '';
-    const what = fo.kind === 'timed' ? (jp ? `${mins(fo.duration_s)}分のタイムレース` : `${mins(fo.duration_s)}-minute timed race`) : (jp ? '周回レース' : 'lap race');
+    const what = formatName(fo, lang);
     const lead = jp ? `了解、このレースは${what}として見る。` : `Copy, treating this as a ${what}.`;
     return lead + sentence(res, done, lang);
   }
@@ -114,7 +159,7 @@
     const b = fin(burnPerLap);
     return b !== null && b > 0 ? Math.round(marginLaps(policy) * b * 100) / 100 : null;
   }
-  const api = { OWNER_SHORT_ENDURANCE, MARGIN_DEFAULT_LAPS, MARGIN_ALLOWED_LAPS, resolve, sentence, parseRefuelStatement, statementReply, parseFormatStatement, formatReply, isRefuelCountQuestion, parseMarginCorrection, marginLaps, marginLiters };
+  const api = { OWNER_SHORT_ENDURANCE, MARGIN_DEFAULT_LAPS, MARGIN_ALLOWED_LAPS, resolve, sentence, parseRefuelStatement, statementReply, parseFormatStatement, formatReply, formatConflicts, formatConfirmQuestion, parseConfirmation, isFormatQuestion, formatReadback, observedFormat, isRefuelCountQuestion, parseMarginCorrection, marginLaps, marginLiters };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PitwallRaceRules = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -10839,7 +10839,7 @@ function evaluateLiveStrategySwitch(live){
   return evaluation;
 }
 // ── レース設定（給油回数・燃料余裕の周数）：レース限りの状態。別raceへ設定の訂正・給油済み状態を持ち越さない（監督 2026-11-18）──
-const raceRulesState={raceKey:'',override:null,marginPolicy:null,formatOverride:null};
+const raceRulesState={raceKey:'',override:null,marginPolicy:null,formatOverride:null,pendingFormat:null};
 function currentMarginPolicy(){return raceRulesState.marginPolicy||{laps:window.PitwallRaceRules?window.PitwallRaceRules.MARGIN_DEFAULT_LAPS:1,source:'default'};}
 function currentRaceRules(live){
   const R=window.PitwallRaceRules;
@@ -10855,7 +10855,7 @@ function syncRaceScopedState(live){
   const first=raceRulesState.raceKey==='';
   raceRulesState.raceKey=rk;
   if(first) return;
-  raceRulesState.override=null;raceRulesState.marginPolicy=null;raceRulesState.formatOverride=null;fuelWindowMarginL=null;
+  raceRulesState.override=null;raceRulesState.marginPolicy=null;raceRulesState.formatOverride=null;raceRulesState.pendingFormat=null;fuelWindowMarginL=null;
   Object.assign(ownPitObserver,{prev:'unknown',completions:0,passes:0,lastCompletedAt:0,lastCompletedLap:null,enteredAt:0,entryFuel:null,onSamples:0});
   postPitFuel.pendingFor=0;postPitFuel.announcedFor=0;
   fuelForecast.prev=null;fuelForecast.inflight=null;fuelForecast.lastEvalLap=null;
@@ -10870,11 +10870,28 @@ function noteRaceRulesTurn(text){
   const jp=isJapaneseEngineer(),lang=jp?'ja':'en';
   let reply=null;
   const stated=R.parseRefuelStatement(text),marg=R.parseMarginCorrection(text),fmtStated=R.parseFormatStatement?R.parseFormatStatement(text):null;
-  if(fmtStated){
-    // レース形式の明示訂正（そのレース限り）。給油回数は会話で変えない。Owner設定が新しい形式の範囲に入るかだけが変わる。
-    raceRulesState.formatOverride=fmtStated;
-    diagnosticLog('RACE_RULES','format stated kind='+fmtStated.kind+' dur='+(fmtStated.duration_s===null?'-':fmtStated.duration_s));
-    reply=R.formatReply(currentRaceRules(lastTelemetry),fmtStated,refuelsDone(),lang);
+  const pend=raceRulesState.pendingFormat;raceRulesState.pendingFormat=null;   // 確認待ちは次の1発話だけ有効
+  const conf=pend&&R.parseConfirmation?R.parseConfirmation(text):null;
+  const planNow=(lastTelemetry&&lastTelemetry.race_plan&&typeof lastTelemetry.race_plan==='object')?lastTelemetry.race_plan:{};
+  if(pend&&conf==='yes'){
+    raceRulesState.formatOverride=pend;
+    diagnosticLog('RACE_RULES','format confirmed kind='+pend.kind+' dur='+(pend.duration_s===null?'-':pend.duration_s));
+    reply=R.formatReply(currentRaceRules(lastTelemetry),pend,refuelsDone(),lang);
+  }else if(pend&&conf==='no'){
+    diagnosticLog('RACE_RULES','format correction declined (kept observed)');
+    reply=jp?'了解、形式は観測のまま見る。':'Copy, keeping the observed format.';
+  }else if(fmtStated){
+    if(R.formatConflicts(planNow,fmtStated)){
+      // 観測した形式と食い違う訂正は、採用の前に一度確認する（Owner設定の適用可否が反転するため）
+      raceRulesState.pendingFormat=fmtStated;
+      diagnosticLog('RACE_RULES','format conflict → confirm kind='+fmtStated.kind+' dur='+(fmtStated.duration_s===null?'-':fmtStated.duration_s));
+      reply=R.formatConfirmQuestion(planNow,fmtStated,lang);
+    }else{
+      raceRulesState.formatOverride=fmtStated;
+      diagnosticLog('RACE_RULES','format stated kind='+fmtStated.kind+' dur='+(fmtStated.duration_s===null?'-':fmtStated.duration_s));
+      reply=R.formatReply(currentRaceRules(lastTelemetry),fmtStated,refuelsDone(),lang);
+    }
+    if(stated) reply+=jp?'給油回数は言い直しでは変えない。':' The refuel count is not changed by conversation.';
   }else if(stated){
     // 監督/Owner 2026-11-19：会話から給油回数だけを抽出してレース設定を上書きしない。言い直しには、設定のままであること・不足時の扱いを返す。
     diagnosticLog('RACE_RULES','refuel count restated='+stated.refuels_stated+' (setting not changed)');
@@ -10885,6 +10902,8 @@ function noteRaceRulesTurn(text){
     diagnosticLog('RACE_RULES','driver margin laps='+marg.laps+' liters='+(L===null?'-':L));
     const lapsText=marg.laps===0.5?'半周':(marg.laps===1?'1周':marg.laps+'周');
     reply=jp?`了解、燃料の余裕は${lapsText}分で見る${L!==null?`（約${L.toFixed(1)}L）`:''}。`:`Copy, fuel margin is ${marg.laps} lap(s)${L!==null?` (about ${L.toFixed(1)} L)`:''}.`;
+  }else if(R.isFormatQuestion&&R.isFormatQuestion(text)){
+    reply=R.formatReadback(currentRaceRules(lastTelemetry),lang);
   }else if(R.isRefuelCountQuestion(text)){
     reply=R.sentence(currentRaceRules(lastTelemetry),refuelsDone(),lang);
   }else if(COVERAGE_QUESTION_RE.test(text)){

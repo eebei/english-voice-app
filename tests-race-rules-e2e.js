@@ -102,18 +102,44 @@ const rules = h => JSON.parse(h.ev('JSON.stringify(currentRaceRules(lastTelemetr
     m = margins();
     ck('5e 別raceに入ると、周数訂正も直接L指定も初期化され、既定の1周分へ戻る（窓・STR-001とも）', m.policy === 1 && h.ev('fuelWindowMarginL') === null, m);
   }
-  // ═══ 6. レース形式の明示訂正（Build 310）：形式だけを変え、給油回数は会話で変えない。別raceで初期化 ═══
+  // ═══ 6. レース形式の明示訂正（Build 310）：形式だけを変え、給油回数は会話で変えない。食い違う時は確認。別raceで初期化 ═══
   {
     const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: { kind: 'timed', configured_duration_s: 10800 } });
     ck('6a 3時間レースはOwner設定を適用しない', rules(h).applies === false, rules(h));
     const a = await ask(h, 'このレースは45分のタイムレースだよ');
-    ck('6b 形式の明示訂正で、Owner設定が適用に変わる（給油1回・出所=Owner設定、形式=あなたの訂正）。そのターンは閉じる（LLMへ回さない）', rules(h).applies === true && rules(h).refuels_required === 1 && rules(h).source === 'owner_directive' && rules(h).format_source === 'driver_correction' && /^了解、このレースは45分のタイムレースとして見る。給油は1回の設定（Owner設定、45分のタイムレース、あなたの訂正）/.test(a[a.length - 1] || '') && h.state.chats.length === 0, { a, r: rules(h) });
-    const b = await ask(h, 'このレースは何分？');
-    ck('6c 質問は形式の訂正にしない（形式は45分のまま）', rules(h).duration_s === 2700, rules(h));
-    const c = await ask(h, 'このレースは周回レースだよ');
-    ck('6d 周回レースへ訂正すると、設定は適用されず理由を言う', rules(h).applies === false && rules(h).reason === 'outside_rule_scope' && /60分以内のショート耐久ではないので/.test(c[c.length - 1] || ''), { c, r: rules(h) });
+    ck('6b 観測(3時間)と食い違う訂正は、すぐ採用せず確認する。設定は適用に変わらない。ターンは閉じる', a.some(t => t === '観測では3時間のタイムレース。45分のタイムレースとして見る？') && rules(h).applies === false && rules(h).format_source === null && h.state.chats.length === 0, { a, r: rules(h) });
+    const b = await ask(h, 'はい');
+    ck('6c 確認に「はい」で採用：Owner設定が適用に変わる（給油1回・形式=あなたの訂正）', rules(h).applies === true && rules(h).refuels_required === 1 && rules(h).format_source === 'driver_correction' && b.some(t => /^了解、このレースは45分のタイムレースとして見る。給油は1回の設定（Owner設定、45分のタイムレース、あなたの訂正）/.test(t)), { b, r: rules(h) });
+    const c = await ask(h, '今のレース形式は？');
+    ck('6d 読み戻し：「今は45分のタイムレース、あなたの訂正。」', c.some(t => t === '今は45分のタイムレース、あなたの訂正。'), c);
     await tel(h, { lap: 1, fuel: 52, race: 'sub:RR-F2', plan: { kind: 'timed', configured_duration_s: 10800 } });
-    ck('6e 別raceに入ると形式の訂正は初期化される（観測した形式へ戻る）', rules(h).format_source === null && rules(h).duration_s === 10800 && rules(h).applies === false, rules(h));
+    ck('6e 別raceに入ると形式の訂正も確認待ちも初期化される（観測へ戻る）', rules(h).format_source === null && rules(h).duration_s === 10800 && rules(h).applies === false && h.ev('raceRulesState.pendingFormat') === null, rules(h));
+  }
+  {
+    const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: { kind: 'timed', configured_duration_s: 10800 } });
+    await ask(h, 'このレースは45分のタイムレースだよ');
+    const n = await ask(h, 'いや、そのまま');
+    ck('6f 確認に「いや」：観測のまま。形式は変わらない', rules(h).applies === false && rules(h).format_source === null && n.some(t => /形式は観測のまま/.test(t)), { n, r: rules(h) });
+    await ask(h, 'このレースは45分のタイムレースだよ');
+    await ask(h, '了解');
+    ck('6g 確認への「了解」だけでは採用しない（勝手に採用しない）。確認待ちは次の1発話で失効', rules(h).format_source === null && h.ev('raceRulesState.pendingFormat') === null, rules(h));
+  }
+  {
+    const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: { kind: 'timed', configured_duration_s: 10800 } });
+    const before = JSON.stringify(rules(h));
+    const said0 = said(h).length;
+    for (const t of ['このレースはあと30分で終わる', '今回のレースは残り45分', 'このレース45分じゃないよ', 'このレースは周回レースじゃなくて45分', '45分走った', 'プラクティス45分', 'このレースは45分のレースで合ってる']) { await finishAudio(h, 2); await h.say(t); }
+    ck('6h 残り・否定・過去・練習・確認文は形式として採用しない（形式・設定とも不変、確認も出さない）', JSON.stringify(rules(h)) === before && h.ev('raceRulesState.pendingFormat') === null && !said(h).slice(said0).some(t => /として見る|観測では/.test(t)), { r: rules(h), said: said(h).slice(said0) });
+  }
+  {
+    const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: { kind: 'timed', configured_duration_s: 10800 } });
+    const m = await ask(h, 'このレースは30分のタイムレース、給油は2回');
+    ck('6i 形式と給油回数が混在：形式は確認に回り、返答に「給油回数は言い直しでは変えない」を含む。設定は変わらない', m.some(t => /30分のタイムレースとして見る？/.test(t) && /給油回数は言い直しでは変えない/.test(t)) && rules(h).refuels_required !== 2, { m, r: rules(h) });
+  }
+  {
+    const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: {} });
+    const a = await ask(h, 'このレースは45分のタイムレースだよ');
+    ck('6j 観測が不明（形式未確認）の時は確認なしで即採用', rules(h).applies === true && rules(h).format_source === 'driver_correction' && a.some(t => /^了解、このレースは45分のタイムレースとして見る。/.test(t)), { a, r: rules(h) });
   }
   console.log('\n=== race rules e2e: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail ? 1 : 0);
