@@ -85,8 +85,8 @@
   // 観測した形式と食い違うか（食い違う訂正は、採用の前に一度確認する）。観測が不明なら食い違いではない。
   function observedFormat(plan) {
     const p = plan || {}, dur = fin(p.configured_duration_s);
-    if (p.kind === 'timed' && dur !== null) return { kind: 'timed', duration_s: dur };
-    if (p.kind && p.kind !== 'timed') return { kind: 'laps', duration_s: null };
+    if (p.kind === 'timed' && dur !== null && dur > 0) return { kind: 'timed', duration_s: dur };
+    if (p.kind === 'laps') return { kind: 'laps', duration_s: null };
     return null;
   }
   function formatConflicts(plan, fo) {
@@ -159,7 +159,48 @@
     const b = fin(burnPerLap);
     return b !== null && b > 0 ? Math.round(marginLaps(policy) * b * 100) / 100 : null;
   }
-  const api = { OWNER_SHORT_ENDURANCE, MARGIN_DEFAULT_LAPS, MARGIN_ALLOWED_LAPS, resolve, sentence, parseRefuelStatement, statementReply, parseFormatStatement, formatReply, formatConflicts, formatConfirmQuestion, parseConfirmation, isFormatQuestion, formatReadback, observedFormat, isRefuelCountQuestion, parseMarginCorrection, marginLaps, marginLiters };
+  // Effective finish is a reference calculation, never a rewrite of observed canonical facts.
+  // Clock corrections need elapsed RACING time, not SessionTime (which includes formation).
+  function effectiveFormat(live, correction, scope) {
+    const l = live || {}, observed = l.observed_race_plan || l.race_plan || {};
+    const key = String(l.race_instance_id || '') + '|' + String(l.session_num ?? '');
+    const fo = correction && key === scope ? correction : null;
+    const format = fo || observedFormat(observed);
+    const out = { scope: key, observed: observedFormat(observed), kind: format?.kind || null,
+      duration_s: format?.duration_s ?? null, source: fo ? 'driver_correction' : 'observed',
+      corrected: !!fo, total_laps: null, remaining_s: null, crossings: null, ready: false, missing: null };
+    if (!fo) return out;
+    const lap = fin(l.lap), pace = fin(l.driver_pace_median_s) || fin(l.last);
+    if (fo.kind === 'laps') {
+      const total = fin(fo.total_laps) ?? (observed.kind==='laps'?fin(l.laps_total):null);
+      if (!Number.isInteger(total) || total < 1 || total > 20000 || lap === null || total < lap) out.missing = 'total_laps';
+      else { out.total_laps = total; out.crossings = total - lap + 1; out.ready = true; }
+    } else {
+      // Only a bounded, same-frame duration/remainder pair can establish elapsed time.
+      // An elapsed value beyond the corrected duration is inconsistent, not a zero-time finish.
+      const duration = fin(observed.configured_duration_s), remaining = fin(l.observed_session_time_remaining_s ?? l.session_time_remaining_s);
+      let elapsed = duration !== null && duration > 0 && remaining !== null && remaining >= 0 && remaining <= duration ? duration - remaining : null;
+      const clock = fin(l.canonical_lifecycle?.source_frame?.session_time_s), anchor = fo.elapsed_anchor;
+      if (anchor) {
+        elapsed=null;
+        if (clock !== null && anchor.epoch === l.bridge_process_epoch && clock >= anchor.clock_s) elapsed=anchor.elapsed_s+clock-anchor.clock_s;
+      }
+      if (elapsed === null || elapsed >= fo.duration_s) out.missing = 'valid_race_elapsed';
+      else {
+        out.remaining_s = fo.duration_s - elapsed;
+        if (!(pace > 0)) out.missing = 'lap_pace';
+        else { out.crossings = Math.ceil(out.remaining_s / pace) + 1; out.total_laps = lap === null ? null : lap + out.crossings - 1; out.ready = out.total_laps !== null; }
+      }
+    }
+    return out;
+  }
+  function calculationStatus(f, lang) {
+    if (!f?.corrected) return '';
+    if (f.ready) return lang === 'en' ? ' Recalculated using your correction (finish estimate, not execution permission).' : '訂正した形式で再計算した（終点は推定、実行指示ではない）。';
+    const need = f.missing === 'valid_race_elapsed' && !f.observed ? '訂正した時間に対する経過時間が必要。' : f.missing === 'current_telemetry' ? '現在のテレメトリが古い。Bridgeを再接続して同レースの残量と周回を取得する必要がある。' : f.missing === 'total_laps' ? '総周回は何周？' : f.missing === 'lap_pace' ? '最近の有効な周回ペースが必要。' : 'スタートからの正しい経過時間が必要。現在の制限時間と残り時間が訂正に整合しない。';
+    return lang === 'en' ? ' Format updated; calculation unconfirmed. Need total laps or consistent racing elapsed time. Use observed fuel and consumption for the next lap; do not commit to the old pit plan.' : '形式の設定だけ変更済み、計算はまだ未確認。' + need + '残燃料と観測燃費で次の1周を走れるか確認し、旧形式のピット案は採用しない。';
+  }
+  const api = { effectiveFormat, calculationStatus, OWNER_SHORT_ENDURANCE, MARGIN_DEFAULT_LAPS, MARGIN_ALLOWED_LAPS, resolve, sentence, parseRefuelStatement, statementReply, parseFormatStatement, formatReply, formatConflicts, formatConfirmQuestion, parseConfirmation, isFormatQuestion, formatReadback, observedFormat, isRefuelCountQuestion, parseMarginCorrection, marginLaps, marginLiters };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PitwallRaceRules = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -28,5 +28,39 @@ ck('RR13 形式訂正で適用可否だけが変わる：90分→不適用(outsi
 ck('RR14 観測した形式と食い違う訂正は確認が要る（観測180分→45分／観測タイム→周回）。一致（±2分）・観測不明は即採用。確認文は「観測では3時間のタイムレース。45分のタイムレースとして見る？」', (() => { const f45 = { kind: 'timed', duration_s: 2700 }; return R.formatConflicts(timed(180), f45) === true && R.formatConflicts(timed(45), f45) === false && R.formatConflicts(timed(46), f45) === false && R.formatConflicts({}, f45) === false && R.formatConflicts({ kind: 'timed' }, f45) === false && R.formatConflicts(timed(45), { kind: 'laps', duration_s: null }) === true && R.formatConfirmQuestion(timed(180), f45, 'ja') === '観測では3時間のタイムレース。45分のタイムレースとして見る？'; })(), R.formatConfirmQuestion(timed(180), { kind: 'timed', duration_s: 2700 }, 'ja'));
 ck('RR15 確認への返答：「はい／うん／お願い」→yes、「いや／違う／そのまま」→no、無関係や「了解」は null（勝手に採用しない）', R.parseConfirmation('はい') === 'yes' && R.parseConfirmation('うん、お願い') === 'yes' && R.parseConfirmation('いや、そのまま') === 'no' && R.parseConfirmation('違う') === 'no' && R.parseConfirmation('了解') === null && R.parseConfirmation('今日は暑い') === null, null);
 ck('RR16 形式の読み戻し：「今のレース形式は？」「何分のレース？」は質問、過去や無関係は質問にしない。返答は出所つき（観測／あなたの訂正）', R.isFormatQuestion('今のレース形式は？') && R.isFormatQuestion('このレースは何分のレース？') && !R.isFormatQuestion('前回のレース形式は？') && !R.isFormatQuestion('今日は暑い') && R.formatReadback(R.resolve({ race_plan: timed(40) }), 'ja') === '今は40分のタイムレース、観測。' && R.formatReadback(R.resolve({ race_plan: {}, format_override: { kind: 'timed', duration_s: 2700 } }), 'ja') === '今は45分のタイムレース、あなたの訂正。' && /まだ確認できていない/.test(R.formatReadback(R.resolve({ race_plan: {} }), 'ja')), null);
+// Counterexamples for the effective correction contract (not just rule applicability).
+{
+ const l={race_instance_id:'r',session_num:2,lap:5,driver_pace_median_s:100,race_plan:{kind:'timed',configured_duration_s:10800},session_time_remaining_s:10200};
+ const f=R.effectiveFormat(l,{kind:'timed',duration_s:2700},'r|2');
+ ck('RR17 timed correction derives 35 minutes from consistent same-race elapsed',f.ready&&f.remaining_s===2100&&f.total_laps===26&&f.crossings===22,f);
+ const bad=R.effectiveFormat({...l,session_time_remaining_s:1500},{kind:'timed',duration_s:2700},'r|2');
+ ck('RR18 inconsistent elapsed cannot become a corrected finish',!bad.ready&&bad.crossings===null&&bad.missing==='valid_race_elapsed',bad);
+ ck('RR19 other session cannot consume correction',!R.effectiveFormat({...l,session_num:3},{kind:'timed',duration_s:2700},'r|2').corrected);
+ const lap=R.effectiveFormat({...l,laps_total:999},{kind:'laps'},'r|2');
+ ck('RR20 old timed total never substitutes for driver lap-race total',!lap.ready&&lap.total_laps===null&&lap.missing==='total_laps',lap);
+ const last=R.effectiveFormat(l,{kind:'laps',total_laps:5},'r|2');
+ ck('RR21 total equal to current lap means one final crossing',last.ready&&last.crossings===1,last);
+ const unknown=R.effectiveFormat({...l,session_time_remaining_s:null},{kind:'timed',duration_s:2700},'r|2');
+ ck('RR22 null remaining does not become zero elapsed or a fabricated finish',!unknown.ready&&unknown.crossings===null,unknown);
+}
+{
+ const anchor={elapsed_s:600,clock_s:1000,epoch:'epoch-a'},fo={kind:'timed',duration_s:2700,elapsed_anchor:anchor};
+ const l={race_instance_id:'r',session_num:2,lap:7,driver_pace_median_s:100,race_plan:{kind:'timed',configured_duration_s:10800},session_time_remaining_s:1500,bridge_process_epoch:'epoch-a',canonical_lifecycle:{source_frame:{session_time_s:1601}}};
+ const next=R.effectiveFormat(l,fo,'r|2');
+ ck('RR23 driver elapsed correction advances with same-session clock beyond five minutes',next.ready&&next.remaining_s===1499,next);
+ const changed=R.effectiveFormat({...l,bridge_process_epoch:'epoch-b'},fo,'r|2');
+ ck('RR24 process restart cannot reuse elapsed anchor',!changed.ready&&changed.missing==='valid_race_elapsed',changed);
+ const rolled=R.effectiveFormat({...l,canonical_lifecycle:{source_frame:{session_time_s:900}}},fo,'r|2');
+ ck('RR25 clock rollback cannot reuse elapsed anchor',!rolled.ready,rolled);
+}
+{
+ for(const plan of [{kind:'unknown'},{},{kind:'timed',configured_duration_s:null},{kind:'unrecognized'}]){
+  ck('RR26 missing/unknown format is not observed laps: '+JSON.stringify(plan),R.observedFormat(plan)===null&&!R.formatConflicts(plan,{kind:'timed',duration_s:2700}),plan);
+  const f=R.effectiveFormat({race_instance_id:'u',session_num:2,lap:5,race_plan:plan},{kind:'timed',duration_s:2700},'u|2');
+  const reply=R.calculationStatus(f,'ja');
+  ck('RR27 missing format requests elapsed without alleging inconsistency: '+JSON.stringify(plan),reply.includes('訂正した時間に対する経過時間が必要')&&!reply.includes('整合しない'),reply);
+ }
+ ck('RR28 known laps still conflicts with timed correction',R.observedFormat({kind:'laps'}).kind==='laps'&&R.formatConflicts({kind:'laps'},{kind:'timed',duration_s:2700}));
+}
 console.log('\n=== race-rules: ' + pass + ' passed, ' + fail + ' failed ===');
 process.exit(fail ? 1 : 0);

@@ -188,12 +188,18 @@ function build(input) {
   }) : null;
   if (!auxCorrelated) unknowns.push('auxiliary_observations:source_frame_correlation_unavailable');
 
+  const ef = available && input.effectiveFormat?.corrected && raceIdentity
+    && input.effectiveFormat.scope === raceIdentity.race_instance_id + '|' + raceIdentity.session_num ? clone(input.effectiveFormat) : null;
+  // Observed finish/agreements remain canonical facts. End-dependent calculations
+  // from the old format must not be reused as a corrected finish prediction.
+  const refs = ef ? {fuel_strategy:null,strategy_options:null} : calculationReferences;
   return immutable({
+    effective_format:ef,
     schema: SCHEMA, schema_version: SCHEMA_VERSION, generated_at: now(),
     race_identity: raceIdentity, freshness, current_facts: currentFacts, penalty_state: penaltyState,
     active_plan: activePlan, pending_proposal: pendingProposal, last_driver_action: lastDriverAction,
     last_pit_event: lastPitEvent, allowed_actions: allowedActions, unknowns,
-    calculation_references: calculationReferences, auxiliary_observations: auxiliaryObservations,
+    calculation_references: refs, auxiliary_observations: auxiliaryObservations,
     historical_relevant_memory: historicalRelevantMemory,
   });
 }
@@ -347,6 +353,21 @@ function validate(ctx, now) {
     const fr = ctx.freshness;
     if (!boundedStr(fr.canonical_snapshot_id) || !posInt(fr.canonical_snapshot_sequence)) return false;
     if (!nonNegInt(fr.source_frame_sequence) || !nonNegFinite(fr.session_time_s)) return false;
+  }
+  if (!object(ctx.current_facts)) return false;
+  if (ctx.effective_format != null) {
+    const e=ctx.effective_format,ri=ctx.race_identity;
+    if(!ctx.freshness.available || !ri || !object(e) || e.corrected!==true || e.source!=='driver_correction'
+      || e.scope!==ri.race_instance_id+'|'+ri.session_num || !['laps','timed'].includes(e.kind) || typeof e.ready!=='boolean') return false;
+    if(e.observed!==null&&(!object(e.observed)||!['timed','laps'].includes(e.observed.kind)||!(e.observed.duration_s===null||(finite(e.observed.duration_s)&&e.observed.duration_s>0&&e.observed.duration_s<=86400))))return false;
+    if(![null,'total_laps','valid_race_elapsed','lap_pace','current_telemetry'].includes(e.missing))return false;
+    if(!(e.remaining_s===null||(finite(e.remaining_s)&&e.remaining_s>0&&e.remaining_s<=e.duration_s)))return false;
+    if(e.kind==='laps'&&(e.duration_s!==null||e.remaining_s!==null))return false;
+    if(e.ready&&e.total_laps!==ctx.current_facts.current_lap+e.crossings-1)return false;
+    if(e.kind==='timed' && !(finite(e.duration_s)&&e.duration_s>=300&&e.duration_s<=86400)) return false;
+    if(e.ready && !(posInt(e.total_laps)&&e.total_laps<=MAX_LAP&&posInt(e.crossings)&&e.crossings<=MAX_SF_CROSSINGS))return false;
+    if(e.kind==='timed'&&e.ready&&!(finite(e.remaining_s)&&e.remaining_s>0&&e.remaining_s<=e.duration_s))return false;
+    if(!e.ready&&(e.crossings!==null||e.total_laps!==null))return false;
   }
   if (!object(ctx.current_facts) || typeof ctx.current_facts.available !== 'boolean') return false;
   if (ctx.current_facts.available) {

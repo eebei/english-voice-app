@@ -3070,7 +3070,7 @@ async function sendMsg(inputSource, entry){
     && typeof window.PitwallLocalIntentRouter.route==='function');
   const _strategyState = (typeof ensureStrategyState==='function') ? ensureStrategyState() : null;
   const localIntent = (selMode==='race' && iracingLive && lastTelemetry
-    && localRouterAvailable)
+    && localRouterAvailable && !(typeof effectiveRaceFormat==='function' && effectiveRaceFormat(lastTelemetry)?.corrected && !window.PitwallPitStrategyCompare.isRetrospectivePitQuestion(text) && /ピット|給油|燃料|残り.*周|あと.*周/.test(text)))
     ? window.PitwallLocalIntentRouter.route({
       text,driverIntent,
       lang:(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')?'ja':'en',
@@ -3665,9 +3665,9 @@ function captureVerifiedAuxBinding(ctx){
   // race-context-builder.jsのimmutable()）と同じくObject.freezeで不変化
   // する（leaders/standings_gapsは既にbuilder側で凍結済みの参照をそのまま
   // 保持するだけで十分、ここでの再帰freezeは不要）。
-  if(!a) return Object.freeze({available:false,source_ref:null,role:null,
+  if(!a) return Object.freeze({formatRevision:typeof raceRulesState==='undefined'?0:raceRulesState.revision,available:false,source_ref:null,role:null,
     gap_ahead:null,gap_behind:null,position:null,class_position:null,leaders:null,standings_gaps:null});
-  return Object.freeze({available:true,source_ref:a.source_ref,role:a.role,
+  return Object.freeze({formatRevision:typeof raceRulesState==='undefined'?0:raceRulesState.revision,available:true,source_ref:a.source_ref,role:a.role,
     gap_ahead:a.gap_ahead,gap_behind:a.gap_behind,position:a.position,
     class_position:a.class_position,leaders:a.leaders,standings_gaps:a.standings_gaps});
 }
@@ -3739,6 +3739,7 @@ function verifiedAuxFieldsStillFresh(text,auxAtRequest,unchangedFrom){
 // （遅延precheckクロージャにはbindingUnchangedFrom/auxUnchangedFromを渡さず、
 // 毎回必ず現在状態を取り直す）。
 function strategyReplyBindingValid(binding,text,auxAtRequest,bindingUnchangedFrom,auxUnchangedFrom){
+  if(auxAtRequest?.formatRevision!==undefined&&auxAtRequest.formatRevision!==(typeof raceRulesState==='undefined'?0:raceRulesState.revision))return false;
   const bindingOk=(bindingUnchangedFrom!==undefined && binding===bindingUnchangedFrom)
     || !binding || strategyProjection.validBinding(binding);
   return bindingOk && (!binding?.memory_record_ref||raceMemorySpeechValid(binding.memory_record_ref)) && verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom);
@@ -6474,6 +6475,7 @@ function currentStrategyPlaybook(){ return strategyProjection.readPlaybook(); }
 // 抽出境界を乱さないよう、定数はtop-levelへ出さずこの関数内に閉じる）。
 function currentCanonicalStrategyLive(live,telemetryScope=(typeof lastTelemetryAuxRef==='undefined'?undefined:lastTelemetryAuxRef)){
   const base={...(live||{})};
+  if(base.observed_race_plan){base.race_plan=base.observed_race_plan;base.session_time_remaining_s=base.observed_session_time_remaining_s;base.laps_total=base.observed_laps_total;}
   for(const k of ['strategy_plan','endurance_fuel_plan','strategy_options_reference',
     'strategy_options','fuel_strategy','race_instance_id','session_num','canonical_lifecycle',
     'canonical_snapshot_id','canonical_snapshot_sequence','bridge_process_epoch',
@@ -6493,14 +6495,15 @@ function currentCanonicalStrategyLive(live,telemetryScope=(typeof lastTelemetryA
     bridge_process_epoch:null,lap:null,fuel:null,on_pit_road:null,on_track:null};
   const recommendations=strategyProjection.strategyEvaluation()?.recommendations||{};
   const fuelRec=recommendations.fuel_strategy,optionsRec=recommendations.strategy_options;
-  return {...base,strategy_plan:null,endurance_fuel_plan:null,strategy_projection:true,strategy_options_reference:optionsRec||null,race_instance_id:snapshot.race_instance_id,session_num:snapshot.session_num,
+  const project=typeof effectiveStrategyLive==='function'?effectiveStrategyLive:(v=>v);
+  return project({...base,strategy_plan:null,endurance_fuel_plan:null,strategy_projection:true,strategy_options_reference:optionsRec||null,race_instance_id:snapshot.race_instance_id,session_num:snapshot.session_num,
     canonical_lifecycle:snapshot,canonical_snapshot_id:snapshot.snapshot_id,
     canonical_snapshot_sequence:snapshot.snapshot_sequence,bridge_process_epoch:snapshot.bridge_process_epoch,
     lap:snapshot.current_facts.current_lap,fuel:snapshot.current_facts.fuel_level_l,
     on_pit_road:snapshot.current_facts.on_pit_road,on_track:snapshot.current_facts.on_track,
     fuel_strategy:fuelRec?.source_valid?fuelRec.value:null,
     strategy_options:optionsRec?.source_valid?optionsRec.value:null,
-    finish_crossings_authority:snapshot.finish.available?snapshot.finish.remaining_sf_crossings:null};
+    finish_crossings_authority:snapshot.finish.available?snapshot.finish.remaining_sf_crossings:null});
 }
 // WO014: single builder used by every current-race LLM caller
 // (sendMessage/followUp/paceCheck/judgeCall/autoBriefing). Connects to the
@@ -6508,6 +6511,7 @@ function currentCanonicalStrategyLive(live,telemetryScope=(typeof lastTelemetryA
 // StrategyLive uses -- it does not re-derive canonical truth.
 function buildCurrentRaceContext(){
   return globalThis.PitwallRaceContextBuilder.build({
+    effectiveFormat:typeof effectiveRaceFormat==='function'?effectiveRaceFormat(lastTelemetry):null,
     projectionView: strategyProjection.current(),
     snapshot: canonicalLifecycleCache.current(),
     evaluation: strategyProjection.strategyEvaluation(),
@@ -6679,6 +6683,7 @@ function maybeProposeUndercut(packet,reason){
 const pitCompareState={packet:null,lapKey:'',opinions:[],scope:'',hadUndercut:false,updatedAt:0,reason:null,history:[],fuelByLap:{},consultTurnsLeft:-1,consultSeenText:null,neighbors:'',llm:{turn:-1,calls:0,log:[]}};
 function pitCompareScopeKey(live){return live?String(live.race_instance_id||'')+'|'+String(live.session_num??''):'';}
 function pitCompareInputFromLive(live){
+  if(typeof effectiveStrategyLive==='function')live=effectiveStrategyLive(live);
   const C=window.PitwallPitStrategyCompare;
   if(!C||!live||!live.race_instance_id) return null;
   const lap=Number(live.lap);
@@ -6695,8 +6700,8 @@ function pitCompareInputFromLive(live){
   const burn=burnObserved||(Number(fs?.strict_clean_avg_fuel_per_lap)>0?Number(fs.strict_clean_avg_fuel_per_lap):(Number(fs?.avg_fuel_per_lap)>0?Number(fs.avg_fuel_per_lap):null));
   // 総周回：検証済みの laps_total、無ければ時間制の残り時間÷ペース（最終周回は±1の幅）
   let total=null;
-  if(Number.isInteger(Number(live.laps_total))&&Number(live.laps_total)>lap) total=obs(Number(live.laps_total));
-  else if(Number(live.session_time_remaining_s)>0&&lapTime){const left=Math.ceil(Number(live.session_time_remaining_s)/lapTime);total=asm(lap+left,lap+left-1,lap+left+1,'時間制: 残り時間÷最近のペース。最終周回は±1');}
+  if(Number.isInteger(Number(live.laps_total))&&Number(live.laps_total)>=lap) total=live.effective_race_format?.corrected?asm(Number(live.laps_total),null,null,'Driver申告の総周回（同race/session限定）'):obs(Number(live.laps_total));
+  else if(live.effective_race_format?.kind!=='laps'&&Number(live.session_time_remaining_s)>0&&lapTime){const left=Math.ceil(Number(live.session_time_remaining_s)/lapTime);total=asm(lap+left,lap+left-1,lap+left+1,'時間制: 残り時間÷最近のペース。最終周回は±1');}
   const tank=Number(strategyStartingFuelL)>0?Number(strategyStartingFuelL):null;
   // ピット作業：Bridgeの校正（観測）。無ければ出所付きの暫定値と幅（assumed）。
   const cal=live.pit_loss_calibration&&typeof live.pit_loss_calibration==='object'?live.pit_loss_calibration:null;
@@ -6797,6 +6802,7 @@ function pitCalculatedQuestion(text){
   if(inConsult && (followUp || /(?:合流|ピット出口|復帰).{0,16}(?:どうなる|どう|前|後ろ|空い|詰ま|混)|(?:what happens|how).*\b(?:rejoin|blend)\b/i.test(text))) return true;
   if(inConsult && pitCompareState.hadUndercut && /^(?:じゃあ|それなら)?\s*(?:なぜ|なんで|理由は|why)[？?。.! ]*$/i.test(text)) return true;
   if(!C.isStrategyConsultation(text)) return false;
+  if(typeof effectiveRaceFormat==='function'&&effectiveRaceFormat(lastTelemetry)?.corrected)return true;
   return pitCompareState.hadUndercut || !!pitCompareState.packet?.undercut_forecast
     || /合流|blend|(?:復帰|ピット出口|rejoin|pit exit).{0,18}(?:交通|ギャップ|gaps?|traffic)|(?:gaps?|traffic).{0,18}(?:rejoin|pit exit)|ピット.{0,4}交通/i.test(text);
 }
@@ -10839,13 +10845,47 @@ function evaluateLiveStrategySwitch(live){
   return evaluation;
 }
 // ── レース設定（給油回数・燃料余裕の周数）：レース限りの状態。別raceへ設定の訂正・給油済み状態を持ち越さない（監督 2026-11-18）──
-const raceRulesState={raceKey:'',override:null,marginPolicy:null,formatOverride:null,pendingFormat:null};
+const raceRulesState={raceKey:'',override:null,marginPolicy:null,formatOverride:null,pendingFormat:null,revision:0};
+// One effective contract for every calculation consumer; raw observations remain recoverable.
+function effectiveRaceFormat(live){
+  const f=window.PitwallRaceRules?.effectiveFormat(live,raceRulesState.formatOverride,raceRulesState.raceKey)||null;
+  if(f?.corrected&&(!iracingLive||Date.now()-lastTelemetryAt>TELEMETRY_STALE_MS))return {...f,ready:false,total_laps:null,crossings:null,remaining_s:null,missing:'current_telemetry'};
+  return f;
+}
+function effectiveStrategyLive(live){
+  if(!live) return live;
+  const f=effectiveRaceFormat(live);
+  if(!f?.corrected) return live.observed_race_plan?{...live,race_plan:live.observed_race_plan,session_time_remaining_s:live.observed_session_time_remaining_s,laps_total:live.observed_laps_total??null,effective_race_format:null}:live;
+  const raw=live.observed_race_plan||live.race_plan||{};
+  const old=live.fuel_strategy||{},burn=Number(old.strict_clean_avg_fuel_per_lap)>0?Number(old.strict_clean_avg_fuel_per_lap):(Number(old.avg_fuel_per_lap)>0?Number(old.avg_fuel_per_lap):observedBurnPerLap());
+  const fuel=Number(live.fuel),need=f.ready&&burn>0?f.crossings*burn:null;
+  const fs={avg_fuel_per_lap:burn,strict_clean_avg_fuel_per_lap:burn,estimated_crossings_to_finish:f.ready?f.crossings:null,
+    required_fuel_l:need,margin_l:need!==null&&live.fuel!==null&&Number.isFinite(fuel)?fuel-need:null,
+    evaluated_lap:live.lap,source:'driver_format_reference'};
+  return {...live,observed_race_plan:raw,observed_session_time_remaining_s:live.observed_session_time_remaining_s??live.session_time_remaining_s,
+    observed_laps_total:live.observed_laps_total??live.laps_total,effective_race_format:f,race_plan:{kind:f.kind,configured_duration_s:f.duration_s,source:f.source},
+    session_time_remaining_s:f.remaining_s,laps_total:f.kind==='laps'?f.total_laps:null,
+    timed_finish_forecast:null,finish_crossings_authority:null,fuel_strategy:fs,strategy_options:null,endurance_fuel_plan:null,strategy_plan:null};
+}
+function changeRaceFormat(format){
+  raceRulesState.formatOverride=format;raceRulesState.revision++;
+  // Queued and in-flight responses were computed under a different finish contract.
+  invalidateQueuedSpeech(['pit_undercut_proposal','fuel_window_watch','pit_post_stop_fuel','fuel_window_forecast','pit_rival_update','operational_followup','race_rules_reply','bridge_strategy_proposal','canonical_strategy_briefing','strategy_plan_box_call'],'race_format_changed');
+  pendingOperationalFollowUp=null;
+  strategyProjection.api.invalidatePendingProposal(strategyProjection.state(),{reason:'race_format_changed'});
+  fuelForecast.prev=null;fuelForecast.inflight=null;fuelForecast.lastEvalLap=null;
+  undercutState.proposals.length=0;undercutState.proposalKey=null;undercutState.proposalLapKey='';
+  pitCompareState.packet=null;pitCompareState.lapKey='';pitCompareState.opinions=[];
+  updatePitStrategyCompare(lastTelemetry,'race_format_changed');
+}
+function raceFormatCalculationStatus(lang){return window.PitwallRaceRules.calculationStatus(effectiveRaceFormat(lastTelemetry),lang);}
 function currentMarginPolicy(){return raceRulesState.marginPolicy||{laps:window.PitwallRaceRules?window.PitwallRaceRules.MARGIN_DEFAULT_LAPS:1,source:'default'};}
 function currentRaceRules(live){
   const R=window.PitwallRaceRules;
   if(!R) return null;
-  const plan=live&&live.race_plan&&typeof live.race_plan==='object'?live.race_plan:(lastTelemetry&&lastTelemetry.race_plan)||{};
-  return R.resolve({race_plan:plan,override:raceRulesState.override,format_override:raceRulesState.formatOverride});
+  const l=live||lastTelemetry,plan=l?.observed_race_plan||l?.race_plan||{};
+  const same=l&&fuelWindowRaceKey(l)===raceRulesState.raceKey;
+  return R.resolve({race_plan:plan,override:raceRulesState.override,format_override:same?raceRulesState.formatOverride:null});
 }
 function refuelsDone(){return ownPitObserver.completions;}   // 給油を確認したピットの回数（進入・ドライブスルー・ノイズは数えない）
 // 別race/sessionに入ったら、レース限りの状態を全て初期化する（給油済み回数・設定の訂正・余裕の変更・見込み・提案の履歴）。
@@ -10872,14 +10912,16 @@ function noteRaceRulesTurn(text){
   const stated=R.parseRefuelStatement(text),marg=R.parseMarginCorrection(text),fmtStated=R.parseFormatStatement?R.parseFormatStatement(text):null;
   const pend=raceRulesState.pendingFormat;raceRulesState.pendingFormat=null;   // 確認待ちは次の1発話だけ有効
   const conf=pend&&R.parseConfirmation?R.parseConfirmation(text):null;
-  const planNow=(lastTelemetry&&lastTelemetry.race_plan&&typeof lastTelemetry.race_plan==='object')?lastTelemetry.race_plan:{};
-  if(pend&&conf==='yes'){
-    raceRulesState.formatOverride=pend;
+  const planNow=lastTelemetry.observed_race_plan||lastTelemetry.race_plan||{};
+  if(/^(?:(?:形式|レース形式)を)?観測(?:の形式)?(?:に|へ)戻(?:す|して)(?:ください|くれ|ね)?[。！!]*$/.test(String(text).trim())){
+    changeRaceFormat(null);reply=(jp?'観測へ戻した。':'Restored observations. ')+R.formatReadback(currentRaceRules(lastTelemetry),lang);
+  }else if(pend&&conf==='yes'){
+    changeRaceFormat(pend);
     diagnosticLog('RACE_RULES','format confirmed kind='+pend.kind+' dur='+(pend.duration_s===null?'-':pend.duration_s));
-    reply=R.formatReply(currentRaceRules(lastTelemetry),pend,refuelsDone(),lang);
+    reply=R.formatReply(currentRaceRules(lastTelemetry),pend,refuelsDone(),lang)+raceFormatCalculationStatus(lang);
   }else if(pend&&conf==='no'){
-    diagnosticLog('RACE_RULES','format correction declined (kept observed)');
-    reply=jp?'了解、形式は観測のまま見る。':'Copy, keeping the observed format.';
+    diagnosticLog('RACE_RULES','format correction declined (kept effective format)');
+    reply=(jp?'了解、新しい訂正は採用しない。':'Copy, declining the new correction. ')+R.formatReadback(currentRaceRules(lastTelemetry),lang);
   }else if(fmtStated){
     if(R.formatConflicts(planNow,fmtStated)){
       // 観測した形式と食い違う訂正は、採用の前に一度確認する（Owner設定の適用可否が反転するため）
@@ -10887,11 +10929,22 @@ function noteRaceRulesTurn(text){
       diagnosticLog('RACE_RULES','format conflict → confirm kind='+fmtStated.kind+' dur='+(fmtStated.duration_s===null?'-':fmtStated.duration_s));
       reply=R.formatConfirmQuestion(planNow,fmtStated,lang);
     }else{
-      raceRulesState.formatOverride=fmtStated;
+      changeRaceFormat(fmtStated);
       diagnosticLog('RACE_RULES','format stated kind='+fmtStated.kind+' dur='+(fmtStated.duration_s===null?'-':fmtStated.duration_s));
-      reply=R.formatReply(currentRaceRules(lastTelemetry),fmtStated,refuelsDone(),lang);
+      reply=R.formatReply(currentRaceRules(lastTelemetry),fmtStated,refuelsDone(),lang)+raceFormatCalculationStatus(lang);
     }
     if(stated) reply+=jp?'給油回数は言い直しでは変えない。':' The refuel count is not changed by conversation.';
+  }else if(raceRulesState.formatOverride?.kind==='laps'&&/^(?:総周回(?:は|数は)?|全)\s*[0-9０-９]{1,5}\s*周(?:のレース|だよ|です|だ|ね)?[。！!]?$/ .test(String(text).trim())){
+    const n=Number(String(text).match(/[0-9０-９]+/)[0].replace(/[０-９]/g,c=>String(c.charCodeAt(0)-0xFF10)));
+    if(n>=Number(lastTelemetry.lap)&&n<=20000){changeRaceFormat({...raceRulesState.formatOverride,total_laps:n});reply=(jp?`総周回${n}周、あなたの申告で見る。`:`Using your total of ${n} laps. `)+raceFormatCalculationStatus(lang);}
+    else reply=jp?'総周回は現在の周回以上、20000周以下で教えて。旧時間制の終点は使わない。':'Need a total at least as large as the current lap, no more than 20000. The old timed finish is not used.';
+  }else if(raceRulesState.formatOverride?.kind==='timed'&&/^スタートから\s*[0-9０-９]{1,4}\s*分経過(?:だよ|です|した|だ)?[。！!]?$/ .test(String(text).trim())){
+    const n=Number(String(text).match(/[0-9０-９]+/)[0].replace(/[０-９]/g,c=>String(c.charCodeAt(0)-0xFF10)));
+    const snap=canonicalLifecycleCache.current(),clock=snap?.source_frame?.session_time_s;
+    if(iracingLive&&Date.now()-lastTelemetryAt<=TELEMETRY_STALE_MS&&fuelWindowRaceKey(snap)===raceRulesState.raceKey&&Number.isFinite(clock)&&n*60<raceRulesState.formatOverride.duration_s){
+      changeRaceFormat({...raceRulesState.formatOverride,elapsed_anchor:{elapsed_s:n*60,clock_s:clock,epoch:snap.bridge_process_epoch}});
+      reply=(jp?`経過${n}分、あなたの申告で見る。`:`Using your elapsed ${n} minutes. `)+raceFormatCalculationStatus(lang);
+    }else reply=jp?'訂正したレース時間内の経過時間と、同レースの現在フレームが必要。':'Need elapsed racing time within the corrected duration and a current frame.';
   }else if(stated){
     // 監督/Owner 2026-11-19：会話から給油回数だけを抽出してレース設定を上書きしない。言い直しには、設定のままであること・不足時の扱いを返す。
     diagnosticLog('RACE_RULES','refuel count restated='+stated.refuels_stated+' (setting not changed)');
@@ -10910,6 +10963,25 @@ function noteRaceRulesTurn(text){
     // 「誰が見えていない？」「どの車を評価してる？」：評価できた車と評価外の車を決定論で答える（順位は総合/クラスを区別。連続範囲は言わない）。
     const u=pitCompareState.packet&&pitCompareState.packet.undercut_forecast;
     reply=window.PitwallUndercutForecast?window.PitwallUndercutForecast.coverageReply(u&&u.comparable!==undefined?u:null,lang):null;
+  }
+  const ef=effectiveRaceFormat(lastTelemetry);
+  // Prevent the canonical router from answering a corrected finish with the old plan.
+  if(!reply&&ef?.corrected&&!/さっき|前回|昨日|振り返|どうだった/.test(text)&&/燃料|燃費|給油|ピット|残り.*周|あと.*周|残り時間/.test(text)&&(!ef.ready||/燃料|燃費|残り.*周|あと.*周|残り時間/.test(text))){
+    if(!ef.ready) reply=R.calculationStatus(ef,lang);
+    else if(/残り時間/.test(text)) reply=jp?`訂正した形式では残り約${Math.ceil(ef.remaining_s/60)}分。`:`About ${Math.ceil(ef.remaining_s/60)} minutes remain under the corrected format.`;
+    else if(/残り.*周|あと.*周/.test(text)) reply=jp?`訂正した形式ではチェッカーまで推定${ef.crossings}回（現在周を含む）。`:`Estimated ${ef.crossings} crossings including the current lap, using the correction.`;
+    else {
+      const v=effectiveStrategyLive(currentCanonicalStrategyLive(lastTelemetry)),fs=v.fuel_strategy;
+      if(v.fuel===null||!Number.isFinite(Number(v.fuel))) reply=jp?'現在の残燃料が確認できない。給油量・停止要否を決める前に残量が必要。':'Current fuel is unavailable; need it before deciding whether to stop.';
+      else if(!(fs?.avg_fuel_per_lap>0)) reply=jp?'訂正した終点は計算できたが、観測燃費が不足している。次のピット案を決める前に、ピットを含まない周の燃料消費が必要。':'Finish recalculated; need measured fuel consumption before planning a stop.';
+      else {
+        const margin=currentMarginLiters(fs.avg_fuel_per_lap)||0,short=fs.required_fuel_l-Number(v.fuel);
+        reply=jp?`観測燃費約${fs.avg_fuel_per_lap.toFixed(2)}L/周。訂正した形式で、チェッカーまで推定${ef.crossings}回、必要約${fs.required_fuel_l.toFixed(1)}L。`:`Corrected format: estimated ${ef.crossings} crossings, about ${fs.required_fuel_l.toFixed(1)} L required. `;
+        reply+=short<=0?(jp?`燃料上は停止なしで完走できる。余裕約${(-short).toFixed(1)}L（希望余裕${margin.toFixed(1)}L）。順位を狙うピット提案は別に比較する。`:'Fuel permits finishing without a stop; a position strategy is a separate comparison.'):(jp?`約${short.toFixed(1)}L不足。燃費を改善できない場合は給油停止が必要。希望余裕${margin.toFixed(1)}Lも別に確保する。`:`About ${short.toFixed(1)} L short; refuel if consumption cannot be reduced.`);
+        if(short<=0&&margin+short>0)reply+=jp?`希望余裕まで約${(margin+short).toFixed(1)}L不足。`:`About ${(margin+short).toFixed(1)} L below the desired reserve.`;
+        if(/ピット|給油/.test(text))reply+=jp?'旧形式のピット周は使わず、更新した比較と給油ウィンドウで相談する。':'Use the updated comparison and fuel window, not the earlier format’s pit lap.';
+      }
+    }
   }
   if(!reply) return {closeTurn:false};
   addMsg('ai',reply);pushMsg({role:'assistant',content:reply});
@@ -10935,7 +11007,7 @@ function fuelWindowInputs(live){
   const facts=c&&c.canonical_lifecycle&&c.canonical_lifecycle.current_facts||null;
   const burnBridge=Number(fs?.strict_clean_avg_fuel_per_lap)>0?Number(fs.strict_clean_avg_fuel_per_lap):(Number(fs?.avg_fuel_per_lap)>0?Number(fs.avg_fuel_per_lap):null);
   const burn=burnBridge||observedBurnPerLap();
-  const crossings=Number.isFinite(Number(c&&c.finish_crossings_authority))&&c.finish_crossings_authority!==null?Number(c.finish_crossings_authority):(Number.isFinite(Number(fs?.estimated_crossings_to_finish))?Number(fs.estimated_crossings_to_finish):null);
+  const crossings=c?.effective_race_format?.corrected?(c.effective_race_format.ready?c.effective_race_format.crossings:null):Number.isFinite(Number(c&&c.finish_crossings_authority))&&c.finish_crossings_authority!==null?Number(c.finish_crossings_authority):(Number.isFinite(Number(fs?.estimated_crossings_to_finish))?Number(fs.estimated_crossings_to_finish):null);
   const cap=Number(lastFuelCapacityContext?.effective_fuel_capacity_l);
   return {fuel_l:c&&Number.isFinite(Number(c.fuel))?Number(c.fuel):null,burn_l:burn,crossings,capacity_l:Number.isFinite(cap)&&cap>0?cap:null,
     lap_dist_pct:facts&&Number.isFinite(Number(facts.lap_dist_pct))?Number(facts.lap_dist_pct):null,on_pit_road:c?c.on_pit_road:null,race_key:c&&c.race_instance_id?String(c.race_instance_id)+'|'+String(c.session_num??''):null};

@@ -894,11 +894,11 @@ function buildSystem(p) {
     if (live.race_plan && live.race_plan.kind === 'timed') {
       const duration = Number(live.race_plan.configured_duration_s);
       if (Number.isFinite(duration) && duration > 0) {
-        jp.push('レース規則: ' + Math.round(duration / 60) + '分タイムレース（SessionInfo確定）');
-        en.push('Race rule: ' + Math.round(duration / 60) + '-minute timed race (SessionInfo authority)');
+        jp.push('レース規則: ' + Math.round(duration / 60) + '分タイムレース（'+(live.race_plan.source==='driver_correction'?'あなたの訂正':'SessionInfo確定')+'）');
+        en.push('Race rule: ' + Math.round(duration / 60) + '-minute timed race ('+(live.race_plan.source==='driver_correction'?'driver correction':'SessionInfo authority')+')');
       }
     }
-    const authFinishCrossings = (rcFacts && rcFacts.finish && rcFacts.finish.available)
+    const authFinishCrossings = !raceContext?.effective_format && (rcFacts && rcFacts.finish && rcFacts.finish.available)
       ? rcFacts.finish.remaining_sf_crossings : (rcUnavailableNoFallback ? null : live.finish_crossings_authority);
     if (authFinishCrossings != null) { jp.push('チェッカーまでの自車S/F通過 ' + authFinishCrossings + '回'); en.push('Authoritative driver S/F crossings to finish ' + authFinishCrossings); }
     else if (live.finish_crossings_status) { jp.push('残り周回権威=取得不能（理由:' + live.finish_crossings_status + '）'); en.push('Finish-crossing authority unavailable (reason: ' + live.finish_crossings_status + ')'); }
@@ -1522,6 +1522,11 @@ function buildSystem(p) {
   if (raceContext) {
     const rc = raceContext;
     const L = [];
+    if(rc.effective_format){
+      L.push(isJ
+        ? '【今回の形式訂正・戦略の終点】'+JSON.stringify(rc.effective_format)+'。出所はDriver訂正、同race/session限定。canonicalのfinishと合意Planは訂正前の観測記録。旧終点・旧提案を今回の見込みとして再利用しない。ready=falseなら設定だけ変更済み・計算未確認と伝え、missingの項目（総周回または有効なレース経過時間）を尋ねる。ready=trueのcrossingsは訂正形式からの推定で、実行許可ではない。順位狙いの提案と燃料上の停止要否を区別する。'
+        : 'Effective race format correction (same race/session only): '+JSON.stringify(rc.effective_format)+'. Canonical finish and agreed plans are observed under the earlier format; do not reuse them as corrected predictions. If not ready, ask for missing total laps or valid racing elapsed time. Crossings are an estimate, not execution permission. Separate fuel necessity from position strategy.');
+    }
     if (!rc.freshness.available) {
       L.push(isJ
         ? `現在の作戦authorityは利用不能（理由:${rc.freshness.reason || 'unknown'}）。燃料・周回・Plan・ピット・実行許可は「不明」と答え、会話や履歴から復元しない。`

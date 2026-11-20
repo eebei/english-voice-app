@@ -35,6 +35,7 @@ async function ask(h, text) { await finishAudio(h, 2); const n0 = said(h).length
 const rules = h => JSON.parse(h.ev('JSON.stringify(currentRaceRules(lastTelemetry))'));
 
 (async () => {
+  if(!process.env.B310_REGRESSION_ONLY){
   // ═══ 1. 設定の確認・訂正（そのレース限り） ═══
   {
     const h = await boot(); await tel(h, { lap: 5, fuel: 40 });
@@ -119,7 +120,7 @@ const rules = h => JSON.parse(h.ev('JSON.stringify(currentRaceRules(lastTelemetr
     const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: { kind: 'timed', configured_duration_s: 10800 } });
     await ask(h, 'このレースは45分のタイムレースだよ');
     const n = await ask(h, 'いや、そのまま');
-    ck('6f 確認に「いや」：観測のまま。形式は変わらない', rules(h).applies === false && rules(h).format_source === null && n.some(t => /形式は観測のまま/.test(t)), { n, r: rules(h) });
+    ck('6f 確認に「いや」：観測のまま。形式は変わらない', rules(h).applies === false && rules(h).format_source === null && n.some(t => /3時間のタイムレース、観測/.test(t)), { n, r: rules(h) });
     await ask(h, 'このレースは45分のタイムレースだよ');
     await ask(h, '了解');
     ck('6g 確認への「了解」だけでは採用しない（勝手に採用しない）。確認待ちは次の1発話で失効', rules(h).format_source === null && h.ev('raceRulesState.pendingFormat') === null, rules(h));
@@ -140,6 +141,58 @@ const rules = h => JSON.parse(h.ev('JSON.stringify(currentRaceRules(lastTelemetr
     const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: {} });
     const a = await ask(h, 'このレースは45分のタイムレースだよ');
     ck('6j 観測が不明（形式未確認）の時は確認なしで即採用', rules(h).applies === true && rules(h).format_source === 'driver_correction' && a.some(t => /^了解、このレースは45分のタイムレースとして見る。/.test(t)), { a, r: rules(h) });
+  }
+  }
+  // Regression B310-3/4: actual speech -> corrected finish -> calculation consumers.
+  {
+    const h=await boot();await tel(h,{lap:5,fuel:40,plan:{kind:'timed',configured_duration_s:10800}});
+    await ask(h,'このレースは45分のタイムレースだよ');
+    const staleAux=h.ev('captureVerifiedAuxBinding(buildCurrentRaceContext())');h.set('__formatAux',staleAux);
+    const adopted=await ask(h,'はい');
+    ck('7a0 in-flight reply captured before correction is invalidated',h.ev("strategyReplyBindingValid(null,'旧ピット案で行こう',__formatAux)")===false);
+    ck('7a inconsistent elapsed is explicit, old timed calculation is unavailable',adopted.some(x=>/計算はまだ未確認/.test(x))&&h.ev('pitCompareInputFromLive(lastTelemetry).total_laps')===null&&h.ev('fuelWindowInputs(lastTelemetry).crossings')===null,{adopted});
+    await ask(h,'このレースは30分のタイムレースだよ');const no=await ask(h,'いや');
+    ck('7b declining a second correction reads the retained 45 minutes and driver source',no.some(x=>/45分のタイムレース、あなたの訂正/.test(x))&&rules(h).duration_s===2700,no);
+    await ask(h,'観測へ戻す？');await ask(h,'観測へ戻していない');
+    ck('7b2 question and negated reset do not remove correction',rules(h).duration_s===2700&&rules(h).format_source==='driver_correction');
+    const elapsed=await ask(h,'スタートから10分経過');
+    const f=JSON.parse(h.ev('JSON.stringify(effectiveRaceFormat(lastTelemetry))'));
+    ck('7c elapsed clarification recalculates 35 minutes and both fuel/compare endpoints',f.ready&&f.remaining_s===2100&&h.ev('fuelWindowInputs(lastTelemetry).crossings')===f.crossings&&h.ev('pitCompareInputFromLive(lastTelemetry).total_laps.value')===f.total_laps,{f,elapsed});
+    h.ev('pitCompareState.fuelByLap={2:49,3:46.5,4:44,5:41.5}');
+    const fuel=await ask(h,'燃料は最後まで足りる？');
+    ck('7d corrected fuel question answers calculated deficit or no-stop explicitly',fuel.some(x=>/必要約/.test(x)&&/不足|燃料上は停止なしで完走できる/.test(x)),fuel);
+    h.set('strategyStartingFuelL',53);h.ev("updatePitStrategyCompare(lastTelemetry,'test_corrected_consult')");
+    const consultation=await ask(h,'最後のピット、いつ入る？');
+    const body=h.state.chats[h.state.chats.length-1];
+    ck('7d2 actual pit consultation sends corrected comparison and context',body?.raceContext?.effective_format?.remaining_s===2100&&body?.pitStrategyCompare&&body.liveData.race_plan.configured_duration_s===2700,{consultation,body});
+    const ctx=JSON.parse(h.ev('JSON.stringify(buildCurrentRaceContext())'));
+    ck('7e LUNA context carries same corrected scope and suppresses old calculation references',ctx.effective_format?.remaining_s===2100&&ctx.calculation_references.fuel_strategy===null&&ctx.calculation_references.strategy_options===null&&h.ev('PitwallRaceContextBuilder.validate(buildCurrentRaceContext(),Date.now())'),ctx.effective_format);
+    console.log('B310_CORRECTED_TRACE',JSON.stringify({adopted,no,elapsed,fuel,effective:f,context:ctx.effective_format,observed:h.ev('lastTelemetry.race_plan')}));
+    const prompt=require('./prompts').buildSystem({character:'LunaJP',mode:'race',telemetry:'live',raceContext:ctx,raceContextModern:true,liveData:{}});
+    ck('7e2 actual server prompt consumes effective correction and explicitly suspends old endpoint',prompt.suffix.includes('今回の形式訂正・戦略の終点')&&prompt.suffix.includes('2100')&&prompt.suffix.includes('旧終点・旧提案'));
+    await ask(h,'観測へ戻して');
+    ck('7f explicit reset removes correction and restores observed timed input',rules(h).duration_s===10800&&rules(h).format_source===null&&h.ev('pitCompareInputFromLive(lastTelemetry).total_laps.value')===20,rules(h));
+    await ask(h,'このレースは周回レースだよ');const lap=await ask(h,'はい');
+    ck('7g lap correction never uses old timed finish; asks total laps',lap.some(x=>/総周回は何周/.test(x))&&h.ev('pitCompareInputFromLive(lastTelemetry).total_laps')===null,lap);
+    const total=await ask(h,'総周回は20周');
+    ck('7h total-lap clarification reaches comparison and fuel window',h.ev('pitCompareInputFromLive(lastTelemetry).total_laps.value')===20&&h.ev('fuelWindowInputs(lastTelemetry).crossings')===16,total);
+    await tel(h,{lap:6,fuel:38,plan:{kind:'timed',configured_duration_s:10800}});
+    ck('7i next telemetry keeps correction while recomputing remaining crossings',h.ev('fuelWindowInputs(lastTelemetry).crossings')===15&&rules(h).kind==='laps',rules(h));
+    const at=h.ev('lastTelemetryAt');h.set('lastTelemetryAt',0);
+    const stale=await ask(h,'燃料は足りる？');
+    ck('7i2 stale telemetry cannot support a corrected fuel/stop claim',stale.some(x=>/テレメトリが古い/.test(x))&&!stale.some(x=>/必要約|燃料上は停止なしで完走できる/.test(x)),stale);
+    h.set('lastTelemetryAt',at);
+    await tel(h,{lap:1,fuel:52,race:'sub:OTHER',plan:{kind:'timed',configured_duration_s:2400}});
+    ck('7j different race clears correction and restores observed fuel endpoint',rules(h).kind==='timed'&&rules(h).duration_s===2400&&h.ev('effectiveRaceFormat(lastTelemetry).corrected')===false,rules(h));
+  }
+  for(const plan of [{kind:'unknown'},{kind:'timed',configured_duration_s:null}]){
+    const h=await boot();await tel(h,{lap:5,fuel:40,plan});
+    const a=await ask(h,'このレースは45分のタイムレースだよ');
+    console.log('B310_5_TRACE',JSON.stringify({plan,a,rules:rules(h)}));
+    ck('8a unknown/missing format immediately adopts without fabricated lap observation',rules(h).duration_s===2700&&rules(h).format_source==='driver_correction'&&h.ev('raceRulesState.pendingFormat')===null&&!a.some(t=>/観測では周回レース/.test(t)),a);
+    ck('8b missing observation requests elapsed rather than alleging inconsistency',a.some(t=>/訂正した時間に対する経過時間が必要/.test(t))&&!a.some(t=>/整合しない/.test(t)),a);
+    await ask(h,'スタートから10分経過');
+    ck('8c elapsed answer completes calculation after unknown format',h.ev('effectiveRaceFormat(lastTelemetry).remaining_s')===2100&&h.ev('effectiveRaceFormat(lastTelemetry).ready')===true);
   }
   console.log('\n=== race rules e2e: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail ? 1 : 0);

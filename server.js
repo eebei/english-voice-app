@@ -940,13 +940,15 @@ function canonicalizeLiveData(liveData, raceContext, isModernCaller) {
   // cross-checked there against that event's own race_instance_id/
   // session_num). No event -> no service -> unknown, never a raw read.
   const lastPitService = raceContext && raceContext.last_pit_event ? raceContext.last_pit_event.service : null;
+  const ef=raceContext?.effective_format;
   return {
     ...live,
+    ...(ef?{race_plan:{kind:ef.kind,configured_duration_s:ef.duration_s,source:ef.source},session_time_remaining_s:ef.remaining_s,laps_total:ef.kind==='laps'?ef.total_laps:null,strategy_plan:null,strategy_options:null,endurance_fuel_plan:null}:{}),
     fuel: facts ? facts.fuel_level_l : null,
     lap: facts ? facts.current_lap : null,
     on_pit_road: facts ? facts.on_pit_road : null,
     on_track: facts ? facts.on_track : null,
-    finish_crossings_authority: (facts && facts.finish && facts.finish.available) ? facts.finish.remaining_sf_crossings : null,
+    finish_crossings_authority: !ef && (facts && facts.finish && facts.finish.available) ? facts.finish.remaining_sf_crossings : null,
     fuel_strategy: fuelRefFresh ? fuelRef.value : null,
     // WO014 round4 residual ("reference role/age"), audit-corrected: even a
     // FRESH (age 0) reference is still a REFERENCE, not canonical current
@@ -962,7 +964,7 @@ function canonicalizeLiveData(liveData, raceContext, isModernCaller) {
     // WO-019: the canonical active Plan (validated raceContext) is the only plan a
     // deterministic plan-status reply may describe; a fuel REFERENCE never stands in for it.
     active_plan: raceContext && raceContext.active_plan && raceContext.active_plan.phase === 'active'
-      ? raceContext.active_plan : null,
+      ? (ef ? null : raceContext.active_plan) : null,
   };
 }
 
