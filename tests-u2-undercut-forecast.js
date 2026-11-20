@@ -442,7 +442,7 @@ const vs = (o, rival, scen) => o.vs_rivals.find(v => v.rival_id === rival && v.s
     const cd = sec.coverage_detail, txt = U.coverageReply(sec, 'ja');
     const evNos = cd.evaluated_rivals.map(c => c.no), unNos = cd.unassessed_same_class.map(c => c.no);
     ck('F9t 1秒欠測した#11は「評価できている」(basis=dead_reckoned・推測位置で条件付き評価)だけに載り、評価外には載らない。同時に消えた後方0.8周の#16(評価対象外)は評価外だけ。同じ車が両方に載らない', evNos.includes('11') && cd.evaluated_rivals.find(c => c.no === '11').basis === 'dead_reckoned' && !unNos.includes('11') && !evNos.includes('16') && unNos.includes('16') && evNos.filter(n => unNos.includes(n)).length === 0, cd);
-    ck('F9u 返答：「#11（総合13位、直近の位置から推測）」は評価できている側、評価外に#11は出ない。評価外の#16には「最後に見えた時点の順位(何秒前)」を添え、現在の順位として言わない', /評価できているのは#11（総合13位、直近の位置から推測）/.test(txt) && !/評価外は[^。]*#11/.test(txt) && /#16（見えていない/.test(txt) && /秒前は総合14位/.test(txt) && cd.unassessed_same_class[0].rank_as_of_last_seen === true, txt);
+    ck('F9u 返答：「#11（総合13位、直近の位置から推測）」は評価できている側、評価外に#11は出ない。評価外の#16には「最後に見えた時点の順位(何秒前)」を添え、現在の順位として言わない', /評価できているのは#11（総合13位、[0-9]+秒前の位置から推測）/.test(txt) && !/評価外は[^。]*#11/.test(txt) && /#16（見えていない/.test(txt) && /秒前は総合14位/.test(txt) && cd.unassessed_same_class[0].rank_as_of_last_seen === true, txt);
   });
   await SEC('F9v', async () => {
     // 推定停止→「未給油なら」の発話：実計算(compute)から作った提案で確認する（期限が近く、未給油の仮定で結論が変わる脅威がある入力）。

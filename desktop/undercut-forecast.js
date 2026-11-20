@@ -636,7 +636,7 @@
     const jp = lang !== 'en';
     if (!u || !u.coverage_detail) return jp ? '評価の対象はまだ確認できていない。' : 'The evaluated cars are not available yet.';
     const d = u.coverage_detail, pn = c => (c.class !== null && c.class !== undefined ? 'クラス' + c.class + '位' : (c.overall !== null && c.overall !== undefined ? '総合' + c.overall + '位' : '順位不明'));
-    const ev = d.evaluated_rivals.length ? d.evaluated_rivals.map(c => '#' + c.no + '（' + pn(c) + (c.basis === 'dead_reckoned' ? '、直近の位置から推測' : '') + '）').join('、') : null;
+    const ev = d.evaluated_rivals.length ? d.evaluated_rivals.map(c => '#' + c.no + '（' + pn(c) + (c.basis === 'dead_reckoned' ? '、' + (c.last_seen_age_s !== null && c.last_seen_age_s !== undefined ? Math.round(c.last_seen_age_s) + '秒前の位置から推測' : '直近の位置から推測') : '') + '）').join('、') : null;
     // 評価外：最後に見えた時点の順位と何秒前かを添える（現在の順位として言わない）
     const un = d.unassessed_same_class.length ? d.unassessed_same_class.slice(0, 5).map(c => '#' + c.no + '（見えていない' + (c.last_seen_age_s !== null && (c.class !== null || c.overall !== null) ? '、' + c.last_seen_age_s + '秒前は' + pn(c) : '') + '）').join('、') : null;
     const own = d.own_position && (d.own_position.class !== null || d.own_position.overall !== null) ? '自車は' + pn(d.own_position) + '。' : '';

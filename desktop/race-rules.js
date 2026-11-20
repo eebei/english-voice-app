@@ -17,8 +17,9 @@
   // 設定がレースに適用されるか。overrideはDriverのそのレース限りの訂正。
   function resolve(input) {
     const i = input || {}, rule = i.rule === undefined ? OWNER_SHORT_ENDURANCE : i.rule, plan = i.race_plan || {};
-    const kind = plan.kind || null, dur = fin(plan.configured_duration_s);
-    const base = { kind, duration_s: dur };
+    const fo = i.format_override && typeof i.format_override === 'object' ? i.format_override : null;   // Driverの明示的な形式訂正（そのレース限り）
+    const kind = fo ? fo.kind : (plan.kind || null), dur = fo ? fin(fo.duration_s) : fin(plan.configured_duration_s);
+    const base = { kind, duration_s: dur, format_source: fo ? 'driver_correction' : null };
     if (i.override && Number.isInteger(i.override.refuels_required) && i.override.refuels_required >= 0) {
       return Object.assign(base, { applies: true, refuels_required: i.override.refuels_required, source: 'driver_correction', rule_id: rule ? rule.id : null, reason: null });
     }
@@ -32,7 +33,7 @@
   function sentence(res, done, lang) {
     const jp = lang !== 'en', d = Number.isInteger(done) ? done : 0;
     if (!res) return '';
-    const fmt = res.kind === 'timed' && res.duration_s ? (jp ? `${mins(res.duration_s)}分のタイムレース` : `${mins(res.duration_s)}-minute timed race`) : null;
+    const fmt = res.kind === 'timed' && res.duration_s ? (jp ? `${mins(res.duration_s)}分のタイムレース${res.format_source === 'driver_correction' ? '、あなたの訂正' : ''}` : `${mins(res.duration_s)}-minute timed race`) : null;
     if (res.applies) {
       const src = res.source === 'driver_correction' ? (jp ? 'あなたの訂正' : 'your correction') : (jp ? 'Owner設定' : 'owner setting');
       return jp ? `給油は${res.refuels_required}回の設定（${src}${fmt ? '、' + fmt : ''}）。済んだのは${d}回。違えば言って。` : `Refuel is set to ${res.refuels_required} (${src}${fmt ? ', ' + fmt : ''}). ${d} done so far. Tell me if that is wrong.`;
@@ -64,6 +65,28 @@
     if (stated === req) return jp ? `給油${req}回の設定どおり。済んだのは${done}回。` : `That matches the ${req}-refuel setting. ${done} done.`;
     return jp ? `このレースは給油${req}回の設定のまま、言い直しでは変えない。足りない時は、不足量と追加の停止が要る条件を伝える。` : `This race stays at ${req} refuel(s); restating does not change it. If fuel runs short I will give the shortfall and the conditions for another stop.`;
   }
+  // レース形式の明示訂正：「このレースは45分のタイムレース」「今回は周回レース」。質問・過去の話・曖昧な発話は対象外。
+  //   形式だけを変える。給油回数の設定そのものは会話で変えない（Owner設定が新しい形式の範囲に入るかだけが変わる）。
+  function parseFormatStatement(text) {
+    const t = String(text || '');
+    if (/[?？]|何分|何周|どれ|教えて|かな|だっけ/.test(t)) return null;
+    if (/前回|昨日|昨夜|先週|さっき|過去|だった|でした|記録|履歴/.test(t)) return null;
+    if (!/(?:このレース|今回|今日の?レース|今のレース|このセッション)/.test(t)) return null;
+    const m = t.match(/(?<![0-9０-９.])([0-9０-９]{1,3})\s*分(?:間)?(?:の)?(?:タイム)?(?:レース|耐久|スプリント)?/);
+    if (m && /レース|耐久|スプリント|タイム/.test(t) && !/周回|ラップレース/.test(t)) {
+      const v = Number(m[1].replace(/[０-９]/g, c => String(c.charCodeAt(0) - 0xFF10)));
+      if (Number.isFinite(v) && v >= 5 && v <= 1440) return { kind: 'timed', duration_s: v * 60 };
+    }
+    if (/周回(?:数)?(?:の)?レース|ラップレース|周回制/.test(t) || /[0-9０-９]{1,3}\s*周(?:の)?レース/.test(t)) return { kind: 'laps', duration_s: null };
+    return null;
+  }
+  function formatReply(res, fo, done, lang) {
+    const jp = lang !== 'en';
+    if (!fo) return '';
+    const what = fo.kind === 'timed' ? (jp ? `${mins(fo.duration_s)}分のタイムレース` : `${mins(fo.duration_s)}-minute timed race`) : (jp ? '周回レース' : 'lap race');
+    const lead = jp ? `了解、このレースは${what}として見る。` : `Copy, treating this as a ${what}.`;
+    return lead + sentence(res, done, lang);
+  }
   function isRefuelCountQuestion(text) {
     const t = String(text || '');
     if (/前回|昨日|昨夜|先週|さっき|過去|した[？?。\s]*$|しました|ゴール|何位|だった|でした|入った|記録|履歴/.test(t)) return false;   // 過去のレースの質問（「何回ピットで何位でゴールした？」）は設定の確認ではない
@@ -91,7 +114,7 @@
     const b = fin(burnPerLap);
     return b !== null && b > 0 ? Math.round(marginLaps(policy) * b * 100) / 100 : null;
   }
-  const api = { OWNER_SHORT_ENDURANCE, MARGIN_DEFAULT_LAPS, MARGIN_ALLOWED_LAPS, resolve, sentence, parseRefuelStatement, statementReply, isRefuelCountQuestion, parseMarginCorrection, marginLaps, marginLiters };
+  const api = { OWNER_SHORT_ENDURANCE, MARGIN_DEFAULT_LAPS, MARGIN_ALLOWED_LAPS, resolve, sentence, parseRefuelStatement, statementReply, parseFormatStatement, formatReply, isRefuelCountQuestion, parseMarginCorrection, marginLaps, marginLiters };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PitwallRaceRules = api;
 })(typeof window !== 'undefined' ? window : globalThis);

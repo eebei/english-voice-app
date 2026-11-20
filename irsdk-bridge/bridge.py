@@ -72,7 +72,7 @@ import box_authority_delivery as box_authority_delivery_mod
 import observability_trace as observability_trace_mod
 
 # ⚠️ビルドを更新したらここを必ず変える（ログでexe版を判別するため。今まで固定で混乱の元だった）。
-BUILD_VERSION = "Build 309 (fuel window watch + race rules + pit calls; Build 308 fixes)"
+BUILD_VERSION = "Build 310 (race format correction + inferred-rival age; Build 309 fixes)"
 PORT = 8765
 connected_clients = set()
 loop = None

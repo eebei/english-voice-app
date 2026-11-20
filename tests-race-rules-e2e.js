@@ -102,6 +102,19 @@ const rules = h => JSON.parse(h.ev('JSON.stringify(currentRaceRules(lastTelemetr
     m = margins();
     ck('5e 別raceに入ると、周数訂正も直接L指定も初期化され、既定の1周分へ戻る（窓・STR-001とも）', m.policy === 1 && h.ev('fuelWindowMarginL') === null, m);
   }
+  // ═══ 6. レース形式の明示訂正（Build 310）：形式だけを変え、給油回数は会話で変えない。別raceで初期化 ═══
+  {
+    const h = await boot(); await tel(h, { lap: 5, fuel: 40, plan: { kind: 'timed', configured_duration_s: 10800 } });
+    ck('6a 3時間レースはOwner設定を適用しない', rules(h).applies === false, rules(h));
+    const a = await ask(h, 'このレースは45分のタイムレースだよ');
+    ck('6b 形式の明示訂正で、Owner設定が適用に変わる（給油1回・出所=Owner設定、形式=あなたの訂正）。そのターンは閉じる（LLMへ回さない）', rules(h).applies === true && rules(h).refuels_required === 1 && rules(h).source === 'owner_directive' && rules(h).format_source === 'driver_correction' && /^了解、このレースは45分のタイムレースとして見る。給油は1回の設定（Owner設定、45分のタイムレース、あなたの訂正）/.test(a[a.length - 1] || '') && h.state.chats.length === 0, { a, r: rules(h) });
+    const b = await ask(h, 'このレースは何分？');
+    ck('6c 質問は形式の訂正にしない（形式は45分のまま）', rules(h).duration_s === 2700, rules(h));
+    const c = await ask(h, 'このレースは周回レースだよ');
+    ck('6d 周回レースへ訂正すると、設定は適用されず理由を言う', rules(h).applies === false && rules(h).reason === 'outside_rule_scope' && /60分以内のショート耐久ではないので/.test(c[c.length - 1] || ''), { c, r: rules(h) });
+    await tel(h, { lap: 1, fuel: 52, race: 'sub:RR-F2', plan: { kind: 'timed', configured_duration_s: 10800 } });
+    ck('6e 別raceに入ると形式の訂正は初期化される（観測した形式へ戻る）', rules(h).format_source === null && rules(h).duration_s === 10800 && rules(h).applies === false, rules(h));
+  }
   console.log('\n=== race rules e2e: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('HARNESS_ERROR', e); process.exit(2); });

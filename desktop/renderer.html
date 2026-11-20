@@ -10839,13 +10839,13 @@ function evaluateLiveStrategySwitch(live){
   return evaluation;
 }
 // ── レース設定（給油回数・燃料余裕の周数）：レース限りの状態。別raceへ設定の訂正・給油済み状態を持ち越さない（監督 2026-11-18）──
-const raceRulesState={raceKey:'',override:null,marginPolicy:null};
+const raceRulesState={raceKey:'',override:null,marginPolicy:null,formatOverride:null};
 function currentMarginPolicy(){return raceRulesState.marginPolicy||{laps:window.PitwallRaceRules?window.PitwallRaceRules.MARGIN_DEFAULT_LAPS:1,source:'default'};}
 function currentRaceRules(live){
   const R=window.PitwallRaceRules;
   if(!R) return null;
   const plan=live&&live.race_plan&&typeof live.race_plan==='object'?live.race_plan:(lastTelemetry&&lastTelemetry.race_plan)||{};
-  return R.resolve({race_plan:plan,override:raceRulesState.override});
+  return R.resolve({race_plan:plan,override:raceRulesState.override,format_override:raceRulesState.formatOverride});
 }
 function refuelsDone(){return ownPitObserver.completions;}   // 給油を確認したピットの回数（進入・ドライブスルー・ノイズは数えない）
 // 別race/sessionに入ったら、レース限りの状態を全て初期化する（給油済み回数・設定の訂正・余裕の変更・見込み・提案の履歴）。
@@ -10855,7 +10855,7 @@ function syncRaceScopedState(live){
   const first=raceRulesState.raceKey==='';
   raceRulesState.raceKey=rk;
   if(first) return;
-  raceRulesState.override=null;raceRulesState.marginPolicy=null;fuelWindowMarginL=null;
+  raceRulesState.override=null;raceRulesState.marginPolicy=null;raceRulesState.formatOverride=null;fuelWindowMarginL=null;
   Object.assign(ownPitObserver,{prev:'unknown',completions:0,passes:0,lastCompletedAt:0,lastCompletedLap:null,enteredAt:0,entryFuel:null,onSamples:0});
   postPitFuel.pendingFor=0;postPitFuel.announcedFor=0;
   fuelForecast.prev=null;fuelForecast.inflight=null;fuelForecast.lastEvalLap=null;
@@ -10869,8 +10869,13 @@ function noteRaceRulesTurn(text){
   if(!R||selMode!=='race'||!lastTelemetry) return {closeTurn:false};
   const jp=isJapaneseEngineer(),lang=jp?'ja':'en';
   let reply=null;
-  const stated=R.parseRefuelStatement(text),marg=R.parseMarginCorrection(text);
-  if(stated){
+  const stated=R.parseRefuelStatement(text),marg=R.parseMarginCorrection(text),fmtStated=R.parseFormatStatement?R.parseFormatStatement(text):null;
+  if(fmtStated){
+    // レース形式の明示訂正（そのレース限り）。給油回数は会話で変えない。Owner設定が新しい形式の範囲に入るかだけが変わる。
+    raceRulesState.formatOverride=fmtStated;
+    diagnosticLog('RACE_RULES','format stated kind='+fmtStated.kind+' dur='+(fmtStated.duration_s===null?'-':fmtStated.duration_s));
+    reply=R.formatReply(currentRaceRules(lastTelemetry),fmtStated,refuelsDone(),lang);
+  }else if(stated){
     // 監督/Owner 2026-11-19：会話から給油回数だけを抽出してレース設定を上書きしない。言い直しには、設定のままであること・不足時の扱いを返す。
     diagnosticLog('RACE_RULES','refuel count restated='+stated.refuels_stated+' (setting not changed)');
     reply=R.statementReply(currentRaceRules(lastTelemetry),stated.refuels_stated,refuelsDone(),lang);
