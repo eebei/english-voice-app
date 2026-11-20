@@ -9,7 +9,8 @@ const F = require('../../desktop/field-snapshot.js');
 const U = require('../../desktop/undercut-forecast.js');
 
 const CONST = Object.freeze({
-  L: 97, burn: 2.6, tank: 60, startFuel: 60, totalLaps: 25, pit: { transit_extra_s: 12, fixed_stall_s: 10, fuel_rate_s_per_l: 0.4 },
+  L: 97, burn: 2.6, reserve: 2.6,   // 燃料余裕＝1周分(2.6L)＝rendererの既定（監督 2026-11-18。旧：固定0.5L）
+   tank: 60, startFuel: 60, totalLaps: 25, pit: { transit_extra_s: 12, fixed_stall_s: 10, fuel_rate_s_per_l: 0.4 },
   ownLap: 9, ownD: 0.0,           // 自車は9周目の頭(ライン通過直後。残燃料＝直前3周と同じ燃費で減った値)
   rearGaps_s: [3.0, 7.0],         // 後ろ2台（#11, #12）
   aheadGaps_s: [20, 40],          // 前の2台
@@ -48,8 +49,8 @@ function trainFor(alignTo, gaps) {
   const { L, ownLap, ownD, pit, burn, tank, totalLaps, trainPace } = CONST; const trainGaps_s = gaps || CONST.trainGaps_s;
   const p0 = ownLap + ownD, fuelNow = CONST.startFuel - burn * (p0 - 1);
   let P = alignTo === 'now' ? ownLap : ownLap + 1;
-  if (alignTo === 'limit') { P = ownLap; while (fuelNow - burn * (P + 1 + 1 - p0) >= 0.5 && P + 1 < totalLaps - 1) P++; }   // 予備を切らずに入れる最も遅い周（undercut-forecastの限界案と同じ定義）
-  const X = P + 1, fe = fuelNow - burn * (P + 1 - p0), add = Math.max(0, burn * ((totalLaps + 1) - P) + 0.5 - fe);   // 総周回の高い側(+1)で必要量
+  if (alignTo === 'limit') { P = ownLap; while (fuelNow - burn * (P + 1 + 1 - p0) >= CONST.reserve && P + 1 < totalLaps - 1) P++; }   // 予備を切らずに入れる最も遅い周（undercut-forecastの限界案と同じ定義）
+  const X = P + 1, fe = fuelNow - burn * (P + 1 - p0), add = Math.max(0, burn * ((totalLaps + 1) - P) + CONST.reserve - fe);   // 総周回の高い側(+1)で必要量
   const loss = pit.transit_extra_s + pit.fixed_stall_s + pit.fuel_rate_s_per_l * add, tx = (X - p0) * L + loss;
   return { P, progress: trainGaps_s.map(g => X + g / L - tx / trainPace) };   // 現在の進行量
 }
@@ -70,7 +71,7 @@ function build() {
     const fuelNow = CONST.startFuel - burn * (p0 - 1);
     out[name] = { align, narrative: name === 'wait_loses' ? '後続#11が先に入ると、次周に入る案は復帰先の遅い車列で損をして逆転される' : '今入る案は復帰先の遅い車列で損をする。待てば車列は後ろへ流れる',
       input: { meta: { race_instance_id: snap.race_instance_id, session_num: snap.session_num },
-        own: { fuel_l: { value: fuelNow, source: 'synthetic' }, fuel_per_lap_l: { value: burn, low: burn, high: burn, source: 'synthetic' }, tank_l: { value: tank, source: 'synthetic' }, reserve_l: { value: 0.5, source: 'assumed' }, lap_time_s: { value: L, source: 'synthetic' } },
+        own: { fuel_l: { value: fuelNow, source: 'synthetic' }, fuel_per_lap_l: { value: burn, low: burn, high: burn, source: 'synthetic' }, tank_l: { value: tank, source: 'synthetic' }, reserve_l: { value: CONST.reserve, source: 'assumed' }, lap_time_s: { value: L, source: 'synthetic' } },
         total_laps: { value: totalLaps, low: totalLaps - 1, high: totalLaps + 1, source: 'assumed' },
         pit: { transit_extra_s: { value: pit.transit_extra_s, source: 'assumed' }, fixed_stall_s: { value: pit.fixed_stall_s, source: 'assumed' }, fuel_rate_s_per_l: { value: pit.fuel_rate_s_per_l, source: 'assumed' } },
         snapshot: snap, tracker, options: {}, _spec: spec } };

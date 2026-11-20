@@ -247,7 +247,9 @@ const vs = (o, rival, scen) => o.vs_rivals.find(v => v.rival_id === rival && v.s
     // 訂正（Driverの意見）で再計算：「次周なら？」の焦点
     const sf = U.compute(Object.assign({}, w.input, { options: Object.assign({}, w.input.options, { focus: U.parseFocus('じゃあ次周なら？') }) }));
     ck('D8 「じゃあ次周なら？」＝焦点が次周案になり、同じ入力から新しい計算版(calc_id)で次周案の内訳が返る（案の優劣・数値は変えない）', sf.focus && sf.focus.option_id === 'next' && sf.focus.evaluated === true && sf.calc_id !== sw.calc_id && optById(sf, 'next').vs_rivals.length === optById(sw, 'next').vs_rivals.length && JSON.stringify(optById(sf, 'next').vs_rivals) === JSON.stringify(wNext.vs_rivals), sf.focus);
-    ck('D9 走行中のLUNA提案文は決定論で、パケットの数値だけを使い、判断期限を含み、推奨変更が無ければ繰り返さない', (() => { const p1 = U.proposal(sw, null); const p2 = U.proposal(sw, p1.key); return p1.text && /判断は\d+周まで/.test(p1.text) && p2.text === null && p2.reason === 'unchanged'; })(), U.proposal(sw, null));
+    ck('D9 走行中のLUNA提案文は決定論で、パケットの数値だけを使い、一文で結論＋理由を短く言い（内部注記・括弧・「最もきつくない」・判断期限の言い回しを含まない）、結論(入る案と周)が変わらなければ繰り返さない', (() => { const p1 = U.proposal(sw, null); const p2 = U.proposal(sw, p1.key); return p1.text && /^今周に入るのがいい。待つと11番が先に入って約\d+(?:\.\d)?秒逆転される。$/.test(p1.text) && !/[（(]|最もきつくない|見えていない|評価できていない|判断は\d+周まで/.test(p1.text) && p2.text === null && p2.reason === 'unchanged' && p1.diag && p1.diag.coverage_clear === true; })(), U.proposal(sw, null));
+    ck('D9b 判断が目前でない(決定期限まで2周以上)案は話さない。話していない間も前回の結論は保持される（遠い案で前の結論を消さない）', (() => { const far = JSON.parse(JSON.stringify(sw)); far.decision.recommendation.decide_by_lap = far.observed_at.lap + 5; const r = U.proposal(far, 'prev-key'); return r.text === null && r.reason === 'not_imminent' && r.key === 'prev-key'; })(), null);
+    ck('D9c 相手の仮定だけが変わっても(結論＝案と周が同じ)再コールしない', (() => { const p1 = U.proposal(sw, null); const sw2 = JSON.parse(JSON.stringify(sw)); sw2.decision.rival_first_threats.forEach(t => { t.behind_by_s += 1; t.rival_no = '99'; }); const p2 = U.proposal(sw2, p1.key); return p2.text === null && p2.reason === 'unchanged'; })(), null);
   });
   // ═══ E. 拒否 ═══
   console.log('── E. 拒否・欠測 ──');
@@ -330,6 +332,138 @@ const vs = (o, rival, scen) => o.vs_rivals.find(v => v.rival_id === rival && v.s
     ck('F9 自車がピットレーン上なら blocking=own_in_pit で、案も推奨も出さない（第二の停止を提案しない）', sec.comparable === false && sec.blocking.includes('own_in_pit') && sec.options.length === 0 && sec.decision === null, { b: sec.blocking, n: sec.options.length });
     const C = require('./desktop/pit-strategy-compare.js');
     ck('F9b own_in_pitのパケットはSTR-001側でも使えない（packetUsable=false）', C.packetUsable(C.attachUndercut({ schema: 'pit_strategy_compare', calc_version: C.VERSION, race: sec.race, comparable: false, blocking: ['x'], observed_at: sec.observed_at, cases: [], recommendation: null, inputs: [], expires: { valid_until_lap: 99 } }, sec)) === false, null);
+  });
+  await SEC('F9c', async () => {
+    // Build 308実走：給油後も旧い「今／次周／限界」の停止提案が繰り返された。自車が既にピットを通過し、残燃料でチェッカーまで足りるなら、停止の比較は出さない（own_stop_done）。足りない時だけ再停止の比較を続ける。
+    const mkTr = () => { const tr = U.createTracker();
+      tr.update(snap({ t: 400, cars: [{ i: 0, no: '10', prog: 5.9, ll: 100 }, { i: 1, no: '11', prog: 5.85, ll: 100 }] }));
+      tr.update(snap({ t: 410, cars: [{ i: 0, no: '10', prog: 6.0, ll: 100, pit: true }, { i: 1, no: '11', prog: 5.95, ll: 100 }] }));
+      const s = snap({ t: 440, cars: [{ i: 0, no: '10', prog: 6.3, ll: 100 }, { i: 1, no: '11', prog: 6.25, ll: 100 }] }); tr.update(s); return { tr, s }; };
+    const { tr, s } = mkTr();
+    const enough = U.compute(baseInput(tr, s, { own: { fuel_l: 53, fuel_per_lap_l: 2.0, tank_l: 53, reserve_l: 0.5, lap_time_s: { value: 100, source: 'observed' } }, total_laps: { value: 20, low: 20, high: 20, source: 'assumed' } }));
+    ck('F9c 自車が給油済み(ピット通過を観測)で、残り燃料でチェッカーまで足りるなら、停止の比較は出さない（blocking=own_stop_done・案も推奨もなし）', enough.comparable === false && enough.blocking.includes('own_stop_done') && enough.options.length === 0 && enough.decision === null, { b: enough.blocking, n: enough.options.length });
+    const short = U.compute(baseInput(tr, s, { own: { fuel_l: 20, fuel_per_lap_l: 2.0, tank_l: 53, reserve_l: 0.5, lap_time_s: { value: 100, source: 'observed' } }, total_laps: { value: 20, low: 20, high: 20, source: 'assumed' } }));
+    ck('F9d 給油済みでも残燃料が足りない時は、再停止の比較を続ける（own_stop_doneにしない）', !(short.blocking || []).includes('own_stop_done') && short.options.length > 0, { b: short.blocking });
+    const tr0 = U.createTracker(); const s0 = snap({ t: 440, cars: [{ i: 0, no: '10', prog: 6.3, ll: 100 }, { i: 1, no: '11', prog: 6.25, ll: 100 }] }); tr0.update(s0);
+    const never = U.compute(baseInput(tr0, s0, { own: { fuel_l: 53, fuel_per_lap_l: 2.0, tank_l: 53, reserve_l: 0.5, lap_time_s: { value: 100, source: 'observed' } }, total_laps: { value: 20, low: 20, high: 20, source: 'assumed' } }));
+    ck('F9e まだ給油していない(ピット通過なし)なら、燃料が足りていても従来どおり比較を出す（own_stop_doneにしない）', !(never.blocking || []).includes('own_stop_done') && never.options.length > 0, { b: never.blocking });
+  });
+  await SEC('F9f', async () => {
+    // Build 308実走(11/15)：#12はピットレーン上で約33秒「見えない」状態になり、再び見えた時は推測位置より約0.3周後ろだった。
+    //   観測では「入った」と分からないまま「#12が今周先に入ると…」と仮定を話し続けた。見えなかった間の遅れで停止を推定する（basis=inferred）。
+    const mk = (unseenS, deficitLap) => { const tr = U.createTracker();
+      tr.update(snap({ t: 500, cars: [{ i: 0, no: '10', prog: 5.5, ll: 100 }, { i: 1, no: '12', prog: 5.4, ll: 100 }] }));
+      tr.update(snap({ t: 500 + 1, cars: [{ i: 0, no: '10', prog: 5.51, ll: 100 }, { i: 1, no: '12', prog: 5.41, ll: 100 }] }));
+      tr.update(snap({ t: 500 + 2, cars: [{ i: 0, no: '10', prog: 5.52, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+      const t2 = 501 + unseenS, exp = 5.41 + unseenS / 100;
+      const s = snap({ t: t2, cars: [{ i: 0, no: '10', prog: 5.51 + unseenS / 100, ll: 100 }, { i: 1, no: '12', prog: exp - deficitLap, ll: 100 }] }); tr.update(s); return { tr, s }; };
+    const a = mk(33, 0.3), b = mk(33, 0.05), c = mk(8, 0.3);
+    ck('F9f 見えなかった33秒の間に推測位置より0.3周遅れた車は「停止した」と推定される（stops=1・inferred=1）', a.tr.cars.get(1).stops === 1 && a.tr.cars.get(1).stopsInferred === 1, { stops: a.tr.cars.get(1).stops });
+    ck('F9g 遅れが小さい(0.05周≒5秒＝スピン等)・見えなかった時間が短い(8秒)なら停止と推定しない', b.tr.cars.get(1).stops === 0 && c.tr.cars.get(1).stops === 0, { b: b.tr.cars.get(1).stops, c: c.tr.cars.get(1).stops });
+    const sec = U.compute(baseInput(a.tr, a.s, { options: { fuel_pace_s_per_l_per_lap: 0 } }));
+    const r = (sec.rivals || []).find(x => x.no === '12');
+    ck('F9h 推定だけの停止は確定扱いにしない（監督 2026-11-18）：already_stopped(basis=inferred)に加えて、未給油の場合(stays_out/pits_now/pits_next・basis=assumed_if_not_stopped)も計算する', r && r.stops_done === 1 && r.stops_inferred === 1 && sec.options.filter(o => (o.vs_rivals || []).length).every(o => { const vs = (o.vs_rivals || []).filter(v => v.rival_no === '12'); return vs.some(v => v.scenario === 'already_stopped' && v.scenario_basis === 'inferred') && vs.some(v => v.scenario === 'pits_now' && v.scenario_basis === 'assumed_if_not_stopped'); }), { r: r && [r.stops_done, r.stops_inferred], vs: sec.options.map(o => (o.vs_rivals || []).map(v => v.scenario + ':' + v.scenario_basis)) });
+    // 観測した停止は従来どおり確定（already_stopped(observed)のみ）
+    const trO = U.createTracker();
+    trO.update(snap({ t: 500, cars: [{ i: 0, no: '10', prog: 5.5, ll: 100 }, { i: 1, no: '12', prog: 5.4, ll: 100 }] }));
+    trO.update(snap({ t: 501, cars: [{ i: 0, no: '10', prog: 5.51, ll: 100 }, { i: 1, no: '12', prog: 5.41, ll: 100, pit: true }] }));
+    const sO = snap({ t: 502, cars: [{ i: 0, no: '10', prog: 5.52, ll: 100 }, { i: 1, no: '12', prog: 5.42, ll: 100 }] }); trO.update(sO);
+    const secO = U.compute(baseInput(trO, sO, { options: { fuel_pace_s_per_l_per_lap: 0 } }));
+    ck('F9h2 観測した停止（ピットIN→OUT）は確定：already_stopped(basis=observed)のみで、未給油の仮定は立てない', secO.options.every(o => (o.vs_rivals || []).filter(v => v.rival_no === '12').every(v => v.scenario === 'already_stopped' && v.scenario_basis === 'observed')), secO.options.map(o => (o.vs_rivals || []).map(v => v.scenario + ':' + v.scenario_basis)));
+  });
+  await SEC('F9i', async () => {
+    // 反例：一時欠測（遅れなし）／観測済みの停止＋その後の欠測（二重計上しない）／スピン相当の小さな遅れ
+    const base = (extra) => { const tr = U.createTracker(); tr.update(snap({ t: 500, cars: [{ i: 0, no: '10', prog: 5.5, ll: 100 }, { i: 1, no: '12', prog: 5.4, ll: 100 }] })); return tr; };
+    const drop = base(); drop.update(snap({ t: 501, cars: [{ i: 0, no: '10', prog: 5.51, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+    drop.update(snap({ t: 525, cars: [{ i: 0, no: '10', prog: 5.75, ll: 100 }, { i: 1, no: '12', prog: 5.4 + 0.25, ll: 100 }] }));   // 24秒見えず、遅れなし（通信欠測）
+    ck('F9i 24秒の一時欠測で遅れが無い車は停止と推定しない', drop.cars.get(1).stops === 0, { stops: drop.cars.get(1).stops });
+    const dbl = base();
+    dbl.update(snap({ t: 501, cars: [{ i: 0, no: '10', prog: 5.51, ll: 100 }, { i: 1, no: '12', prog: 5.41, ll: 100, pit: true }] }));
+    dbl.update(snap({ t: 502, cars: [{ i: 0, no: '10', prog: 5.52, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+    dbl.update(snap({ t: 540, cars: [{ i: 0, no: '10', prog: 5.9, ll: 100 }, { i: 1, no: '12', prog: 5.41 + 0.1, ll: 100 }] }));   // ピットIN観測→欠測→再観測（0.28周遅れ）。入口は観測済み
+    ck('F9j ピットINを観測した車が、その後の欠測で再び遅れて見えても二重に数えない（停止は1回）', dbl.cars.get(1).stops === 1 && !(dbl.cars.get(1).stopsInferred > 0), { stops: dbl.cars.get(1).stops, inf: dbl.cars.get(1).stopsInferred });
+  });
+  await SEC('F9l', async () => {
+    // R-FW-1：ピットで説明できない遅れ・長い欠測は停止と推定しない（Build 308実ログ #14：928秒見えず3.66周遅れ）。境界も確認する。
+    const mk = (unseenS, deficitLap) => { const tr = U.createTracker();
+      tr.update(snap({ t: 500, cars: [{ i: 0, no: '10', prog: 5.5, ll: 100 }, { i: 1, no: '12', prog: 5.4, ll: 100 }] }));
+      tr.update(snap({ t: 501, cars: [{ i: 0, no: '10', prog: 5.51, ll: 100 }, { i: 1, no: '12', prog: 5.41, ll: 100 }] }));
+      tr.update(snap({ t: 502, cars: [{ i: 0, no: '10', prog: 5.52, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+      const t2 = 501 + unseenS; tr.update(snap({ t: t2, cars: [{ i: 0, no: '10', prog: 5.51 + unseenS / 100, ll: 100 }, { i: 1, no: '12', prog: 5.41 + unseenS / 100 - deficitLap, ll: 100 }] })); return tr.cars.get(1); };
+    const long = mk(928, 3.66), mid = mk(300 - 1, 1.5), edgeOk = mk(40, 0.59), edgeBig = mk(40, 0.61), longOk = mk(300, 0.3), tooLong = mk(301, 0.3);
+    ck('F9l 928秒見えず3.66周遅れ／300秒弱見えず1.5周遅れ(ピットで説明できない)は停止と推定しない（stops=0・unresolved）', long.stops === 0 && !(long.stopsInferred > 0) && long.stopsUnresolved === 1 && mid.stops === 0 && mid.stopsUnresolved === 1, { long: [long.stops, long.stopsUnresolved], mid: [mid.stops, mid.stopsUnresolved] });
+    ck('F9m 境界：遅れ0.59周・欠測300秒は推定する。遅れ0.61周・欠測301秒は推定しない', edgeOk.stops === 1 && longOk.stops === 1 && edgeBig.stops === 0 && tooLong.stops === 0, { edgeOk: edgeOk.stops, longOk: longOk.stops, edgeBig: edgeBig.stops, tooLong: tooLong.stops });
+  });
+  await SEC('F9k', async () => {
+    // 反例：ピット出口を観測した直後に見えなくなり、遅れて再観測された車（観測済みの停止の直後の欠測）を、推定でもう1回数えない
+    const tr = U.createTracker();
+    tr.update(snap({ t: 500, cars: [{ i: 0, no: '10', prog: 5.5, ll: 100 }, { i: 1, no: '12', prog: 5.4, ll: 100 }] }));
+    tr.update(snap({ t: 501, cars: [{ i: 0, no: '10', prog: 5.51, ll: 100 }, { i: 1, no: '12', prog: 5.41, ll: 100, pit: true }] }));
+    tr.update(snap({ t: 502, cars: [{ i: 0, no: '10', prog: 5.52, ll: 100 }, { i: 1, no: '12', prog: 5.42, ll: 100 }] }));   // ピット出口を観測（停止1回）
+    tr.update(snap({ t: 503, cars: [{ i: 0, no: '10', prog: 5.53, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+    tr.update(snap({ t: 540, cars: [{ i: 0, no: '10', prog: 5.9, ll: 100 }, { i: 1, no: '12', prog: 5.42 + 0.37 - 0.3, ll: 100 }] }));   // 37秒見えず、推測位置より0.3周遅れ
+    ck('F9k ピット出口を観測した直後の欠測＋遅れ再観測は、推定でもう1回数えない（停止は観測の1回のまま）', tr.cars.get(1).stops === 1 && !(tr.cars.get(1).stopsInferred > 0), { stops: tr.cars.get(1).stops, inf: tr.cars.get(1).stopsInferred });
+  });
+  await SEC('F9n', async () => {
+    // 監督 2026-11-18：給油回数は「給油を確認したピット」の回数。ドライブスルー・ノイズ・給油なし通過で消費しない（rendererが own_refuels_done を渡す）
+    const tr = U.createTracker();
+    tr.update(snap({ t: 400, cars: [{ i: 0, no: '10', prog: 5.9, ll: 100 }, { i: 1, no: '11', prog: 5.85, ll: 100 }] }));
+    tr.update(snap({ t: 410, cars: [{ i: 0, no: '10', prog: 6.0, ll: 100, pit: true }, { i: 1, no: '11', prog: 5.95, ll: 100 }] }));
+    const s = snap({ t: 440, cars: [{ i: 0, no: '10', prog: 6.3, ll: 100 }, { i: 1, no: '11', prog: 6.25, ll: 100 }] }); tr.update(s);   // ピット通過を観測（trackerのstops=1）
+    const own = { fuel_l: 53, fuel_per_lap_l: 2.0, tank_l: 53, reserve_l: 0.5, lap_time_s: { value: 100, source: 'observed' } }, tl = { value: 20, low: 20, high: 20, source: 'assumed' };
+    const pass = U.compute(baseInput(tr, s, { own, total_laps: tl, options: { own_refuels_done: 0 } }));
+    const done = U.compute(baseInput(tr, s, { own, total_laps: tl, options: { own_refuels_done: 1 } }));
+    ck('F9n 給油を確認していない(own_refuels_done=0)ピット通過では、停止の比較をやめない（own_stop_doneにしない）。給油を確認した(=1)＋残量が足りれば own_stop_done', !(pass.blocking || []).includes('own_stop_done') && pass.options.length > 0 && (done.blocking || []).includes('own_stop_done'), { pass: pass.blocking, done: done.blocking });
+    ck('F9o 計算結果に出所つきのレース設定と給油回数が載り、LUNAのプロンプト用slimにも rules として入る', (() => { const r = { applies: true, refuels_required: 1, source: 'owner_directive', reason: null }; const u = U.compute(baseInput(tr, s, { own, total_laps: tl, options: { own_refuels_done: 0, race_rules: r } })); const sl = U.promptSlim(u); return u.race_rules.applies === true && u.race_rules.refuels_required === 1 && u.race_rules.source === 'owner_directive' && u.own_refuels_done === 0 && sl.rules.refuels_required === 1 && sl.rules.refuels_done === 0 && sl.rules.source === 'owner_directive'; })(), null);
+  });
+  await SEC('F9p', async () => {
+    // 認識範囲：評価できた車と評価外の車（途中の欠測を含む）。順位は総合/クラスを区別。連続範囲を主張しない
+    const tr = U.createTracker();
+    const mk = t => snap({ t, cars: [{ i: 0, no: '27', prog: 5.5 + (t - 500) / 100, ll: 100 }, { i: 1, no: '12', prog: 5.45 + (t - 500) / 100, ll: 100, p: 13 }, { i: 2, no: '10', prog: 5.2 + (t - 500) / 100, ll: 100 }, { i: 3, no: '16', st: 'out' }, { i: 4, no: '22', st: 'out' }] });
+    tr.update(mk(500)); const s = mk(501); tr.update(s);
+    const sec = U.compute(baseInput(tr, s, { options: { fuel_pace_s_per_l_per_lap: 0 } }));
+    const cd = sec.coverage_detail, txt = U.coverageReply(sec, 'ja');
+    ck('F9p 評価できた相手(#12・#10)と評価外(#16・#22)が計算結果に載る。評価外の数も持つ。「連続範囲は言えない」を注記', cd && cd.evaluated_rivals.map(c => c.no).sort().join() === '10,12' && cd.unassessed_same_class.map(c => c.no).sort().join() === '16,22' && cd.unassessed_count === 2 && /連続範囲は言えない/.test(cd.note + txt), cd);
+    ck('F9q 決定論の返答：評価できているのは#…／評価外は#…（見えていない）。順位範囲（「◯位まで把握」）を捏造しない', /評価できているのは#\d+/.test(txt) && /評価外は#16（見えていない）、#22（見えていない）/.test(txt) && !/位まで/.test(txt), txt);
+    // 話法：後続の脅威を評価できない時は短く制約と再評価の行動を伝える／停止が推定だけの相手は「未給油なら」と条件を付ける
+    const base = { comparable: true, race: { race_instance_id: 'r', session_num: 2 }, observed_at: { lap: 5 }, coverage: { clear_claim_allowed: true }, rivals: [{ id: 'car1', car_idx: 1, no: '12', stops_done: 1, stops_inferred: 1 }],
+      decision: { recommendation: { option_id: 'next', pit_lap: 6, decide_by_lap: 6, stop_required_for_fuel: true }, rival_first_threats: [{ option_id: 'next', rival_id: 'car1', rival_no: '12', scenario: 'pits_now', behind_by_s: 1.3 }], flips_when: [], rival_threat_assessed: true } };
+    const p1 = U.proposal(base, null), un = JSON.parse(JSON.stringify(base)); un.decision.rival_threat_assessed = false; un.rivals[0].stops_inferred = 0; un.decision.rival_first_threats = [];
+    const p2 = U.proposal(un, null);
+    ck('F9r 停止が推定だけの相手の脅威は「12番が未給油なら約1.3秒逆転される。」と条件付きで言う（「先に入ると」と確定的に言わない）', p1.text === '次の周に入るのがいい。12番が未給油なら約1.3秒逆転される。' && p1.diag.inferred_rival === true, p1);
+    ck('F9s 後続の脅威を評価できていない時は、短く制約と再評価の行動を添える：「次の周に入るのがいい。後ろの車は見えていない。見えたら言い直す。」', p2.text === '次の周に入るのがいい。後ろの車は見えていない。見えたら言い直す。', p2);
+  });
+  await SEC('F9t', async () => {
+    // 監査Codex 11/19：観測後1秒欠測した車(#11)が「評価できている」と「評価外」の両方に載り、「評価できているのは#11…評価外は#11」と返した。3状態で一貫させる。
+    const tr = U.createTracker();
+    tr.update(snap({ t: 500, cars: [{ i: 0, no: '27', prog: 5.5, ll: 100 }, { i: 1, no: '11', prog: 5.45, ll: 100, p: 13 }, { i: 2, no: '16', prog: 4.7, ll: 100, p: 14 }, { i: 3, no: '5', prog: 5.9, ll: 100 }] }));
+    const s = snap({ t: 501, cars: [{ i: 0, no: '27', prog: 5.51, ll: 100 }, { i: 1, no: '11', st: 'out' }, { i: 2, no: '16', st: 'out' }, { i: 3, no: '5', prog: 5.91, ll: 100 }] }); tr.update(s);
+    const sec = U.compute(baseInput(tr, s, { options: { fuel_pace_s_per_l_per_lap: 0 } }));
+    const cd = sec.coverage_detail, txt = U.coverageReply(sec, 'ja');
+    const evNos = cd.evaluated_rivals.map(c => c.no), unNos = cd.unassessed_same_class.map(c => c.no);
+    ck('F9t 1秒欠測した#11は「評価できている」(basis=dead_reckoned・推測位置で条件付き評価)だけに載り、評価外には載らない。同時に消えた後方0.8周の#16(評価対象外)は評価外だけ。同じ車が両方に載らない', evNos.includes('11') && cd.evaluated_rivals.find(c => c.no === '11').basis === 'dead_reckoned' && !unNos.includes('11') && !evNos.includes('16') && unNos.includes('16') && evNos.filter(n => unNos.includes(n)).length === 0, cd);
+    ck('F9u 返答：「#11（総合13位、直近の位置から推測）」は評価できている側、評価外に#11は出ない。評価外の#16には「最後に見えた時点の順位(何秒前)」を添え、現在の順位として言わない', /評価できているのは#11（総合13位、直近の位置から推測）/.test(txt) && !/評価外は[^。]*#11/.test(txt) && /#16（見えていない/.test(txt) && /秒前は総合14位/.test(txt) && cd.unassessed_same_class[0].rank_as_of_last_seen === true, txt);
+  });
+  await SEC('F9v', async () => {
+    // 推定停止→「未給油なら」の発話：実計算(compute)から作った提案で確認する（期限が近く、未給油の仮定で結論が変わる脅威がある入力）。
+    const tr = U.createTracker();
+    tr.update(snap({ t: 400, cars: [{ i: 0, no: '27', prog: 5.9, ll: 100 }, { i: 1, no: '12', prog: 5.75, ll: 100 }] }));
+    tr.update(snap({ t: 401, cars: [{ i: 0, no: '27', prog: 5.91, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+    const s = snap({ t: 440, cars: [{ i: 0, no: '27', prog: 6.3, ll: 100 }, { i: 1, no: '12', prog: 5.76 + 0.39 - 0.3, ll: 100 }] }); tr.update(s);   // #12は約39秒見えず、推測位置より0.3周遅れ＝停止と推定
+    const own = { fuel_l: 17, fuel_per_lap_l: 3, tank_l: 53, reserve_l: 0.5, lap_time_s: { value: 100, source: 'observed' } };
+    const sec = U.compute(baseInput(tr, s, { own, total_laps: { value: 20, low: 20, high: 20, source: 'assumed' }, options: { fuel_pace_s_per_l_per_lap: 0.03 } }));
+    const r12 = (sec.rivals || []).find(r => r.no === '12'), pr = U.proposal(sec, null);
+    // 実計算から発話まで：#12(推定停止)が自車の約3秒後ろに復帰、自車は燃料7L(次周が最善・判断が目前)
+    const tr2 = U.createTracker();
+    tr2.update(snap({ t: 400, cars: [{ i: 0, no: '27', prog: 5.9, ll: 100 }, { i: 1, no: '12', prog: 6.18, ll: 100 }] }));
+    tr2.update(snap({ t: 401, cars: [{ i: 0, no: '27', prog: 5.91, ll: 100 }, { i: 1, no: '12', st: 'out' }] }));
+    const s2 = snap({ t: 440, cars: [{ i: 0, no: '27', prog: 6.3, ll: 100 }, { i: 1, no: '12', prog: 6.27, ll: 100 }] }); tr2.update(s2);
+    const sec2 = U.compute(baseInput(tr2, s2, { own: { fuel_l: 7, fuel_per_lap_l: 3, tank_l: 53, reserve_l: 0.5, lap_time_s: { value: 100, source: 'observed' } }, total_laps: { value: 20, low: 20, high: 20, source: 'assumed' }, options: { fuel_pace_s_per_l_per_lap: 0.03 } }));
+    const p2 = U.proposal(sec2, null), r2 = (sec2.rivals || [])[0];
+    ck('F9v 実計算→提案発話：#12の停止が推定だけ(stops_done=1・inferred=1)・自車の燃料7Lで次周が最善(判断が目前)。提案は「次の周に入るのがいい。12番が未給油なら／給油済みなら約X秒逆転される。」と給油状態の条件を付け、確定的に「先に入ると」と言わない', r2 && r2.stops_inferred === 1 && p2 && p2.text && /^次の周に入るのがいい。12番(?:が未給油なら|が給油済みなら)約\d+(?:\.\d)?秒逆転される。$/.test(p2.text) && p2.diag.inferred_rival === true, { text: p2 && p2.text, reason: p2 && p2.reason, th: sec2.decision && sec2.decision.rival_first_threats.map(t => t.option_id + ':' + t.scenario) });
+    const mkU = (scen, infer) => ({ comparable: true, race: { race_instance_id: 'r', session_num: 2 }, observed_at: { lap: 5 }, coverage: { clear_claim_allowed: true }, rivals: [{ id: 'car1', car_idx: 1, no: '12', stops_done: 1, stops_inferred: infer ? 1 : 0 }],
+      decision: { recommendation: { option_id: 'next', pit_lap: 6, decide_by_lap: 6, stop_required_for_fuel: true }, rival_first_threats: [{ option_id: 'next', rival_id: 'car1', rival_no: '12', scenario: scen, behind_by_s: 2 }], flips_when: [], rival_threat_assessed: true } });
+    ck('F9w 条件の言い分け：推定の停止×給油済みの仮定＝「給油済みなら」、推定×未給油の仮定＝「未給油なら」、観測した停止＝「給油済みで」、観測していない相手の仮定＝「先に入ると」', U.proposal(mkU('already_stopped', true), null).text === '次の周に入るのがいい。12番が給油済みなら約2秒逆転される。' && U.proposal(mkU('pits_now', true), null).text === '次の周に入るのがいい。12番が未給油なら約2秒逆転される。' && U.proposal(mkU('already_stopped', false), null).text === '次の周に入るのがいい。12番は給油済みで約2秒逆転される。' && U.proposal(mkU('pits_now', false), null).text === '次の周に入るのがいい。12番が先に入ると約2秒逆転される。', null);
   });
   await SEC('F10', async () => {
     // R-U2-4①：別session/raceでは追跡をリセットする（前sessionのピット通過回数・位置を持ち越さない）

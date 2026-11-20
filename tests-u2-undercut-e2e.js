@@ -75,15 +75,15 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     // 提案は「今入る案が最善」か「判断が目前」で、前回と変わった時だけ。Lap14は限界案と次周案が同じ周（15）で、判断が目前。
     const chats0 = h.state.chats.length;
     for (let lap = 9; lap <= 12; lap++) await feedLap(lap);
-    const proposalsNow = () => speakText(h).filter(t => /ピット判断/.test(t));
+    const proposalsNow = () => speakText(h).filter(t => /に入るのがいい/.test(t));
     ck('P0 Lap9〜12：限界案が遠い(判断期限15周)間は提案を話さない（毎周の独り言にしない）。計算は毎Lap走り、見送りの理由が診断ログに残る', proposalsNow().length === 0 && h.diag(/UNDERCUT_PROPOSAL/).length >= 3 && h.diag(/UNDERCUT_PROPOSAL/).every(t => /"spoken":false/.test(t)), { spoken: proposalsNow(), diag: h.diag(/UNDERCUT_PROPOSAL/).slice(-2) });
     await feedLap(13);
     await feedLap(14);
     await h.sleep(60);
     const spoke = proposalsNow();
     st = state();
-    ck('P1 Lap14：推奨が「次周(15周)」で判断が目前（完走燃料をチェッカー基準N−Pに直した後の結果）。走行中のLUNA提案が発話される（決定論の文面。判断期限・見えていない車・後続を評価できていない旨を含む）', spoke.length >= 1 && /次周\(15周\)/.test(spoke[spoke.length - 1]) && /判断は15周まで/.test(spoke[spoke.length - 1]) && /空いているとは言えない/.test(spoke[spoke.length - 1]) && /後続の位置が見えていない/.test(spoke[spoke.length - 1]), { spoke, rec: st.u && st.u.decision && st.u.decision.recommendation });
-    ck('P2 提案の数値は同じ計算版のパケット由来（推奨周・判断期限）で、提案はLLMを呼ばない（chat送信0件）', st.u.decision.recommendation.pit_lap === 15 && st.u.decision.recommendation.decide_by_lap === 15 && h.state.chats.length === chats0, { chats: h.state.chats.length - chats0 });
+    ck('P1 Lap14：推奨が「今周(14周)」で判断が目前（燃料余裕＝1周分(約3.6L)をSTR-001/U2の入力へ接続した結果。旧：固定0.5Lでは次周）。走行中のLUNA提案が発話される（決定論の短い文：結論＋制約と再評価の行動。後続の脅威を評価できていない鈴鹿は「後ろの車は見えていない。見えたら言い直す。」）。括弧・「最もきつくない」・判断期限・「空いているとは言えない」は含まない', spoke.length >= 1 && spoke.some(t => /^次の周に入るのがいい。後ろの車は見えていない。見えたら言い直す。$/.test(t)) && /^今周に入るのがいい。後ろの車は見えていない。見えたら言い直す。$/.test(spoke[spoke.length - 1]) && !spoke.some(t => /[（(]|最もきつくない|空いているとは言えない|判断は\d+周まで/.test(t)), { spoke, rec: st.u && st.u.decision && st.u.decision.recommendation });
+    ck('P2 提案の数値は同じ計算版のパケット由来（推奨周・判断期限）で、提案はLLMを呼ばない（chat送信0件）', st.u.decision.recommendation.pit_lap === 14 && st.u.decision.recommendation.decide_by_lap === 14 && h.state.chats.length === chats0, { chats: h.state.chats.length - chats0 });
     ck('P2b 提案は異なるLapに1回ずつ（同じ文面を同じLapで繰り返さない）', new Set(spoke).size === spoke.length, spoke);
     const propLog = h.diag(/UNDERCUT_PROPOSAL/).slice(-1)[0] || '';
     ck('P3 提案の診断ログに計算版が残り、同じLapの再計算では繰り返さない（1Lapに1回）', propLog.includes(st.u.calc_id) || /"spoken":true/.test(propLog), propLog);
@@ -136,15 +136,15 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     const body2 = h.state.chats[h.state.chats.length - 1];
     const u2 = body2 && body2.pitStrategyCompare && body2.pitStrategyCompare.undercut_forecast;
     ck('R1 「じゃあ次周なら？」は固定応答で終端せずLLMへ届く（有効な計算パケットがあるので続きとして扱う）', h.state.chats.length > nb && routed2 === null, { routed2, n: h.state.chats.length - nb });
-    ck('R2 再計算：焦点が次周案(15周)になり、新しい計算版(calc_id)で送られる。案の数値(vs・給油量)は同じ入力のまま変わらない', !!u2 && u2.focus && u2.focus.option_id === 'next' && u2.focus.pit_lap === 15 && u2.focus.evaluated === true && u2.calc_id !== u1.calc_id && JSON.stringify(u2.options.find(o => o.id === 'next').vs_rivals) === JSON.stringify(u1.options.find(o => o.id === 'next').vs_rivals) && u2.options.find(o => o.id === 'next').add_l === u1.options.find(o => o.id === 'next').add_l, u2 && u2.focus);
+    ck('R2 再計算：焦点が次周案(15周)になり、新しい計算版(calc_id)で送られる。余裕を1周分に接続したので、次周案は「燃料が入口まで届かない」と評価され(excluded=fuel_insufficient_to_reach_pit)、その理由が焦点に載る。推奨(今14周)の給油量は同じ入力のまま変わらない', !!u2 && u2.focus && u2.focus.option_id === 'next' && u2.focus.pit_lap === 15 && u2.focus.excluded === 'fuel_insufficient_to_reach_pit' && u2.focus.evaluated === false && u2.calc_id !== u1.calc_id && u2.options.find(o => o.id === 'now').add_l === u1.options.find(o => o.id === 'now').add_l, u2 && u2.focus);
     const cap2 = srv.captured().slice(-1)[0], slim2 = slimFromSystem(cap2.system);
     ck('R3 サーバーのsystem promptにも新しい計算版と焦点(focus=next)が入る＝LUNAは次周案の内訳で答えられる', slim2 && slim2.uc && slim2.uc.id === u2.calc_id && slim2.uc.focus && slim2.uc.focus.option === 'next' && slim2.uc.focus.pit_lap === 15, slim2 && slim2.uc && slim2.uc.focus);
-    const nx = slim2.uc.options.find(o => o.id === 'next') || slim2.uc.options.find(o => o.id === 'now');
-    const reply2 = '次周なら' + (slim2.uc.focus.pit_lap) + '周目に入る案。給油は' + (nx.add_l) + 'リットル。判断は' + slim2.uc.rec.decide_by_lap + '周までです。';
+    const nx = slim2.uc.options.find(o => o.id === slim2.uc.rec.option) || slim2.uc.options.find(o => o.id === 'now');   // 焦点の次周案は成立しないので、成立する推奨案の数値で答える
+    const reply2 = '次周は成立しない。' + (slim2.uc.rec.pit_lap) + '周目に入る案。給油は' + (nx.add_l) + 'リットル。判断は' + slim2.uc.rec.decide_by_lap + '周までです。';
     srv.queueReply('じゃあ次周なら？もう一度', reply2);
     await h.say('じゃあ次周なら？もう一度');
     const shown2 = speakText(h).slice(-1)[0] || '';
-    ck('R4 再計算後の返答（次周案の周・給油量・判断期限）が、新しい計算版の値と一致して発話される', shown2.includes(slim2.uc.focus.pit_lap + '周目') && (nx.add_l === undefined || shown2.includes((Math.round(nx.add_l*10)/10) + 'リットル')), shown2);
+    ck('R4 再計算後の返答：焦点の次周案が成立しない時は、成立しない旨と、成立する推奨案の周・給油量（packetの値）を決定論の文面で発話する（LLMの返答がTruth Gateを通らない／通る場合のどちらでも、packetと一致する数値だけ）', /成立しない/.test(shown2) && shown2.includes(slim2.uc.rec.pit_lap + '周目') && (() => { const m = shown2.match(/(\d+(?:\.\d+)?)リットル/); return !!m && Math.abs(Number(m[1]) - nx.add_l) <= 0.5; })(), { shown2, rec: slim2.uc.rec.pit_lap, add: nx.add_l });
     // 焦点は質問したLapの間だけ：Lapが進めば外れる（古い焦点を持ち越さない）
     const stFocus = state();
     ck('R5 焦点の質問をしたLapの計算では focus が付く（Lap14）', stFocus.u.focus && stFocus.u.focus.option_id === 'next', stFocus.u.focus);
@@ -163,7 +163,7 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     srv.queueReply(OP, '了解。交通を見込んで計算し直した。');
     await h.say(OP);
     const u3 = h.state.chats[h.state.chats.length - 1].pitStrategyCompare.undercut_forecast;
-    ck('O1 意見は観測ではなく仮定(driver_declared)として入り、今入る案(アンダーカット側)にだけ交通3sが加わる（次周・限界案には入らない）', u3 && u3.options.find(o => o.id === 'now').rejoin.traffic_extra_declared_s === 3 && u3.options.find(o => o.id === 'next').rejoin.traffic_extra_declared_s === 0 && u3.calc_id !== u2.calc_id, u3 && u3.options.map(o => [o.id, o.rejoin && o.rejoin.traffic_extra_declared_s]));
+    ck('O1 意見は観測ではなく仮定(driver_declared)として入り、今入る案(アンダーカット側)にだけ交通3sが加わる（次周・限界案には入らない）', u3 && u3.options.find(o => o.id === 'now').rejoin.traffic_extra_declared_s === 3 && u3.options.filter(o => o.id !== 'now' && o.rejoin).every(o => o.rejoin.traffic_extra_declared_s === 0) && u3.calc_id !== u2.calc_id, u3 && u3.options.map(o => [o.id, o.rejoin && o.rejoin.traffic_extra_declared_s]));
 
     // ── 古い/別session：snapshotが古くなれば全車の計算は付かない（前の全車情報を使わない）──
     shiftClock(60000);
@@ -229,10 +229,10 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     const opt = (u, id) => u.options.find(o => o.id === id);
     const hw = await runFuji('wait_loses');
     const uw = fstate(hw);
-    const propW = speakText(hw).filter(t => /ピット判断/.test(t));
+    const propW = speakText(hw).filter(t => /に入るのがいい/.test(t));
     ck('FW1 富士(待つと逆転)：実入口の計算で、後続#11が先に入る想定では次周案・限界案は相手が前(rival)、今入る案は自車が前(own)', !!uw && uw.comparable && uw.rivals.map(r => r.no).join() === '11,12' && opt(uw, 'next').vs_rivals.some(v => v.rival_no === '11' && v.scenario === 'pits_now' && v.leads_at_common_point === 'rival') && opt(uw, 'now').vs_rivals.every(v => v.leads_at_common_point === 'own'), uw && uw.options.map(o => [o.id, o.vs_rivals.map(v => v.rival_no + v.scenario + v.leads_at_common_point)]));
     ck('FW2 推奨は今入る案。見えていない車が無い(全16台を観測)ので復帰区間は「空いている」と言える(clear_claim_allowed=true)が、今案以外は遅い車で詰まる', uw.decision.recommendation.option_id === 'now' && uw.coverage.clear_claim_allowed === true && opt(uw, 'now').rejoin.clear === false /* 窓内に前走車(同ペース)が居るので空いてはいない */ || opt(uw, 'now').rejoin.traffic_loss_s.value === 0, { rec: uw.decision.recommendation, now: opt(uw, 'now').rejoin.traffic_loss_s });
-    ck('FW3 走行中のLUNA提案：後続#11が先に入ると次周/限界案は負ける旨を、決定論の文面で話す（判断期限9周・LLM 0回）', propW.length === 1 && /後ろの11番/.test(propW[0]) && /判断は9周まで/.test(propW[0]) && /今周\(9周\)/.test(propW[0]) && hw.state.chats.length === 0, { propW, chats: hw.state.chats.length });
+    ck('FW3 走行中のLUNA提案：今入る案が最善で、待つと後続#11が先に入って逆転される旨を、決定論の一文で話す（LLM 0回）', propW.length === 1 && /^今周に入るのがいい。待つと11番が先に入って約\d+(?:\.\d)?秒逆転される。$/.test(propW[0]) && hw.state.chats.length === 0, { propW, chats: hw.state.chats.length });
     srv.queueReply('じゃあ次周なら？', '仮');
     await hw.say('じゃあ次周なら？');
     const bw = hw.state.chats[hw.state.chats.length - 1], uw2 = bw && bw.pitStrategyCompare && bw.pitStrategyCompare.undercut_forecast;
@@ -248,11 +248,11 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
       && (!nW.blend_gap.behind || shW.includes('後続まで約'+Math.round(nW.blend_gap.behind.gap_s*10)/10+'秒')), shW);
 
     const he = await runFuji('early_loses');
-    const ue = fstate(he), propE = speakText(he).filter(t => /ピット判断/.test(t));
+    const ue = fstate(he), propE = speakText(he).filter(t => /に入るのがいい/.test(t));
     ck('FE1 富士(早く入ると損)：実入口の計算で、今入る案は復帰先の遅い車3台(別クラス・観測)で交通損失が出て、次周案より給油後のGAPが悪い。推奨は今入る案ではない', !!ue && ue.decision.recommendation.option_id !== 'now' && opt(ue, 'now').rejoin.ahead.filter(c => c.basis === 'observed' && c.class_id === 2).length === 3 && opt(ue, 'now').rejoin.traffic_loss_s.value > opt(ue, 'next').rejoin.traffic_loss_s.value + 1 && opt(ue, 'now').vs_rivals.every(x => { const y = opt(ue, 'next').vs_rivals.find(z => z.rival_id === x.rival_id && z.scenario === x.scenario); return y && x.gap_s > y.gap_s; }), ue && opt(ue, 'now').rejoin);
     ck('FE2 今入る案は#11が今周先に入る想定で自車が後ろに回る(rival)＝「早く入れば安全」とは限らない条件も、packetのrival_first_threatsとして渡る', ue.decision.rival_first_threats.some(t => t.option_id === 'now' && t.rival_no === '11' && t.scenario === 'pits_now'), ue.decision.rival_first_threats);
     ck('FE3 「今入ったら？」の質問が焦点=今(9周)になり、新しい計算版で今案の内訳（交通損失・復帰先の車列）が送られる', await (async () => { srv.queueReply('今入ったら？', '仮'); await he.say('今入ったら？'); const b = he.state.chats[he.state.chats.length - 1], u = b && b.pitStrategyCompare && b.pitStrategyCompare.undercut_forecast; return !!u && u.focus.option_id === 'now' && u.focus.pit_lap === 9 && u.calc_id !== ue.calc_id && opt(u, 'now').rejoin.ahead.length >= 3; })(), null);
-    ck('FW4 提案文の主語が明示される（R-U2-5）：「11番に約◯秒先に出られる（自車が後ろになる）」。誰が前に出るのかを読み違えない', !!propW[0] && /11番に約\d+(?:\.\d)?秒先に出られる（自車が後ろになる）/.test(propW[0]) && !/給油後に約\d+(?:\.\d)?秒前に出られる/.test(propW[0]), propW[0]);
+    ck('FW4 提案文は主語が明示され短い：「11番が先に入って約◯秒逆転される」。誰が前に出るのかを読み違えない（括弧説明・内部注記なし）', !!propW[0] && /11番が先に入って約\d+(?:\.\d)?秒逆転される/.test(propW[0]) && !/[（(]|自車が後ろ|給油後に/.test(propW[0]) && propW[0].length <= 40, propW[0]);
     console.log('   富士の提案文(待つと逆転)：' + (propW[0] || '(なし)'));
     console.log('   富士の提案文(早く入ると損)：' + (propE[0] || '(提案なし＝推奨が限界案で判断が遠く、後続の先入れ脅威も今案だけ)'));
     const trace = h => JSON.parse(h.ev('JSON.stringify(utteranceTraceLog)'));
@@ -425,7 +425,7 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     ctx.last_pit_event.event_ref.race_instance_id='sub:other';
     const other=await sendRecorded();
     ck('別raceのピット周は採用しない', other.intent==='recorded_pit_lap'&&!other.text.includes('5周目')&&other.text.includes('確認できない'),other);
-    const tight=await runFuji('wait_loses',{fuel:4});
+    const tight=await runFuji('wait_loses',{fuel:6});   // 余裕1周分(2.6L)を入口で確保できるのは今周だけ（6−2.6=3.4≧2.6、次周は0.8＜2.6）
     const tq='アンダーカットの合流は？';
     srv.queueReply(tq,'一周待ちましょう。');
     await tight.say(tq);

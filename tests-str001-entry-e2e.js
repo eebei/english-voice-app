@@ -77,6 +77,7 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     const h = H.boot({ root: ROOT, chatForward: srv.url, localStorage: { pw_auth_user: { id: 'u1' }, pw_auth_token: 'tok-u1' }, user: { id: 'u1', isMember: true, displayName: 'T' } });
     await h.sleep(300);
     h.set('selMode', 'race'); h.set('sel', 'LunaJP'); h.set('iracingLive', true); h.set('bridgeConnected', true);
+    h.set('fuelWindowMarginL', 0.5);   // このMontreal入力の期待値は予備0.5L前提（旧：固定0.5L）。燃料余裕を既定の1周分(約3L)にすると早い案が『1回の給油で完走できない』で除外されるため、直接L指定で従来の0.5Lへ固定する（余裕の接続自体は tests-race-rules-e2e 5a〜5e）
     await feedLaps(h, 8);
     const lapNow = h.ev('lastTelemetry && lastTelemetry.lap');
     ck('E0 前提：実telemetry_liveの受信で、現在Lap=8・保存レースのraceが実rendererの状態に入る', lapNow === 8 && h.ev('lastTelemetry.race_instance_id') === fx.race_instance_id, { lapNow });
@@ -141,7 +142,7 @@ const speakText = h => h.diag(/LunaJP\]/).map(t => t.replace(/^\[LunaJP\]\s*/, '
     const sys3 = packetFromSystem(srv.captured().slice(-1)[0].system);
     ck('E12 サーバーのsystem promptにも、更新後の計算版(新しいcalc_id)が入る＝LUNAは更新後の数値で再提案できる', sys3 && sys3.id === p3.calc_id, [sys3 && sys3.id, p3 && p3.calc_id]);
     const u3 = p3.cases.find(c => c.id === 'under1');
-    ck('E13 追加された交通損失はアンダーカット案にだけ入る（通常案には入らない）', u3 && u3.rejoin.traffic_extra_declared_s > 0 && p3.cases.find(c => c.id === 'normal').rejoin.traffic_extra_declared_s === 0, u3 && u3.rejoin);
+    ck('E13 追加された交通損失はアンダーカット案にだけ入る（通常案には入らない）', u3 && u3.rejoin.traffic_extra_declared_s > 0 && (((p3.cases.find(c => c.id === 'normal') || {}).rejoin || {}).traffic_extra_declared_s ?? 0) === 0, u3 && u3.rejoin);
     // ── 古い計算版・別race/sessionの提案は渡さない ──
     const snap9 = h.raceSnap({ race: fx.race_instance_id, driver: 7, session: 0, lap: 9, fuel: fx.rows.find(r => r.lap === 9).fuel_l });
     await h.bridge(bridgeMsg(h, snap9, fx.rows.find(r => r.lap === 9), R.replayInputAt(fx, 9)));

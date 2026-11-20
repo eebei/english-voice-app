@@ -1282,13 +1282,14 @@ def c_fresh_current_answers(R):
     rate = (calculation.get('value') or {}).get('avg_fuel_per_lap')
     current, crossings = facts.get('fuel_level_l'), finish.get('remaining_sf_crossings')
     numeric = isinstance(current, (int, float)) and isinstance(rate, (int, float)) and isinstance(crossings, int)
-    required = rate * crossings + 2 if numeric else None
+    # 監督 2026-11-18：希望余裕は周数（既定1周分）。Lへは燃費で換算し、固定の予備2Lとは二重に数えない（回答は「余裕1周分(約X L)込み必要約Y L」）。
+    required = rate * crossings + rate if numeric else None
     same_source = ((facts.get('source_frame') or {}).get('sequence') == (source.get('source_frame') or {}).get('sequence')
                    and (facts.get('source_frame') or {}).get('session_time_s') == (source.get('source_frame') or {}).get('session_time_s')
                    and finish.get('source_frame_sequence') == (source.get('source_frame') or {}).get('sequence'))
     useful = (numeric and same_source and finish.get('available') and current >= required
               and ('現在燃料%.1fL' % current) in fuel and ('約%.1fL' % required) in fuel
-              and '予備2L' in fuel and 'この推定では完走できる' in fuel
+              and '余裕1周分' in fuel and '予備2L' not in fuel and 'この推定では完走できる' in fuel
               and 'クリーン' in fuel and '確認できない' not in fuel and '不足' not in fuel)
     return _ok(useful and not disputes
                and 'ステイアウト' in plan and '燃料余裕' in plan and 'クリーン実測がまだない' not in plan and not rejected,
@@ -1573,7 +1574,7 @@ def c_llm_wait_canonical_change(R):
     spoken_ch = [u for u in ch['desktop']['utterances'] if u.get('text') and WAIT_A.startswith(u['text'])]
     spoken_co = [u for u in co['desktop']['utterances'] if u.get('text') and WAIT_A.startswith(u['text'])]
     return _ok(len(_wait_reqs(ch)) == 1 and len(_wait_reqs(co)) == 1 and changed
-               and not nch.get('assistant') and not spoken_ch
+               and not [x for x in (nch.get('assistant') or []) if not re.match(r'^給油(完了|後でも)', x)] and not spoken_ch   # Build 309: 実ピット完了後の決定論の「給油完了…」(新機能)は、応答待ちだった旧い返答ではないので数えない
                and nco.get('assistant') == [WAIT_A] and spoken_co and 'completed' in spoken_co[0]['states'],
                {'change_window': (nch.get('started_frame'), nch.get('finished_frame'), exits), 'change_spoken': spoken_ch,
                 'control_assistant': nco.get('assistant'), 'control_states': spoken_co and spoken_co[0]['states']})

@@ -36,6 +36,16 @@ r = route('このレースのフォーマットは？', live);
 check('race format is answered locally', r.handled && r.intent==='race_format' && r.reply==='2時間のタイムレース。');
 r = route('残り何周？', live);
 check('authoritative short finish crossings are answered locally', r.handled && r.intent==='laps_remaining' && r.reply==='残り4周。');
+// Owner 2026-11-17（Build 308実走：「周回数は何周ぐらいを想定してる？」が3回「まだ確定できない」だけだった）：時間制は残り時間÷ペースで見込み周回数を先に返す。確定とは区別。
+{
+  const est=route('このレースは40分のレース。周回数は何周ぐらいを想定してる？',{...live,finish_crossings_authority:null,session_time_remaining_s:1200,driver_pace_median_s:99.5});
+    check('timed race without a confirmed finish distance answers the expected laps from time remaining and pace, labelled as not confirmed',
+    est.handled&&est.intent==='laps_remaining'&&est.confidence==='estimate'&&/^残り20分0秒。今のペース1分40秒だと、あと約12〜13周の見込み。確定ではない。$/.test(est.reply)&&!/まだ確定できない/.test(est.reply));
+  const noPace=route('残り何周？',{...live,finish_crossings_authority:null,session_time_remaining_s:1200,driver_pace_median_s:null});
+  check('without a usable pace the old honest answer remains', noPace.handled&&/残り周回はまだ確定できない/.test(noPace.reply));
+  const auth=route('残り何周？',{...live,finish_crossings_authority:4,session_time_remaining_s:400,driver_pace_median_s:99.5});
+  check('a confirmed short finish distance still wins over the estimate', auth.reply==='残り4周。');
+}
 r = route('残り時間は？', live);
 check('long remaining time is spoken in hours and minutes', r.handled && r.reply==='残り7時間45分。');
 r = route('トップとの差は？', live);
@@ -169,8 +179,9 @@ check('8/24 GAP replay: live local facts run before an active debrief can interc
 check('renderer arms and delivers the one-shot fuel-window monitor from telemetry',
   renderer.includes("type==='arm_fuel_window_watch'")
   && renderer.includes('maybeDeliverFuelWindowWatch(lastTelemetry)')
-  && renderer.includes('燃料ウィンドウの比較候補が成立。')
-  && renderer.includes('fuelWindowStatus(currentCanonicalStrategyLive('));
+  && renderer.includes("kind:'fuel_window_watch'")
+  && renderer.includes('currentFuelWindowResult(live)')
+  && renderer.includes('answered_open_now'));
 check('renderer supplies personal history and identity to the deterministic router',
   renderer.includes("raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[])")
   && renderer.includes("currentUserId:(typeof currentMemoryUserId==='function'?currentMemoryUserId():null)"));

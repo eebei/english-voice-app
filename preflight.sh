@@ -18,7 +18,7 @@ else
 fi
 
 echo "── JavaScript: 構文"
-for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js desktop/pit-strategy-compare.js desktop/field-snapshot.js desktop/undercut-forecast.js; do
+for f in prompts.js server.js engineer-card.js desktop/memory-action-layer.js desktop/strategy-playbook.js desktop/pit-strategy-compare.js desktop/field-snapshot.js desktop/undercut-forecast.js desktop/fuel-window.js desktop/race-rules.js; do
   if node --check "$f" 2>&1 | head -3; then echo "   ✅ $f"; else echo "   ❌ $f"; fail=1; fi
 done
 
@@ -463,6 +463,19 @@ echo "▶ U2/U3 全車snapshotからの「今／次周／燃料の限界」比�
 if out=$(node tests-u2-undercut-forecast.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 echo "▶ U2/U3 通し（実field_snapshot→実renderer→実server→LUNA提案/質問/「じゃあ次周なら？」→Truth Gate・偽造拒否。実U1ログが無い環境は『未実施』）"
 if out=$(node tests-u2-undercut-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+
+echo "▶ 給油ウィンドウ（Owner定義：給油後に持てる量≧出口からチェッカーまでの消費＋設定余裕。必要量と余裕は別。4周目の見込み・燃費サンプルの採否・再コールの判定。手計算・実ログ(鈴鹿)の採否）"
+if out=$(node tests-fuel-window.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ 給油ウィンドウ監視 通し（実renderer：依頼→監視登録→戦略案更新でも保持→成立→一度だけ発話→実再生で確定／警告に譲って待機→破棄→再配送／ピット完了で旧提案・待機音声を失効→実残量で再計算／4周目の見込み→無音→更新→開通通知）"
+if out=$(node tests-fuel-window-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+
+echo "▶ 戦略の自発コール e2e（Driverの停止依頼で自発コールが止まる／仮定を話した相手が入った時の短い知らせ：観測=入った・欠測からの推定=入ったようだ・欠測中は言わない）"
+if out=$(node tests-pit-calls-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+
+echo "▶ レース設定（Owner指定：60分以内のショート耐久・給油1回を出所付きで保持／観測した形式が範囲の時だけ適用／Driverの確認・訂正はそのレース限り／余裕は周数×燃費）"
+if out=$(node tests-race-rules.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ レース設定 e2e（実renderer：確認→訂正→別raceで初期化／範囲外・未確認は適用しない／ドライブスルーで給油回数を消費しない／給油後の返答と設定との衝突の明示）"
+if out=$(node tests-race-rules-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ source preflight合格（artifact・Windows・実走は別ゲート）"; else echo "❌ 出荷不可（上記を直すこと）"; fi

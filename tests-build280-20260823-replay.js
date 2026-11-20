@@ -78,9 +78,10 @@ check('production handler no longer emits the banned generic phrase',
 const renderer = fs.readFileSync('./desktop/renderer.html', 'utf8');
 check('armed fuel-window watch has a one-shot telemetry delivery path',
   renderer.includes('maybeDeliverFuelWindowWatch(lastTelemetry)')
-    && renderer.includes('fuelWindowWatch.announced=true')
-    && renderer.includes('燃料ウィンドウの比較候補が成立。ピット実行は合意中のプランで確認する。')
-    && renderer.includes('router.fuelWindowStatus(currentCanonicalStrategyLive(live||{}),lang)'));
+    && renderer.includes('w.announced=true')                         // Build 309: 発話確定(onDelivery=spoken)でだけ「通知済み」にする
+    && renderer.includes("outcome==='spoken'")
+    && renderer.includes('window.PitwallFuelWindow.sentence(res,')    // 実燃料条件から作る一文（戦略案のrevisionに結ばない）
+    && renderer.includes('currentFuelWindowResult(live)'));
 
 console.log(`\n8/23 Build 279 failure replay: ${pass}/${pass + fail}`);
 process.exit(fail ? 1 : 0);

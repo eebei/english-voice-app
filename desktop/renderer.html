@@ -709,6 +709,8 @@ h2.sec-title{font-size:clamp(28px,4vw,42px);font-weight:800;line-height:1.1;marg
 <script src="field-snapshot.js"></script>
 <script src="undercut-forecast.js"></script>
 <script src="pit-strategy-compare.js"></script>
+<script src="fuel-window.js"></script>
+<script src="race-rules.js"></script>
 <script src="strategy-playbook.js"></script>
 <script src="fuel-plan-guard.js"></script>
 <script src="fuel-safety-override-guard.js"></script>
@@ -1688,6 +1690,9 @@ let liveStrategyValidation = null;
 let enduranceForecastAnnouncedKey = '';
 let enduranceFuelWindowAnnouncedKey = '';
 let fuelWindowWatch = {armed:false,sessionKey:'',announced:false};
+// 自車のピット完了（on_pit_road の on→off）を数える。初回観測は seed だけ（ピットボックス発進を完了と数えない）。
+const ownPitObserver={prev:'unknown',completions:0,passes:0,lastCompletedAt:0,lastCompletedLap:null,enteredAt:0,entryFuel:null,onSamples:0};   // completions＝給油を確認したピット／passes＝給油の確認が無い通過（ドライブスルー・ペナルティ等）
+let fuelWindowMarginL=null;   // Lで直接指定する余裕（検査・内部用。保存しない＝別raceへ持ち越さない）。通常は周数(既定1周分・Driverが0.5周へ)×燃費。優先順：Driverの周数訂正 ＞ 直接L指定 ＞ 既定の周数
 let pendingLunaSelfMemoryConfirmation = null;
 let sessionBestLapStr = '';
 let sessionBestLapSeconds = null;
@@ -2929,6 +2934,8 @@ async function sendMsg(inputSource, entry){
   maybeQuietMode(text);          // ★「静かにして」を構造で受ける（安全項目には効かない）
   pushMsg({role:'user',content:text});
   turns++; sessionMsgCount++;
+  try{const _mute=noteDriverMute(text);if(_mute.closeTurn){diagnosticLog('DRIVER_MUTE','turn_closed (ack only)');return;}}catch(e){diagnosticLog('DRIVER_MUTE','error '+String(e&&e.message||e));}   // 戦略の自発コールを止める（安全・依頼した通知・質問への返答は止めない）。停止だけの発話は受領1回でターンを閉じる
+  try{if(noteRaceRulesTurn(text).closeTurn){diagnosticLog('RACE_RULES','turn_closed (deterministic reply)');return;}}catch(e){diagnosticLog('RACE_RULES','error '+String(e&&e.message||e));}
   // Every driver turn enters the same memory search before intent-specific
   // handlers or the LLM. Individual features no longer decide whether Luna
   // remembers; they only decide how the retrieved evidence is consumed.
@@ -3075,7 +3082,8 @@ async function sendMsg(inputSource, entry){
       live:currentCanonicalStrategyLive({...lastTelemetry,
         track:lastTelemetry.track||lastTrack||null,
         car_class:lastTelemetry.car_class||lastCarClass||null,
-        car_model:lastTelemetry.car_model||lastCarModel||null}),
+        car_model:lastTelemetry.car_model||lastCarModel||null,
+        fuel_margin_policy:(typeof currentMarginPolicy==='function'?currentMarginPolicy():null)}),
       sessionAuthority:(typeof lastSessionAuthority!=='undefined'?lastSessionAuthority:null),
       raceHistory:(typeof loadRaceHistory==='function'?loadRaceHistory():[]),
       historicalRequest:activeMemoryBrainTurn?.historicalRequest||null,
@@ -3203,24 +3211,32 @@ async function sendMsg(inputSource, entry){
     diagnosticLog('LOCAL_INTENT_ROUTE',`intent=${localIntent.intent} authority=${localIntent.source||'bridge_local'} confidence=${localIntent.confidence||'unknown'} race_record_id=${_ansRaceRecordId||'-'}`);
     if(localIntent.fuelEstimate)diagnosticLog('FUEL_ESTIMATE',JSON.stringify(localIntent.fuelEstimate));
     if(localIntent.action&&localIntent.action.type==='cancel_fuel_window_watch'){
+      releaseFuelWindowWatch('driver_cancelled');
       fuelWindowWatch={armed:false,sessionKey:String(lastSessionNum??''),announced:false,cancelled:true};
     }
     if(localIntent.action&&localIntent.action.type==='arm_fuel_window_watch'){
-      // WO012 REVISE P1-B: arming without a verified canonical scope produced
-      // scopeBinding:null, which maybeDeliverFuelWindowWatch() then skipped
-      // validating entirely — so any later driver/race/epoch's fresh canonical
-      // could fire this driver's watch. Require a verified scope to arm at
-      // all; otherwise do not arm, and say so instead of a silent "will call".
-      const _watchScope=strategyProjection.binding('recommendation');
-      if(_watchScope){
-        fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false,scopeBinding:_watchScope};
-        diagnosticLog('FUEL_WINDOW_WATCH','armed session='+fuelWindowWatch.sessionKey);
+      // Owner 2026-11-15：監視は「同じレース・自車の実燃料条件」に結ぶ（戦略案のrevisionに結ばない＝案が更新されても保持）。
+      //   既に開いていればその場で答え、監視は登録しない。登録した時だけ受領を返す（登録できないのに「呼ぶ」と言わない）。
+      const _live=lastTelemetry,_jp=isJapaneseEngineer(),_W=window.PitwallFuelWindow;
+      const _res=_live&&_live.race_instance_id?currentFuelWindowResult(_live):null;
+      if(!_live||!_live.race_instance_id||!_W){
+        fuelWindowWatch={armed:false,sessionKey:String(lastSessionNum??''),announced:false};
+        diagnosticLog('FUEL_WINDOW_WATCH','arm_rejected reason=no_live_race');
+        reply=_jp?'いまは走行データが取れていないので、ウィンドウの監視は始められない。':'I have no live race data, so I did not start the window watch.';
+      } else if(_res&&_res.state==='open'){
+        fuelWindowWatch={armed:false,sessionKey:String(lastSessionNum??''),announced:true,raceKey:fuelWindowRaceKey(_live)};
+        diagnosticLog('FUEL_WINDOW_WATCH','answered_open_now add_l='+_res.add_l);
+        reply=(_jp?'もう開いている。':'It is already open. ')+_W.sentence(_res,'status',_jp?'ja':'en');
+      } else if(_res&&_res.state==='unreachable'){
+        fuelWindowWatch={armed:false,sessionKey:String(lastSessionNum??''),announced:false,raceKey:fuelWindowRaceKey(_live)};
+        diagnosticLog('FUEL_WINDOW_WATCH','arm_rejected reason='+_res.reason);
+        reply=_W.sentence(_res,'status',_jp?'ja':'en');
       } else {
-        fuelWindowWatch={armed:false,sessionKey:String(lastSessionNum??''),announced:false,scopeBinding:null};
-        diagnosticLog('FUEL_WINDOW_WATCH','arm_rejected reason=scope_unverifiable');
-        reply=(sel==='Kanbe'||sel==='Oishi'||sel==='HajimeJP'||sel==='LunaJP')
-          ?'現在のPlanを確認できないため、ウィンドウの監視は開始していない。'
-          :'I cannot verify the current plan, so I did not arm the window watch.';
+        fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),raceKey:fuelWindowRaceKey(_live),pitCompletions:ownPitObserver.completions,armedAt:Date.now(),announced:false,delivery:{state:'idle',attempts:0}};
+        diagnosticLog('FUEL_WINDOW_WATCH','armed source=driver_request race='+fuelWindowWatch.raceKey+' state='+(_res?_res.state:'none')+(_res&&_res.opens_in_laps?' opens_in='+_res.opens_in_laps:''));
+        reply=_res&&_res.state==='waiting'
+          ?(_jp?`了解。あと約${_res.opens_in_laps}周で開く。開いたら一度だけ呼ぶ。`:`Copy. About ${_res.opens_in_laps} laps to go. I will call once when it opens.`)
+          :(_jp?'了解。ウィンドウが開いたら一度だけ呼ぶ。':'Copy. I will call once when the window opens.');
       }
     }
     // ★第3回P1-1：**Yuji が報告した経路はこちら（PTTで尋ねた時のGAP）**。
@@ -6520,9 +6536,77 @@ function fieldSnapshotStats(){return fieldSnapshotReceiver.stats();}
 //   名簿の全車を同時に観測できない間は、復帰先を「空いている」と言わない。相手の給油予定は仮定。提案は実行指示ではない（採用は既存のPlan/ACK）。
 const undercutTracker=PitwallUndercutForecast.createTracker();
 const undercutState={lastEventAt:0,proposalKey:null,proposalLapKey:'',proposals:[],skips:{}};
+// Driverの停止依頼（Owner 2026-11-17：「黙っとけよ。もうピットないんだよ」「もうそれ喋らなくていいからさ」の後もU2提案が出続けた）。
+//   戦略の自発コール（アンダーカット提案・給油ウィンドウの見込み・給油後の確認）だけを止める。Driverが依頼した通知・質問への返答・安全(P0/P1)・反射は止めない。
+//   解除：別race/session、またはDriverが再開を頼んだ時。
+// 停止依頼は**LUNAの発話に向けた言い方**に限る（「エンジン音がうるさい」「周りの車がうるさい」「ピットの出口は狭いからもういい」で止めない：検査Claude R-FW-2）。
+//   ・黙れ系／喋らなくていい系／静かにして
+//   ・「それ／その話／提案／ピットの話／アンダーカット」＋もういい・いらない・やめて
+//   ・短い「うるさい(な/よ)」だけの発話（名詞＋うるさい＝騒音の話は除く）
+const DRIVER_MUTE_RE=/黙っとけ|黙れ(?!ば)|黙って(?:て|いて|ろ|くれ|いい)|喋るな|しゃべるな|(?:喋ら|しゃべら|話さ)なくて(?:も)?(?:いい|大丈夫)|静かに(?:して|しといて)|(?:それ|その話|今の|提案|(?:ピット|戦略)(?:の)?(?:話|提案|判断)|アンダーカット|ピットハンター).{0,6}(?:もういい|いらない|要らない|やめて|うるさい)|^(?:もう)?うるさい(?:な|よ|ね)?[。！!、\s]*$/;
+const DRIVER_UNMUTE_RE=/(?:ピット|戦略|提案|アンダーカット).{0,8}(?:また|再開|教えて|言って|喋って)|(?:また|再開).{0,6}(?:喋って|教えて|提案)|喋って(?:いい|くれ)/;
+// 停止の期限は設けない（監督 2026-11-18：「12周」は発話停止の期限でありピット期限ではない。Driverの再開依頼まで保持）。別race/sessionへは持ち越さない。
+const driverMute={active:false,raceKey:'',since:0,phrase:''};
+const DRIVER_QUESTION_RE=/[?？]|教え|どう(?!で)|何|なに|いつ|どこ|誰|だれ|足りる|足りない|大丈夫|いくら|どれ|どのくらい/;
+// 戻り値：{muted:bool, closeTurn:bool}。停止だけの発話（質問を含まない）は、受領を1回返してそのターンを閉じる（LLM・自己記憶の訂正処理へ回さない）。質問が一緒なら質問にも答える。
+function noteDriverMute(text){
+  const t=String(text||'');
+  if(DRIVER_UNMUTE_RE.test(t)&&driverMute.active){driverMute.active=false;diagnosticLog('DRIVER_MUTE','cleared by driver');return {muted:false,closeTurn:false};}
+  if(!DRIVER_MUTE_RE.test(t)) return {muted:false,closeTurn:false};
+  const was=driverMute.active;
+  driverMute.active=true;driverMute.raceKey=lastTelemetry?fuelWindowRaceKey(lastTelemetry):'';driverMute.since=Date.now();driverMute.phrase=t.slice(0,40);
+  const n=invalidateQueuedSpeech(['pit_undercut_proposal','fuel_window_forecast','pit_post_stop_fuel','pit_rival_update'],'driver_mute');
+  const hasQuestion=DRIVER_QUESTION_RE.test(t.replace(DRIVER_MUTE_RE,''));
+  diagnosticLog('DRIVER_MUTE','set phrase='+JSON.stringify(driverMute.phrase)+' queued_dropped='+n+' question='+hasQuestion);
+  // 止まった事実を短く返す（再開の案内つき）。
+  if(!was){
+    const ack=isJapaneseEngineer()?'了解、戦略の提案は止める。また聞きたい時に言って。':'Copy, strategy calls are off until you ask again.';
+    addMsg('ai',ack);pushMsg({role:'assistant',content:ack});
+    speak(ack,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'driver_mute_ack',dedupeKey:'driver_mute_ack|'+driverMute.since});
+  }
+  return {muted:true,closeTurn:!hasQuestion};
+}
+function spontaneousMuted(){
+  if(!driverMute.active) return false;
+  if(driverMute.raceKey&&lastTelemetry&&driverMute.raceKey!==fuelWindowRaceKey(lastTelemetry)){driverMute.active=false;diagnosticLog('DRIVER_MUTE','cleared race_changed');return false;}
+  return true;
+}
+// 提案で「◯番が先に入ると」と仮定を話した相手が、実際に入った(観測または推定)ことが分かったら、実測の前後と差を短く知らせる（一度だけ）。
+//   観測した停止は「入った」、見えなかった間の遅れからの推定は「入ったようだ」（確度を区別）。
+function maybeAnnounceRivalStopped(){
+  if(spontaneousMuted()||selMode!=='race'||!iracingLive||!lastTelemetry||lastTelemetry.on_pit_road===true||isSessionEndingLifecycle()) return;
+  const snap=currentFieldSnapshot({race_instance_id:lastTelemetry.race_instance_id,session_num:lastTelemetry.session_num,max_age_s:8,now_s:Date.now()/1000});
+  if(!snap) return;
+  const own=snap.cars.find(c=>c.i===snap.player_car_idx);
+  if(!own||own.st!=='ok'||!Number.isFinite(own.l)||!Number.isFinite(own.d)) return;
+  const pace=Number(lastTelemetry.driver_pace_median_s)>0?Number(lastTelemetry.driver_pace_median_s):null;
+  if(!pace) return;
+  for(const pr of undercutState.proposals){
+    for(const ref of (pr.refs||[])){
+      if(!Number.isInteger(ref.car_idx)||ref.announced) continue;
+      const st=undercutTracker.cars.get(ref.car_idx);
+      if(!st||!(st.stops>(ref.stops_done||0))) continue;
+      const car=snap.cars.find(c=>c.i===ref.car_idx);
+      if(!car||car.st!=='ok'||!Number.isFinite(car.l)||!Number.isFinite(car.d)||car.pit===1) continue;   // 再観測できて、ピットレーン上でない時だけ（欠測は前後を言わない）
+      const diff=(own.l+own.d-(car.l+car.d))*pace;   // 正＝自車が前（相手が後ろ）
+      if(Math.abs(diff)>=pace*0.5) { ref.announced=true; continue; }   // 半周以上離れていれば前後の話は意味が薄い
+      const inferred=(st.stopsInferred||0)>=st.stops;
+      const gap=Math.abs(diff).toFixed(1),side=diff>=0?'後ろ':'前';
+      const text=(inferred?`${ref.rival_no}番は入ったようだ、`:`${ref.rival_no}番は入った、`)+`いま約${gap}秒${side}。`;
+      ref.announced=true;
+      addMsg('ai',text);pushMsg({role:'assistant',content:text});
+      const calcId=pr.calc_id;
+      speak(text,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pit_rival_update',dedupeKey:'pit_rival_update|'+ref.car_idx+'|'+(st.stops),
+        precheck:()=>!spontaneousMuted()&&!!lastTelemetry&&lastTelemetry.on_pit_road!==true});
+      diagnosticLog('PIT_RIVAL_UPDATE',JSON.stringify({rival:ref.rival_no,basis:inferred?'inferred':'observed',gap_s:Number(gap),side,stops:st.stops,from_calc:calcId}));
+      return;
+    }
+  }
+}
 function undercutSkip(reason){undercutState.skips[reason]=(undercutState.skips[reason]||0)+1;return null;}
 function onFieldSnapshotAccepted(msg){
   undercutTracker.update(msg);
+  try{maybeAnnounceRivalStopped();}catch(e){diagnosticLog('PIT_RIVAL_UPDATE_ERROR',String(e&&e.message||e));}
   // 相手のピットIN/OUT・ピット状態の変化は、Lapの途中でも再計算する（2秒に1回まで）。毎標本は計算しない。
   if(Array.isArray(msg.events)&&msg.events.some(e=>e==='pit_in'||e==='pit_out'||e==='pit')&&lastTelemetry&&Date.now()-undercutState.lastEventAt>2000&&pitCompareState.packet){
     undercutState.lastEventAt=Date.now();
@@ -6543,6 +6627,7 @@ function buildUndercutSection(live,input,opinions){
   if(fo) opts.focus=fo.focus;
   const tr=[...(opinions||[])].reverse().find(o=>o&&o.kind==='traffic'&&o.extra_s);
   if(tr){opts.traffic_extra_s=tr.extra_s;const ids=(tr.plan_ids||[]).join(',');opts.traffic_extra_option_ids=/under|undercut/.test(ids)?['now']:(/over/.test(ids)?['next','limit']:null);}
+  opts.own_refuels_done=refuelsDone();opts.race_rules=currentRaceRules(live);   // 給油を確認したピット回数と、適用されるレース設定（出所付き）。進入・通過では消費しない
   const rejected=(opinions||[]).filter(o=>o&&o.kind==='reject_plan').map(o=>o.plan);
   if(rejected.length) opts.declined_option_ids=[].concat(rejected.includes('undercut')?['now']:[],rejected.includes('overcut')?['limit']:[]);
   const sec=U.compute({meta:{race_instance_id:live.race_instance_id,session_num:live.session_num,observed_wall:new Date(snap.observed_at*1000).toISOString()},
@@ -6568,18 +6653,23 @@ function maybeProposeUndercut(packet,reason){
   if(!U||!packet||!packet.undercut_forecast||reason==='driver_opinion'||String(reason||'').startsWith('driver_opinion')) return;
   if(selMode!=='race'||!iracingLive||!lastTelemetry||lastTelemetry.on_track!==true||lastTelemetry.on_pit_road===true) return;
   if(typeof isSessionEndingLifecycle==='function'&&isSessionEndingLifecycle()) return;
+  if(spontaneousMuted()){diagnosticLog('UNDERCUT_PROPOSAL',JSON.stringify({calc_id:packet.undercut_forecast.calc_id,reason,spoken:false,why:'driver_mute'}));return;}
   const sec=packet.undercut_forecast;
   const lapKey=pitCompareScopeKey(lastTelemetry)+'|'+Number(lastTelemetry.lap);
   if(undercutState.proposalLapKey===lapKey) return;   // 1Lapに1回まで
   const pr=U.proposal(sec,undercutState.proposalKey);
-  diagnosticLog('UNDERCUT_PROPOSAL',JSON.stringify({calc_id:sec.calc_id,reason,spoken:!!(pr&&pr.text),why:pr&&pr.reason||'none'}));
+  diagnosticLog('UNDERCUT_PROPOSAL',JSON.stringify({calc_id:sec.calc_id,reason,spoken:!!(pr&&pr.text),why:pr&&pr.reason||'none',diag:pr&&pr.diag||null}));
   if(!pr||!pr.text){if(pr) undercutState.proposalKey=pr.key;return;}
   undercutState.proposalKey=pr.key;undercutState.proposalLapKey=lapKey;
   const text=pr.text;
-  undercutState.proposals.push({lap:Number(lastTelemetry.lap),calc_id:sec.calc_id,text});
+  undercutState.proposals.push({lap:Number(lastTelemetry.lap),calc_id:sec.calc_id,text,refs:(pr.refs||[]).map(r=>({...r}))});
   if(undercutState.proposals.length>50) undercutState.proposals.shift();
   addMsg('ai',text);pushMsg({role:'assistant',content:text});
-  speak(text,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pit_undercut_proposal',dedupeKey:'pit_undercut_'+pr.key,precheck:()=>undercutAnswerCurrent(packet),
+  speak(text,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pit_undercut_proposal',dedupeKey:'pit_undercut_'+pr.key,precheck:()=>{
+      // 提案を作った時の状態と、音声を始める時の状態を分けて確認し、落とす時は理由を残す（Driverの停止依頼・相手が既に入った・計算の更新）。
+      if(spontaneousMuted()){diagnosticLog('UNDERCUT_PROPOSAL_DROPPED','driver_mute');return false;}
+      for(const ref of (pr.refs||[])){const st=Number.isInteger(ref.car_idx)?undercutTracker.cars.get(ref.car_idx):null;if(st&&st.stops>(ref.stops_done||0)){diagnosticLog('UNDERCUT_PROPOSAL_DROPPED','rival_stopped_since rival='+ref.rival_no);return false;}}
+      const ok=undercutAnswerCurrent(packet);if(!ok)diagnosticLog('UNDERCUT_PROPOSAL_DROPPED','stale_calculation');return ok;},
     auxAtRequest:{role:'pit_calculation',source_ref:{calc_id:sec.calc_id,calc_version:sec.version,race:sec.race,observed_at:sec.observed_at}}});
 }
 // ══ STR-001：毎Lapの戦略比較（通常／アンダーカット／オーバーカット）══════════════════════
@@ -6639,7 +6729,7 @@ function pitCompareInputFromLive(live){
       series:lastCarClass||null,track:lastTrack||null,car:lastCarModel||null},
     total_laps:total,
     own:{fuel_l:Number.isFinite(Number(live.fuel))?obs(Number(live.fuel)):null,fuel_per_lap_l:burn?(burnObserved?obs(burn,burns[0],burns[burns.length-1],'観測'+burns.length+'Lapの燃料減少の中央値'):obs(burn,burn*0.95,burn*1.05,'Bridgeの燃費')):null,
-      tank_l:tank?obs(tank,tank,tank,'レース開始時の燃料'):null,reserve_l:asm(0.5,0.5,0.5,'予備燃料（仮定）'),
+      tank_l:tank?obs(tank,tank,tank,'レース開始時の燃料'):null,reserve_l:(()=>{const m=burn?currentMarginLiters(burn):null;return m!==null?asm(m,m,m,'燃料余裕（周数×燃費。Driver設定または既定1周分）'):asm(0.5,0.5,0.5,'予備燃料（仮定）');})(),   // 窓・燃料回答・STR-001・U2で同じ余裕（監査Codex 11/19）
       lap_time_s:lapTime?obs(lapTime,lapTime-0.5,lapTime+0.5,'最近のペース'):null,best_clean_lap_s:Number(live.best)>0?obs(Number(live.best)):null},
     pit:{transit_extra_s:transit,fixed_stall_s:fixed,fuel_rate_s_per_l:rate},
     baseline_pit_lap:baselineLap,baseline_source:baselineSource,   // 通常案＝現行の燃料計画(Plan A)の有効な周。無ければ出所つきの暫定基準。燃料の限界周は使わない
@@ -10748,40 +10838,256 @@ function evaluateLiveStrategySwitch(live){
     sessionKey:String(lastSessionNum??''),at:Date.now()}:null;
   return evaluation;
 }
+// ── レース設定（給油回数・燃料余裕の周数）：レース限りの状態。別raceへ設定の訂正・給油済み状態を持ち越さない（監督 2026-11-18）──
+const raceRulesState={raceKey:'',override:null,marginPolicy:null};
+function currentMarginPolicy(){return raceRulesState.marginPolicy||{laps:window.PitwallRaceRules?window.PitwallRaceRules.MARGIN_DEFAULT_LAPS:1,source:'default'};}
+function currentRaceRules(live){
+  const R=window.PitwallRaceRules;
+  if(!R) return null;
+  const plan=live&&live.race_plan&&typeof live.race_plan==='object'?live.race_plan:(lastTelemetry&&lastTelemetry.race_plan)||{};
+  return R.resolve({race_plan:plan,override:raceRulesState.override});
+}
+function refuelsDone(){return ownPitObserver.completions;}   // 給油を確認したピットの回数（進入・ドライブスルー・ノイズは数えない）
+// 別race/sessionに入ったら、レース限りの状態を全て初期化する（給油済み回数・設定の訂正・余裕の変更・見込み・提案の履歴）。
+function syncRaceScopedState(live){
+  const rk=fuelWindowRaceKey(live);
+  if(!live||!rk||rk==='|'||rk===raceRulesState.raceKey) return;
+  const first=raceRulesState.raceKey==='';
+  raceRulesState.raceKey=rk;
+  if(first) return;
+  raceRulesState.override=null;raceRulesState.marginPolicy=null;fuelWindowMarginL=null;
+  Object.assign(ownPitObserver,{prev:'unknown',completions:0,passes:0,lastCompletedAt:0,lastCompletedLap:null,enteredAt:0,entryFuel:null,onSamples:0});
+  postPitFuel.pendingFor=0;postPitFuel.announcedFor=0;
+  fuelForecast.prev=null;fuelForecast.inflight=null;fuelForecast.lastEvalLap=null;
+  undercutState.proposals.length=0;undercutState.proposalKey=null;undercutState.proposalLapKey='';
+  diagnosticLog('RACE_SCOPED_RESET','race changed → refuels_done=0, rule override and margin cleared');
+}
+// Driverの発話：給油回数の確認／訂正、燃料余裕の変更。決定論の返答を1回返してそのターンを閉じる（LLMへ回さない）。
+const COVERAGE_QUESTION_RE=/(?:誰|どの車|何台|どこまで).{0,10}(?:見えて|評価|把握|分か)|(?:見えて|評価).{0,6}(?:ない|いない|外|できて).{0,6}(?:車|相手|誰)|評価外|何位まで.{0,6}(?:見えて|把握|分か)/;
+function noteRaceRulesTurn(text){
+  const R=window.PitwallRaceRules;
+  if(!R||selMode!=='race'||!lastTelemetry) return {closeTurn:false};
+  const jp=isJapaneseEngineer(),lang=jp?'ja':'en';
+  let reply=null;
+  const stated=R.parseRefuelStatement(text),marg=R.parseMarginCorrection(text);
+  if(stated){
+    // 監督/Owner 2026-11-19：会話から給油回数だけを抽出してレース設定を上書きしない。言い直しには、設定のままであること・不足時の扱いを返す。
+    diagnosticLog('RACE_RULES','refuel count restated='+stated.refuels_stated+' (setting not changed)');
+    reply=R.statementReply(currentRaceRules(lastTelemetry),stated.refuels_stated,refuelsDone(),lang);
+  }else if(marg){
+    raceRulesState.marginPolicy={laps:marg.laps,source:'driver_setting'};
+    const burn=fuelWindowInputs(lastTelemetry)?.burn_l,L=R.marginLiters(raceRulesState.marginPolicy,burn);
+    diagnosticLog('RACE_RULES','driver margin laps='+marg.laps+' liters='+(L===null?'-':L));
+    const lapsText=marg.laps===0.5?'半周':(marg.laps===1?'1周':marg.laps+'周');
+    reply=jp?`了解、燃料の余裕は${lapsText}分で見る${L!==null?`（約${L.toFixed(1)}L）`:''}。`:`Copy, fuel margin is ${marg.laps} lap(s)${L!==null?` (about ${L.toFixed(1)} L)`:''}.`;
+  }else if(R.isRefuelCountQuestion(text)){
+    reply=R.sentence(currentRaceRules(lastTelemetry),refuelsDone(),lang);
+  }else if(COVERAGE_QUESTION_RE.test(text)){
+    // 「誰が見えていない？」「どの車を評価してる？」：評価できた車と評価外の車を決定論で答える（順位は総合/クラスを区別。連続範囲は言わない）。
+    const u=pitCompareState.packet&&pitCompareState.packet.undercut_forecast;
+    reply=window.PitwallUndercutForecast?window.PitwallUndercutForecast.coverageReply(u&&u.comparable!==undefined?u:null,lang):null;
+  }
+  if(!reply) return {closeTurn:false};
+  addMsg('ai',reply);pushMsg({role:'assistant',content:reply});
+  speak(reply,{prio:SPEAK_PRIO.P2_PROCEDURE,kind:'race_rules_reply',dedupeKey:'race_rules|'+Date.now()});
+  return {closeTurn:true};
+}
+// ── 給油ウィンドウの監視（Owner 2026-11-15 監督の修復指示）──────────────────────────────
+//   監視は「同じレース・自車の実燃料条件」に結ぶ。戦略案（decision_id／revision）の更新では解除しない。
+//   解除は：取消し／ピット完了／別race・別session／セッション終了のみ。
+//   成立は一度だけ耳に届ける：発話確定(spoken)で初めて「通知済み」にし、待機中に破棄された時は有効な間だけ再配送する。
+//   待機中に条件が古くなったら、再生直前に最新の燃料条件で確認し直す（precheck）。
+function fuelWindowRaceKey(live){return live?String(live.race_instance_id||'')+'|'+String(live.session_num??''):'';}
+// 現在の実燃料条件（canonical＝Bridge権威の現在値）。燃費はBridgeのfuel_strategyが有効ならそれ、無ければ観測したLapごとの残燃料の減少の中央値。
+function observedBurnPerLap(){
+  const fl=pitCompareState.fuelByLap,burns=[];
+  for(const k of Object.keys(fl).map(Number).sort((x,y)=>x-y)){if(fl[k-1]!==undefined){const d=fl[k-1]-fl[k];if(d>0.3&&d<8)burns.push(d);}}
+  burns.sort((x,y)=>x-y);
+  return burns.length>=2?burns[Math.floor(burns.length/2)]:null;
+}
+function fuelWindowInputs(live){
+  if(!live) return null;
+  const c=currentCanonicalStrategyLive(live),fs=c&&c.fuel_strategy&&typeof c.fuel_strategy==='object'?c.fuel_strategy:null;
+  const facts=c&&c.canonical_lifecycle&&c.canonical_lifecycle.current_facts||null;
+  const burnBridge=Number(fs?.strict_clean_avg_fuel_per_lap)>0?Number(fs.strict_clean_avg_fuel_per_lap):(Number(fs?.avg_fuel_per_lap)>0?Number(fs.avg_fuel_per_lap):null);
+  const burn=burnBridge||observedBurnPerLap();
+  const crossings=Number.isFinite(Number(c&&c.finish_crossings_authority))&&c.finish_crossings_authority!==null?Number(c.finish_crossings_authority):(Number.isFinite(Number(fs?.estimated_crossings_to_finish))?Number(fs.estimated_crossings_to_finish):null);
+  const cap=Number(lastFuelCapacityContext?.effective_fuel_capacity_l);
+  return {fuel_l:c&&Number.isFinite(Number(c.fuel))?Number(c.fuel):null,burn_l:burn,crossings,capacity_l:Number.isFinite(cap)&&cap>0?cap:null,
+    lap_dist_pct:facts&&Number.isFinite(Number(facts.lap_dist_pct))?Number(facts.lap_dist_pct):null,on_pit_road:c?c.on_pit_road:null,race_key:c&&c.race_instance_id?String(c.race_instance_id)+'|'+String(c.session_num??''):null};
+}
+// 燃料余裕(L)＝余裕の周数(既定1周・Driverが0.5周へ変更可)×1周の燃費。Driverが直接Lで設定していればそれを優先。燃費が無ければ候補値(fuel-window.js)。
+function currentMarginLiters(burn){
+  const R=window.PitwallRaceRules,pol=currentMarginPolicy();
+  if(R&&pol&&pol.source==='driver_setting'){const L=R.marginLiters(pol,burn);if(L!==null) return L;}   // Driverの周数訂正は直接L指定より優先
+  if(fuelWindowMarginL!==null) return fuelWindowMarginL;
+  return R?R.marginLiters(pol,burn):null;
+}
+function currentFuelWindowResult(live){
+  const W=window.PitwallFuelWindow;
+  if(!W||!live) return null;
+  const f=fuelWindowInputs(live);
+  return f?W.evaluate({fuel_l:f.fuel_l,burn_l:f.burn_l,crossings:f.crossings,capacity_l:f.capacity_l,lap_dist_pct:f.lap_dist_pct,margin_l:currentMarginLiters(f.burn_l)}):null;
+}
+function invalidateQueuedSpeech(kinds,reason){
+  const drop=speakQueue.filter(q=>q&&kinds.includes(q.kind));
+  if(!drop.length) return 0;
+  discardQueuedUtterances(drop,reason);
+  speakQueue=speakQueue.filter(q=>!(q&&kinds.includes(q.kind)));
+  return drop.length;
+}
+function releaseFuelWindowWatch(reason){
+  if(fuelWindowWatch.armed) diagnosticLog('FUEL_WINDOW_WATCH','released reason='+reason+' attempts='+((fuelWindowWatch.delivery&&fuelWindowWatch.delivery.attempts)||0));
+  fuelWindowWatch=Object.assign({},fuelWindowWatch,{armed:false,releasedReason:reason});
+  invalidateQueuedSpeech(['fuel_window_watch'],'watch_released:'+reason);
+}
+// 自車のピット完了を観測する（毎telemetry）。完了したら、旧い計算・旧い提案・待機中の古い音声を失効させ、新しい残量から計算し直す。
+function observeOwnPitCompletion(live){
+  if(!live||typeof live.on_pit_road!=='boolean') return false;
+  const now=live.on_pit_road===true?'on':'off',prev=ownPitObserver.prev,fuel=Number.isFinite(Number(live.fuel))?Number(live.fuel):null;
+  if(now==='on'){
+    if(prev!=='on'){ownPitObserver.enteredAt=Date.now();ownPitObserver.entryFuel=fuel;ownPitObserver.onSamples=0;}   // 入庫時の残量（給油前）を控える
+    ownPitObserver.onSamples+=1;
+  }
+  ownPitObserver.prev=now;
+  if(!(prev==='on'&&now==='off')) return false;
+  const samples=ownPitObserver.onSamples;ownPitObserver.onSamples=0;
+  // 検査Claude R-FW-4：「給油完了」は給油の事実を確かめてから。1標本だけの on_pit_road=true（ノイズ）は無視。入庫から出庫で残量が増えていない通過は給油とは扱わない。
+  if(samples<3){diagnosticLog('OWN_PIT_NOISE','on_pit_road samples='+samples+' ignored');return false;}
+  const gained=ownPitObserver.entryFuel!==null&&fuel!==null?fuel-ownPitObserver.entryFuel:null;
+  if(gained!==null&&gained>=0.5){
+    ownPitObserver.completions+=1;ownPitObserver.lastCompletedAt=Date.now();ownPitObserver.lastCompletedLap=Number(live.lap)||null;
+    onOwnPitCompleted(live,gained);
+    return true;
+  }
+  ownPitObserver.passes+=1;
+  diagnosticLog('OWN_PIT_PASSED','no refuel confirmed samples='+samples+' fuel_gain='+(gained===null?'-':gained.toFixed(2))+' (給油完了とは言わない・監視と見込みは保持)');
+  return true;
+}
+function onOwnPitCompleted(live,gained){
+  const dropped=invalidateQueuedSpeech(['pit_undercut_proposal','fuel_window_watch','pit_post_stop_fuel','fuel_window_forecast','pit_rival_update'],'own_pit_completed');
+  diagnosticLog('OWN_PIT_COMPLETED','n='+ownPitObserver.completions+' lap='+ownPitObserver.lastCompletedLap+' refuel_l='+(Number.isFinite(gained)?gained.toFixed(1):'-')+' fuel='+(Number.isFinite(Number(live.fuel))?Number(live.fuel).toFixed(1):'-')+' queued_dropped='+dropped);
+  if(fuelWindowWatch.armed) releaseFuelWindowWatch('pit_completed');
+  // 旧い比較・提案を失効：次のLapまで古い「入る周」の提案を出さない。新しい計算は次のtelemetryで残量から出す。
+  undercutState.proposalKey=null;undercutState.proposalLapKey='pit_completed|'+ownPitObserver.completions;
+  pitCompareState.packet=null;pitCompareState.lapKey='';
+  postPitFuel.pendingFor=ownPitObserver.completions;
+  fuelForecast.prev=null;fuelForecast.inflight=null;   // 旧い見込みは音声まで失効（給油後は実残量からの再計算だけ）
+}
+// 給油後：実際の残量からチェッカーまでを計算し直し、新しい結論がある時だけ一文で伝える（同じ内容は繰り返さない）。
+const postPitFuel={pendingFor:0,announcedFor:0};
+function maybePostPitFuelUpdate(live){
+  if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;
+  if(selMode!=='race'||!live||live.on_pit_road!==false||live.on_track!==true||isSessionEndingLifecycle()||spontaneousMuted()) return;
+  const fi=fuelWindowInputs(live);
+  if(!fi) return;
+  const burn=fi.burn_l,crossings=fi.crossings,fuel=fi.fuel_l;
+  if(!(burn>0)||!(crossings>=1)||!Number.isFinite(fuel)) return;   // 値が揃うまで待つ（揃わない間は何も言わない）
+  const need=burn*crossings,margin=fuel-need,jp=isJapaneseEngineer();
+    let text;
+  if(margin>=0) text=jp?`給油完了、このままゴールまで足りる（余裕約${margin.toFixed(1)}L）。`:`Fuel done, enough to the finish (about ${margin.toFixed(1)} L spare).`;
+  else{
+    // 設定の給油回数を済ませているのに足りない時は、設定との衝突を明示する（監督 2026-11-18）。
+    const rr=currentRaceRules(live),req=rr&&rr.applies?rr.refuels_required:null,conflict=req!==null&&refuelsDone()>=req;
+    text=jp?(conflict?`設定の給油${req}回は済んだが、約${Math.abs(margin).toFixed(1)}L足りない、もう一度入る必要がある。`:`給油後でも約${Math.abs(margin).toFixed(1)}L足りない、もう一度入る必要がある。`)
+      :`${conflict?`The set ${req} refuel(s) are done but we`:'Even after the stop we'} are about ${Math.abs(margin).toFixed(1)} L short, another stop is needed.`;
+  }
+  const key=ownPitObserver.completions+'|'+(margin>=0?'enough':'short');
+  postPitFuel.announcedFor=postPitFuel.pendingFor;   // 完了ごとに一度だけ（同じ完了では繰り返さない）
+  addMsg('ai',text);pushMsg({role:'assistant',content:text});
+  speak(text,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'pit_post_stop_fuel',dedupeKey:'post_pit_fuel|'+key,precheck:()=>ownPitObserver.completions===postPitFuel.pendingFor&&lastTelemetry&&lastTelemetry.on_pit_road===false});
+  diagnosticLog('POST_PIT_FUEL','spoken margin='+margin.toFixed(2)+' need='+need.toFixed(2)+' fuel='+fuel.toFixed(2)+' key='+key);
+}
+function fuelWindowWatchStillValid(){
+  const w=fuelWindowWatch;
+  if(!w.armed||!lastTelemetry) return false;
+  if(w.raceKey!==fuelWindowRaceKey(lastTelemetry)) return false;
+  if(w.pitCompletions!==ownPitObserver.completions) return false;
+  const r=currentFuelWindowResult(lastTelemetry);
+  return !!(r&&r.state==='open');
+}
+// ── 4周目の給油ウィンドウ見込み（Owner 2026-11-15）──────────────────────────────────────
+//   燃費に使える安定した完了3周が揃ったら、4周目の入口で「開く見込み周」を一度伝える（実際の開通通知とは別）。
+//   完了ラップごとに更新し、Driverの判断が変わる時だけ短く再コール（前倒し/後ろ倒しが2回続けて同じ時／入れる周が無くなる時はすぐ）。
+//   見込みはBOX指示・給油設定へ昇格させない（kind=fuel_window_forecast。strategyBinding・Plan・set_fuelへ触れない）。
+//   燃費サンプルの採否は早期見込み専用（既存のBridgeのクリーン判定・安全燃料警告は変えない）。採否理由は FUEL_FORECAST ログに毎周残す。
+const fuelLapLog={scope:'',rows:[],pitSeen:false,lastLap:null};
+const fuelForecast={prev:null,inflight:null,lastEvalLap:null};
+function recordFuelLap(live){
+  const sc=fuelWindowRaceKey(live);
+  if(!live||!sc||sc==='|') return false;
+  if(sc!==fuelLapLog.scope){fuelLapLog.scope=sc;fuelLapLog.rows=[];fuelLapLog.pitSeen=false;fuelLapLog.lastLap=null;fuelForecast.prev=null;fuelForecast.inflight=null;fuelForecast.lastEvalLap=null;}
+  if(live.on_pit_road===true) fuelLapLog.pitSeen=true;
+  const lap=Number(live.lap),fuel=Number(live.fuel);
+  if(!Number.isInteger(lap)||lap<1||!Number.isFinite(fuel)||lap===fuelLapLog.lastLap) return false;
+  fuelLapLog.rows.push({lap,fuel_l:fuel,last_lap_s:Number(live.last)>0?Number(live.last):null,pit_touched:fuelLapLog.pitSeen,in_pit_at_boundary:live.on_pit_road===true,t:Date.now()});
+  if(fuelLapLog.rows.length>80) fuelLapLog.rows.shift();
+  fuelLapLog.pitSeen=live.on_pit_road===true;fuelLapLog.lastLap=lap;
+  return true;
+}
+function maybeForecastFuelWindow(live,newLap){
+  const W=window.PitwallFuelWindow;
+  if(!W||!newLap||selMode!=='race'||!live||isSessionEndingLifecycle()||live.on_pit_road===true||ownPitObserver.completions>0||spontaneousMuted()) return;   // 給油済みの後は実残量からの再計算だけ（旧い見込みを出さない）
+  const fi=fuelWindowInputs(live);
+  if(!fi||fi.race_key!==fuelWindowRaceKey(live)) return;
+  const sel=W.selectBurnSamples(fuelLapLog.rows);
+  const useObs=sel.n>=2&&sel.burn_l>0;
+  const burn=useObs?sel.burn_l:fi.burn_l;
+  const src=useObs?(sel.stable?'observed_stable':'observed_partial'):(fi.burn_l?'bridge_average':null);
+  const f=W.forecast({lap:Number(live.lap),fuel_l:fi.fuel_l,burn_l:burn,crossings:fi.crossings,capacity_l:fi.capacity_l,lap_dist_pct:fi.lap_dist_pct,margin_l:currentMarginLiters(burn),stable:useObs&&sel.stable,burn_source:src,samples_used:sel.n});
+  const d=W.decideForecastCall(fuelForecast.prev,f,{minLap:4});
+  fuelForecast.lastEvalLap=Number(live.lap);
+  diagnosticLog('FUEL_FORECAST',JSON.stringify({lap:Number(live.lap),state:f.state,open_lap:f.open_lap,last_feasible_lap:f.last_feasible_lap,provisional:f.provisional,burn_source:src,burn:burn?Math.round(burn*100)/100:null,
+    accepted:sel.accepted.map(c=>c.lap),rejected:sel.rejected.map(c=>c.lap+':'+c.reason),spread:sel.spread_ratio,call:d.speak?d.speak.type:null,spoken_open_lap:(d.next||{}).spoken_open_lap,pending:(d.next||{}).pending_open_lap}));
+  if(!d.speak||fuelForecast.inflight){ if(!d.speak) fuelForecast.prev=d.next; return; }
+  const text=W.forecastSentence(d.speak,f,isJapaneseEngineer()?'ja':'en');
+  if(!text) {fuelForecast.prev=d.next;return;}
+  const rk=fuelWindowRaceKey(live),pc=ownPitObserver.completions,lapAtCall=Number(live.lap);
+  fuelForecast.inflight={next:d.next,call:d.speak};
+  addMsg('ai',text);pushMsg({role:'assistant',content:text});
+  speak(text,{prio:SPEAK_PRIO.P3_STRATEGY,kind:'fuel_window_forecast',dedupeKey:'fw_forecast|'+rk+'|'+d.speak.type+'|'+(d.speak.open_lap??'x')+'|'+lapAtCall,
+    precheck:()=>!!lastTelemetry&&fuelWindowRaceKey(lastTelemetry)===rk&&ownPitObserver.completions===pc&&lastTelemetry.on_pit_road!==true,
+    onDelivery:(outcome)=>{const inf=fuelForecast.inflight;fuelForecast.inflight=null;if(!inf) return;
+      if(outcome==='spoken'){fuelForecast.prev=inf.next;diagnosticLog('FUEL_FORECAST','delivered(spoken) type='+inf.call.type+' open_lap='+(inf.call.open_lap??'-'));}
+      else diagnosticLog('FUEL_FORECAST','not_delivered outcome='+outcome+' type='+inf.call.type+' (will re-evaluate next lap)');}});
+}
 function maybeDeliverFuelWindowWatch(live){
+  syncRaceScopedState(live);
+  const _newLap=recordFuelLap(live);
+  observeOwnPitCompletion(live);
+  maybeForecastFuelWindow(live,_newLap);
+  maybePostPitFuelUpdate(live);
   const selfFuelGuard=currentStrategyPlaybook()?.evidence?.luna_self_memory_tags?.includes('fuel_window_proactive')===true;
-  if(selfFuelGuard&&!fuelWindowWatch.armed&&!fuelWindowWatch.announced&&!fuelWindowWatch.cancelled){
-    fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),announced:false};
+  if(selfFuelGuard&&!fuelWindowWatch.armed&&!fuelWindowWatch.announced&&!fuelWindowWatch.cancelled&&live&&live.race_instance_id){
+    fuelWindowWatch={armed:true,sessionKey:String(lastSessionNum??''),raceKey:fuelWindowRaceKey(live),pitCompletions:ownPitObserver.completions,armedAt:Date.now(),announced:false,delivery:{state:'idle',attempts:0}};
     diagnosticLog('FUEL_WINDOW_WATCH','armed source=luna_self_memory memory_id='+
       String(currentStrategyPlaybook()?.evidence?.luna_self_memory_id||'-'));
   }
-  if(!fuelWindowWatch.armed||fuelWindowWatch.announced||isSessionEndingLifecycle()) return;
-  if(fuelWindowWatch.expiresAt&&Date.now()>fuelWindowWatch.expiresAt){fuelWindowWatch.armed=false;return;}
-  if(fuelWindowWatch.scopeBinding){
-    const current=strategyProjection.binding('recommendation'),original=fuelWindowWatch.scopeBinding;
-    if(!current){fuelWindowWatch.armed=false;return;}
-    if(current.identity!==original.identity||current.decision_id!==original.decision_id||current.revision!==original.revision){fuelWindowWatch.armed=false;return;}
-  }
-  const currentSession=String(lastSessionNum??'');
-  if(fuelWindowWatch.sessionKey!==currentSession){
-    fuelWindowWatch={armed:false,sessionKey:currentSession,announced:false};
-    diagnosticLog('FUEL_WINDOW_WATCH','expired reason=session_changed');
-    return;
-  }
-  const router=window.PitwallLocalIntentRouter;
-  if(!router||typeof router.fuelWindowStatus!=='function') return;
+  const w=fuelWindowWatch;
+  if(!w.armed||w.announced) return;
+  if(isSessionEndingLifecycle()){releaseFuelWindowWatch('session_ending');return;}
+  if(w.expiresAt&&Date.now()>w.expiresAt){releaseFuelWindowWatch('expired');return;}
+  if(w.raceKey&&w.raceKey!==fuelWindowRaceKey(live)){releaseFuelWindowWatch('race_or_session_changed');return;}
+  if(w.pitCompletions!==undefined&&w.pitCompletions!==ownPitObserver.completions){releaseFuelWindowWatch('pit_completed');return;}
+  const d=w.delivery||(w.delivery={state:'idle',attempts:0});
+  if(d.state==='pending') return;   // 発話待ち（確定は onDelivery）
+  const res=currentFuelWindowResult(live);
+  if(!res||res.state!=='open') return;
+  if(d.attempts>=3){releaseFuelWindowWatch('delivery_failed');return;}
+  if(d.lastAttemptAt&&Date.now()-d.lastAttemptAt<4000) return;
   const lang=isJapaneseEngineer()?'ja':'en';
-  const status=router.fuelWindowStatus(currentCanonicalStrategyLive(live||{}),lang);
-  if(!status||status.state!=='open') return;
-  fuelWindowWatch.announced=true;
-  fuelWindowWatch.armed=false;
-  const msg=lang==='ja'?'燃料ウィンドウの比較候補が成立。ピット実行は合意中のプランで確認する。':'A fuel-window comparison candidate is available. Confirm execution against the agreed plan.';
-  const key=['fuel_window_watch',currentSession,Number(live?.lap)||0].join('|');
-  addMsg('ai',msg);pushMsg({role:'assistant',content:msg});
-  const binding=strategyProjection.binding('recommendation');
-  speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'fuel_window_watch',dedupeKey:key,strategyBinding:binding,precheck:()=>strategyProjection.validBinding(binding)});
-  diagnosticLog('FUEL_WINDOW_WATCH','delivered key='+key+
-    (selfFuelGuard?' source=luna_self_memory':' source=driver_request'));
+  const msg=window.PitwallFuelWindow.sentence(res,'notify',lang);
+  if(!msg) return;
+  const key=['fuel_window_watch',w.raceKey||w.sessionKey,ownPitObserver.completions].join('|');
+  d.state='pending';d.attempts+=1;d.lastAttemptAt=Date.now();
+  if(d.attempts===1){addMsg('ai',msg);pushMsg({role:'assistant',content:msg});}
+  diagnosticLog('FUEL_WINDOW_WATCH','decided attempt='+d.attempts+' add_l='+res.add_l+' required_l='+res.required_l+' margin_l='+res.margin_l+' key='+key);
+  speak(msg,{prio:SPEAK_PRIO.P2_CRITICAL,kind:'fuel_window_watch',dedupeKey:key+'|'+d.attempts,precheck:fuelWindowWatchStillValid,
+    onDelivery:(outcome)=>{
+      const cur=fuelWindowWatch.delivery;if(!cur||fuelWindowWatch!==w) return;
+      if(outcome==='spoken'){cur.state='spoken';w.announced=true;w.armed=false;diagnosticLog('FUEL_WINDOW_WATCH','delivered(spoken) key='+key+(selfFuelGuard?' source=luna_self_memory':' source=driver_request'));}
+      else{cur.state='idle';diagnosticLog('FUEL_WINDOW_WATCH','not_delivered outcome='+outcome+' attempt='+cur.attempts+' (still armed, will retry while valid)');}
+    }});
 }
 function maybeAnnounceEnduranceFuelForecast(live){
   if(!/race/i.test(String(lastSessionType||live?.session_type||''))||isSessionEndingLifecycle()) return;

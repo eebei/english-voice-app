@@ -24,6 +24,7 @@
     slowerPaceThresholdS: 0.3,
     fasterClassPaceS: 3.0,
     fuelPaceSPerL: { value: 0.03, low: 0.0, high: 0.045 }, // 燃料重量による1周の遅れ(秒/L/Lap)。未校正の暫定
+    inferredStop: { minUnseenS: 15, maxUnseenS: 300, minDeficitLap: 0.2, maxDeficitLap: 0.6 },    // 見えなかった時間(15〜300秒)と、再び見えた時の推測位置との差(0.2〜0.6周＝ピットで説明できる範囲)のときだけ停止と推定
     rivalFill: { low: 0.7, high: 1.3 },                    // 相手の給油量＝自車案の量×この比（暫定）
     rivalsBehind: 2,
     tieEpsS: 0.1,
@@ -68,13 +69,26 @@
         if (!s) { s = { i: c.i, no: c.no, cls: c.c, role: c.r, seen: null, paces: [], lastLl: null, stops: 0, pit: false, pitInT: null, on_pit_now: false }; cars.set(c.i, s); }
         s.no = c.no; s.cls = c.c; s.role = c.r;
         const ok = c.st === 'ok' && Number.isFinite(c.l) && Number.isFinite(c.d);
+        // ピットレーン上は車が「見えない(out)」状態になる車がある（Build 308実走：#12は約33秒見えず、再び見えた時は推測位置より約0.3周後ろ）。
+        //   ピットに入る瞬間が観測できていない車は、見えなかった間の遅れ（推測位置との差）が大きければ「停止した」と推定する（basis=inferred。観測とは区別する）。
+        if (ok && s.seen && !s.pit && c.pit !== 1 && !(s.lastObservedStopT >= s.seen.t)) {   // 見えなかった間に観測済みの停止があれば二重に数えない
+          const gapS = t - s.seen.t, pace = s.paces.length ? median(s.paces.slice(-6)) : (Number.isFinite(c.ll) && c.ll > 0 ? c.ll : null);
+          if (gapS >= DEFAULTS.inferredStop.minUnseenS && pace) {
+            const deficit = s.seen.progress + gapS / pace - (c.l + c.d);
+            const D = DEFAULTS.inferredStop;
+            // ピットの損失は約25〜60秒。それを大きく超える遅れや、数百秒の欠測は「ピットで説明できない」（切断・離脱・修復など）＝停止と断定せず unresolved に数える（Build 308 実ログ：#14は928秒見えず3.66周遅れ）。
+            if (deficit >= D.minDeficitLap && deficit <= D.maxDeficitLap && gapS <= D.maxUnseenS) { s.stops += 1; s.stopsInferred = (s.stopsInferred || 0) + 1; }
+            else if (deficit >= D.minDeficitLap) s.stopsUnresolved = (s.stopsUnresolved || 0) + 1;
+          }
+        }
         if (ok) s.seen = { t, progress: c.l + c.d, lap: c.l, d: c.d, pit: c.pit === 1 };
+        if (ok && (Number.isFinite(c.p) || Number.isFinite(c.cp))) s.lastPos = { p: Number.isFinite(c.p) ? c.p : null, cp: Number.isFinite(c.cp) ? c.cp : null, t };   // 最後に見えた時点の順位（見えなくなった車の説明に使う。現在の順位ではない）
         s.on_pit_now = ok && c.pit === 1;
         if (Number.isFinite(c.ll) && c.ll > 0 && c.ll !== s.lastLl) { s.lastLl = c.ll; s.paces.push(c.ll); if (s.paces.length > 8) s.paces.shift(); }
         if (ok && c.pit === 0 || ok && c.pit === 1) {
           const on = c.pit === 1;
           if (on && !s.pit) s.pitInT = t;
-          if (!on && s.pit && s.pitInT !== null) { s.stops += 1; s.pitInT = null; }   // ピットレーンに入って出た回数（給油の有無は1Hzでは区別できない）
+          if (!on && s.pit && s.pitInT !== null) { s.stops += 1; s.pitInT = null; s.lastObservedStopT = t; }   // ピットレーンに入って出た回数（給油の有無は1Hzでは区別できない）
           s.pit = on;
         }
       }
@@ -102,7 +116,7 @@
       else if (s.seen && t - s.seen.t <= dr.maxAgeS && t >= s.seen.t) { state = 'dead_reckoned'; ageS = t - s.seen.t; }
       const p = tracker.paceOf(s);
       cars.push({ i, no: s.no, cls: s.cls, role: s.role, state, progress, ageS, sigmaS, pace: p ? { value: p.value, source: 'observed', n: p.n } : null,
-        stops_done: s.stops, on_pit_now: state === 'observed' && s.on_pit_now, seen: s.seen, last_overall_pos: e ? e.p : null, last_class_pos: e ? e.cp : null });
+        stops_done: s.stops, stops_inferred: s.stopsInferred || 0, on_pit_now: state === 'observed' && s.on_pit_now, seen: s.seen, last_overall_pos: (e && e.p !== null && e.p !== undefined) ? e.p : (s.lastPos ? s.lastPos.p : null), last_class_pos: (e && e.cp !== null && e.cp !== undefined) ? e.cp : (s.lastPos ? s.lastPos.cp : null) });
     }
     const own = cars.find(c => c.i === ownIdx) || null;
     const classPace = {};
@@ -132,8 +146,24 @@
       rivalStops: o.rival_stops && typeof o.rival_stops === 'object' ? o.rival_stops : {},   // {carIdx: {lap, source}} Driver申告など
       trafficExtraS: q(o.traffic_extra_s, 'driver_declared'), trafficExtraOptionIds: Array.isArray(o.traffic_extra_option_ids) ? o.traffic_extra_option_ids : null,
       declinedOptionIds: Array.isArray(o.declined_option_ids) ? o.declined_option_ids : [],
+      ownRefuelsDone: Number.isInteger(o.own_refuels_done) && o.own_refuels_done >= 0 ? o.own_refuels_done : null,   // 給油を確認したピットの回数（renderer）。進入・ドライブスルー・ノイズは数えない
+      raceRules: o.race_rules && typeof o.race_rules === 'object' ? { applies: o.race_rules.applies === true, refuels_required: Number.isInteger(o.race_rules.refuels_required) ? o.race_rules.refuels_required : null, source: o.race_rules.source || null, reason: o.race_rules.reason || null } : null,
       driver_assumptions: Array.isArray(i.driver_assumptions) ? i.driver_assumptions : [],
     };
+  }
+
+  // 評価できた車と、判断に影響する欠測車（Owner/監督 2026-11-18）。連続した順位範囲（「◯位まで把握」）は作らない：途中の欠測を含む。
+  //   順位は総合(overall)とクラス(class)を区別して持つ（標本に無ければnull）。
+  function coverageDetail(view, own, rivals, sameCls, p0) {
+    const pos = c => ({ overall: c.last_overall_pos === undefined ? null : c.last_overall_pos, class: c.last_class_pos === undefined ? null : c.last_class_pos });
+    const age = c => (c.ageS === null || c.ageS === undefined ? null : Math.round(c.ageS));
+    // 3状態で一貫して表す（監査Codex 11/19：同じ車が「評価できている」と「評価外」の両方に載らない）：
+    //   observed＝観測して評価／dead_reckoned＝直近の位置からの推測位置で条件付きに評価／unassessed＝位置不明または評価対象外（見えていない）
+    const evaluated = rivals.map(c => Object.assign({ no: c.no, basis: c.state === 'observed' ? 'observed' : 'dead_reckoned', last_seen_age_s: c.state === 'observed' ? 0 : age(c) }, pos(c)));
+    const evaluatedIds = new Set(rivals.map(c => c.i));
+    const unassessedAll = sameCls.filter(c => c.state !== 'observed' && !evaluatedIds.has(c.i));
+    const unassessed = unassessedAll.map(c => Object.assign({ no: c.no, state: c.state, last_seen_age_s: age(c), rank_as_of_last_seen: true }, pos(c))).sort((a, b) => (a.last_seen_age_s === null ? 1e9 : a.last_seen_age_s) - (b.last_seen_age_s === null ? 1e9 : b.last_seen_age_s)).slice(0, 8);
+    return { own_position: pos(own), evaluated_rivals: evaluated, unassessed_same_class: unassessed, unassessed_count: unassessedAll.length, note: '評価外の車は見えていない。順位は最後に見えた時点のもので、現在の順位ではない。順位の連続範囲は主張しない' };
   }
 
   function compute(rawInput) {
@@ -171,6 +201,10 @@
     const own = view.own, p0 = own.progress, lap = Math.floor(p0);
     const fpl = n.own.fuel_per_lap_l, fuelNow = n.own.fuel_l.value, tank = n.own.tank_l.value, reserve = n.own.reserve_l.value, N = n.total_laps;
     const rate = n.pit.fuel_rate_s_per_l, fixed = n.pit.fixed_stall_s, transit = n.pit.transit_extra_s, k = n.fuelPace;
+    // 自車が既にピットで給油を済ませ（ピットレーン通過を観測）、残りの燃料でチェッカーまで足りるなら、もう「入る周」の比較は無い。
+    //   給油後も旧い「今／次周／限界」の停止提案を出し続けない（Build 308実走の「給油後も提案が繰り返された」の再現条件）。足りない時だけ再停止の比較を続ける。
+    const ownStops = n.ownRefuelsDone !== null ? n.ownRefuelsDone : ((tracker.cars.get(own.i) || {}).stops || 0);   // 給油回数はrendererの確認済み回数を優先（ピット進入・通過で消費しない）
+    if (ownStops >= 1 && fuelNow - fpl.value * (N.high - p0 + 1) >= reserve) return seal(Object.assign(base, { comparable: false, blocking: ['own_stop_done'], options: [], rivals: [], decision: null, inputs: describeInputs(n, L), unmeasured: unmeasured(n, cov), own_stops_done: ownStops }));
     const loss = (add, side) => transit[side] + fixed[side] + rate[side] * add;
 
     // 1) 自車の候補：今(この周の終わり)／次周／燃料の限界。追加の指定周も評価する（「じゃあ○周目なら？」）
@@ -229,7 +263,10 @@
       const late = Math.min(Math.floor(N.low) - 1, Math.max(maxOwnP, rivalLap) + 1);
       const candidates = r.progress === null ? []
         : r.on_pit_now ? [{ id: 'in_pit_now', stop_lap: rivalLap, basis: 'observed', in_pit: true }]
-        : r.stops_done >= 1 ? [{ id: 'already_stopped', stop_lap: null, basis: 'observed' }]
+        : r.stops_done >= 1 ? (r.raw && r.raw.stops_inferred > 0 && r.raw.stops_inferred >= r.stops_done
+          // 推定だけの停止は確定扱いにしない（監督 2026-11-18）：給油済みの場合と未給油の場合の両方を計算し、結論が変わる条件を出す
+          ? [{ id: 'already_stopped', stop_lap: null, basis: 'inferred' }, { id: 'stays_out', stop_lap: late, basis: 'assumed_if_not_stopped' }, { id: 'pits_now', stop_lap: lap, basis: 'assumed_if_not_stopped' }, { id: 'pits_next', stop_lap: lap + 1, basis: 'assumed_if_not_stopped' }]
+          : [{ id: 'already_stopped', stop_lap: null, basis: 'observed' }])
         : ov && Number.isInteger(ov.lap) ? [{ id: 'stops_lap_' + ov.lap, stop_lap: ov.lap, basis: ov.source === 'observed' ? 'observed' : 'driver_declared' }]
         : [{ id: 'stays_out', stop_lap: late, basis: 'assumed', note: '相手は燃料限界付近まで延ばすと仮定' },
           { id: 'pits_now', stop_lap: lap, basis: 'assumed' }, { id: 'pits_next', stop_lap: lap + 1, basis: 'assumed' }];
@@ -305,7 +342,7 @@
     }
 
     // 4) 候補×相手の想定ごとの比較（給油後の共通ラインでの到達時刻差）。相手の復帰交通も同じ方法で入れる（自車だけを不利にしない）
-    const rivalRows = rivalInfo.map(r => ({ id: r.id, car_idx: r.car_idx, no: r.no, state: r.state, gap_now_s: r.gap_now_s, pace_s: r3(r.pace.value), pace_basis: r.pace.source, stops_done: r.stops_done, on_pit_now: r.on_pit_now, age_s: r.age_s === null ? null : r1(r.age_s),
+    const rivalRows = rivalInfo.map(r => ({ id: r.id, car_idx: r.car_idx, no: r.no, state: r.state, gap_now_s: r.gap_now_s, pace_s: r3(r.pace.value), pace_basis: r.pace.source, stops_done: r.stops_done, stops_inferred: (r.raw && r.raw.stops_inferred) || 0, on_pit_now: r.on_pit_now, age_s: r.age_s === null ? null : r1(r.age_s),
       scenarios: scenarios.get(r.id).filter(sc => !sc.excluded).map(({ in_pit, ...sc }) => sc),
       excluded_scenarios: scenarios.get(r.id).filter(sc => sc.excluded) }));
     const perOption = new Map();
@@ -407,6 +444,8 @@
       comparable: !!best, blocking: liveOpts.length ? null : ['no_feasible_option'], coverage: cov,
       own: { car_idx: own.i, lap, progress: r3(p0), lap_time_s: r3(L.value), fuel_l: r3(fuelNow), no_stop_feasible: fuelFinishNoStop },
       normal_plan_source: n.normalSource,
+      race_rules: n.raceRules, own_refuels_done: n.ownRefuelsDone,
+      coverage_detail: coverageDetail(view, own, rivals, sameCls, p0),
       finish_lap_range: { low: N.low, high: N.high },
       rivals: rivalRows, rear_coverage: { tracked_behind: rivals.length, same_class_unobserved: unknownSameClass, note: unknownSameClass ? '同クラスに位置が見えていない車がいる。後続はここに出した車だけとは限らない' : null },
       options, decision, sensitivity, focus, action: decisionAction({ options, decision, focus, lap, fuelFinishNoStop, canReachNext: lap + 1 < Math.floor(N.low) && entryFuel(lap + 1, fpl.high) >= reserve, cov, planDeadline: n.normalSource==='plan_a' ? n.normalPitLap : null }), inputs: describeInputs(n, L), assumptions: assumptionList(n, nextAdd, cov), unmeasured: unmeasured(n, cov),
@@ -549,6 +588,8 @@
       options: u.options && u.options.map(o => o.excluded ? { id: o.id, pit_lap: o.pit_lap, excluded: o.excluded } : o.same_lap_as ? { id: o.id, pit_lap: o.pit_lap, same_as: o.same_lap_as } : { id: o.id, pit_lap: o.pit_lap, add_l: o.add_l, pit_loss_s: rd(o.pit_loss_s && o.pit_loss_s.value), fuel_margin_laps_after_l: rd(o.fuel_margin_laps_after_l),
         traffic_loss_s: o.rejoin && [rd(o.rejoin.traffic_loss_s.low), rd(o.rejoin.traffic_loss_s.value), rd(o.rejoin.traffic_loss_s.high)], clear: o.rejoin && o.rejoin.clear, blend_gap: o.rejoin && o.rejoin.blend_gap, ahead_at_rejoin: o.rejoin && o.rejoin.ahead.length, behind_at_rejoin: o.rejoin && o.rejoin.behind.length,
         vs: o.vs_rivals.map(x => [x.rival_no, x.scenario, rd(x.gap_s), x.leads_at_common_point, x.common_point_lap, x.required_pace && rd(x.required_pace.faster_per_lap_s)]) }),
+      rules: u.race_rules && { refuels_required: u.race_rules.refuels_required, applies: u.race_rules.applies, source: u.race_rules.source, reason: u.race_rules.reason, refuels_done: u.own_refuels_done },
+      unassessed: u.coverage_detail && { count: u.coverage_detail.unassessed_count, cars: u.coverage_detail.unassessed_same_class.map(c => c.no) },
       action: u.action,
       vs_fields: 'rival_no,scenario,gap_s(neg=own ahead),leads,common_point_lap,faster_per_lap_s',
       rec: dec && { option: dec.recommendation.option_id, pit_lap: dec.recommendation.pit_lap, add_l: dec.recommendation.add_l, decide_by_lap: dec.recommendation.decide_by_lap, worst_gap_s: rd(dec.recommendation.worst_case_gap_s), leads_in_all_assumptions: dec.recommendation.leads_in_all_assumptions, stop_required_for_fuel: dec.recommendation.stop_required_for_fuel,
@@ -559,28 +600,49 @@
 
   // ── 走行中のLUNA提案（能動）：Driverがまだ選べる間に、変化があった時だけ ────────────────
   //   決定論の文面。数値は全てパケットの値。LLMを呼ばない（費用0）。提案は実行指示ではない（採用は既存のPlan/ACK）。
+  // 走行中の自発提案（決定論・LLMを呼ばない）。Owner 2026-11-17（Build 308実走：同種の126文字前後の提案が自車ピット後を含め毎周9回）：
+  //   ・一文で「結論＋必要な理由」。内部注記（見えていない車・評価できていない旨）・括弧説明・「最もきつくない」は話さない（診断ログへ）。
+  //   ・判断が目前(決定期限まで1周以内)の時だけ。遠い周の案や、条件が変わるだけの案は話さない。
+  //   ・前回話した結論と実質差が無ければ再コールしない（結論＝入る案と周）。相手の仮定が変わっただけでは話さない。
   function proposal(u, prevKey) {
     if (!u || u.comparable !== true || !u.decision) return null;
     const rec = u.decision.recommendation, lap = u.observed_at.lap;
     if (!(rec.decide_by_lap >= lap)) return null;
     if (rec.stop_required_for_fuel === false) return { key: 'no_fuel_need|' + u.race.race_instance_id, text: null, reason: 'no_fuel_need' };   // 燃料上は停止不要。義務ピットの規則が未確認なので、停止を促す提案はしない
-    const th = u.decision.rival_first_threats.filter(t => t.option_id === 'next' || t.option_id === 'limit').sort((a, b) => b.behind_by_s - a.behind_by_s)[0] || null;
     const imminent = rec.decide_by_lap - lap <= 1;
-    const flip = u.decision.flips_when.find(f => f.scenario) || null;   // 相手の想定で結論が変わる条件（未校正コストの感度は提案には出さない）
-    const key = [u.race.race_instance_id, u.race.session_num, rec.option_id, rec.pit_lap, th ? th.rival_no + ':' + th.scenario : ''].join('|');
-    // 話すのは「後続が先に入ると待つ側が負ける」「いま入る案が最善」「判断が目前」のどれかで、かつ前回と変わった時だけ（毎周の独り言にしない）
-    if (!th && rec.option_id !== 'now' && !imminent) return { key, text: null, reason: 'not_actionable' };
+    const key = [u.race.race_instance_id, u.race.session_num, rec.option_id, rec.pit_lap].join('|');   // 結論＝入る案と周だけ（相手の仮定の変化では変えない）
+    if (!imminent) return { key: prevKey || null, text: null, reason: 'not_imminent' };
     if (key === prevKey) return { key, text: null, reason: 'unchanged' };
-    const optName = id => id === 'now' ? '今周' : id === 'next' ? '次周' : id === 'limit' ? '燃料の限界' : id;
-    const parts = [];
-    parts.push('ピット判断。いまの比較では' + optName(rec.option_id) + '(' + rec.pit_lap + '周)に入る案が最もきつくない。');
-    if (th) parts.push('ただし後ろの' + th.rival_no + '番が' + scenarioText(th.scenario) + 'と、' + optName(th.option_id) + '案だと給油後に' + th.rival_no + '番に約' + (Math.round(th.behind_by_s * 10) / 10) + '秒先に出られる（自車が後ろになる）。');
-    else if (flip) parts.push('条件次第：' + flip.condition + 'なら' + optName(flip.best_option_id) + '(' + flip.best_pit_lap + '周)が有利。');
-    if (u.decision.rival_threat_assessed === false) parts.push('後続の位置が見えていないので、後続のアンダーカットは評価できていない。');
-    if (!u.coverage.clear_claim_allowed) parts.push('復帰先は見えていない車がいるので空いているとは言えない。');
-    parts.push('判断は' + rec.decide_by_lap + '周まで。');
-    return { key, text: parts.join(''), reason: 'changed' };
+    const worst = arr => arr.sort((a, b) => b.behind_by_s - a.behind_by_s)[0] || null;
+    const th = rec.option_id === 'now' ? worst(u.decision.rival_first_threats.filter(t => t.option_id !== 'now')) : worst(u.decision.rival_first_threats.filter(t => t.option_id === rec.option_id));   // 理由＝今入る時は「待つ案が相手の先入れで負ける」、待つ案の時は「その案が相手の先入れで負ける」
+    const when = rec.option_id === 'now' ? '今周' : rec.option_id === 'next' ? '次の周' : rec.pit_lap + '周目';
+    const parts = [when + 'に入るのがいい。'];
+    const secs = th ? (Math.round(th.behind_by_s * 10) / 10) : null;
+    const rv = th ? (u.rivals || []).find(r => r.id === th.rival_id) : null, inferredRival = !!(rv && rv.stops_inferred > 0);   // 停止が推定だけの相手は「未給油なら」と条件を付ける（確定しない）
+    // 相手の給油状態で結論が変わる時は、その条件を言う：停止が推定だけの相手は「給油済みなら／未給油なら」と確定しない。観測した停止は「給油済みで」。
+    const cond = !th ? null : (th.scenario === 'already_stopped' ? (inferredRival ? 'が給油済みなら' : 'は給油済みで') : (inferredRival ? 'が未給油なら' : null));
+    if (th) parts.push(cond !== null
+      ? (rec.option_id === 'now' ? th.rival_no + '番' + cond + '、待つと約' + secs + '秒逆転される。' : th.rival_no + '番' + cond + '約' + secs + '秒逆転される。')
+      : (rec.option_id === 'now' ? '待つと' + th.rival_no + '番が先に入って約' + secs + '秒逆転される。' : th.rival_no + '番が先に入ると約' + secs + '秒逆転される。'));
+    // 後続の脅威を評価できていない時は、短く制約と再評価の行動を伝える（監督 2026-11-18）。詳細は聞かれた時に答える。
+    if (u.decision.rival_threat_assessed === false) parts.push('後ろの車は見えていない。見えたら言い直す。');
+    return { key, text: parts.join(''), reason: 'changed',
+      refs: th ? [{ rival_no: th.rival_no, car_idx: ((u.rivals || []).find(r => r.id === th.rival_id) || {}).car_idx, stops_done: ((u.rivals || []).find(r => r.id === th.rival_id) || {}).stops_done }] : [],
+      diag: { coverage_clear: !!(u.coverage && u.coverage.clear_claim_allowed), rival_threat_assessed: u.decision.rival_threat_assessed, inferred_rival: inferredRival, decide_by_lap: rec.decide_by_lap, option_id: rec.option_id, pit_lap: rec.pit_lap } };
   }
 
-  return { VERSION, SOURCES, DEFAULTS, createTracker, buildView, compute, parseFocus, promptSlim, proposal, consultationReply, scenarioText, hashString, normalCdf };
+  // 「誰を評価していて、誰が見えていないか」への決定論の返答。順位は総合/クラスを区別し、連続範囲（「◯位まで把握」）は言わない。
+  function coverageReply(u, lang) {
+    const jp = lang !== 'en';
+    if (!u || !u.coverage_detail) return jp ? '評価の対象はまだ確認できていない。' : 'The evaluated cars are not available yet.';
+    const d = u.coverage_detail, pn = c => (c.class !== null && c.class !== undefined ? 'クラス' + c.class + '位' : (c.overall !== null && c.overall !== undefined ? '総合' + c.overall + '位' : '順位不明'));
+    const ev = d.evaluated_rivals.length ? d.evaluated_rivals.map(c => '#' + c.no + '（' + pn(c) + (c.basis === 'dead_reckoned' ? '、直近の位置から推測' : '') + '）').join('、') : null;
+    // 評価外：最後に見えた時点の順位と何秒前かを添える（現在の順位として言わない）
+    const un = d.unassessed_same_class.length ? d.unassessed_same_class.slice(0, 5).map(c => '#' + c.no + '（見えていない' + (c.last_seen_age_s !== null && (c.class !== null || c.overall !== null) ? '、' + c.last_seen_age_s + '秒前は' + pn(c) : '') + '）').join('、') : null;
+    const own = d.own_position && (d.own_position.class !== null || d.own_position.overall !== null) ? '自車は' + pn(d.own_position) + '。' : '';
+    if (!jp) return (ev ? 'Evaluated: ' + ev + '. ' : 'No rival is evaluated. ') + (un ? 'Not evaluated (not visible): ' + un + '.' : '');
+    return own + (ev ? '評価できているのは' + ev + '。' : '評価できている相手はいない。') + (un ? '評価外は' + un + (d.unassessed_count > 5 ? 'ほか' + (d.unassessed_count - 5) + '台' : '') + '。' : '') + '順位の連続範囲は言えない。';
+  }
+
+  return { VERSION, SOURCES, DEFAULTS, createTracker, buildView, compute, parseFocus, promptSlim, proposal, coverageReply, consultationReply, scenarioText, hashString, normalCdf };
 }));

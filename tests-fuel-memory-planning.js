@@ -54,6 +54,30 @@ next.recommendations.fuel_strategy={value:{avg_fuel_per_lap:3.5,clean_laps_sampl
 check(ctx.canonicalLifecycleCache.receive(next),'next canonical frame accepted');
 const afterPit=ask();check(afterPit.basis==='current_clean_laps'&&afterPit.fuelEstimate.required_l===12.5&&afterPit.fuelEstimate.additional_l===0,'live measurements replace historical and post-pit old shortage');
 check(afterPit.reply.includes('この推定では完走'),'after-pit answer');
+// Owner 2026-11-17（Build 308実走：給油後に「追加1.3/3.5/1.9Lを推奨」と言い続けた）：完走に必要な不足と、予備(希望余裕)の不足は別項目。
+//   予備2Lに足りないだけ(完走はできる)なら「推奨」とも「追加が要る」とも言わない。完走できない時だけ追加を推奨する。
+{
+ const bump=x=>{x.snapshot_sequence++;x.snapshot_id=x.bridge_process_epoch+':'+x.snapshot_sequence;x.source_frame.sequence++;x.current_facts.source_frame.sequence++;x.race_facts.source_frame.sequence++;x.race_facts.black_flag.source_frame_sequence++;x.finish.source_frame_sequence=x.source_frame.sequence;x.recommendations.fuel_strategy.calculation_source.source_frame_sequence=x.source_frame.sequence;};
+ const under=JSON.parse(JSON.stringify(next));bump(under);under.current_facts.fuel_level_l=11;   // 必要(予備なし)10.5L→完走は足りるが予備2Lには1.5L足りない
+ check(ctx.canonicalLifecycleCache.receive(under),'frame with reserve-only shortfall accepted');
+ const r1=ask();check(r1.reply.includes('この推定では完走できる')&&r1.reply.includes('ぎりぎり、余裕は約0.5L')&&r1.reply.includes('予備2Lには約1.5L足りない')&&!r1.reply.includes('入らなくていい')&&!r1.reply.includes('推奨')&&!r1.reply.includes('追加が要る')&&!r1.reply.includes('補給案'),'spare under one lap of fuel is tight, never no-need-to-stop: '+r1.reply);
+ // 余裕が1周の消費量以上(でも予備未満)なら「それだけでは入らなくていい」と言ってよい（3.5L/周の車で余裕0.5Lは『ぎりぎり』、1.2L/周の車で1.5Lは『入らなくていい』）。
+ const light=JSON.parse(JSON.stringify(under));bump(light);light.current_facts.fuel_level_l=5.1;
+ light.recommendations.fuel_strategy={value:{avg_fuel_per_lap:1.2,clean_laps_sampled:3,strict_clean_laps_sampled:3,strict_clean_avg_fuel_per_lap:1.2,measured_laps_sampled:3,fuel_sample_basis:'pit_excluded_measured'},calculation_source:{source_frame_sequence:light.source_frame.sequence,session_time_s:light.source_frame.session_time_s}};
+ check(ctx.canonicalLifecycleCache.receive(light),'light-burn frame accepted');
+ const r3=ask();check(r3.reply.includes('余裕は約1.5L')&&r3.reply.includes('予備2Lには約0.5L足りないが、それだけでは入らなくていい')&&!r3.reply.includes('ぎりぎり'),'spare of one lap or more under the reserve may say no need to stop: '+r3.reply);
+ // 監督 2026-11-18：希望余裕は周数（既定1周分・0.5周分へ変更可）。Lへは燃費で換算し、既存の予備2Lとは二重に数えない。0.5周分でも、その基準を満たすだけで無条件に「入らなくていい」とは言わない。
+ {
+  const withPolicy=(laps,mk)=>mk({fuel_margin_policy:{laps,source:'default'}});
+  const lightP=ask({fuel_margin_policy:{laps:1,source:'default'}});   // 現在のcanonicalは light(1.2L/周・残量5.1L・完走必要3.6L)
+  check(lightP.reply.includes('余裕1周分(約1.2L)込み必要約4.8L')&&lightP.reply.includes('この推定では完走できる')&&!lightP.reply.includes('予備2L')&&!lightP.reply.includes('足りない'),'policy margin replaces the fixed 2 L reserve (no double counting): '+lightP.reply);
+  const half=ask({fuel_margin_policy:{laps:0.5,source:'driver_setting'}});
+  check(half.reply.includes('余裕半周分(約0.6L)込み必要約4.2L')&&!half.reply.includes('予備2L'),'half-lap margin is converted with the burn rate: '+half.reply);
+ }
+ const real=JSON.parse(JSON.stringify(light));bump(real);real.current_facts.fuel_level_l=9;real.recommendations.fuel_strategy={value:{avg_fuel_per_lap:3.5,clean_laps_sampled:3,strict_clean_laps_sampled:3,strict_clean_avg_fuel_per_lap:3.5,measured_laps_sampled:3,fuel_sample_basis:'pit_excluded_measured'},calculation_source:{source_frame_sequence:real.source_frame.sequence,session_time_s:real.source_frame.session_time_s}};   // 完走に必要10.5Lに1.5L足りない
+ check(ctx.canonicalLifecycleCache.receive(real),'frame with real shortfall accepted');
+ const r2=ask();check(r2.reply.includes('ゴールまで約1.5L足りない')&&r2.reply.includes('追加3.5Lを推奨')&&!r2.reply.includes('それだけでは入らなくていい'),'real shortfall is still reported and a stop recommended: '+r2.reply);
+}
 // Identity and correction counterexamples.
 for(const mutation of [{custId:999},{car:'Other car'},{track:'Spa'},{disputed:true},{deleted:true},{recordedAt:new Date(Date.now()+86400000).toISOString()}]){
  const rows=history.map(r=>({...r,...mutation}));check(!Memory.fuelPlanningEvidence(rows,identity).available,'reject '+JSON.stringify(mutation));

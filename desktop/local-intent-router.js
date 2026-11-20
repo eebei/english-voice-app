@@ -804,14 +804,35 @@
           const historical=['memory_analysis','device_reference'].includes(e.basis);
           let reply=e.fuel_l!==null?(jp?`現在燃料${e.fuel_l.toFixed(1)}L。`:`Current fuel ${e.fuel_l.toFixed(1)} L. `):a.reply+' ';
           if(e.required_l!==null){
-            reply+=jp?`予備${e.reserve_l}L込み必要約${e.required_l.toFixed(1)}L。`:`Finish requirement with ${e.reserve_l} L reserve: ${e.required_l.toFixed(1)} L. `;
-            if(e.additional_l!==null)reply+=e.additional_l>0?(jp?`追加${e.additional_l.toFixed(1)}Lを推奨。`:`Recommend ${e.additional_l.toFixed(1)} L additional fuel. `)
-              :(jp?'この推定では完走できる。':'This estimate covers the finish. ');
+            // Owner 2026-11-17（Build 308実走）：「完走に必要な不足」と「希望余裕の不足」は別項目。予備込みの必要量との差を「追加を推奨」と言うと、給油しなくても足りる時に再ピットを促してしまった（追加1.3/3.5/1.9L）。
+            // 監督 2026-11-18：希望余裕は周数（既定1周分・Driverが0.5周分へ変更可）。Lへは燃費で換算し、既存の予備2Lとは二重に数えない（policyがあれば2Lは使わない）。
+            const policyLaps=finite(live.fuel_margin_policy&&live.fuel_margin_policy.laps);
+            const usePolicy=policyLaps!==null&&Number.isFinite(rate)&&rate>0;
+            const reserve=usePolicy?Math.round(policyLaps*rate*100)/100:(Number.isFinite(e.reserve_l)?e.reserve_l:0);
+            const finishNeed=e.required_l-(Number.isFinite(e.reserve_l)?e.reserve_l:0);   // 予備を除いた「ゴールまでの必要量」
+            const lapsWord=policyLaps===0.5?'半周分':(policyLaps===1?'1周分':`${policyLaps}周分`);
+            const marginName=usePolicy?`余裕${lapsWord}(約${reserve.toFixed(1)}L)`:`予備${reserve}L`;
+            const requiredWith=finishNeed+reserve;
+            const additional=Math.max(0,requiredWith-(e.fuel_l===null?0:e.fuel_l));
+            const finishShort=e.fuel_l!==null?Math.max(0,finishNeed-e.fuel_l):null;
+            if(e.fuel_l!==null&&finishShort>0.05){
+              reply+=jp?`ゴールまで約${finishShort.toFixed(1)}L足りない。${marginName}込みで追加${additional.toFixed(1)}Lを推奨。`:`About ${finishShort.toFixed(1)} L short of the finish. Recommend ${additional.toFixed(1)} L additional including the margin. `;
+              if(e.laps_with_reserve!==null){
+                const lap=integer(live.lap),target=lap!==null?lap+Math.max(0,e.laps_with_reserve-1):null;
+                reply+=jp?(target!==null?`燃料上は${target}周目までに入る必要がある。`:`補給は約${e.laps_with_reserve}周以内。`):`Fuel-only: stop within about ${e.laps_with_reserve} laps. `;
+              }
+            }else if(e.fuel_l!==null){
+              const spare=e.fuel_l-finishNeed,short=Math.max(0,reserve-spare);
+              reply+=jp?`${marginName}込み必要約${requiredWith.toFixed(1)}L。この推定では完走できる。`:`Finish requirement with the margin: ${requiredWith.toFixed(1)} L. This estimate covers the finish. `;
+              // 余裕が1周の消費量未満＝見積り誤差やチェッカー周の増加(時間制は+1周)で食われうる。「入らなくていい」と断定せず「ぎりぎり」と言う（検査Claude R-FW-3）。
+              //   0.5周分に設定した場合も、その基準を満たすだけで無条件に「入らなくていい」とは言わない。
+              const lapBurn=Number.isFinite(rate)&&rate>0?rate:null;
+              if(short>0.05){
+                if(lapBurn!==null&&spare<lapBurn)reply+=jp?`ぎりぎり、余裕は約${spare.toFixed(1)}L。${marginName}には約${short.toFixed(1)}L足りない。`:`Tight, spare is about ${spare.toFixed(1)} L, ${short.toFixed(1)} L under the margin. `;
+                else reply+=jp?`余裕は約${spare.toFixed(1)}L。${marginName}には約${short.toFixed(1)}L足りないが、それだけでは入らなくていい。`:`Spare is about ${spare.toFixed(1)} L, ${short.toFixed(1)} L under the margin, which alone is no reason to stop. `;
+              }
+            }else reply+=jp?`${marginName}込み必要約${requiredWith.toFixed(1)}L。`:`Finish requirement with the margin: ${requiredWith.toFixed(1)} L. `;
           }else reply+=jp?'完走距離は未確定。':'Finish distance is unconfirmed. ';
-          if(e.laps_with_reserve!==null&&e.additional_l>0){
-            const lap=integer(live.lap),target=lap!==null?lap+Math.max(0,e.laps_with_reserve-1):null;
-            reply+=jp?(target!==null?`燃料上は${target}周目までの補給案。`:`補給は約${e.laps_with_reserve}周以内の案。`):`Fuel-only proposal: stop within approximately ${e.laps_with_reserve} laps. `;
-          }
           if(e.basis==='device_reference')reply+=jp?'端末参考・本人未確認の暫定値。':'Provisional device reference, driver unverified.';
           else if(historical)reply+=jp?'過去燃費からの暫定値。':'Provisional estimate from historical fuel use.';
           else if(e.basis==='current_clean_laps')reply+=jp?`クリーン${e.live_sample_laps}周からの推定。`:`Estimate from ${e.live_sample_laps} clean laps.`;
@@ -1167,6 +1188,17 @@
       const crossings = integer(live.finish_crossings_authority);
       if (crossings !== null && crossings >= 1 && crossings <= 10) return answer('laps_remaining', isJP(lang) ? `残り${crossings}周。` : `${crossings} lap${crossings === 1 ? '' : 's'} remaining.`);
       const remaining = finite(live.session_time_remaining_s);
+      // Owner 2026-11-17（Build 308実走：「周回数は何周ぐらい？」を3回「まだ確定できない」だけで返した）：
+      //   時間制は、残り時間とラップペースから見込み周回数を先に返す。見込みと確定周は区別する（確定＝Bridgeの権威。見込み＝残り時間÷最近のペース）。
+      const paceNow = finite(live.driver_pace_median_s);
+      if (remaining !== null && remaining > 0 && paceNow !== null && paceNow > 20 && paceNow < 600) {
+        const x = remaining / paceNow, lo = Math.floor(x), hi = Math.floor(x) + 1;   // チェッカーはトップが時間切れ後に最初にラインを越えた時＝残り時間÷ペースの小数部で1周増える
+        const rng = lo >= 1 ? (lo === hi ? `${lo}` : `${lo}〜${hi}`) : `${hi}`;
+        return answer('laps_remaining', isJP(lang)
+          ? `残り${formatDuration(remaining, lang)}。今のペース${Math.floor(Math.round(paceNow) / 60)}分${Math.round(paceNow) % 60}秒だと、あと約${rng}周の見込み。確定ではない。`
+          : `${formatDuration(remaining, lang)} remain. At the current pace of ${formatLapTime(paceNow, lang)}, about ${lo >= 1 ? (lo === hi ? lo : lo + ' to ' + hi) : hi} laps. Not confirmed.`,
+          null, { confidence: 'estimate', basis: 'time_remaining_over_recent_pace' });
+      }
       return answer('laps_remaining', remaining !== null
         ? (isJP(lang) ? `残り${formatDuration(remaining, lang)}。残り周回はまだ確定できない。` : `${formatDuration(remaining, lang)} remain; finish crossings are not confirmed.`)
         : (isJP(lang) ? '残り周回の権威データがない。' : 'Authoritative finish distance is unavailable.'));
