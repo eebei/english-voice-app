@@ -788,9 +788,13 @@ function buildSystem(p) {
     }
     // Build 312（暫定）：ドライバーの質問への回答は、結論と必要な理由・手順を**完結した文**で言い切る。短く切るために文の途中で終わらせない。
     if (mode === 'race') {
+      // 旧Desktop（max_chars=35）でも回答が成立するよう、予算は実際に送られた上限に合わせる（互換：35字上限へ160字向けの指示を出さない）。
+      const _ansLimit = Math.min(Math.max(Number.parseInt(p.max_chars, 10) || 35, 12), 160);
+      const _ansAim = Math.round(_ansLimit * 0.65);
+      const _ansSent = _ansLimit > 60 ? '2〜3文' : '1文';
       modeNote += isJ
-        ? '\n\n【質問への回答の予算・最優先】ドライバーが質問・相談した時の返答は、結論を先に、必要な理由か手順だけを足し、**160文字以内の完結した文**で言い切れ（目安は100文字前後。2〜3文）。文や単語の途中で終えるな。160字に収まらない内容は、結論と最初の一手順だけを言い切り、続きは「それから？」と聞かれた時に話せ（続きは直前に実際に話した内容からつなぐ）。短い相槌・報告への返しは1文でよい。ドライバーが「続きは」「それから」「どうする」と言ったら、直前に自分が話した話題の続きを話せ。話題を変えるな。\nFPS・グラフィック・画面・PCなど**車ではないシステム設定**の相談は、車のセッティングと混同するな。iRacingのグラフィック設定の一般的な改善手順（解像度・影・ミラー・ターゲットFPS・不要な描画の削減など）を、分かる範囲で順に1つずつ短く案内し、分からない点は正直に分からないと言え。内部記録や撤回の話（「記録は撤回する」等）はドライバーへ話すな。'
-        : '\n\n[ANSWER BUDGET — top priority] When the driver asks a question, answer with the conclusion first, add only the needed reason or step, in COMPLETE sentences within 160 characters (aim for about 100). Never stop mid-sentence or mid-word. If it does not fit, give the conclusion and the first step only; continue when asked "and then?". Continue from what you actually just said. Do not narrate internal record-keeping.';
+        ? '\n\n【質問への回答の予算・最優先】ドライバーが質問・相談した時の返答は、結論を先に、必要な理由か手順だけを足し、**' + _ansLimit + '文字以内の完結した文**で言い切れ（目安は' + _ansAim + '文字前後。' + _ansSent + '）。最初の文に結論か手順の要点を入れ、「〜だね。」のような相槌だけの文で枠を使うな。文や単語の途中で終えるな。' + _ansLimit + '字に収まらない内容は、結論と最初の一手順だけを言い切り、続きは「それから？」と聞かれた時に話せ（続きは直前に実際に話した内容からつなぐ）。短い相槌・報告への返しは1文でよい。ドライバーが「続きは」「それから」「どうする」と言ったら、直前に自分が話した話題の続きを話せ。話題を変えるな。\nFPS・グラフィック・画面・PCなど**車ではないシステム設定**の相談は、車のセッティングと混同するな。iRacingのグラフィック設定の一般的な改善手順（解像度・影・ミラー・ターゲットFPS・不要な描画の削減など）を、分かる範囲で順に1つずつ短く案内し、分からない点は正直に分からないと言え。内部記録や撤回の話（「記録は撤回する」等）はドライバーへ話すな。'
+        : '\n\n[ANSWER BUDGET — top priority] When the driver asks a question, answer with the conclusion first, add only the needed reason or step, in COMPLETE sentences within ' + _ansLimit + ' characters (aim for about ' + _ansAim + '). Put the conclusion or key step in the FIRST sentence; never spend the budget on an acknowledgement alone. Never stop mid-sentence or mid-word. If it does not fit, give the conclusion and the first step only; continue when asked "and then?". Continue from what you actually just said. Do not narrate internal record-keeping.';
     }
     if (mode === 'strategy') {
       modeNote += isJ

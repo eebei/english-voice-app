@@ -1207,6 +1207,19 @@ function replyFallbackText(body) {
     : 'I could not finish that one. Please ask again.';
 }
 
+// 相槌・前置きだけが残り、本題の文が上限超過で落ちた時（監査 R-C312-2）：相槌だけで終わると質問に答えたことにならない。
+// 追加のLLM呼出はせず、短い明示の再質問誘導を足す。判定は語リストでなく「短い先頭文だけ残り、次の文が上限超過で落ちた」という構造で行う。
+const LEAD_IN_ONLY_MAX = 24;
+function leadInOnlyFollowup(body, emitted, dropReason, limit) {
+  if (!(limit > 60)) return '';
+  if (dropReason !== 'next_sentence_over_limit' && dropReason !== 'sentence_over_limit') return '';
+  const n = unicodeLength(emitted || '');
+  if (n === 0 || n > LEAD_IN_ONLY_MAX) return '';
+  const c = String((body && body.character) || '');
+  const f = /JP|Kanbe|Oishi|Hajime/.test(c) ? '詳しくは、もう一度聞いて。' : 'Ask me again for the details.';
+  return n + unicodeLength(f) <= limit ? f : '';
+}
+
 function resolveReplyCharLimit(body, mode) {
   const defaults = mode === 'race' ? 35 : mode === 'debrief' ? 70 : 180;
   const hardCap = mode === 'race' ? 160 : mode === 'debrief' ? 70 : 300;   // race：Driverへの回答は160字以内の完結文（自発コールは呼出側が短い max_chars を送る）
@@ -1690,7 +1703,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (!sentence) continue;
           const remaining = safeMaxChars - unicodeLength(jtEmitted);
           if (remaining <= 0) { jtTextClosed = true; return; }
-          if (jtEmitted && unicodeLength(sentence) > remaining) { jtTextClosed = true; return; }
+          if (jtEmitted && unicodeLength(sentence) > remaining) { jtTextClosed = true; replyDropReason = replyDropReason || 'next_sentence_over_limit'; return; }
           const limited = limitReplyText(sentence, remaining);
           if (limited) { jtWriteFrame({ text: limited }); jtEmitted += limited; }
           if (unicodeLength(sentence) > remaining || unicodeLength(jtEmitted) >= safeMaxChars) {
@@ -1815,6 +1828,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           emitJudgeTransport(true);
           if (!jtEmitted && !clientClosed) {   // 完結した文が作れなかった：短い再質問を返す（不完全な断片を出さない）
             const _fb = replyFallbackText(req.body); jtWriteFrame({ text: _fb }); jtEmitted += _fb; replyDropReason = replyDropReason || 'empty_after_limit';
+          } else if (!clientClosed) {
+            const _fu = leadInOnlyFollowup(req.body, jtEmitted, replyDropReason, safeMaxChars);
+            if (_fu) { jtWriteFrame({ text: _fu }); jtEmitted += _fu; replyDropReason = replyDropReason + '+lead_in_followup'; }
           }
           // Agreement requires a provable NORMAL completion: an explicit
           // SDK message_stop event AND a stop_reason that means the model
@@ -1840,6 +1856,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (!emittedText && !clientClosed) {   // 完結した文が作れなかった：短い再質問を返す（不完全な断片を出さない）
             const _fb = replyFallbackText(req.body);
             res.write(_fb); emittedText = _fb; replyDropReason = replyDropReason || 'empty_after_limit';
+          } else if (!clientClosed) {
+            const _fu = leadInOnlyFollowup(req.body, emittedText, replyDropReason, safeMaxChars);
+            if (_fu) { res.write(_fu); emittedText += _fu; replyDropReason = replyDropReason + '+lead_in_followup'; }
           }
         }
         // 追跡：provider終了理由・生成長・最終本文長・上限・破棄理由（本文・秘密値は出さない）。最終本文のTTS/再生結果はRenderer側 UTTERANCE_FINAL。

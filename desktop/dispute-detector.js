@@ -237,10 +237,14 @@ function detect(driverText, context = {}) {
   const REFLEX_TOPIC = /左|右|3台|三台|並走|横|停止|止まっ|前方|車|クラッシュ|事故|黄旗|イエロー|フラッグ|いない|いません|いる|来て|見えて/;
   const bareNegation = text.replace(/[\s、。,.！!？?]/g, '').length <= 10;
   // 「画面には何も見えない」「モニターには映ってない」は、車（反射コールの対象）が見えないという存在の否定であって、画面設定の話ではない（検査 R-C312-1）。
-  const REFLEX_VISIBILITY = /(?:画面|モニター|ディスプレ[イー]?)(?:に|には|で|では|の中)?[^。、]{0,8}(?:見え|映)(?:て|ら)?(?:ない|ません|ていない|ってない)/;
-  const offTopicText = OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text) && !REFLEX_VISIBILITY.test(text);
+  // 監査 R-C312-3：「ディスプレイが故障して映らない」「ディスプレイが映らない」は表示装置そのものの不調（主語が装置）で、車の存在の否定ではない。
+  //   車の見えなさは「画面に／モニターには（場所）＋見えない／映ってない」の形に限り、装置の故障・接続・映像語を含む発話は会話へ送る。
+  const DISPLAY_FAULT = /故障|壊れ|不具合|映像|真っ暗|真っ黒|ちらつ|点滅|つながら|繋がら|接続|認識|信号|電源|HDMI|ケーブル|映りが|映らなく/;
+  const REFLEX_VISIBILITY = /(?:画面|モニター|ディスプレ[イー]?)(?:に|には|で|では|の中)[^。、]{0,8}(?:見え|映)(?:て|ら)?(?:ない|ません|ていない|ってない)/;
+  const visibilityNegation = REFLEX_VISIBILITY.test(text) && !DISPLAY_FAULT.test(text);
+  const offTopicText = OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text) && !visibilityNegation;
   const reflexRelevant = !offTopicText
-    && (REFLEX_TOPIC.test(text) || REFLEX_VISIBILITY.test(text) || bareNegation);
+    && (REFLEX_TOPIC.test(text) || visibilityNegation || bareNegation);
   if (!reflexRelevant && (prevIsReflex || reflexIsFresh) && !spokenAxis) return null;
   if (!explicitNonReflexAxis && reflexRelevant && (prevIsReflex || reflexIsFresh) && (negated || soft)) {
     const kind = recentReflex ? recentReflex.kind : null;

@@ -104,14 +104,42 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     h.ev("addMsg('ai','前方に停止車両。注意。');pushMsg({role:'assistant',content:'前方に停止車両。注意。'})");
     const r7e = await ask(h, '画面がカクカクして違う設定にしたい');
     ck('7e 画面の設定の話（違う設定にしたい）は訂正にしない：取り消しを言わず、会話へ届く', !r7e.spoken.join('').includes('取り消す') && r7e.spoken.some(t => /グラフィック設定の解像度/.test(t)), r7e);
+    // 監査 R-C312-3：表示装置そのものの故障・不調（主語が装置）は、停止車両コールの確定訂正にせず会話へ送る
+    for (const t of ['ディスプレイが故障して映らない、違う', 'ディスプレイが映らない、違う']) {
+      srv.queueReply('ディスプレイが', 'ディスプレイの接続とケーブルを確認して、別の入力へ切り替えてみよう。');
+      h.ev("addMsg('ai','前方に停止車両。注意。');pushMsg({role:'assistant',content:'前方に停止車両。注意。'})");
+      const n0 = h.diag(/DISPUTE_DETECTED/).length;
+      const r = await ask(h, t);
+      ck('7f 「' + t + '」は表示装置の不調：停止車両コールを取り消さず、確定訂正を記録せず、会話へ届く', !r.spoken.join('').includes('取り消す') && h.diag(/DISPUTE_DETECTED/).length === n0 && r.spoken.some(x => /接続とケーブル/.test(x)), { r, d: h.diag(/DISPUTE/).slice(n0) });
+    }
+    // 監査 R-C312-2：相槌だけ残して本題の文を落とさない
+    const lead = 'FPSが低いんだね。';
+    const body9 = 'まずiRacingのグラフィック設定を開いて、解像度とターゲットFPSを確認し、影と反射の品質を一段ずつ下げて、それでも改善しなければミラーの描画とレンダー設定も下げて、不要な描画の項目を順に切り、それでも足りなければ解像度のスケールを下げて、最後にターゲットFPSを固定して、バックグラウンドのアプリも閉じてみて。';
+    srv.queueReply('何から直せばいい', lead + body9);
+    const r9 = await ask(h, 'FPSが落ちている、何から直せばいい？');
+    ck('9a 相槌（10字）＋160字超の1文：相槌だけで終わらず、明示の聞き直し誘導が付く（本文を途中で切らない）', Array.from(lead + body9).length > 160 && r9.spoken.join('') === lead + '詳しくは、もう一度聞いて。' && lastAssistant(h) === r9.spoken.join(''), { spoken: r9.spoken, hist: lastAssistant(h), len: Array.from(lead + body9).length });
+    ck('9b 追跡ログに lead_in_followup が残る', srv.traces().some(x => /lead_in_followup/.test(String(x.dropped)) && x.final_chars === Array.from(lead + '詳しくは、もう一度聞いて。').length), srv.traces().slice(-2));
+    srv.queueReply('小数点', '解像度の倍率は1.5倍から0.8倍へ下げて、影の品質を低にしよう。');
+    const r10 = await ask(h, '小数点の話：倍率はいくつ？');
+    ck('9c 小数点（1.5・0.8）を文の区切りにせず、完結した1文がそのまま話される。聞き直し誘導は付かない', r10.spoken.join('') === '解像度の倍率は1.5倍から0.8倍へ下げて、影の品質を低にしよう。', r10);
+    srv.queueReply('短い手順', 'ターゲットFPSを60に固定して、影を低にして。');
+    const r11 = await ask(h, '短い手順を教えて');
+    ck('9d 最初から短い手順は従来どおり1つ話され、聞き直し誘導を足さない。画面＝TTS＝履歴が同一', r11.spoken.join('') === 'ターゲットFPSを60に固定して、影を低にして。' && lastAssistant(h) === r11.spoken.join(''), { r11, hist: lastAssistant(h) });
     ck('7b 追加のLLM呼出（有料API）は発生していない：Driver発話ごとの要求数＝会話に回した発話数', h.state.chats.length >= 7, h.state.chats.length);
     ck('7c 実行中に例外なし', h.state.errors.length === 0, h.state.errors.slice(0, 3));
   });
   // ── 8. 生成指示：実際に組み立てた system に、回答の予算（160字・完結）とFPS設定の扱いが載る（文字列の存在だけでなく、組み立て結果で確認） ──
   {
-    const sys = require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false });
+    const sys = require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 160 });
     const sysStr = typeof sys === 'string' ? sys : JSON.stringify(sys);
     ck('8a Lunaのレースmodeの組み立て結果に「質問への回答の予算：160文字以内の完結した文」と「車ではないシステム設定を車のセッティングと混同しない」が載る。旧「通常35文字以内。燃料・ピット・戦略への回答だけ60文字」は無い', /質問への回答の予算/.test(sysStr) && /160文字以内の完結した文/.test(sysStr) && /車ではないシステム設定/.test(sysStr) && !/燃料・ピット・戦略への回答だけ60文字以内/.test(sysStr), sysStr.length);
+    // 監査 互換性：旧Desktop（max_chars=35）には、35字に合わせた完結回答の指示を出す（160字向けの指示を出さない）。上限値の指定が無い時も同じ
+    for (const mc of [35, undefined]) {
+      const old = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: mc }));
+      ck('8b 旧Desktop(max_chars=' + mc + ')：「35文字以内の完結した文」と「最初の文に結論」を指示し、「160文字以内」を指示しない', /35文字以内の完結した文/.test(old) && /最初の文に結論か手順の要点/.test(old) && !/160文字以内/.test(old), old.length);
+    }
+    const mid = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 160 }));
+    ck('8c 新Desktop(160)：最初の文に結論・相槌だけで枠を使わない指示が載る', /最初の文に結論か手順の要点を入れ、「〜だね。」のような相槌だけの文で枠を使うな/.test(mid), mid.length);
   }
   console.log('\n=== conversation repair e2e: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail ? 1 : 0);
