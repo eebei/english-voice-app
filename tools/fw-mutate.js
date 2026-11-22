@@ -54,9 +54,9 @@ const M = [
   ['FW51', 'server.js', "  return lastBoundary >= 0 ? points.slice(0, lastBoundary + 1).join('').trim() : '';", "  return lastBoundary >= 0 ? points.slice(0, lastBoundary + 1).join('').trim() : points.slice(0, Math.max(1, maxChars - 1)).join('').trimEnd() + '。';", 'conv', '1文が上限を超えると単語の途中で切って句点を足す（まずディスプレ。）'],
   ['FW52', 'desktop/dispute-detector.js', '  if (!reflexRelevant && (prevIsReflex || reflexIsFresh) && !spokenAxis) return null;\n', '', 'conv', '無関係な話の否定語を反射コールへの訂正にする（FPS相談で記録撤回）'],
   ['FW53', 'engineer-card.js', "  const nonCarSetup = (SYSTEM_SETTING_TOPIC.test(t) || SYSTEM_SETTING_TOPIC.test(String(options.recentText || ''))) && !CAR_SETUP_TERM.test(t);", '  const nonCarSetup = false;', 'conv', 'FPSの設定相談を足回りのセットアップ相談にする'],
-  ['FW54', 'desktop/renderer.html', "const maxChars = selMode==='race' ? 160", "const maxChars = selMode==='race' ? 35", 'conv', 'Driverへの回答を35字に戻す'],
-  ['FW55', 'desktop/renderer.html', "    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 100   // 提案への合意の応答（判定タグつき）は従来の予算のまま\n                 : (selMode==='race' && isJP) ? 260", "    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 100   // 提案への合意の応答（判定タグつき）は従来の予算のまま\n                 : (selMode==='race' && isJP) ? 55", 'conv', '回答のtoken予算を55に戻す（途中で切れる）'],
-  ['FW56', 'server.js', "const hardCap = mode === 'race' ? 160", "const hardCap = mode === 'race' ? 60", 'conv', 'server上限を60字に戻して回答を切る'],
+  ['FW54', 'desktop/renderer.html', "const maxChars = selMode==='race' ? 240", "const maxChars = selMode==='race' ? 35", 'conv', 'Driverへの回答を35字に戻す'],
+  ['FW55', 'desktop/renderer.html', "    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 100   // 提案への合意の応答（判定タグつき）は従来の予算のまま\n                 : (selMode==='race' && isJP) ? 380", "    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 100   // 提案への合意の応答（判定タグつき）は従来の予算のまま\n                 : (selMode==='race' && isJP) ? 55", 'conv', '回答のtoken予算を55に戻す（途中で切れる）'],
+  ['FW56', 'server.js', "const hardCap = mode === 'race' ? 240", "const hardCap = mode === 'race' ? 60", 'conv', 'server上限を60字に戻して回答を切る'],
   ['FW57', 'server.js', '          if (!emittedText && !clientClosed) {   // 完結した文が作れなかった：短い再質問を返す（不完全な断片を出さない）', '          if (false) {', 'conv', '完結した文が無い時に再質問を返さず無音にする'],
   ['FW58', 'server.js', "          if (boundary < 0 && final && streamStopReason === 'max_tokens') {", '          if (false) {', 'conv', 'max_tokensで終わった不完全な文を読み上げる'],
   ['FW59', 'desktop/dispute-detector.js', "  if (ja) return AX_JA[axis] ? `了解、さっきの${AX_JA[axis]}は取り消す。` : '了解、さっきのは取り消す。';", "  if (ja) return item && item.prior_claim_value ? `わかった、私の${item.prior_claim_value}という記録は撤回する。次の計測から入れ替えるよ。` : '了解、さっきのは取り消す。';", 'conv', '内部の記録処理の定型文をDriverへ話す'],
@@ -68,8 +68,21 @@ const M = [
   ['FW65', 'desktop/dispute-detector.js', "(?:画面|モニター|ディスプレ[イー]?)(?:に|には|で|では|の中)[^。、]{0,8}", "(?:画面|モニター|ディスプレ[イー]?)(?:に|には|で|では|の中)?[^。、]{0,8}", 'conv', '「ディスプレイが映らない」（主語が装置）を車の見えなさの訂正にする（監査R-C312-3）'],
   ['FW66', 'server.js', "  if (n === 0 || n > LEAD_IN_ONLY_MAX) return '';", "  return '';", 'conv', '相槌だけ残って本題の文が落ちても聞き直し誘導を付けない（監査R-C312-2）'],
   ['FW67', 'server.js', "n + unicodeLength(f) <= limit ? f : '';", "'';", 'conv', '聞き直し誘導が付かず相槌だけで終わる（監査R-C312-2）'],
-  ['FW68', 'prompts.js', "const _ansLimit = Math.min(Math.max(Number.parseInt(p.max_chars, 10) || 35, 12), 160);", "const _ansLimit = 160;", 'conv', '旧Desktop(35字)にも160字向けの指示を出す（監査 互換）'],
+  ['FW68', 'prompts.js', "const _ansLimit = Math.min(Math.max(Number.parseInt(p.max_chars, 10) || 35, 12), 240);", "const _ansLimit = 35;", 'conv', '旧Desktop(35字)にも160字向けの指示を出す（監査 互換）'],
   ['FW69', 'prompts.js', "最初の文に結論か手順の要点を入れ、「〜だね。」のような相槌だけの文で枠を使うな。", "", 'conv', '相槌だけで枠を使うなという生成指示を外す（監査R-C312-2）'],
+  ['FW70', 'server.js', "const safeMaxSentences = (mode === 'race' && safeMaxChars > 60) ? 3 : Infinity;", "const safeMaxSentences = Infinity;", 'conv', '質問回答の文数上限（3文）を外す（設計§24.16）'],
+  ['FW71', 'server.js', "  if (lastAssistant.trim() === first) {", "  if (false) {", 'conv', '直前が同じ再質問でも同じ再質問を繰り返す'],
+  ['FW72', 'desktop/renderer.html', "if(tag==='STRATEGY_PROJECTION'&&/^stale_(?:decoded_)?reply(?:_all_exits)?_discarded$/.test(String(text||''))) staleRecoveryOnDiscard();", "", 'conv', '数値前提の失効で質問全体を無言で捨てる（17:34ログ型）'],
+  ['FW73', 'desktop/renderer.html', "      if(_staleRecovery.tries>=1){", "      if(false){", 'conv', '答え直しが失効しても短い確認を話さず再送を繰り返す'],
+  ['FW74', 'desktop/renderer.html', "      if(_staleRecovery.key!==keyAtDiscard) return;", "", 'conv', '新しい質問が始まっても古い質問を答え直す'],
+  ['FW75', 'prompts.js', "自発の無線に適用・最優先・厳守。ドライバーの質問・相談への回答は【質問への回答の予算】の短い2〜3文が優先", "全コール共通・最優先・厳守", 'conv', '「全コール1文」が質問回答の2〜3文と競合する旧指示を残す'],
+  ['FW76', 'desktop/qualify-phase.js', "    return phase === 'attack' && kind !== 'reply' && Number(prio) >= 3;", "    return phase === 'attack' && Number(prio) >= 3;", 'qual', 'アタック中にDriverへの返答まで捨てる'],
+  ['FW77', 'desktop/qualify-phase.js', "    return phase === 'attack' && kind !== 'reply' && Number(prio) >= 3;", "    return phase === 'attack' && kind !== 'reply' && Number(prio) >= 0;", 'qual', 'アタック中に安全コールまで捨てる'],
+  ['FW78', 'desktop/qualify-phase.js', "      else if (n <= attackLaps) { hadAttack = true; setPhase('attack', 'timed_lap'); }", "      else if (n <= attackLaps) { hadAttack = true; setPhase('prep', 'timed_lap'); }", 'qual', 'アタック周を準備扱いにして抑制しない'],
+  ['FW79', 'desktop/qualify-phase.js', "        exitedNow = (prevOnPit === true);", "        exitedNow = true;", 'qual', '途中から観測を始めてもアウトラップと断定して声かけする'],
+  ['FW80', 'desktop/qualify-phase.js', "if (!isQualifying(sessionType) || !live) {", "if (!live) {", 'qual', 'Race等の予選以外でも予選フェーズを判定して抑制する'],
+  ['FW81', 'desktop/renderer.html', "  if(qualifyPhaseNow==='attack'&&window.PitwallQualifyPhase&&", "  if(false&&window.PitwallQualifyPhase&&", 'qual', 'speak()に予選アタック中の抑制を配線しない'],
+  ['FW82', 'desktop/renderer.html', "        qualifyPhaseOnTelemetry(data);", "", 'qual', 'telemetry入口に予選フェーズ判定を配線しない'],
   ['FW8', 'desktop/fuel-window.js', "if (target <= cap + 1e-9) {", "if (target <= cap + 1e9) {", 'unit', '容量に収まらなくても開き扱いにする'],
   ['FW9', 'desktop/renderer.html', "if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;", "if(postPitFuel.pendingFor===0) return;", 'e2e', '給油後の同じ結論を繰り返す'],
 ];
@@ -83,7 +96,7 @@ for (const [id, file, from, to, suite, note] of M) {
   try {
     let mut = orig; froms.forEach((f, k) => { mut = mut.replace(f, tos[k]); });
     fs.writeFileSync(p, mut);
-    const scripts = suite === 'unit' ? ['tests-fuel-window.js', 'tests-u2-undercut-forecast.js'] : suite === 'pitcalls' ? ['tests-pit-calls-e2e.js'] : suite === 'router' ? ['tests-fuel-memory-planning.js', 'tests-local-intent-router.js'] : suite === 'conv' ? ['tests-conversation-repair-e2e.js', 'tests-build232-hardening.js'] : suite === 'rules' ? ['tests-race-rules.js', 'tests-race-rules-e2e.js'] : ['tests-fuel-window-e2e.js'];
+    const scripts = suite === 'unit' ? ['tests-fuel-window.js', 'tests-u2-undercut-forecast.js'] : suite === 'pitcalls' ? ['tests-pit-calls-e2e.js'] : suite === 'router' ? ['tests-fuel-memory-planning.js', 'tests-local-intent-router.js'] : suite === 'conv' ? ['tests-conversation-repair-e2e.js', 'tests-build232-hardening.js'] : suite === 'rules' ? ['tests-race-rules.js', 'tests-race-rules-e2e.js'] : suite === 'qual' ? ['tests-qualify-phase.js'] : ['tests-fuel-window-e2e.js'];
     let red = [];
     for (const sc of scripts) { const r = spawnSync(process.execPath, [sc], { cwd: ROOT, encoding: 'utf8', env: process.env, timeout: 400000 }); const out = (r.stdout || '') + (r.stderr || ''); red = red.concat(out.split('\n').filter(l => l.startsWith('❌')).map(l => l.slice(0, 50))); if (!red.length && r.status !== 0) red.push('exit=' + r.status + '（assertで停止）'); }
     console.log((red.length ? 'killed  ' : 'SURVIVED'), id, note, '→', red.slice(0, 3).join(' | '));

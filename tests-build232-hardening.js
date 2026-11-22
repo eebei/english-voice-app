@@ -33,22 +33,22 @@ check('不足解消後の燃料OK通知を配線',
   && bridge.includes("'critical_to_safe'")
   && renderer.includes("case 'fuel_strategy_safe':"));
 check('レースとデブリーフの出力上限を縮小',
-  renderer.includes("(selMode==='race' && isJP) ? 260")
+  renderer.includes("(selMode==='race' && isJP) ? 380")
   && renderer.includes("(selMode==='debrief' && isJP) ? 120"));
-check('Driverへの回答：レース160字（完結文）・デブリーフ70字を送信',
-  renderer.includes("selMode==='race' ? 160")
+check('Driverへの回答：レースは短い2〜3文（安全上限240字）・デブリーフ70字を送信',
+  renderer.includes("selMode==='race' ? 240")
   && renderer.includes("selMode==='debrief' ? 70")
   && renderer.includes('max_chars:maxChars'));
 check('サーバー側にもモード別文字数ハード上限',
-  server.includes("mode === 'race' ? 160")
+  server.includes("mode === 'race' ? 240")
   && server.includes("mode === 'debrief' ? 70")
   && server.includes('limitReplyText(block.text, safeMaxChars)'));
 check('ストリーミング本文も文単位で文字数制限',
   server.includes('emitCompleteSentences(false)')
   && server.includes('emitCompleteSentences(true)')
   && server.includes('safeMaxChars - unicodeLength(emittedText)'));
-check('Lunaレースプロンプト：自発の無線は35字、質問への回答は160字以内の完結文',
-  prompts.includes('自発の短い無線は通常35文字以内') && prompts.includes("文字以内の完結した文**で言い切れ") && prompts.includes('_ansLimit') && /Math\.min\(Math\.max\(Number\.parseInt\(p\.max_chars, 10\) \|\| 35, 12\), 160\)/.test(prompts));
+check('Lunaレースプロンプト：自発の無線は35字、質問への回答は短い2〜3文で完結（上限値に応じた予算）',
+  prompts.includes('自発の短い無線は通常35文字以内') && prompts.includes('短い2〜3文で完結') && prompts.includes("文字以内の完結した文**で言い切れ") && prompts.includes('_ansLimit') && /Math\.min\(Math\.max\(Number\.parseInt\(p\.max_chars, 10\) \|\| 35, 12\), 160\)/.test(prompts));
 
 const limiterFns = server.match(/function unicodeLength[\s\S]*?(?=\/\/ ── Chat proxy)/);
 check('文字数ゲート関数を抽出', !!limiterFns);
@@ -58,8 +58,8 @@ if (limiterFns) {
   const longReply = '現在のペースは安定しています。後方とのギャップも十分あります。タイヤも問題ありません。';
   const limited35 = limitCtx.limitReplyText(longReply, 35);
   check('35文字以内かつ文末で完結', Array.from(limited35).length <= 35 && /[。！？!?]$/.test(limited35));
-  check('クライアントが大きな値を送ってもraceは160字',
-    limitCtx.resolveReplyCharLimit({max_chars:999}, 'race') === 160);
+  check('クライアントが大きな値を送ってもraceは安全上限240字',
+    limitCtx.resolveReplyCharLimit({max_chars:999}, 'race') === 240);
   // Build 312：上限超過でも単語・文の途中で切らない。完結した文が収まらなければ空（呼出側が短い再質問へ置換）
   const longOneSentence = 'iRacingのグラフィック設定でFPS改善するには、まずディスプレイの解像度とフレームレート上限を確認して、次に影と反射の品質を下げる必要がある。';
   check('1文が上限を超える時は、途中で切らず空を返す（「まずディスプレ。」を作らない）', limitCtx.limitReplyText(longOneSentence, 35) === '');

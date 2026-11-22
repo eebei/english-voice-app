@@ -62,9 +62,9 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     srv.queueReply('改善するには', full4);
     const t4 = await ask(h, 'グラフィックスのfpsの。  動きが悪いからそれを改善するにはどうしたらいい？');
     const body4 = h.state.chats[h.state.chats.length - 1];
-    ck('4a Driverへの回答の予算：max_chars=160・max_tokens=260（旧35字・55トークン）', body4.max_chars === 160 && body4.max_tokens === 260, { mc: body4.max_chars, mt: body4.max_tokens });
+    ck('4a Driverへの回答の予算：max_chars=240（安全上限）・max_tokens=380（旧35字・55トークン）', body4.max_chars === 240 && body4.max_tokens === 380, { mc: body4.max_chars, mt: body4.max_tokens });
     ck('4b 長い完結回答がそのまま（語途中で切れず）話される。画面＝TTS＝履歴が同じ確定本文', t4.spoken.join('') === full4 && lastAssistant(h) === full4 && Array.from(full4).length <= 160, { spoken: t4.spoken, hist: lastAssistant(h) });
-    ck('4c 追跡ログ：終了理由・生成長・最終本文長・上限・破棄なし', srv.traces().some(x => x.stop_reason === 'end_turn' && x.generated_chars === Array.from(full4).length && x.final_chars === Array.from(full4).length && x.limit === 160 && x.dropped === null), srv.traces());
+    ck('4c 追跡ログ：終了理由・生成長・最終本文長・上限・破棄なし', srv.traces().some(x => x.stop_reason === 'end_turn' && x.generated_chars === Array.from(full4).length && x.final_chars === Array.from(full4).length && x.limit === 240 && x.dropped === null), srv.traces());
 
     // ── 5. 「それから」「ディスプレイをどうする？」：直前に実際に話した内容へ続く ──
     srv.queueReply('それから', 'それから、ディスプレイの解像度を下げて、垂直同期をオフにしてみよう。');
@@ -84,10 +84,10 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     srv.queueReply('尻切れB', ['iRacingのグラフィック設定でFPS改善するには、まずディスプ'], { stopReason: 'max_tokens' });
     const t8 = await ask(h, '尻切れB');
     ck('6b 最初から不完全（文末なしでmax_tokens）：「まずディスプレ。」のような断片を作らず、短い完結した再質問を返す', t8.spoken.join('') === 'うまくまとめきれなかった。もう一度聞いて。' && !/ディスプ/.test(t8.spoken.join('')), t8);
-    const longOne = '設定' + 'を見直して'.repeat(40) + '改善する。';
+    const longOne = '設定' + 'を見直して'.repeat(60) + '改善する。';
     srv.queueReply('超過', longOne);
     const t9 = await ask(h, '超過');
-    ck('6c 160字を超える1文は、単語の途中で切らず、短い完結した再質問に置き換える', Array.from(longOne).length > 160 && t9.spoken.join('') === 'うまくまとめきれなかった。もう一度聞いて。', t9);
+    ck('6c 安全上限240字を超える異常な長い1文は、単語の途中で切らず、短い完結した再質問に置き換える', Array.from(longOne).length > 240 && t9.spoken.join('') === 'まだ整理できてない。聞きたいことを一つに絞って言って。'  /* 直前の6bが定型の再質問だったので別の依頼に変わる（10c参照） */, t9);
     ck('6d 追跡ログに終了理由と破棄理由が残る（max_tokens_incomplete／sentence_over_limit）', srv.traces().some(x => x.stop_reason === 'max_tokens' && x.dropped === 'max_tokens_incomplete') && srv.traces().some(x => x.dropped === 'sentence_over_limit'), srv.traces());
 
     // ── 7. 回帰：本物の訂正は取り消され、自然な短文で返す。短い相槌・安全割込みは影響を受けない ──
@@ -114,10 +114,10 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     }
     // 監査 R-C312-2：相槌だけ残して本題の文を落とさない
     const lead = 'FPSが低いんだね。';
-    const body9 = 'まずiRacingのグラフィック設定を開いて、解像度とターゲットFPSを確認し、影と反射の品質を一段ずつ下げて、それでも改善しなければミラーの描画とレンダー設定も下げて、不要な描画の項目を順に切り、それでも足りなければ解像度のスケールを下げて、最後にターゲットFPSを固定して、バックグラウンドのアプリも閉じてみて。';
+    const body9 = '長い手順：' + '解像度や影の品質を見直して、'.repeat(20) + '最後にターゲットFPSを固定してみて。';
     srv.queueReply('何から直せばいい', lead + body9);
     const r9 = await ask(h, 'FPSが落ちている、何から直せばいい？');
-    ck('9a 相槌（10字）＋160字超の1文：相槌だけで終わらず、明示の聞き直し誘導が付く（本文を途中で切らない）', Array.from(lead + body9).length > 160 && r9.spoken.join('') === lead + '詳しくは、もう一度聞いて。' && lastAssistant(h) === r9.spoken.join(''), { spoken: r9.spoken, hist: lastAssistant(h), len: Array.from(lead + body9).length });
+    ck('9a 相槌（10字）＋安全上限超の1文：相槌だけで終わらず、明示の聞き直し誘導が付く（本文を途中で切らない）', Array.from(lead + body9).length > 240 && r9.spoken.join('') === lead + '詳しくは、もう一度聞いて。' && lastAssistant(h) === r9.spoken.join(''), { spoken: r9.spoken, hist: lastAssistant(h), len: Array.from(lead + body9).length });
     ck('9b 追跡ログに lead_in_followup が残る', srv.traces().some(x => /lead_in_followup/.test(String(x.dropped)) && x.final_chars === Array.from(lead + '詳しくは、もう一度聞いて。').length), srv.traces().slice(-2));
     srv.queueReply('小数点', '解像度の倍率は1.5倍から0.8倍へ下げて、影の品質を低にしよう。');
     const r10 = await ask(h, '小数点の話：倍率はいくつ？');
@@ -125,21 +125,62 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     srv.queueReply('短い手順', 'ターゲットFPSを60に固定して、影を低にして。');
     const r11 = await ask(h, '短い手順を教えて');
     ck('9d 最初から短い手順は従来どおり1つ話され、聞き直し誘導を足さない。画面＝TTS＝履歴が同一', r11.spoken.join('') === 'ターゲットFPSを60に固定して、影を低にして。' && lastAssistant(h) === r11.spoken.join(''), { r11, hist: lastAssistant(h) });
+    // ── 10. 設計§24.16：文字数ではなく『短い2〜3文で完結』。3文まで話し、4文目以降は止める。文字数で本文を切らない ──
+    const three = '先にターゲットFPSを60に固定して、グラフィックのプリセットを一段下げよう。次に影と反射の品質を低にして、ミラーの解像度も落としてみて。最後にバックグラウンドのアプリを閉じてから、もう一度走って変化を見よう。';
+    srv.queueReply('三文の手順', three);
+    const r12 = await ask(h, '三文の手順を教えて');
+    ck('10a 3文・120字超の完結回答は文字数で切られず全文話される（旧100字級の切断・超過文落としをしない）。画面＝TTS＝履歴が同一', Array.from(three).length > 100 && r12.spoken.join('') === three && lastAssistant(h) === three, { spoken: r12.spoken, len: Array.from(three).length });
+    srv.queueReply('四文の手順', 'まず一つ目を確認しよう。次に二つ目を変えよう。三つ目も試そう。四つ目は後でいい。五つ目もある。');
+    const r13 = await ask(h, '四文の手順を教えて');
+    ck('10b 4文以上の生成は3文で止め、完結した3文だけが話される。追跡ログに sentence_count_cap', r13.spoken.join('') === 'まず一つ目を確認しよう。次に二つ目を変えよう。三つ目も試そう。' && srv.traces().some(x => x.dropped === 'sentence_count_cap'), { spoken: r13.spoken, tr: srv.traces().slice(-1) });
+    // 同じ再質問を無限に要求しない：直前の返答が定型の再質問だった時は、質問を絞る別の依頼に変える
+    const unfinishable = '設定' + 'を見直して'.repeat(60) + '改善する。';
+    srv.queueReply('整理不能A', unfinishable);
+    const r14 = await ask(h, '整理不能A');
+    srv.queueReply('整理不能B', unfinishable);
+    const r15 = await ask(h, '整理不能B');
+    ck('10c 直前が定型の再質問なら、同じ文を繰り返さず「一つに絞って」と別の依頼に変える', r14.spoken.join('') === 'うまくまとめきれなかった。もう一度聞いて。' && r15.spoken.join('') === 'まだ整理できてない。聞きたいことを一つに絞って言って。', { r14: r14.spoken, r15: r15.spoken });
+    // ── 11. 設計§24.16：数値前提の失効（stale_reply_discarded）で質問を無言で捨てない。最新値で1回答え直し、それも失効したら短い確認を話す ──
+    h.ev("window.__orig_srbv=strategyReplyBindingValid; window.__stale=1; strategyReplyBindingValid=function(){ if(window.__stale>0){window.__stale--; return false;} return window.__orig_srbv.apply(this,arguments); };");
+    srv.queueReply('影の品質', '影の品質を一段下げると、FPSはまず安定しやすい。');
+    srv.queueReply('影の品質', '影の品質を一段下げると、FPSはまず安定しやすい。');
+    const d0 = h.diag(/stale_reply_discarded|stale_recovery_retry/).length;
+    const r16 = await ask(h, '影の品質を下げるとどうなる？');
+    await h.sleep(900); await finishAudio(h, 4);
+    const sp16 = finals(h).slice(-2).join('');
+    ck('11a 数値前提が失効して最初の返答が破棄されても、質問を無言にせず最新値で1回答え直す（再質問の自動送信は1回）', /影の品質を一段下げると/.test(sp16) && h.diag(/stale_recovery_retry/).length >= 1, { sp16, d: h.diag(/stale_reply_discarded|stale_recovery/).slice(d0) });
+    h.ev("window.__stale=99;");
+    srv.queueReply('反射の品質', '反射の品質は低にして問題ない。');
+    srv.queueReply('反射の品質', '反射の品質は低にして問題ない。');
+    const r17 = await ask(h, '反射の品質はどうする？');
+    await h.sleep(1500); await finishAudio(h, 4);
+    const sp17 = finals(h).slice(-3).join('');
+    ck('11b 答え直しも失効する時は、無限に繰り返さず短い確認の一言を話して終える（質問全体を無言で捨てない）', /もう一度聞いて/.test(sp17) && h.diag(/stale_recovery_notice/).length >= 1 && !/問題ない/.test(sp17), { sp17, d: h.diag(/stale_recovery/) });
+    // 失効の直後に新しい質問が始まったら、古い質問を答え直さない（新しい質問だけが答えられる）
+    h.ev("window.__stale=1;");
+    srv.queueReply('Aの質問', 'Aの答えは古い。');
+    srv.queueReply('Bの質問', 'Bの質問には、影を低にすると答える。');
+    const c0 = h.state.chats.length;
+    await h.say('Aの質問を教えて'); await h.say('Bの質問を教えて');
+    await h.sleep(1200); await finishAudio(h, 4);
+    const lastUsers = h.state.chats.slice(c0).map(c => String((c.messages[c.messages.length - 1] || {}).content || ''));
+    ck('11c 失効の直後に新しい質問が始まったら、古い質問を答え直さず、新しい質問だけが答えられる', lastUsers.filter(t => /Aの質問/.test(t)).length === 1 && finals(h).slice(-2).join('').includes('Bの質問には') && !finals(h).slice(-3).join('').includes('Aの答え'), { lastUsers, f: finals(h).slice(-3) });
+    h.ev("strategyReplyBindingValid=window.__orig_srbv; window.__stale=0;");
     ck('7b 追加のLLM呼出（有料API）は発生していない：Driver発話ごとの要求数＝会話に回した発話数', h.state.chats.length >= 7, h.state.chats.length);
     ck('7c 実行中に例外なし', h.state.errors.length === 0, h.state.errors.slice(0, 3));
   });
   // ── 8. 生成指示：実際に組み立てた system に、回答の予算（160字・完結）とFPS設定の扱いが載る（文字列の存在だけでなく、組み立て結果で確認） ──
   {
-    const sys = require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 160 });
+    const sys = require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 240 });
     const sysStr = typeof sys === 'string' ? sys : JSON.stringify(sys);
-    ck('8a Lunaのレースmodeの組み立て結果に「質問への回答の予算：160文字以内の完結した文」と「車ではないシステム設定を車のセッティングと混同しない」が載る。旧「通常35文字以内。燃料・ピット・戦略への回答だけ60文字」は無い', /質問への回答の予算/.test(sysStr) && /160文字以内の完結した文/.test(sysStr) && /車ではないシステム設定/.test(sysStr) && !/燃料・ピット・戦略への回答だけ60文字以内/.test(sysStr), sysStr.length);
+    ck('8a Lunaのレースmodeの組み立て結果（max_chars=240）に「短い2〜3文で完結」と「車ではないシステム設定を車のセッティングと混同しない」が載り、旧「全コール共通の1文1情報」は自発の無線に限定される。旧「通常35文字以内。燃料・ピット・戦略への回答だけ60文字」は無い', /質問への回答の予算/.test(sysStr) && /短い2〜3文で完結/.test(sysStr) && /車ではないシステム設定/.test(sysStr) && /自発の無線に適用/.test(sysStr) && !/全コール共通/.test(sysStr) && !/燃料・ピット・戦略への回答だけ60文字以内/.test(sysStr), sysStr.length);
     // 監査 互換性：旧Desktop（max_chars=35）には、35字に合わせた完結回答の指示を出す（160字向けの指示を出さない）。上限値の指定が無い時も同じ
     for (const mc of [35, undefined]) {
       const old = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: mc }));
       ck('8b 旧Desktop(max_chars=' + mc + ')：「35文字以内の完結した文」と「最初の文に結論」を指示し、「160文字以内」を指示しない', /35文字以内の完結した文/.test(old) && /最初の文に結論か手順の要点/.test(old) && !/160文字以内/.test(old), old.length);
     }
-    const mid = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 160 }));
-    ck('8c 新Desktop(160)：最初の文に結論・相槌だけで枠を使わない指示が載る', /最初の文に結論か手順の要点を入れ、「〜だね。」のような相槌だけの文で枠を使うな/.test(mid), mid.length);
+    const mid = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 240 }));
+    ck('8c 新Desktop(240)：最初の文に結論・相槌だけの文で終えない指示が載る', /最初の文に結論か手順の要点を入れ、「〜だね。」のような相槌だけの文で終えるな/.test(mid), mid.length);
   }
   console.log('\n=== conversation repair e2e: ' + pass + ' passed, ' + fail + ' failed ===');
   process.exit(fail ? 1 : 0);

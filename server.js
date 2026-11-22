@@ -1202,9 +1202,16 @@ function limitReplyText(text, maxChars) {
 // 完結した文が作れなかった時の、短い完結した再質問（不完全な断片を読み上げない）。
 function replyFallbackText(body) {
   const c = String((body && body.character) || '');
-  return /JP|Kanbe|Oishi|Hajime/.test(c)
-    ? 'うまくまとめきれなかった。もう一度聞いて。'
-    : 'I could not finish that one. Please ask again.';
+  const jp = /JP|Kanbe|Oishi|Hajime/.test(c);
+  const first = jp ? 'うまくまとめきれなかった。もう一度聞いて。' : 'I could not finish that one. Please ask again.';
+  // 直前の自分の返答が同じ再質問だった時は、同じ文を繰り返さず、質問を絞る具体的な依頼に変える（同じ再質問を無限に要求しない）。
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  let lastAssistant = '';
+  for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i] && msgs[i].role === 'assistant') { lastAssistant = String(msgs[i].content || ''); break; } }
+  if (lastAssistant.trim() === first) {
+    return jp ? 'まだ整理できてない。聞きたいことを一つに絞って言って。' : 'Still not clear. Ask me just one thing.';
+  }
+  return first;
 }
 
 // 相槌・前置きだけが残り、本題の文が上限超過で落ちた時（監査 R-C312-2）：相槌だけで終わると質問に答えたことにならない。
@@ -1222,7 +1229,7 @@ function leadInOnlyFollowup(body, emitted, dropReason, limit) {
 
 function resolveReplyCharLimit(body, mode) {
   const defaults = mode === 'race' ? 35 : mode === 'debrief' ? 70 : 180;
-  const hardCap = mode === 'race' ? 160 : mode === 'debrief' ? 70 : 300;   // race：Driverへの回答は160字以内の完結文（自発コールは呼出側が短い max_chars を送る）
+  const hardCap = mode === 'race' ? 240 : mode === 'debrief' ? 70 : 300;   // race：Driverへの回答は160字以内の完結文（自発コールは呼出側が短い max_chars を送る）
   const requested = Number.parseInt(body.max_chars, 10);
   return Math.min(Math.max(Number.isFinite(requested) ? requested : defaults, 12), hardCap);
 }
@@ -1533,8 +1540,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     let safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
     // レース無線は物理的にも短く（長文の暴走を防ぐバックストップ）
     const safeMaxChars = resolveReplyCharLimit(req.body, mode);
+    // Driverへの回答（max_chars>60）は文字数でなく『短い2〜3文で完結』で締める（設計§24.16）。文字数上限は異常長文だけを止める安全上限。
+    const safeMaxSentences = (mode === 'race' && safeMaxChars > 60) ? 3 : Infinity;
     // Driverへの回答（max_chars>60）は完結した文を生成できる余裕を持たせる。短い自発コール（既定35字）は従来の100。
-    if (mode === 'race') { const _raceTokCap = safeMaxChars > 60 ? 300 : 100; safeMaxTokens = _pendingJudgeTurn ? Math.max(100, Math.min(safeMaxTokens, _raceTokCap)) : Math.min(safeMaxTokens, _raceTokCap); }
+    if (mode === 'race') { const _raceTokCap = safeMaxChars > 60 ? 400 : 100; safeMaxTokens = _pendingJudgeTurn ? Math.max(100, Math.min(safeMaxTokens, _raceTokCap)) : Math.min(safeMaxTokens, _raceTokCap); }
 
     // ユーザーログ（Railway のログで確認可能）
     if (userName) {
@@ -1608,6 +1617,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         clientClosed = true;
         try { providerAbort.abort(); } catch (e) {}
       });
+      let emittedSentences = 0;
       const emitCompleteSentences = (final = false) => {
         if (outputClosed || clientClosed) return;
         while (pendingText) {
@@ -1648,11 +1658,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (limited) {
             res.write(limited);
             emittedText += limited;
+            emittedSentences++;
             if (typeof res.flush === 'function') res.flush();
           } else {
             replyDropReason = replyDropReason || 'sentence_over_limit';
           }
-          if (unicodeLength(sentence) > remaining || unicodeLength(emittedText) >= safeMaxChars) {
+          if (unicodeLength(sentence) > remaining || unicodeLength(emittedText) >= safeMaxChars || emittedSentences >= safeMaxSentences) {
+            if (emittedSentences >= safeMaxSentences && pendingText.trim()) replyDropReason = replyDropReason || 'sentence_count_cap';
             outputClosed = true;
             return;
           }
@@ -1668,6 +1680,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       let jtPending = '';            // raw deltas not yet classified as safe-text vs tag-region
       let jtSentencePending = '';    // confirmed-safe text awaiting sentence-boundary emission
       let jtEmitted = '';
+      let jtEmittedSentences = 0;
       let jtTextClosed = false;   // text char-budget exhausted — gates TEXT frames only
       let jtJudgment = null;
       let jtStopReason = null;
@@ -1705,8 +1718,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (remaining <= 0) { jtTextClosed = true; return; }
           if (jtEmitted && unicodeLength(sentence) > remaining) { jtTextClosed = true; replyDropReason = replyDropReason || 'next_sentence_over_limit'; return; }
           const limited = limitReplyText(sentence, remaining);
-          if (limited) { jtWriteFrame({ text: limited }); jtEmitted += limited; }
-          if (unicodeLength(sentence) > remaining || unicodeLength(jtEmitted) >= safeMaxChars) {
+          if (limited) { jtWriteFrame({ text: limited }); jtEmitted += limited; jtEmittedSentences++; }
+          if (unicodeLength(sentence) > remaining || unicodeLength(jtEmitted) >= safeMaxChars || jtEmittedSentences >= safeMaxSentences) {
             jtTextClosed = true; return;
           }
         }

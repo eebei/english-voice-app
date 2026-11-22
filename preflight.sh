@@ -476,8 +476,10 @@ echo "▶ レース設定（Owner指定：60分以内のショート耐久・給
 if out=$(node tests-race-rules.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 echo "▶ レース設定 e2e（実renderer：確認→訂正→別raceで初期化／範囲外・未確認は適用しない／ドライブスルーで給油回数を消費しない／給油後の返答と設定との衝突の明示）"
 if out=$(node tests-race-rules-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
-echo "▶ 会話修復 e2e（実renderer→実server→保存応答：FPS相談を誤撤回／足回り相談にしない・160字の完結回答・語途中で切らない・追質問が直前の回答につながる・追跡ログ）"
+echo "▶ 会話修復 e2e（実renderer→実server→保存応答：FPS相談を誤撤回／足回り相談にしない・短い2〜3文で完結する回答・無言破棄しない・語途中で切らない・追質問が直前の回答につながる・追跡ログ）"
 if out=$(node tests-conversation-repair-e2e.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
+echo "▶ 予選フェーズ別無線（設計§24.16：準備・アウトラップ／アタック／終了後。アタック中は非緊急の自発発話を捨て、安全と返答は通す）"
+if out=$(node tests-qualify-phase.js 2>&1); then echo "   ✅ $(echo "$out"|tail -1)"; else echo "   ❌ 不合格"; echo "$out"|grep "❌"|head -10; fail=1; fi
 
 echo ""
 if [ "$fail" -eq 0 ]; then echo "✅ source preflight合格（artifact・Windows・実走は別ゲート）"; else echo "❌ 出荷不可（上記を直すこと）"; fi
