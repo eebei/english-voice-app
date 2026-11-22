@@ -150,7 +150,7 @@ function queuedScenario(messages, req) {
   // WO019: a saved response may hold the real HTTP stream at the same file barrier as the
   // marker path (holdGateDir/holdAfterChunk/holdTimeoutMs), so canonical updates can land
   // while the provider reply is genuinely still in flight.
-  return { chunks: decoded.chunks, stopReason: 'end_turn', omitMessageStop: false, throwMidStream: false,
+  return { chunks: decoded.chunks, stopReason: typeof decoded.stopReason === 'string' ? decoded.stopReason : 'end_turn', omitMessageStop: false, throwMidStream: false,
     holdGateDir: typeof decoded.holdGateDir === 'string' ? decoded.holdGateDir : null,
     holdAfterChunk: Number.isInteger(decoded.holdAfterChunk) ? decoded.holdAfterChunk : null,
     holdTimeoutMs: Number.isFinite(decoded.holdTimeoutMs) ? decoded.holdTimeoutMs : null };

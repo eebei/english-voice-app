@@ -823,7 +823,7 @@ function sendGuardReply(req, res, text, structuredLimit = null, authority = 'det
   const charLimit = Number.isFinite(structuredLimit)
     ? structuredLimit
     : resolveReplyCharLimit(req.body || {}, req.body && req.body.mode);
-  const limitedText = limitReplyText(text, charLimit);
+  const limitedText = limitReplyText(text, charLimit) || replyFallbackText(req.body);
   res.setHeader('X-Pitwall-Authority', authority);
   if (intent) res.setHeader('X-Pitwall-Intent', String(intent));
   if (req.body.stream) {
@@ -1185,25 +1185,31 @@ function unicodeSlice(text, limit) {
 }
 
 // LLMの指示追従だけに依存せず、表示・TTS・会話履歴へ返す本文そのものを制限する。
-// 上限超過時は最後の文末までを優先し、文末が無ければ句点を付けて尻切れを避ける。
+// 上限超過時は最後の**完結した文**までだけを返す。文・単語の途中で切って句点を足さない
+// （Build 311 実走11/22：「まずディスプレイ…」を35字で切り「まずディスプレ。」を読み上げた）。
+// 完結した文が上限内に無ければ空文字を返し、呼出側が短い完結した再質問へ置き換える。
 function limitReplyText(text, maxChars) {
   const clean = String(text || '').trim();
   if (!clean || unicodeLength(clean) <= maxChars) return clean;
-  const head = unicodeSlice(clean, maxChars);
-  const points = Array.from(head);
+  const points = Array.from(unicodeSlice(clean, maxChars));
   let lastBoundary = -1;
   for (let i = 0; i < points.length; i++) {
     if (/[。．！？!?]/.test(points[i])) lastBoundary = i;
   }
-  if (lastBoundary >= Math.min(8, Math.floor(maxChars / 3))) {
-    return points.slice(0, lastBoundary + 1).join('').trim();
-  }
-  return points.slice(0, Math.max(1, maxChars - 1)).join('').trimEnd() + '。';
+  return lastBoundary >= 0 ? points.slice(0, lastBoundary + 1).join('').trim() : '';
+}
+
+// 完結した文が作れなかった時の、短い完結した再質問（不完全な断片を読み上げない）。
+function replyFallbackText(body) {
+  const c = String((body && body.character) || '');
+  return /JP|Kanbe|Oishi|Hajime/.test(c)
+    ? 'うまくまとめきれなかった。もう一度聞いて。'
+    : 'I could not finish that one. Please ask again.';
 }
 
 function resolveReplyCharLimit(body, mode) {
   const defaults = mode === 'race' ? 35 : mode === 'debrief' ? 70 : 180;
-  const hardCap = mode === 'race' ? 60 : mode === 'debrief' ? 70 : 300;
+  const hardCap = mode === 'race' ? 160 : mode === 'debrief' ? 70 : 300;   // race：Driverへの回答は160字以内の完結文（自発コールは呼出側が短い max_chars を送る）
   const requested = Number.parseInt(body.max_chars, 10);
   return Math.min(Math.max(Number.isFinite(requested) ? requested : defaults, 12), hardCap);
 }
@@ -1513,8 +1519,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Never trust the client's token count — clamp it server-side.
     let safeMaxTokens = Math.min(Math.max(parseInt(max_tokens, 10) || 300, 1), MAX_TOKENS_CAP);
     // レース無線は物理的にも短く（長文の暴走を防ぐバックストップ）
-    if (mode === 'race') safeMaxTokens = _pendingJudgeTurn ? 100 : Math.min(safeMaxTokens, 100);
     const safeMaxChars = resolveReplyCharLimit(req.body, mode);
+    // Driverへの回答（max_chars>60）は完結した文を生成できる余裕を持たせる。短い自発コール（既定35字）は従来の100。
+    if (mode === 'race') { const _raceTokCap = safeMaxChars > 60 ? 300 : 100; safeMaxTokens = _pendingJudgeTurn ? Math.max(100, Math.min(safeMaxTokens, _raceTokCap)) : Math.min(safeMaxTokens, _raceTokCap); }
 
     // ユーザーログ（Railway のログで確認可能）
     if (userName) {
@@ -1575,6 +1582,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       let pendingText = '';
       let emittedText = '';
       let outputClosed = false;
+      let streamStopReason = null;   // provider終了理由（追跡用。max_tokensの尻切れを正常回答にしない）
+      let rawGeneratedChars = 0;
+      let replyDropReason = null;
       // ★WO016：Renderer側のturn取消（fetch abort）でclient接続が閉じたら、provider生成も
       //   SDKのsignal契約で取り消す。'close'は正常終了後にも来るため、未完了時だけを切断と扱う。
       //   切断後はwrite・judgment/end frameを出さず、stream ERRORとも区別して記録する。
@@ -1595,6 +1605,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (boundary < 0 && final && emittedText) {
             pendingText = '';
             outputClosed = true;
+            replyDropReason = replyDropReason || 'incomplete_tail_dropped';
+            return;
+          }
+          // 文末が無いまま token 上限で終わった生成は不完全な文。読み上げず、短い再質問へ置き換える。
+          if (boundary < 0 && final && streamStopReason === 'max_tokens') {
+            pendingText = '';
+            outputClosed = true;
+            replyDropReason = replyDropReason || 'max_tokens_incomplete';
             return;
           }
           const take = boundary >= 0 ? boundary + 1 : pendingText.length;
@@ -1610,6 +1628,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           // 「最終ラッ。」「次回は見越。」のような尻切れより、完成文1つを優先する。
           if (emittedText && unicodeLength(sentence) > remaining) {
             outputClosed = true;
+            replyDropReason = replyDropReason || 'next_sentence_over_limit';
             return;
           }
           const limited = limitReplyText(sentence, remaining);
@@ -1617,6 +1636,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
             res.write(limited);
             emittedText += limited;
             if (typeof res.flush === 'function') res.flush();
+          } else {
+            replyDropReason = replyDropReason || 'sentence_over_limit';
           }
           if (unicodeLength(sentence) > remaining || unicodeLength(emittedText) >= safeMaxChars) {
             outputClosed = true;
@@ -1769,14 +1790,16 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
               pendingText += event.delta.text;
               emitCompleteSentences(false);
             }
+            rawGeneratedChars += unicodeLength(event.delta.text);
           } else if (event.type === 'message_start') {
             streamUsage = { ...event.message.usage };
           } else if (event.type === 'message_delta') {
             if (event.usage) streamUsage = { ...streamUsage, output_tokens: event.usage.output_tokens };
             // ★2026-10-08 WO013途中レビュー差戻しP1：stop_reasonを捕まえる。
             //   'max_tokens'（打ち切り）は正常completionではない——合意を作らない。
-            if (_judgeTransportV1 && event.delta && typeof event.delta.stop_reason === 'string') {
-              jtStopReason = event.delta.stop_reason;
+            if (event.delta && typeof event.delta.stop_reason === 'string') {
+              streamStopReason = event.delta.stop_reason;
+              if (_judgeTransportV1) jtStopReason = event.delta.stop_reason;
             }
           } else if (event.type === 'message_stop') {
             if (_judgeTransportV1) jtSawMessageStop = true;
@@ -1790,6 +1813,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         }
         if (_judgeTransportV1) {
           emitJudgeTransport(true);
+          if (!jtEmitted && !clientClosed) {   // 完結した文が作れなかった：短い再質問を返す（不完全な断片を出さない）
+            const _fb = replyFallbackText(req.body); jtWriteFrame({ text: _fb }); jtEmitted += _fb; replyDropReason = replyDropReason || 'empty_after_limit';
+          }
           // Agreement requires a provable NORMAL completion: an explicit
           // SDK message_stop event AND a stop_reason that means the model
           // actually finished on its own (end_turn/stop_sequence) — not a
@@ -1811,7 +1837,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           }
         } else {
           emitCompleteSentences(true);
+          if (!emittedText && !clientClosed) {   // 完結した文が作れなかった：短い再質問を返す（不完全な断片を出さない）
+            const _fb = replyFallbackText(req.body);
+            res.write(_fb); emittedText = _fb; replyDropReason = replyDropReason || 'empty_after_limit';
+          }
         }
+        // 追跡：provider終了理由・生成長・最終本文長・上限・破棄理由（本文・秘密値は出さない）。最終本文のTTS/再生結果はRenderer側 UTTERANCE_FINAL。
+        console.log('[reply_trace] ' + JSON.stringify({ stop_reason: streamStopReason, generated_chars: rawGeneratedChars,
+          final_chars: unicodeLength(_judgeTransportV1 ? jtEmitted : emittedText), limit: safeMaxChars, max_tokens: safeMaxTokens, dropped: replyDropReason, mode }));
         logUsage(streamUsage);
         res.end();
       } catch (streamErr) {
@@ -1840,7 +1873,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (Array.isArray(response.content)) {
       response.content = response.content.map(block => (
         block && block.type === 'text'
-          ? { ...block, text: limitReplyText(block.text, safeMaxChars) }
+          ? { ...block, text: limitReplyText(block.text, safeMaxChars) || replyFallbackText(req.body) }
           : block
       ));
     }

@@ -230,7 +230,16 @@ function detect(driverText, context = {}) {
   //   （「ピット判断が違う。」／直前「左に車。今周ピットを確認する。」）は、
   //   直前が反射語で始まるというだけで反射経路へ入れてはならない。明示軸を先に解決する。
   const explicitNonReflexAxis = !!(spokenAxis && !negatesReflexWord);
-  if (!explicitNonReflexAxis && (prevIsReflex || reflexIsFresh) && (negated || soft)) {
+  // ★Build 311 実走(11/22)：直前が停止車両の反射だっただけで、無関係な話（「FPSが悪い…運転できる状態じゃない」「違う、iRacingの設定を聞きたい」）の
+  //   否定語を「反射コールへの訂正」と取り、「前方に停止車両の記録は撤回する」と言った。反射経路へ入れるのは、発話が反射の話題に触れている時
+  //   （左右・車・停止・並走・黄旗など）か、否定だけの短い発話の時に限る。別の話題を明示している発話は訂正にしない。
+  const OFF_TOPIC = /fps|フレームレート|グラフィック|画面|ディスプレ|モニター|解像度|描画|パソコン|\bPC\b|GPU|グラボ|\bVR\b|ラグ|遅延|マイク|音量|スピーカー|設定|セッティング|アイ\s*レーシング|iRacing|会話|エンジニア|声/i;
+  const REFLEX_TOPIC = /左|右|3台|三台|並走|横|停止|止まっ|前方|車|クラッシュ|事故|黄旗|イエロー|フラッグ|いない|いません|いる|来て|見えて/;
+  const bareNegation = text.replace(/[\s、。,.！!？?]/g, '').length <= 10;
+  const reflexRelevant = !(OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text))
+    && (REFLEX_TOPIC.test(text) || bareNegation);
+  if (!reflexRelevant && (prevIsReflex || reflexIsFresh) && !spokenAxis) return null;
+  if (!explicitNonReflexAxis && reflexRelevant && (prevIsReflex || reflexIsFresh) && (negated || soft)) {
     const kind = recentReflex ? recentReflex.kind : null;
     return {
       axis: (kind && REFLEX_AXIS[kind]) || axisOf(prev && prev.text) || 'nearby_car',
@@ -266,6 +275,8 @@ function detect(driverText, context = {}) {
   }
 
   // ③ 軸が特定できないが否定形。**黙って通常質問へ落とさない**（設計 v2 §B）。
+  //   ただし、車の話ではない話題（FPS・設定・画面など）を明示している発話は、訂正候補にもしない（Build 311 実走 11/22）。
+  if (OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text)) return null;
   if (negated || soft) {
     return {
       axis: null,
@@ -307,16 +318,15 @@ function resolveTurnPriority({ dispute, driverCommand }) {
 
 /** 訂正受領の最小応答（設計 v2 §C）：受領 → 旧値の撤回 → 新値を次から使う。 */
 function acknowledgementLine(item, lang) {
+  // 内部の記録処理（「記録は撤回する」「次の計測から入れ替える」）はDriverへ話さない。Driverには、何を取り消したかを自然な短文で伝える。
   const ja = String(lang || 'ja').toLowerCase().startsWith('ja');
-  const had = item && item.prior_claim_value !== null && item.prior_claim_value !== undefined;
-  if (ja) {
-    return had
-      ? `わかった、私の${item.prior_claim_value}という記録は撤回する。次の計測から入れ替えるよ。`
-      : 'わかった、今の値は保留にする。次の計測で言い直すよ。';
-  }
-  return had
-    ? `Understood - I am retracting my ${item.prior_claim_value}. I will use yours from the next reading.`
-    : 'Understood - I am holding that value and will re-state it at the next reading.';
+  const AX_JA = { stopped_car: '停止車両の呼びかけ', nearby_car: '並走の呼びかけ', yellow: '黄旗の呼びかけ', gap_behind: '後ろとの差', gap_ahead: '前との差', gap: '差の数字', incidents: 'インシデントの数', fuel: '燃料の話', pit: 'ピットの話', strategy: '戦略の話', car_state: 'タイヤの話', position: '順位', lap_time: 'ラップタイム' };
+  const AX_EN = { stopped_car: 'stopped-car call', nearby_car: 'side-by-side call', yellow: 'yellow-flag call', gap_behind: 'gap behind', gap_ahead: 'gap ahead', gap: 'gap figure', incidents: 'incident count', fuel: 'fuel note', pit: 'pit note', strategy: 'strategy note', car_state: 'tyre note', position: 'position', lap_time: 'lap time' };
+  // 何を取り消すかは、取り消す対象の本文を優先して決める（反射コールの軸は「前方の停止車両」も nearby_car に寄るため）。
+  const claim = String((item && item.prior_claim_value) || '');
+  const axis = /停止車両/.test(claim) ? 'stopped_car' : /左に車|右に車|3台並走|並走/.test(claim) ? 'nearby_car' : (item && item.axis);
+  if (ja) return AX_JA[axis] ? `了解、さっきの${AX_JA[axis]}は取り消す。` : '了解、さっきのは取り消す。';
+  return AX_EN[axis] ? `Understood, scratch that ${AX_EN[axis]}.` : 'Understood, scratch that.';
 }
 
 return { detect, axisOf, resolveAxis, isReflexText, acknowledgementLine, resolveTurnPriority, REFLEX_AXIS };

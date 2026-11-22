@@ -33,22 +33,22 @@ check('不足解消後の燃料OK通知を配線',
   && bridge.includes("'critical_to_safe'")
   && renderer.includes("case 'fuel_strategy_safe':"));
 check('レースとデブリーフの出力上限を縮小',
-  renderer.includes("(selMode==='race' && isJP) ? 55")
+  renderer.includes("(selMode==='race' && isJP) ? 260")
   && renderer.includes("(selMode==='debrief' && isJP) ? 120"));
-check('レース通常35字・戦略60字・デブリーフ70字を送信',
-  renderer.includes("selMode==='race' ? (isStrategyQuestion ? 60 : 35)")
+check('Driverへの回答：レース160字（完結文）・デブリーフ70字を送信',
+  renderer.includes("selMode==='race' ? 160")
   && renderer.includes("selMode==='debrief' ? 70")
   && renderer.includes('max_chars:maxChars'));
 check('サーバー側にもモード別文字数ハード上限',
-  server.includes("mode === 'race' ? 60")
+  server.includes("mode === 'race' ? 160")
   && server.includes("mode === 'debrief' ? 70")
   && server.includes('limitReplyText(block.text, safeMaxChars)'));
 check('ストリーミング本文も文単位で文字数制限',
   server.includes('emitCompleteSentences(false)')
   && server.includes('emitCompleteSentences(true)')
   && server.includes('safeMaxChars - unicodeLength(emittedText)'));
-check('Lunaレースプロンプトにも35字・戦略60字を明記',
-  prompts.includes('通常35文字以内。燃料・ピット・戦略への回答だけ60文字以内'));
+check('Lunaレースプロンプト：自発の無線は35字、質問への回答は160字以内の完結文',
+  prompts.includes('自発の短い無線は通常35文字以内') && prompts.includes('160文字以内の完結した文'));
 
 const limiterFns = server.match(/function unicodeLength[\s\S]*?(?=\/\/ ── Chat proxy)/);
 check('文字数ゲート関数を抽出', !!limiterFns);
@@ -58,8 +58,12 @@ if (limiterFns) {
   const longReply = '現在のペースは安定しています。後方とのギャップも十分あります。タイヤも問題ありません。';
   const limited35 = limitCtx.limitReplyText(longReply, 35);
   check('35文字以内かつ文末で完結', Array.from(limited35).length <= 35 && /[。！？!?]$/.test(limited35));
-  check('クライアントが大きな値を送ってもraceは60字',
-    limitCtx.resolveReplyCharLimit({max_chars:999}, 'race') === 60);
+  check('クライアントが大きな値を送ってもraceは160字',
+    limitCtx.resolveReplyCharLimit({max_chars:999}, 'race') === 160);
+  // Build 312：上限超過でも単語・文の途中で切らない。完結した文が収まらなければ空（呼出側が短い再質問へ置換）
+  const longOneSentence = 'iRacingのグラフィック設定でFPS改善するには、まずディスプレイの解像度とフレームレート上限を確認して、次に影と反射の品質を下げる必要がある。';
+  check('1文が上限を超える時は、途中で切らず空を返す（「まずディスプレ。」を作らない）', limitCtx.limitReplyText(longOneSentence, 35) === '');
+  check('複数文で上限を超える時は、最後の完結した文までを返す', limitCtx.limitReplyText('一つ目の文。二つ目の文は少し長めです。', 12) === '一つ目の文。');
   check('クライアント指定なしのraceは35字',
     limitCtx.resolveReplyCharLimit({}, 'race') === 35);
 }

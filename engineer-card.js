@@ -200,7 +200,12 @@ function classify(text, options = {}) {
   //   読み上げて終わっていた。相談は温度の質問ではない。
   //   セットアップ語 or ハンドリング症状があれば weather より先に取る。
   // セットアップという語そのものは、温度の質問ではありえない。単独で weather に勝つ。
-  const setupNoun = /セッ?ト\s*ア(?:ッ|ツ)?プ|セッティング|set-?up/i.test(t);
+  // 「FPS／グラフィック／画面／PC」の設定は車のセットアップ相談ではない（Build 311 実走 11/22：「FPSの基準を上げる…セッティングで何か変わる？」が
+  //   足回りの相談になった）。車の語（アンダー・タイヤ・ダンパー等）が無く、本文か直前の発話がシステム設定の話題なら、車の相談にしない。
+  const SYSTEM_SETTING_TOPIC = /fps|フレームレート|グラフィック|画面|ディスプレ|モニター|解像度|描画|カクつ|カクカク|パソコン|\bPC\b|GPU|グラボ|\bVR\b|ラグ|遅延|\bping\b|マイク|音量|スピーカー|(?:iRacing|アイ\s*レーシング|アイレーシング)(?:の)?\s*設定/i;
+  const CAR_SETUP_TERM = /アンダー|オーバー|タイヤ|キャンバー|トー(?:イン|アウト)?|ダンパー|スプリング|ウイング|ウィング|ブレーキ|アライメント|車高|サスペンション|デフ|ギア|ABS|\bTC\b|トラクション|グリップ|曲がらない|滑る/i;
+  const nonCarSetup = (SYSTEM_SETTING_TOPIC.test(t) || SYSTEM_SETTING_TOPIC.test(String(options.recentText || ''))) && !CAR_SETUP_TERM.test(t);
+  const setupNoun = !nonCarSetup && /セッ?ト\s*ア(?:ッ|ツ)?プ|セッティング|set-?up/i.test(t);
   // 「方向」「変えたい」「意見」等は単独では弱いので、症状と組み合わせて判定する。
   const setupIntent = /方向性|方向|変えたい|変更したい|振り|アドバイス|意見|どうすれば|balance/i.test(t);
   const handlingSymptom = /アンダー(?:ステア)?|オーバー(?:ステア)?|タイヤ.{0,6}(?:持たない|もたない|垂れ|タレ|厳しい|きつい)|グリップ.{0,6}(?:ない|落ち|不足)|曲がらない|滑る|フロント.{0,6}(?:食わない|入らない)|リア.{0,12}(?:出る|流れる|踏ん張り|グリップ).{0,8}(?:欲しい|ほしい|ない|不足)?|understeer|oversteer|grip|traction|slide|loose|push/i.test(t);

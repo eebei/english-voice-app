@@ -4006,9 +4006,11 @@ async function callAPI(inputSource, memoryStatus=''){
     //   言われた時モデルが尻切れ文の残りから補完＝単語の途中から始まる壊れた返答になる
     //   (Yuji 2026-07-15 Monza実走で発覚)。1返答で1論点を完結できる余裕に引き上げる。
     // レースは物理的にも短く（プロンプトの無線鉄則のバックストップ。冗長な4文返答を頭打ちに）
-    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 100
-                 : (selMode==='race' && isJP) ? 55
-                 : (selMode==='race' && !isJP) ? 45
+    // Build 312（暫定）：Driverへの回答は完結した文で160字以内。日本語160字は約200〜260トークンなので、途中で切れない余裕を持たせる
+    //   （旧：55トークン／35字で、長い一文が「まずディスプレ。」のように単語の途中で切れて読み上げられた）。自発コールは別経路で短い予算のまま。
+    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 260
+                 : (selMode==='race' && isJP) ? 260
+                 : (selMode==='race' && !isJP) ? 200
                  : (selMode==='debrief' && isJP) ? 120
                  : (selMode==='debrief' && !isJP) ? 100
                  : 550;
@@ -4018,7 +4020,7 @@ async function callAPI(inputSource, memoryStatus=''){
     updateNamedRivalFromUser(latestUserText);
     forwardDriverDamageReport(latestUserText);
     const isStrategyQuestion = /燃料|給油|リットル|リッター|ピット|戦略|作戦|残り.{0,4}(?:周|時間)|何周|アンダーカット|オーバーカット|fuel|pit|strategy|laps? left|undercut|overcut/i.test(latestUserText);
-    const maxChars = selMode==='race' ? (isStrategyQuestion ? 60 : 35)
+    const maxChars = selMode==='race' ? 160   // Driverへの回答：完結した文で160字以内（暫定）。isStrategyQuestionも同じ上限
                    : selMode==='debrief' ? 70
                    : 180;
     // ⚠️アクセスコードのみのセッション(八木さん/Tobi等)ではproductを送らない＝従来通りゲート無し。
