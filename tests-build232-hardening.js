@@ -48,7 +48,7 @@ check('ストリーミング本文も文単位で文字数制限',
   && server.includes('emitCompleteSentences(true)')
   && server.includes('safeMaxChars - unicodeLength(emittedText)'));
 check('Lunaレースプロンプト：自発の無線は35字、質問への回答は短い2〜3文で完結（上限値に応じた予算）',
-  prompts.includes('自発の短い無線は通常35文字以内') && prompts.includes('短い2〜3文で完結') && prompts.includes("文字以内の完結した文**で言い切れ") && prompts.includes('_ansLimit') && /Math\.min\(Math\.max\(Number\.parseInt\(p\.max_chars, 10\) \|\| 35, 12\), 160\)/.test(prompts));
+  prompts.includes('自発の短い無線は通常35文字以内') && prompts.includes('短い2〜3文で完結') && prompts.includes("文字以内の完結した文**で言い切れ") && prompts.includes('_ansLimit') && /Math\.min\(Math\.max\(Number\.parseInt\(p\.max_chars, 10\) \|\| 35, 12\), 240\)/.test(prompts));
 
 const limiterFns = server.match(/function unicodeLength[\s\S]*?(?=\/\/ ── Chat proxy)/);
 check('文字数ゲート関数を抽出', !!limiterFns);

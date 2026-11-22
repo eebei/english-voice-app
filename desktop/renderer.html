@@ -2503,8 +2503,8 @@ function staleRecoveryOnDiscard(){
       if(isBusy){ _staleRecovery.timer=setTimeout(run,300); return; }
       if(_staleRecovery.tries>=1){
         const msg=(typeof sel!=='undefined'&&sel==='LunaJP')?'数値が動いてて答えを出し切れなかった。もう一度聞いて。':'数値が更新され続けて答えを出せませんでした。もう一度聞いてください。';
+        addMsg('ai',msg);   // 画面表示と会話Boxへの記録（addMsgの既存経路）
         speak(msg,true);
-        if(typeof recordLunaTurn==='function') recordLunaTurn(msg,'stale_recovery_notice');
         pushMsg({role:'assistant',content:msg});
         diagnosticLog('STRATEGY_PROJECTION','stale_recovery_notice');
         return;
@@ -3803,7 +3803,7 @@ function strategyReplyBindingValid(binding,text,auxAtRequest,bindingUnchangedFro
 
 async function callAPI(inputSource, memoryStatus=''){
   usageCount(inputSource==='ptt'?'ptt':'typed');
-  staleRecoveryNoteStart(inputSource,memoryStatus);
+  if(typeof staleRecoveryNoteStart==='function') staleRecoveryNoteStart(inputSource,memoryStatus);
   // ★WO016：この呼出し＝1turn owner。外部（優先入力・PTT割込み）から取消せるcontrollerを持ち、
   //   取消後は本文/判定/履歴/memoryへ到達しない。終了時はownerの時だけbusyを閉じる。
   const _turn=(typeof beginDriverTurn==='function')?beginDriverTurn(inputSource):null;
@@ -4962,7 +4962,7 @@ function speak(text, opts){
   const prio = (typeof o.prio === 'number') ? o.prio : SPEAK_PRIO.P4_INFO;
   const kind = o.kind||'radio';
   // ★設計§24.16：予選のアタック中は、安全・車両異常・Driverへの返答以外の自発発話を捨てる（アタック後に古い情報をまとめて流さない）。
-  if(qualifyPhaseNow==='attack'&&window.PitwallQualifyPhase&&window.PitwallQualifyPhase.quietDuring(qualifyPhaseNow,prio,kind)){
+  if(typeof qualifyPhaseNow!=='undefined'&&qualifyPhaseNow==='attack'&&typeof window!=='undefined'&&window.PitwallQualifyPhase&&window.PitwallQualifyPhase.quietDuring(qualifyPhaseNow,prio,kind)){
     diagnosticLog('QUALIFY_PHASE','quiet_drop kind='+kind+' prio='+prio);
     lastQueuedSpeakItem=null;
     if(typeof o.onDelivery==='function'){ try{o.onDelivery('suppressed_by_user','qualify_attack_quiet');}catch(e){} }

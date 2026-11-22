@@ -81,7 +81,7 @@ const M = [
   ['FW78', 'desktop/qualify-phase.js', "      else if (n <= attackLaps) { hadAttack = true; setPhase('attack', 'timed_lap'); }", "      else if (n <= attackLaps) { hadAttack = true; setPhase('prep', 'timed_lap'); }", 'qual', 'アタック周を準備扱いにして抑制しない'],
   ['FW79', 'desktop/qualify-phase.js', "        exitedNow = (prevOnPit === true);", "        exitedNow = true;", 'qual', '途中から観測を始めてもアウトラップと断定して声かけする'],
   ['FW80', 'desktop/qualify-phase.js', "if (!isQualifying(sessionType) || !live) {", "if (!live) {", 'qual', 'Race等の予選以外でも予選フェーズを判定して抑制する'],
-  ['FW81', 'desktop/renderer.html', "  if(qualifyPhaseNow==='attack'&&window.PitwallQualifyPhase&&", "  if(false&&window.PitwallQualifyPhase&&", 'qual', 'speak()に予選アタック中の抑制を配線しない'],
+  ['FW81', 'desktop/renderer.html', "  if(typeof qualifyPhaseNow!=='undefined'&&qualifyPhaseNow==='attack'&&typeof window", "  if(false&&typeof window", 'qual', 'speak()に予選アタック中の抑制を配線しない'],
   ['FW82', 'desktop/renderer.html', "        qualifyPhaseOnTelemetry(data);", "", 'qual', 'telemetry入口に予選フェーズ判定を配線しない'],
   ['FW8', 'desktop/fuel-window.js', "if (target <= cap + 1e-9) {", "if (target <= cap + 1e9) {", 'unit', '容量に収まらなくても開き扱いにする'],
   ['FW9', 'desktop/renderer.html', "if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;", "if(postPitFuel.pendingFor===0) return;", 'e2e', '給油後の同じ結論を繰り返す'],
