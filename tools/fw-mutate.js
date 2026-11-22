@@ -63,6 +63,7 @@ const M = [
   ['FW60', 'server.js', "        console.log('[reply_trace] ' + JSON.stringify(", "        if (false) console.log('[reply_trace] ' + JSON.stringify(", 'conv', 'provider終了理由・生成長・最終本文長の追跡を出さない'],
   ['FW61', 'server.js', '              streamStopReason = event.delta.stop_reason;\n', '', 'conv', 'provider終了理由を捕まえない（max_tokensの尻切れを正常回答にする）'],
   ['FW62', 'prompts.js', "    // Build 312（暫定）：ドライバーの質問への回答は、結論と必要な理由・手順を**完結した文**で言い切る。短く切るために文の途中で終わらせない。\n    if (mode === 'race') {", '    // Build 312（暫定）：ドライバーの質問への回答は、結論と必要な理由・手順を**完結した文**で言い切る。短く切るために文の途中で終わらせない。\n    if (false) {', 'conv', '生成指示から回答の予算（160字・完結）を外す'],
+  ['FW63', 'desktop/dispute-detector.js', '  const offTopicText = OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text) && !REFLEX_VISIBILITY.test(text);', '  const offTopicText = OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text);', 'conv', '「画面には何も見えない」（車が見えない）を画面設定の話として訂正を取りこぼす（検査R-C312-1）'],
   ['FW8', 'desktop/fuel-window.js', "if (target <= cap + 1e-9) {", "if (target <= cap + 1e9) {", 'unit', '容量に収まらなくても開き扱いにする'],
   ['FW9', 'desktop/renderer.html', "if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;", "if(postPitFuel.pendingFor===0) return;", 'e2e', '給油後の同じ結論を繰り返す'],
 ];

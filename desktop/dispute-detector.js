@@ -236,8 +236,11 @@ function detect(driverText, context = {}) {
   const OFF_TOPIC = /fps|フレームレート|グラフィック|画面|ディスプレ|モニター|解像度|描画|パソコン|\bPC\b|GPU|グラボ|\bVR\b|ラグ|遅延|マイク|音量|スピーカー|設定|セッティング|アイ\s*レーシング|iRacing|会話|エンジニア|声/i;
   const REFLEX_TOPIC = /左|右|3台|三台|並走|横|停止|止まっ|前方|車|クラッシュ|事故|黄旗|イエロー|フラッグ|いない|いません|いる|来て|見えて/;
   const bareNegation = text.replace(/[\s、。,.！!？?]/g, '').length <= 10;
-  const reflexRelevant = !(OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text))
-    && (REFLEX_TOPIC.test(text) || bareNegation);
+  // 「画面には何も見えない」「モニターには映ってない」は、車（反射コールの対象）が見えないという存在の否定であって、画面設定の話ではない（検査 R-C312-1）。
+  const REFLEX_VISIBILITY = /(?:画面|モニター|ディスプレ[イー]?)(?:に|には|で|では|の中)?[^。、]{0,8}(?:見え|映)(?:て|ら)?(?:ない|ません|ていない|ってない)/;
+  const offTopicText = OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text) && !REFLEX_VISIBILITY.test(text);
+  const reflexRelevant = !offTopicText
+    && (REFLEX_TOPIC.test(text) || REFLEX_VISIBILITY.test(text) || bareNegation);
   if (!reflexRelevant && (prevIsReflex || reflexIsFresh) && !spokenAxis) return null;
   if (!explicitNonReflexAxis && reflexRelevant && (prevIsReflex || reflexIsFresh) && (negated || soft)) {
     const kind = recentReflex ? recentReflex.kind : null;
@@ -276,7 +279,7 @@ function detect(driverText, context = {}) {
 
   // ③ 軸が特定できないが否定形。**黙って通常質問へ落とさない**（設計 v2 §B）。
   //   ただし、車の話ではない話題（FPS・設定・画面など）を明示している発話は、訂正候補にもしない（Build 311 実走 11/22）。
-  if (OFF_TOPIC.test(text) && !REFLEX_TOPIC.test(text)) return null;
+  if (offTopicText) return null;
   if (negated || soft) {
     return {
       axis: null,

@@ -94,6 +94,16 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     h.ev("addMsg('ai','前方に停止車両。注意。');pushMsg({role:'assistant',content:'前方に停止車両。注意。'})");
     const t10 = await ask(h, 'いや、前方に停止車両なんかいないよ');
     ck('7a 実際の訂正（停止車両はいない）は取り消し、内部の記録処理の定型文を話さない：「了解、さっきの停止車両の呼びかけは取り消す。」', t10.spoken.join('').includes('了解、さっきの停止車両の呼びかけは取り消す。') && !/記録|次の計測/.test(t10.spoken.join('')), t10);
+    // 検査 R-C312-1：「画面」「モニター」を含む本物の訂正（車が見えない）は取り消す。FPS・設定の話は取り消さない
+    for (const t of ['画面には何も見えないよ', 'モニターには映ってない、違う']) {
+      h.ev("addMsg('ai','前方に停止車両。注意。');pushMsg({role:'assistant',content:'前方に停止車両。注意。'})");
+      const r = await ask(h, t);
+      ck('7d 「' + t + '」は停止車両コールへの本物の訂正として取り消す（画面・モニターの語で取りこぼさない）', r.spoken.join('').includes('取り消す。') && !/記録|次の計測/.test(r.spoken.join('')), r);
+    }
+    srv.queueReply('画面がカクカク', 'カクつきならグラフィック設定の解像度を下げてみよう。');
+    h.ev("addMsg('ai','前方に停止車両。注意。');pushMsg({role:'assistant',content:'前方に停止車両。注意。'})");
+    const r7e = await ask(h, '画面がカクカクして違う設定にしたい');
+    ck('7e 画面の設定の話（違う設定にしたい）は訂正にしない：取り消しを言わず、会話へ届く', !r7e.spoken.join('').includes('取り消す') && r7e.spoken.some(t => /グラフィック設定の解像度/.test(t)), r7e);
     ck('7b 追加のLLM呼出（有料API）は発生していない：Driver発話ごとの要求数＝会話に回した発話数', h.state.chats.length >= 7, h.state.chats.length);
     ck('7c 実行中に例外なし', h.state.errors.length === 0, h.state.errors.slice(0, 3));
   });
