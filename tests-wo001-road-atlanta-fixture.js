@@ -794,13 +794,13 @@ function probeServerTruncationDependency(rendererSrc) {
   const from = "if (boundary < 0 && final && emittedText) {\n            pendingText = '';\n            outputClosed = true;\n            replyDropReason = replyDropReason || 'incomplete_tail_dropped';\n            return;\n          }";
   const runVariant = (src, feedText) => {
     const ctx = { console, safeMaxChars: 500, limitReplyText: (s) => s, unicodeLength: (s) => s.length,
-      pendingText: '', emittedText: '', outputClosed: false, clientClosed: false, replyDropReason: null, streamStopReason: null, __written: '' };
+      pendingText: '', emittedText: '', outputClosed: false, clientClosed: false, replyDropReason: null, streamStopReason: null, emittedSentences: 0, safeMaxSentences: Infinity, __written: '' };
     ctx.globalThis = ctx;
     ctx.res = { write: (s) => { ctx.__written += s; }, flush: () => {} };
     vm.createContext(ctx);
     vm.runInContext(
       'var pendingText = globalThis.pendingText, emittedText = globalThis.emittedText, '
-      + 'outputClosed = globalThis.outputClosed, clientClosed = globalThis.clientClosed, replyDropReason = globalThis.replyDropReason, streamStopReason = globalThis.streamStopReason;\n' + src, ctx);
+      + 'outputClosed = globalThis.outputClosed, clientClosed = globalThis.clientClosed, replyDropReason = globalThis.replyDropReason, streamStopReason = globalThis.streamStopReason, emittedSentences = globalThis.emittedSentences, safeMaxSentences = globalThis.safeMaxSentences;\n' + src, ctx);
     ctx.pendingText += feedText;
     ctx.emitCompleteSentences(true);
     return ctx.__written;

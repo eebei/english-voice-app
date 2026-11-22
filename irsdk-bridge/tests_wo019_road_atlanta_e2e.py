@@ -1573,8 +1573,10 @@ def c_llm_wait_canonical_change(R):
     changed = any(nch.get('started_frame', 0) < e <= nch.get('finished_frame', 0) for e in exits)
     spoken_ch = [u for u in ch['desktop']['utterances'] if u.get('text') and WAIT_A.startswith(u['text'])]
     spoken_co = [u for u in co['desktop']['utterances'] if u.get('text') and WAIT_A.startswith(u['text'])]
-    return _ok(len(_wait_reqs(ch)) == 1 and len(_wait_reqs(co)) == 1 and changed
-               and not [x for x in (nch.get('assistant') or []) if not re.match(r'^給油(完了|後でも)', x)] and not spoken_ch   # Build 309: 実ピット完了後の決定論の「給油完了…」(新機能)は、応答待ちだった旧い返答ではないので数えない
+    # Build 313（設計§24.16）：失効した返答は話さず履歴にも残さない（不変）。ただし質問全体を無言で捨てず、最新値で1回だけ自動で答え直す（要求は最大2回）。
+    #   答え直しも失効する時は短い確認（「数値が動いて…もう一度聞いて」）だけが残る。旧Planの返答（WAIT_A）そのものは話されず、履歴にも残らない。
+    return _ok(len(_wait_reqs(ch)) in (1, 2) and len(_wait_reqs(co)) == 1 and changed
+               and not [x for x in (nch.get('assistant') or []) if not re.match(r'^(給油(完了|後でも)|数値が動いて)', x)] and WAIT_A not in (nch.get('assistant') or []) and not spoken_ch   # Build 309: 実ピット完了後の決定論の「給油完了…」(新機能)は、応答待ちだった旧い返答ではないので数えない
                and nco.get('assistant') == [WAIT_A] and spoken_co and 'completed' in spoken_co[0]['states'],
                {'change_window': (nch.get('started_frame'), nch.get('finished_frame'), exits), 'change_spoken': spoken_ch,
                 'control_assistant': nco.get('assistant'), 'control_states': spoken_co and spoken_co[0]['states']})
@@ -1585,7 +1587,7 @@ def c_llm_wait_ttl_contract(R):
     snapshot it was built on, even with no change. Recorded so a change to it is visible."""
     r = R['llm_wait_long_no_change']
     n = r['notes'].get('wait_q') or {}
-    return _ok(len(_wait_reqs(r)) == 1 and not n.get('assistant'),
+    return _ok(len(_wait_reqs(r)) in (1, 2) and WAIT_A not in (n.get('assistant') or []) and not [x for x in (n.get('assistant') or []) if not x.startswith('数値が動いて')],   # Build 313：期限切れでも質問を無言で捨てない（最大1回の答え直し→短い確認）
                {'held_frames': (n.get('started_frame'), n.get('finished_frame')), 'assistant': n.get('assistant')})
 
 
