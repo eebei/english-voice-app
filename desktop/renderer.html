@@ -4008,7 +4008,7 @@ async function callAPI(inputSource, memoryStatus=''){
     // レースは物理的にも短く（プロンプトの無線鉄則のバックストップ。冗長な4文返答を頭打ちに）
     // Build 312（暫定）：Driverへの回答は完結した文で160字以内。日本語160字は約200〜260トークンなので、途中で切れない余裕を持たせる
     //   （旧：55トークン／35字で、長い一文が「まずディスプレ。」のように単語の途中で切れて読み上げられた）。自発コールは別経路で短い予算のまま。
-    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 260
+    const maxTok = (selMode==='race' && _judgePendingAtRequest) ? 100   // 提案への合意の応答（判定タグつき）は従来の予算のまま
                  : (selMode==='race' && isJP) ? 260
                  : (selMode==='race' && !isJP) ? 200
                  : (selMode==='debrief' && isJP) ? 120
