@@ -37,7 +37,7 @@ check('明示保存はcallAPIを待たせない',
   && !/await saveMemory\(\{force:true, reason:'explicit_request'\}\)/.test(renderer)
   && /await callAPI\(inputSource==='ptt'\?'ptt':'typed', memoryStatus\)/.test(renderer));
 check('保存中ステータスをcall単位でLLMへ注入',
-  /async function callAPI\(inputSource, memoryStatus=''\)/.test(renderer)
+  /async function callAPI\(inputSource, memoryStatus='', _callOpts=null\)/.test(renderer)
   && /buildMemoryStatusNote\(_isJP_pre, memoryStatus\)/.test(renderer)
   && renderer.includes('バックグラウンドで保存処理中')
   && !renderer.includes('pendingMemoryStatus'));
