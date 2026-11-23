@@ -105,8 +105,8 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     const r7e = await ask(h, '画面がカクカクして違う設定にしたい');
     ck('7e 画面の設定の話（違う設定にしたい）は訂正にしない：取り消しを言わず、会話へ届く', !r7e.spoken.join('').includes('取り消す') && r7e.spoken.some(t => /グラフィック設定の解像度/.test(t)), r7e);
     // 監査 R-C312-3：表示装置そのものの故障・不調（主語が装置）は、停止車両コールの確定訂正にせず会話へ送る
-    for (const t of ['ディスプレイが故障して映らない、違う', 'ディスプレイが映らない、違う']) {
-      srv.queueReply('ディスプレイが', 'ディスプレイの接続とケーブルを確認して、別の入力へ切り替えてみよう。');
+    for (const t of ['ディスプレイが故障して映らない、違う', 'ディスプレイが映らない、違う', 'ディスプレイには故障で何も映ってない、違う']) {
+      srv.queueReply('ディスプレイ', 'ディスプレイの接続とケーブルを確認して、別の入力へ切り替えてみよう。');
       h.ev("addMsg('ai','前方に停止車両。注意。');pushMsg({role:'assistant',content:'前方に停止車両。注意。'})");
       const n0 = h.diag(/DISPUTE_DETECTED/).length;
       const r = await ask(h, t);
@@ -164,8 +164,21 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     await h.say('Aの質問を教えて'); await h.say('Bの質問を教えて');
     await h.sleep(1200); await finishAudio(h, 4);
     const lastUsers = h.state.chats.slice(c0).map(c => String((c.messages[c.messages.length - 1] || {}).content || ''));
-    ck('11c 失効の直後に新しい質問が始まったら、古い質問を答え直さず、新しい質問だけが答えられる', lastUsers.filter(t => /Aの質問/.test(t)).length === 1 && finals(h).slice(-2).join('').includes('Bの質問には') && !finals(h).slice(-3).join('').includes('Aの答え'), { lastUsers, f: finals(h).slice(-3) });
-    h.ev("strategyReplyBindingValid=window.__orig_srbv; window.__stale=0;");
+    ck('11c 失効の直後に新しい質問が始まったら、古い質問を答え直さず、新しい質問だけが答えられる', h.state.chats.length - c0 === 2 && lastUsers.filter(t => /Aの質問/.test(t)).length === 1 && finals(h).slice(-2).join('').includes('Bの質問には') && !finals(h).slice(-3).join('').includes('Aの答え'), { lastUsers, f: finals(h).slice(-3) });
+    // 実走型（R-C313-2）：数値が1秒で動き続けるため、数値を含む返答は何度作り直しても失効する。答え直しは「数値を言わない」指示で組み直し、無言にも確認だけにもならず質問に答える
+    h.ev("window.__stale=0; strategyReplyBindingValid=window.__orig_srbv; window.__orig_vaf=verifiedAuxFieldsStillFresh; verifiedAuxFieldsStillFresh=function(t){ if(/\\d/.test(String(t||''))) return false; return window.__orig_vaf.apply(this,arguments); };");
+    srv.queueReply('影の段階', '影は2段階下げると効く。次に反射も1段下げよう。');
+    srv.queueReply('影の段階', '影と反射を一段ずつ下げるのが先。ミラーの描画は後でいい。');
+    const dg0 = h.diag(/stale_reason/).length;
+    const c1 = h.state.chats.length;
+    const r18 = await ask(h, '影の段階はどうする？');
+    await h.sleep(1200); await finishAudio(h, 4);
+    const sp18 = finals(h).slice(-3).join('');
+    const bodies = h.state.chats.slice(c1);
+    ck('11d 数値を含む返答が毎回失効する状況でも、答え直しは数値なしで質問に答える（数値入りの古い返答は話さない・確認だけで終わらない）', /影と反射を一段ずつ下げるのが先/.test(sp18) && !/2段階/.test(sp18) && !/もう一度聞いて/.test(sp18), { sp18, n: bodies.length });
+    ck('11e 答え直しの要求だけが no_numbers=true（最初の要求は通常）（最初の要求は通常）', bodies.length === 2 && !bodies[0].no_numbers && bodies[1].no_numbers === true, { n: bodies.length, nn: bodies.map(b => b.no_numbers) });
+    ck('11f 失効の原因（どの検査が偽か）が診断ログに残る', h.diag(/stale_reason=aux_fields/).length > 0 && h.diag(/stale_reason/).slice(dg0).some(t => /aux_fields/.test(t)), h.diag(/stale_reason/).slice(dg0));
+    h.ev("strategyReplyBindingValid=window.__orig_srbv; verifiedAuxFieldsStillFresh=window.__orig_vaf; window.__stale=0;");
     ck('7b 追加のLLM呼出（有料API）は発生していない：Driver発話ごとの要求数＝会話に回した発話数', h.state.chats.length >= 7, h.state.chats.length);
     ck('7c 実行中に例外なし', h.state.errors.length === 0, h.state.errors.slice(0, 3));
   });
@@ -179,6 +192,9 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
       const old = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: mc }));
       ck('8b 旧Desktop(max_chars=' + mc + ')：「35文字以内の完結した文」と「最初の文に結論」を指示し、「160文字以内」を指示しない', /35文字以内の完結した文/.test(old) && /最初の文に結論か手順の要点/.test(old) && !/160文字以内/.test(old), old.length);
     }
+    const nn = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 240, no_numbers: true }));
+    const nn0 = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 240 }));
+    ck('8d 失効後の答え直し（no_numbers=true）だけに「今回は数値を言わない」指示が載り、通常の要求には載らない', /今回は数値を言わない/.test(nn) && !/今回は数値を言わない/.test(nn0), [nn.length, nn0.length]);
     const mid = JSON.stringify(require('./prompts').buildSystem({ character: 'LunaJP', mode: 'race', telemetry: 'live', liveData: {}, raceContext: null, raceContextModern: false, max_chars: 240 }));
     ck('8c 新Desktop(240)：最初の文に結論・相槌だけの文で終えない指示が載る', /最初の文に結論か手順の要点を入れ、「〜だね。」のような相槌だけの文で終えるな/.test(mid), mid.length);
   }

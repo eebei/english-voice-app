@@ -16,17 +16,21 @@ const F = (o) => ({ on_pit_road: false, on_track: true, lap: 0, ...o });
   ck('U1 ピット内（走行前）＝準備', ph(F({ on_pit_road: true })) === 'prep');
   ck('U2 ピット出口を出た周＝アウトラップ（準備）。遷移理由outlap', ph(F({ lap: 0 })) === 'prep');
   ck('U3 ライン通過後の周＝アタック', ph(F({ lap: 1 })) === 'attack' && t.transition().reason === 'timed_lap');
-  ck('U4 計測ラップ後の周＝終了後（インラップ）。attack→postの遷移', ph(F({ lap: 2 })) === 'post' && t.transition().from === 'attack');
-  ck('U5 ピットへ戻った後も終了後。再度出れば新しい走行でアウトラップ（準備）に戻る', ph(F({ on_pit_road: true, lap: 2 })) === 'post' && ph(F({ lap: 2 })) === 'prep' && ph(F({ lap: 3 })) === 'attack');
+  ck('U4 複数周回の予選：ライン通過後の2周目・3周目・5周目もアタックのまま（周回数ではアタックを終えない）。遷移なし', ph(F({ lap: 2 })) === 'attack' && t.transition() === null && ph(F({ lap: 3 })) === 'attack' && ph(F({ lap: 5 })) === 'attack' && t.transition() === null);
+  ck('U4b スピン・コース外（on_track=false）や残り時間null・欠測でも、アタックのまま（抑制を外さない）', ph(F({ lap: 5, on_track: false })) === 'attack' && ph(F({ lap: 5, session_time_remaining_s: null })) === 'attack' && ph(F({ lap: 6, session_time_remaining_s: 300 })) === 'attack');
+  ck('U5 ピットへ戻った時にアタック→終了後（pit_in）。再度出れば新しい走行でアウトラップ（準備）→次の周でアタック。ピット入出を繰り返しても同じ', ph(F({ on_pit_road: true, lap: 6 })) === 'post' && t.transition().from === 'attack' && t.transition().reason === 'pit_in' && ph(F({ lap: 6 })) === 'prep' && ph(F({ lap: 7 })) === 'attack' && ph(F({ on_pit_road: true, lap: 9 })) === 'post' && ph(F({ lap: 9 })) === 'prep');
+  for (const st of ['Lone Qualify', 'Open Qualify']) { const x = Q.create(); x.update(F({ on_pit_road: true }), st); x.update(F({ lap: 0 }), st); ck('U5b ' + st + '：複数周回でアタックを維持し、ピット復帰で終了後', x.update(F({ lap: 1 }), st) === 'attack' && x.update(F({ lap: 4 }), st) === 'attack' && x.update(F({ lap: 4, on_pit_road: true }), st) === 'post'); }
+  const mid = Q.create(); mid.update(F({ lap: 3 }), 'Open Qualify');
+  ck('U5c 途中から観測を始めた時（ピット出口を見ていない）は、アウトラップと断定せず声かけも出さない', mid.phase() === 'prep' && mid.transition() && mid.transition().reason === 'observe_start' && Q.lineFor(mid.transition(), {}, 'jp') === null, mid.transition());
   const r = Q.create(); ck('U6 Raceセッションでは判定しない（none）', r.update(F({ lap: 5 }), 'Race') === 'none');
-  const e = Q.create(); e.update(F({ lap: 0 }), QS); ck('U7 セッション残り時間0＝終了後', e.update(F({ lap: 1, session_time_remaining_s: 0 }), QS) === 'post');
+  const e = Q.create(); e.update(F({ lap: 0 }), QS); e.update(F({ lap: 1 }), QS); ck('U7 セッション残り時間0＝終了後（アタック中でも）', e.update(F({ lap: 2, session_time_remaining_s: 0 }), QS) === 'post');
   const two = Q.create({ attackLaps: 2 }); two.update(F({ lap: 0 }), QS);
-  ck('U8 2周計測：1周目・2周目ともアタック、3周目からインラップ', two.update(F({ lap: 1 }), QS) === 'attack' && two.update(F({ lap: 2 }), QS) === 'attack' && two.update(F({ lap: 3 }), QS) === 'post');
+  ck('U8 周回数の上限を指定した時だけ：2周までアタック、3周目からpost（既定は上限なし）', two.update(F({ lap: 1 }), QS) === 'attack' && two.update(F({ lap: 2 }), QS) === 'attack' && two.update(F({ lap: 3 }), QS) === 'post');
   ck('U9 抑制規則：アタック中は自発のP3以降だけ捨て、安全P0・危険P1・手順P2・Driverへの返答は通す', Q.quietDuring('attack', 4, 'radio') && Q.quietDuring('attack', 3, 'radio') && !Q.quietDuring('attack', 0, 'radio') && !Q.quietDuring('attack', 1, 'radio') && !Q.quietDuring('attack', 2, 'radio') && !Q.quietDuring('attack', 5, 'reply') && !Q.quietDuring('prep', 4, 'radio') && !Q.quietDuring('post', 4, 'radio'));
   const l1 = Q.lineFor({ from: 'none', to: 'prep', reason: 'outlap' }, { trackTempC: 27.4 }, 'jp');
   const l2 = Q.lineFor({ from: 'none', to: 'prep', reason: 'outlap' }, {}, 'jp');
   ck('U10 アウトラップの声かけ：路面温度は実測がある時だけ。タイヤ温度などの実測できない値は言わない', /路面は27度/.test(l1) && !/路面/.test(l2) && !/タイヤ温度|\d+℃/.test(l1 + l2) && !/撤回|記録/.test(l1 + l2), { l1, l2 });
-  ck('U11 計測ラップ終了の声かけ（インラップ）。順位は鮮度が確認できないので言わない', /インラップ/.test(Q.lineFor({ from: 'attack', to: 'post', reason: 'inlap' }, {}, 'jp')) && !/番手|位/.test(Q.lineFor({ from: 'attack', to: 'post', reason: 'inlap' }, {}, 'jp')));
+  ck('U11 走行終了（ピット復帰）の声かけ。「計測ラップ終了」「インラップ」と断定せず、タイム・順位・有効周回は言わない（鮮度・有効性が未確認）', /走行終了/.test(Q.lineFor({ from: 'attack', to: 'post', reason: 'pit_in' }, {}, 'jp')) && !/インラップ|計測ラップ終了|番手|位|\d/.test(Q.lineFor({ from: 'attack', to: 'post', reason: 'pit_in' }, {}, 'jp')));
 }
 
 // ── 実renderer ──
@@ -54,9 +58,13 @@ const F = (o) => ({ on_pit_road: false, on_track: true, lap: 0, ...o });
   const after = finals().slice(n0);
   ck('E4 アタック中でも安全コール(P0)とDriverへの返答は話される', after.some(t => /左に車/.test(t)) && after.some(t => /グリップは十分/.test(t)), after);
   feed({ lap: 2 }); await settle();
-  ck('E5 計測ラップ終了で「インラップ」の声かけ。アタック中に捨てた発話は再生されない', finals().some(t => /計測ラップ終了。インラップ/.test(t)) && !finals().some(t => /ベスト更新|ペースダウン/.test(t)), finals());
+  ck('E4b 2周目に入っても誤った帰還指示を話さず、アタックの抑制は続く（複数周回）', h.ev('qualifyPhaseNow') === 'attack' && !finals().some(t => /インラップ|走行終了/.test(t)), finals());
+  h.ev("speak('ペースダウン。状況は？', {prio: SPEAK_PRIO.P3_INFO, kind: 'radio'})"); await settle();
+  ck('E4c 2周目でも非緊急の自発発話は捨てる', !finals().some(t => /ペースダウン/.test(t)), finals());
+  feed({ on_pit_road: true, lap: 2 }); await settle();
+  ck('E5 ピットへ戻ると「走行終了」の声かけ（終了後）。アタック中に捨てた発話は再生されない', finals().some(t => /走行終了。タイヤと路面を確認/.test(t)) && !finals().some(t => /ベスト更新|ペースダウン/.test(t)), finals());
   h.ev("speak('ベスト更新。1分23秒456。', {prio: SPEAK_PRIO.P4_INFO, kind: 'radio'})"); await settle();
-  ck('E6 終了後（インラップ）は通常どおり自発発話を話す', finals().some(t => /ベスト更新/.test(t)), finals());
+  ck('E6 終了後（ピット内）は通常どおり自発発話を話す', finals().some(t => /ベスト更新/.test(t)), finals());
   // 実入口：Bridge の canonical snapshot と telemetry_live を実 irBridge.onmessage へ流し、実ingestion経由で判定が動く
   {
     const RID = 'sub:90286845'; let cseq = 1000; let connected = true;
@@ -75,7 +83,7 @@ const F = (o) => ({ on_pit_road: false, on_track: true, lap: 0, ...o });
     await tel({ lap: 3, pit: true }); h.set('lastSessionType', 'Lone Qualify'); await tel({ lap: 3, pit: true }); await tel({ lap: 3, pit: false }); await tel({ lap: 4, pit: false });
     ck('E9 実のBridge telemetry入口（canonical＋telemetry_live）から、ピット出口→ライン通過でアタックと判定される', h.ev('qualifyPhaseNow') === 'attack', { ph: h.ev('qualifyPhaseNow'), q: h.diag(/QUALIFY_PHASE/) });
     await tel({ lap: 5, pit: false });
-    ck('E10 次の周でインラップ（終了後）に変わる', h.ev('qualifyPhaseNow') === 'post', h.ev('qualifyPhaseNow'));
+    ck('E10 次の周に入ってもアタックのまま（複数周回）。ピットへ戻ると終了後に変わる', h.ev('qualifyPhaseNow') === 'attack' && (await tel({ lap: 5, pit: true }), h.ev('qualifyPhaseNow') === 'post'), h.ev('qualifyPhaseNow'));
   }
   h.set('lastSessionType', 'Race'); feed({ lap: 5 });
   ck('E7 Raceセッションでは予選の抑制を一切かけない（none）', h.ev('qualifyPhaseNow') === 'none');

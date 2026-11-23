@@ -799,6 +799,12 @@ function buildSystem(p) {
           + '\nFPS・グラフィック・画面・PCなど**車ではないシステム設定**の相談は、車のセッティングと混同するな。iRacingのグラフィック設定の一般的な改善手順（解像度・影・ミラー・ターゲットFPS・不要な描画の削減など）を、分かる範囲で順に1つずつ短く案内し、分からない点は正直に分からないと言え。内部記録や撤回の話（「記録は撤回する」等）はドライバーへ話すな。'
         : '\n\n[ANSWER BUDGET — top priority] When the driver asks a question, answer in ' + (_ansAnswer ? '2-3 short COMPLETE sentences (one if the question is simple)' : 'COMPLETE sentences within ' + _ansLimit + ' characters (aim for about ' + _ansAim + ')') + ': conclusion first, then only the needed reason or step. Put the conclusion or key step in the FIRST sentence; never spend the budget on an acknowledgement alone. Never stop mid-sentence or mid-word. If it does not fit, give the conclusion and the first step only; continue when asked "and then?". Continue from what you actually just said. Do not narrate internal record-keeping.';
     }
+    // R-C313-2：数値が動いて直前の返答が失効した後の答え直し。ライブの数値は言わず、結論と次の行動だけを短く。
+    if (mode === 'race' && p.no_numbers === true) {
+      modeNote += isJ
+        ? '\n\n【今回は数値を言わない】直前の返答は、その間に数値が動いたため捨てられた。今回は、差（秒）・順位・周回・燃料量・タイムなどの**具体的な数値を一切言わず**、結論と次にすることだけを短い2文以内で言い切れ。数値は、ドライバーが聞き直した時に最新値で答える。'
+        : '\n\n[NO NUMBERS THIS TIME] Your previous answer was discarded because the numbers moved. Say NO specific numbers (gaps, positions, laps, fuel, times); give only the conclusion and the next action in at most two short sentences. Numbers will be given fresh if the driver asks again.';
+    }
     if (mode === 'strategy') {
       modeNote += isJ
         ? '\n\n━━ セッション種別の質問禁止（最優先）━━\n「今日はレースか、テストか」は絶対に質問するな。Practice／Qualify／RaceはCURRENT SESSIONの権威データをこちらから宣言する。UNKNOWNなら接続待ちとだけ扱い、種別を推測しない。質問は目標・フィーリングなどテレメトリで分からない主観だけにする。'

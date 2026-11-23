@@ -2511,14 +2511,17 @@ function staleRecoveryOnDiscard(){
       }
       _staleRecovery.tries++;
       diagnosticLog('STRATEGY_PROJECTION','stale_recovery_retry');
-      callAPI(_staleRecovery.inputSource,_staleRecovery.memoryStatus);
+      callAPI(_staleRecovery.inputSource,_staleRecovery.memoryStatus,{numberless:true});
     }catch(e){}
   };
   _staleRecovery.timer=setTimeout(run,400);
 }
 function diagnosticLog(tag, text){
   try{
-    if(tag==='STRATEGY_PROJECTION'&&/^stale_(?:decoded_)?reply(?:_all_exits)?_discarded$/.test(String(text||''))) staleRecoveryOnDiscard();
+    if(tag==='STRATEGY_PROJECTION'&&/^stale_(?:decoded_)?reply(?:_all_exits)?_discarded$/.test(String(text||''))){
+      try{ if(irBridge&&irBridge.readyState===1) irBridge.send(JSON.stringify({cmd:'log_line',text:'[STRATEGY_PROJECTION] stale_reason='+String((typeof strategyReplyBindingValid==='function'&&strategyReplyBindingValid.lastWhy)||'unknown')}));}catch(e){}
+      staleRecoveryOnDiscard();
+    }
   }catch(e){}
   try{
     if(text && irBridge && irBridge.readyState===1){
@@ -3795,13 +3798,18 @@ function verifiedAuxFieldsStillFresh(text,auxAtRequest,unchangedFrom){
 // （遅延precheckクロージャにはbindingUnchangedFrom/auxUnchangedFromを渡さず、
 // 毎回必ず現在状態を取り直す）。
 function strategyReplyBindingValid(binding,text,auxAtRequest,bindingUnchangedFrom,auxUnchangedFrom){
-  if(auxAtRequest?.formatRevision!==undefined&&auxAtRequest.formatRevision!==(typeof raceRulesState==='undefined'?0:raceRulesState.revision))return false;
+  // ★R-C313-2：失効の原因（どの検査が偽か）を strategyReplyBindingValid.lastWhy に残す（本文・値は残さない）。失効診断（STRATEGY_PROJECTION stale_*）と一緒に出す。
+  if(auxAtRequest?.formatRevision!==undefined&&auxAtRequest.formatRevision!==(typeof raceRulesState==='undefined'?0:raceRulesState.revision)){strategyReplyBindingValid.lastWhy='format_revision';return false;}
   const bindingOk=(bindingUnchangedFrom!==undefined && binding===bindingUnchangedFrom)
     || !binding || strategyProjection.validBinding(binding);
-  return bindingOk && (!binding?.memory_record_ref||raceMemorySpeechValid(binding.memory_record_ref)) && verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom);
+  if(!bindingOk){strategyReplyBindingValid.lastWhy='projection_binding';return false;}
+  if(binding?.memory_record_ref&&!raceMemorySpeechValid(binding.memory_record_ref)){strategyReplyBindingValid.lastWhy='memory_record';return false;}
+  if(!verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom)){strategyReplyBindingValid.lastWhy='aux_fields';return false;}
+  strategyReplyBindingValid.lastWhy=null;
+  return true;
 }
 
-async function callAPI(inputSource, memoryStatus=''){
+async function callAPI(inputSource, memoryStatus='', _callOpts=null){
   usageCount(inputSource==='ptt'?'ptt':'typed');
   if(typeof staleRecoveryNoteStart==='function') staleRecoveryNoteStart(inputSource,memoryStatus);
   // ★WO016：この呼出し＝1turn owner。外部（優先入力・PTT割込み）から取消せるcontrollerを持ち、
@@ -4136,6 +4144,7 @@ async function callAPI(inputSource, memoryStatus=''){
         raceHistory,
         max_tokens:maxTok,
         max_chars:maxChars,
+        no_numbers:!!(_callOpts&&_callOpts.numberless),   // ★R-C313-2：失効後の答え直しは、ライブで動く数値（差・順位・周・燃料）を言わず結論と行動だけ話させる（数値が1秒で変わる実走でも失効しない）
         usageSessionId
     };
     if(inputSource==='ptt'||inputSource==='typed') chatBody.inputSource = inputSource;
@@ -4371,7 +4380,7 @@ async function callAPI(inputSource, memoryStatus=''){
         || lastTelemetry?.bridge_process_epoch!==_pitAnswerEpoch || !iracingLive || selMode!=='race')) return;
     if(_pitFollowUp && !_referenceJudgeFinalKind && window.PitwallPitStrategyCompare.hasBlendTopic(full)) _pitAnswer=true;
     if(_pitFollowUp && !_pitAnswer && !_referenceJudgeFinalKind){
-      if(!strategyReplyBindingValid(_replyBindingFor(full),full,_replyAuxAtRequest)) return;
+      if(!strategyReplyBindingValid(_replyBindingFor(full),full,_replyAuxAtRequest)){diagnosticLog('STRATEGY_PROJECTION','stale_decoded_reply_discarded');return;}   // ★R-C313-2：復帰交通など追質問の失効も無言にせず、原因を残して答え直しへ
       if(responseAuthority!=='deterministic' && (hasTelemetryOwnedVehicleClaim(full,true,_pitCompareNumbers)
           || (_pitCompareNumbers && window.PitwallPitStrategyCompare.hasUncoveredPositionClaim(full,_pitCompareNumbers)))){
         full=telemetryTruthFallback(lastTelemetry,latestUserText,isJP);
