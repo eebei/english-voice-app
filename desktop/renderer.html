@@ -2470,11 +2470,13 @@ function convoLog(type, text){
 //   各fence（既存の fail-closed 判定）自体は変えず、その診断ログを契機にする。
 // ★設計§24.16（Build 313）：予選フェーズ（準備・アウトラップ／アタック／終了後・インラップ）。判定はdesktop/qualify-phase.js。
 let qualifyPhaseNow='none';
+let qualifyLastSessionNum;
 const qualifyTracker=(typeof window!=='undefined'&&window.PitwallQualifyPhase)?window.PitwallQualifyPhase.create():null;
 function qualifyPhaseOnTelemetry(live){
   try{
     if(!qualifyTracker) return;
     const prev=qualifyPhaseNow;
+    if(qualifyLastSessionNum!==lastSessionNum){ if(qualifyLastSessionNum!==undefined) qualifyTracker.reset(); qualifyLastSessionNum=lastSessionNum; }   // セッション切替で前のセッションの走行状態を持ち越さない
     qualifyPhaseNow=qualifyTracker.update(live,lastSessionType);
     if(prev!==qualifyPhaseNow) diagnosticLog('QUALIFY_PHASE',prev+'->'+qualifyPhaseNow+' reason='+((qualifyTracker.transition()||{}).reason||'?'));
     const tr=qualifyTracker.transition();

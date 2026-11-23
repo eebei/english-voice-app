@@ -89,6 +89,9 @@ const M = [
   ['FW86', 'prompts.js', "if (mode === 'race' && p.no_numbers === true) {", "if (false) {", 'conv', '失効後の答え直しに「数値を言わない」指示を載せない（R-C313-2）'],
   ['FW87', 'desktop/renderer.html', "callAPI(_staleRecovery.inputSource,_staleRecovery.memoryStatus,{numberless:true});", "callAPI(_staleRecovery.inputSource,_staleRecovery.memoryStatus);", 'conv', '答え直しが数値入りのまま再び失効して確認だけで終わる（R-C313-2）'],
   ['FW88', 'desktop/renderer.html', "if(!verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom)){strategyReplyBindingValid.lastWhy='aux_fields';return false;}", "if(!verifiedAuxFieldsStillFresh(text,auxAtRequest,auxUnchangedFrom)){return false;}", 'conv', '失効の原因を診断に残さない（R-C313-2）'],
+  ['FW89', 'desktop/qualify-phase.js', "return /qualif/i.test(t) && !/open/i.test(t); };", "return /qualif/i.test(t); };", 'qual', 'Open予選にも予選のフェーズ案内・発話制御を適用する（Owner指示：Open予選は今回の対象外）'],
+  ['FW90', 'desktop/renderer.html', "if(qualifyLastSessionNum!==undefined) qualifyTracker.reset();", "", 'qual', 'セッション切替で前の走行状態（attack/post）を持ち越す'],
+  ['FW91', 'desktop/qualify-phase.js', "return /qualif/i.test(t) && !/open/i.test(t); };", "return /^lone qualify$/i.test(t); };", 'qual', '名称の完全一致に固定して「Lone Qualifying」「Qualify」の単独予選を取りこぼす'],
   ['FW8', 'desktop/fuel-window.js', "if (target <= cap + 1e-9) {", "if (target <= cap + 1e9) {", 'unit', '容量に収まらなくても開き扱いにする'],
   ['FW9', 'desktop/renderer.html', "if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;", "if(postPitFuel.pendingFor===0) return;", 'e2e', '給油後の同じ結論を繰り返す'],
 ];

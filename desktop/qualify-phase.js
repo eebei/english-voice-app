@@ -6,10 +6,14 @@
 //   アタックを終えるのは**ピットへ戻った時／セッション終了**（複数周回の予選が通常。周回数では終えない）。スピン・コース外ではフェーズを変えない。
 //   **実機のLap増加タイミング・予選で生telemetryにlap/on_pit_road/on_trackが届くか・2周計測の本命周は未検証**。
 (function (root) {
-  const isQualifying = (sessionType) => /qualif/i.test(String(sessionType || ''));
+  // 対象は**単独予選**（iRacingのSessionType「Lone Qualify」。表記ゆれ「Lone Qualifying」・種別のない「Qualify」も含む）。
+  //   他車が同時に走る**Open予選は今回の対象外**：明示的に「Open」を含むセッションには、フェーズ案内も発話制御も適用しない（誤適用防止）。
+  //   Bridgeはイベントの SessionType をそのまま渡す（identity: tests_session_authority*.py）。名称の完全一致で固定せず、「qualif」を含み「open」を含まないものを単独予選として扱う。
+  const isSoloQualifying = (sessionType) => { const t = String(sessionType || ''); return /qualif/i.test(t) && !/open/i.test(t); };
+  const isQualifying = isSoloQualifying;
 
   function create(opts) {
-    // 実際の予選は複数周回が通常（Lone/Open）。周回数でアタックを終えず、**ピットへ戻る**か**セッション終了**でアタックを終える（検査 R-C313-1）。
+    // 単独予選でも計測は複数周回になり得る。周回数でアタックを終えず、**ピットへ戻る**か**セッション終了**でアタックを終える（検査 R-C313-1）。
     //   attackLaps は上限を付けたい時だけ（既定＝上限なし）。スピン・コース外・ガレージ内の観測欠けでは、フェーズを変えない（誤ってアタック抑制を外さない）。
     const attackLaps = Number(opts && opts.attackLaps) > 0 ? Number(opts.attackLaps) : Infinity;
     let phase = 'none';
@@ -64,7 +68,8 @@
       return phase;
     }
 
-    return { update, phase: () => phase, transition: () => lastTransition, attackLaps };
+    function reset() { phase = 'none'; exitLap = null; hadAttack = false; prevOnPit = null; lastTransition = null; }   // セッション切替（session_numが変わった時）
+    return { update, reset, phase: () => phase, transition: () => lastTransition, attackLaps };
   }
 
   // アタック中に控える自発発話。安全(P0)・危険(P1)・手順(P2)・Driverへの返答は通す。P3以降の自発情報は捨てる。
@@ -88,7 +93,7 @@
     return null;
   }
 
-  const api = { create, isQualifying, quietDuring, lineFor };
+  const api = { create, isQualifying, isSoloQualifying, quietDuring, lineFor };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PitwallQualifyPhase = api;
 })(typeof window !== 'undefined' ? window : globalThis);

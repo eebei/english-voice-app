@@ -19,8 +19,9 @@ const F = (o) => ({ on_pit_road: false, on_track: true, lap: 0, ...o });
   ck('U4 複数周回の予選：ライン通過後の2周目・3周目・5周目もアタックのまま（周回数ではアタックを終えない）。遷移なし', ph(F({ lap: 2 })) === 'attack' && t.transition() === null && ph(F({ lap: 3 })) === 'attack' && ph(F({ lap: 5 })) === 'attack' && t.transition() === null);
   ck('U4b スピン・コース外（on_track=false）や残り時間null・欠測でも、アタックのまま（抑制を外さない）', ph(F({ lap: 5, on_track: false })) === 'attack' && ph(F({ lap: 5, session_time_remaining_s: null })) === 'attack' && ph(F({ lap: 6, session_time_remaining_s: 300 })) === 'attack');
   ck('U5 ピットへ戻った時にアタック→終了後（pit_in）。再度出れば新しい走行でアウトラップ（準備）→次の周でアタック。ピット入出を繰り返しても同じ', ph(F({ on_pit_road: true, lap: 6 })) === 'post' && t.transition().from === 'attack' && t.transition().reason === 'pit_in' && ph(F({ lap: 6 })) === 'prep' && ph(F({ lap: 7 })) === 'attack' && ph(F({ on_pit_road: true, lap: 9 })) === 'post' && ph(F({ lap: 9 })) === 'prep');
-  for (const st of ['Lone Qualify', 'Open Qualify']) { const x = Q.create(); x.update(F({ on_pit_road: true }), st); x.update(F({ lap: 0 }), st); ck('U5b ' + st + '：複数周回でアタックを維持し、ピット復帰で終了後', x.update(F({ lap: 1 }), st) === 'attack' && x.update(F({ lap: 4 }), st) === 'attack' && x.update(F({ lap: 4, on_pit_road: true }), st) === 'post'); }
-  const mid = Q.create(); mid.update(F({ lap: 3 }), 'Open Qualify');
+  for (const st of ['Lone Qualify', 'Lone Qualifying', 'Qualify']) { const x = Q.create(); x.update(F({ on_pit_road: true }), st); x.update(F({ lap: 0 }), st); ck('U5b ' + st + '：単独予選の表記ゆれでも複数周回でアタックを維持し、ピット復帰で終了後', x.update(F({ lap: 1 }), st) === 'attack' && x.update(F({ lap: 4 }), st) === 'attack' && x.update(F({ lap: 4, on_pit_road: true }), st) === 'post'); }
+  for (const st of ['Open Qualify', 'open qualifying', 'Practice', 'Offline Testing', 'Race', '', null]) { const x = Q.create(); x.update(F({ on_pit_road: true }), st); x.update(F({ lap: 0 }), st); const a = x.update(F({ lap: 1 }), st); ck('U5d 境界（誤適用防止）：「' + st + '」は単独予選ではない＝フェーズ判定せず（none）、発話も抑制しない', a === 'none' && x.transition() === null && !Q.quietDuring(a, 4, 'radio') && !Q.isSoloQualifying(st), a); }
+  const mid = Q.create(); mid.update(F({ lap: 3 }), 'Lone Qualify');
   ck('U5c 途中から観測を始めた時（ピット出口を見ていない）は、アウトラップと断定せず声かけも出さない', mid.phase() === 'prep' && mid.transition() && mid.transition().reason === 'observe_start' && Q.lineFor(mid.transition(), {}, 'jp') === null, mid.transition());
   const r = Q.create(); ck('U6 Raceセッションでは判定しない（none）', r.update(F({ lap: 5 }), 'Race') === 'none');
   const e = Q.create(); e.update(F({ lap: 0 }), QS); e.update(F({ lap: 1 }), QS); ck('U7 セッション残り時間0＝終了後（アタック中でも）', e.update(F({ lap: 2, session_time_remaining_s: 0 }), QS) === 'post');
@@ -84,6 +85,25 @@ const F = (o) => ({ on_pit_road: false, on_track: true, lap: 0, ...o });
     ck('E9 実のBridge telemetry入口（canonical＋telemetry_live）から、ピット出口→ライン通過でアタックと判定される', h.ev('qualifyPhaseNow') === 'attack', { ph: h.ev('qualifyPhaseNow'), q: h.diag(/QUALIFY_PHASE/) });
     await tel({ lap: 5, pit: false });
     ck('E10 次の周に入ってもアタックのまま（複数周回）。ピットへ戻ると終了後に変わる', h.ev('qualifyPhaseNow') === 'attack' && (await tel({ lap: 5, pit: true }), h.ev('qualifyPhaseNow') === 'post'), h.ev('qualifyPhaseNow'));
+  }
+  // 実Bridgeの識別契約：session_info の current_session_authority.session_type をそのまま渡す（名称固定でなく「qualifを含みopenを含まない」）
+  {
+    const sessionInfo = (num, type) => h.bridge({ type: 'session_info', data: { current_session_authority: { session_num: num, session_type: type, track: 'Silverstone Circuit', car_model: 'GT3' } } });
+    await sessionInfo(3, 'Lone Qualifying');
+    ck('E11 実session_info（Lone Qualifying）→ lastSessionType → 単独予選として判定が動く', h.ev('lastSessionType') === 'Lone Qualifying' && h.ev('PitwallQualifyPhase.isSoloQualifying(lastSessionType)') === true, h.ev('lastSessionType'));
+    feed({ on_pit_road: true }); feed({ lap: 0 }); feed({ lap: 1 }); await settle();
+    const nq = finals().length;
+    h.ev("speak('ベスト更新。1分23秒456。', {prio: SPEAK_PRIO.P4_INFO, kind: 'radio'})"); await settle();
+    ck('E11b 単独予選のアタック中は、非緊急の自発発話を捨てる（実session_info経由）', h.ev('qualifyPhaseNow') === 'attack' && finals().length === nq, { ph: h.ev('qualifyPhaseNow') });
+    // セッション切替（単独→単独）：前の走行状態（attack）を持ち越さず、準備から始まる
+    await sessionInfo(4, 'Lone Qualify');
+    feed({ on_pit_road: true }); await settle();
+    ck('E13 セッション切替後の単独予選は準備から始まる（前の走行のattack／postを持ち越さない）', h.ev('qualifyPhaseNow') === 'prep', h.ev('qualifyPhaseNow'));
+    // セッション切替：別のセッション（Open予選）へ移ったら、前の走行状態も抑制も持ち越さない
+    await sessionInfo(6, 'Open Qualify');
+    feed({ lap: 2 }); await settle();
+    h.ev("speak('ペースダウン。状況は？', {prio: SPEAK_PRIO.P4_INFO, kind: 'radio'})"); await settle();
+    ck('E12 境界（誤適用防止）：明示的なOpen予選にはフェーズ案内も発話制御も適用しない。単独予選のアタック抑制は持ち越さず、通常どおり話す', h.ev('qualifyPhaseNow') === 'none' && finals().some(t => /ペースダウン/.test(t)), { ph: h.ev('qualifyPhaseNow'), f: finals().slice(-2) });
   }
   h.set('lastSessionType', 'Race'); feed({ lap: 5 });
   ck('E7 Raceセッションでは予選の抑制を一切かけない（none）', h.ev('qualifyPhaseNow') === 'none');
