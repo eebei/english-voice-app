@@ -1720,6 +1720,7 @@ let namedRival = null; // {carIdx,name,carNumber}; reset at SessionNum boundary
 let strategyObjectiveAnnouncedKey = '';
 
 function resetSessionScopedReviewState(nextSessionNum=null){
+  if(typeof staleRecoveryCancel==='function') staleRecoveryCancel('session_reset');
   if(autoDebriefTimer){ clearTimeout(autoDebriefTimer); autoDebriefTimer=null; }
   autoDebriefStarted=false;
   autoDebriefData=null;
@@ -2485,23 +2486,46 @@ function qualifyPhaseOnTelemetry(live){
     if(line) speak(line,{prio:SPEAK_PRIO.P4_INFO,kind:'radio',dedupeKey:'qualify_phase_'+tr.from+'_'+tr.to});
   }catch(e){}
 }
-const _staleRecovery={key:'',tries:0,inputSource:'typed',memoryStatus:'',timer:null};
-function staleRecoveryNoteStart(inputSource,memoryStatus){
+// 回復予約は「どのDriverターンの・どのrace/session/epochの」ものかに結び付ける（監査 R-C313-4）。
+//   予約時のturn識別（seq）と範囲（race_instance_id／session_num／bridge_process_epoch）を保持し、timer実行前に現状と再検証する。
+//   不一致（新しいDriverターン・別race／session／epoch・レース退出・非live）なら取り消し、旧質問も旧memoryStatusも再送しない。
+//   答え直し自身（numberless）は新しいDriverターンではない（seq・範囲を引き継ぐ）。同文の別質問も別ターン。
+const _staleRecovery={seq:0,tries:0,scope:null,inputSource:'typed',memoryStatus:'',timer:null};
+function staleRecoveryScope(){
+  return {race:(lastTelemetry&&lastTelemetry.race_instance_id)||null,session:(typeof lastSessionNum!=='undefined')?lastSessionNum:null,epoch:(lastTelemetry&&lastTelemetry.bridge_process_epoch)||null};
+}
+function staleRecoverySameScope(a,b){ return !!a&&!!b&&a.race===b.race&&a.session===b.session&&a.epoch===b.epoch; }
+function staleRecoveryCancel(reason){
   try{
-    const conv=(typeof currentRaceConversation==='function')?currentRaceConversation():[];
-    let lastUser=''; for(let i=conv.length-1;i>=0;i--){ if(conv[i]&&conv[i].role==='user'){lastUser=String(conv[i].content||'');break;} }
-    const key=lastUser;
-    if(key!==_staleRecovery.key){ _staleRecovery.key=key; _staleRecovery.tries=0; }
+    const had=!!_staleRecovery.timer;
+    if(_staleRecovery.timer){ clearTimeout(_staleRecovery.timer); _staleRecovery.timer=null; }
+    _staleRecovery.seq++; _staleRecovery.tries=0; _staleRecovery.scope=null; _staleRecovery.memoryStatus='';
+    if(had) diagnosticLog('STRATEGY_PROJECTION','stale_recovery_cancelled reason='+String(reason||'?'));
+  }catch(e){}
+}
+function staleRecoveryNoteStart(inputSource,memoryStatus,callOpts){
+  try{
+    if(callOpts&&callOpts.numberless) return;   // 答え直し自身：新しいDriverターンではない
+    if(_staleRecovery.timer){ clearTimeout(_staleRecovery.timer); _staleRecovery.timer=null; diagnosticLog('STRATEGY_PROJECTION','stale_recovery_cancelled reason=new_turn'); }
+    _staleRecovery.seq++; _staleRecovery.tries=0;
+    _staleRecovery.scope=staleRecoveryScope();
     _staleRecovery.inputSource=inputSource; _staleRecovery.memoryStatus=memoryStatus||'';
   }catch(e){}
 }
 function staleRecoveryOnDiscard(){
   if(_staleRecovery.timer) return;
-  const keyAtDiscard=_staleRecovery.key;
+  const rsv={seq:_staleRecovery.seq,scope:_staleRecovery.scope,inputSource:_staleRecovery.inputSource,memoryStatus:_staleRecovery.memoryStatus};
+  const stillValid=()=>{
+    if(_staleRecovery.seq!==rsv.seq) return 'new_turn';
+    if(!rsv.scope||!staleRecoverySameScope(rsv.scope,staleRecoveryScope())) return 'scope_changed';
+    if(iracingLive!==true||selMode!=='race') return 'not_live_race';
+    return null;
+  };
   const run=()=>{
     _staleRecovery.timer=null;
     try{
-      if(_staleRecovery.key!==keyAtDiscard) return;   // その間に新しい質問が始まっていれば、古い質問を答え直さない
+      const why=stillValid();
+      if(why){ diagnosticLog('STRATEGY_PROJECTION','stale_recovery_cancelled reason='+why); return; }   // 旧質問・旧memoryStatusを再送しない
       if(isBusy){ _staleRecovery.timer=setTimeout(run,300); return; }
       if(_staleRecovery.tries>=1){
         const msg=(typeof sel!=='undefined'&&sel==='LunaJP')?'数値が動いてて答えを出し切れなかった。もう一度聞いて。':'数値が更新され続けて答えを出せませんでした。もう一度聞いてください。';
@@ -2513,7 +2537,7 @@ function staleRecoveryOnDiscard(){
       }
       _staleRecovery.tries++;
       diagnosticLog('STRATEGY_PROJECTION','stale_recovery_retry');
-      callAPI(_staleRecovery.inputSource,_staleRecovery.memoryStatus,{numberless:true});
+      callAPI(rsv.inputSource,rsv.memoryStatus,{numberless:true});
     }catch(e){}
   };
   _staleRecovery.timer=setTimeout(run,400);
@@ -3813,7 +3837,7 @@ function strategyReplyBindingValid(binding,text,auxAtRequest,bindingUnchangedFro
 
 async function callAPI(inputSource, memoryStatus='', _callOpts=null){
   usageCount(inputSource==='ptt'?'ptt':'typed');
-  if(typeof staleRecoveryNoteStart==='function') staleRecoveryNoteStart(inputSource,memoryStatus);
+  if(typeof staleRecoveryNoteStart==='function') staleRecoveryNoteStart(inputSource,memoryStatus,_callOpts);
   // ★WO016：この呼出し＝1turn owner。外部（優先入力・PTT割込み）から取消せるcontrollerを持ち、
   //   取消後は本文/判定/履歴/memoryへ到達しない。終了時はownerの時だけbusyを閉じる。
   const _turn=(typeof beginDriverTurn==='function')?beginDriverTurn(inputSource):null;
@@ -5762,6 +5786,7 @@ function updateBridgeStatus(){
 }
 function markTelemetryStale(reason){
   if(!iracingDetected||telemetryStaleNotified) return;
+  if(typeof staleRecoveryCancel==='function') staleRecoveryCancel('bridge_disconnect');
   iracingLive=false;usageIracingLive=false;lastTelemetry=null;lastTelemetryAuxRef=null;lastSectors=null;
   // ★P0-3修正：切断時に currentSessionCustId をリセット（古い ID の残留防止）
   currentSessionCustId=null;

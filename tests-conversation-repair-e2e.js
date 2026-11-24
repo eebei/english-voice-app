@@ -179,6 +179,52 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
     ck('11e 答え直しの要求だけが no_numbers=true（最初の要求は通常）（最初の要求は通常）', bodies.length === 2 && !bodies[0].no_numbers && bodies[1].no_numbers === true, { n: bodies.length, nn: bodies.map(b => b.no_numbers) });
     ck('11f 失効の原因（どの検査が偽か）が診断ログに残る', h.diag(/stale_reason=aux_fields/).length > 0 && h.diag(/stale_reason/).slice(dg0).some(t => /aux_fields/.test(t)), h.diag(/stale_reason/).slice(dg0));
     h.ev("strategyReplyBindingValid=window.__orig_srbv; verifiedAuxFieldsStillFresh=window.__orig_vaf; window.__stale=0;");
+    // ── 12. 監査 R-C313-4：回復予約は同じDriverターン・同じrace/session/epochの間だけ有効（旧race・旧記憶・旧質問を再送しない）──
+    {
+      const reserve = (race, mem) => {
+        h.ev("window.__calls=[]; window.__ocall=window.__ocall||callAPI; callAPI=function(){ window.__calls.push(Array.prototype.slice.call(arguments)); return Promise.resolve(); };");
+        h.ev("staleRecoveryCancel('test_reset'); staleRecoveryNoteStart('typed'," + JSON.stringify(mem) + ", null);");
+        h.ev("staleRecoveryOnDiscard();");
+      };
+      const calls = () => JSON.parse(h.ev('JSON.stringify(window.__calls.map(a=>[a[0],a[1],!!(a[2]&&a[2].numberless),selMode,(lastTelemetry||{}).race_instance_id]))'));
+      h.enterRace({ race: 'sub:OLD', track: 'Silverstone Circuit', car: 'Mercedes-AMG GT3 2020' });
+      reserve('sub:OLD', 'OLD MEMORY');
+      await h.sleep(100); h.enterRace({ race: 'sub:NEW', track: 'Silverstone Circuit', car: 'Mercedes-AMG GT3 2020' });   // 待機中に別raceへ切替
+      await h.sleep(700);
+      ck('12a 待機中に別race（sub:OLD→sub:NEW）へ切り替わったら、旧質問・旧memoryStatusで答え直さない（callAPI呼出0・scope_changedで取消）', calls().length === 0 && h.diag(/stale_recovery_cancelled reason=scope_changed/).length >= 1, { calls: calls(), d: h.diag(/stale_recovery/) });
+      reserve('sub:NEW', 'NEW MEMORY');
+      await h.sleep(700);
+      ck('12b 同じrace・同じターンなら、最大1回だけ答え直す（旧記憶でなく予約時のmemoryStatus・numberless）。範囲が変わらない限り取り消さない', calls().length === 1 && calls()[0][1] === 'NEW MEMORY' && calls()[0][2] === true, calls());
+      reserve('sub:NEW', 'M3');
+      await h.sleep(100); h.ev("staleRecoveryNoteStart('typed','M4',null);");   // 同文でも新しいDriverターン（予約は破棄）
+      await h.sleep(700);
+      ck('12c 新しいDriverターン（本文が同じでも）が始まったら、古い予約は破棄され答え直さない', calls().length === 0 && h.diag(/stale_recovery_cancelled reason=new_turn/).length >= 1, { calls: calls(), d: h.diag(/stale_recovery_cancelled/) });
+      reserve('sub:NEW', 'M5');
+      await h.sleep(100); h.set('iracingLive', false);
+      await h.sleep(700);
+      ck('12d 待機中にliveが切れたら（レース退出・非live）答え直さない（not_live_race）', calls().length === 0 && h.diag(/stale_recovery_cancelled reason=not_live_race/).length >= 1, { calls: calls(), d: h.diag(/stale_recovery_cancelled/) });
+      h.set('iracingLive', true);
+      reserve('sub:NEW', 'M6');
+      await h.sleep(100); h.ev("resetSessionScopedReviewState(7);");
+      await h.sleep(700);
+      ck('12e セッション初期化（別session）でtimerと回復状態を失効させる。答え直さない', calls().length === 0 && h.diag(/stale_recovery_cancelled reason=session_reset/).length >= 1, { calls: calls(), d: h.diag(/stale_recovery_cancelled/) });
+      // 実callAPI入口へ戻す（以降の検査のため）：実raceへ復帰
+      h.ev("callAPI=window.__ocall;");
+      h.enterRace({ race: 'sub:90286845', track: 'Silverstone Circuit', car: 'Mercedes-AMG GT3 2020' });
+    }
+    // 実callAPI入口〜実requestまで：失効→待機中に別raceへ切替→実serverへ答え直しの要求が出ない
+    {
+      h.ev("window.__stale=1; window.__orig_srbv2=strategyReplyBindingValid; strategyReplyBindingValid=function(){ if(window.__stale>0){window.__stale--; return false;} return window.__orig_srbv2.apply(this,arguments); };");
+      srv.queueReply('反射の設定', '反射は低にして問題ない。');
+      srv.queueReply('反射の設定', '反射は低にして問題ない。');
+      const c2 = h.state.chats.length;
+      await h.say('反射の設定は？');
+      await h.sleep(100); h.enterRace({ race: 'sub:NEW2', track: 'Silverstone Circuit', car: 'Mercedes-AMG GT3 2020' });
+      await h.sleep(900);
+      ck('12f 実callAPI→実server：失効した質問は、待機中に別race（sub:NEW2）へ切り替わると、実requestとして再送されない（要求は元の1件だけ）', h.state.chats.length - c2 === 1 && h.diag(/stale_recovery_cancelled reason=scope_changed/).length >= 2, { n: h.state.chats.length - c2, d: h.diag(/stale_recovery_cancelled/) });
+      h.ev("strategyReplyBindingValid=window.__orig_srbv2; window.__stale=0;");
+      h.enterRace({ race: 'sub:90286845', track: 'Silverstone Circuit', car: 'Mercedes-AMG GT3 2020' });
+    }
     ck('7b 追加のLLM呼出（有料API）は発生していない：Driver発話ごとの要求数＝会話に回した発話数', h.state.chats.length >= 7, h.state.chats.length);
     ck('7c 実行中に例外なし', h.state.errors.length === 0, h.state.errors.slice(0, 3));
   });
