@@ -225,6 +225,38 @@ const lastAssistant = h => { const c = JSON.parse(h.ev('JSON.stringify(currentRa
       h.ev("strategyReplyBindingValid=window.__orig_srbv2; window.__stale=0;");
       h.enterRace({ race: 'sub:90286845', track: 'Silverstone Circuit', car: 'Mercedes-AMG GT3 2020' });
     }
+    // ── 13. R-C313-5：実sendMsg→実serverで失効予約後にローカル発話が入ると旧質問を再送・発話しない ──
+    for (const [label, text, source, entry] of [
+      ['fuel', '燃料は？', 'typed', false],
+      ['lap', '今何周目？', 'ptt', true],
+      ['mute', 'うるさい', 'ptt', true],
+      ['correction', '違う、燃料は？', 'typed', false],
+    ]) {
+      const local = H.boot({ root: ROOT, chatForward: srv.url, localStorage: { pw_auth_user: { id: 'u1' }, pw_auth_token: 'tok-u1' }, user: { id: 'u1', isMember: true, displayName: 'T' } });
+      await local.sleep(100);
+      local.enterRace({ race: 'sub:LOCAL-' + label });
+      local.raceSnap({ race: 'sub:LOCAL-' + label, fuel: 5, lap: 20, frame: 11 });
+      local.ev("window.__originalBinding=strategyReplyBindingValid; window.__discardOnce=true; strategyReplyBindingValid=function(){if(window.__discardOnce){window.__discardOnce=false;return false;}return window.__originalBinding.apply(this,arguments);};");
+      const oldReply = '影の設定は低にすると改善する。';
+      srv.queueReply('影の設定は', oldReply);
+      srv.queueReply('影の設定は', oldReply);
+      await local.say('影の設定は？');
+      await local.sleep(60);
+      const reserved = local.ev('!!_staleRecovery.timer');
+      const before = { requests: local.state.chats.length, finals: finals(local).length, cancelled: local.diag(/stale_recovery_cancelled reason=new_turn/).length };
+      // PTT確定も実製品と同じ明示entryでsendMsgへ。通常入力は入力欄から。
+      if (entry) await local.ev('sendMsg(' + JSON.stringify(source) + ',{text:' + JSON.stringify(text) + ',captureId:"r5-' + label + '"})');
+      else await local.say(text, source);
+      await local.sleep(900); await finishAudio(local, 4);
+      const spoken = finals(local).slice(before.finals);
+      const requests = local.state.chats.length;
+      const retry = local.diag(/stale_recovery_retry/).length;
+      const cancelled = local.diag(/stale_recovery_cancelled reason=new_turn/).length - before.cancelled;
+      const detail = { reserved, before, requests, retry, cancelled, spoken, errors: local.state.errors };
+      console.log('R-C313-5_TRACE ' + JSON.stringify({ label, text, source, ...detail }));
+      ck('13-' + label + ' 失効後の実入力(' + source + ': ' + text + ')がローカルで完了し、旧回復は取消・retry0・実要求は元1件', reserved && before.requests === 1 && requests === 1 && retry === 0 && cancelled === 1 && local.ev('_staleRecovery.timer===null') && local.ev('_staleRecovery.scope===null'), detail);
+      ck('13-' + label + ' 新発話へのローカル応答があり、古い設定回答は画面・履歴・TTSへ出ない', spoken.length > 0 && !said(local).some(t => t.includes(oldReply)) && !spoken.some(t => t.includes(oldReply)) && !String(lastAssistant(local) || '').includes(oldReply) && local.state.errors.length === 0, detail);
+    }
     ck('7b 追加のLLM呼出（有料API）は発生していない：Driver発話ごとの要求数＝会話に回した発話数', h.state.chats.length >= 7, h.state.chats.length);
     ck('7c 実行中に例外なし', h.state.errors.length === 0, h.state.errors.slice(0, 3));
   });

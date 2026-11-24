@@ -95,6 +95,7 @@ const M = [
   ['FW93', 'desktop/renderer.html', ["    if(_staleRecovery.seq!==rsv.seq) return 'new_turn';", "    if(_staleRecovery.timer){ clearTimeout(_staleRecovery.timer); _staleRecovery.timer=null; diagnosticLog('STRATEGY_PROJECTION','stale_recovery_cancelled reason=new_turn'); }\n"], ["", ""], 'conv', '新しいDriverターンが始まっても古い予約が答え直す（本文が同じ別質問を含む。多層防御の両方を外す）'],
   ['FW94', 'desktop/renderer.html', "    if(iracingLive!==true||selMode!=='race') return 'not_live_race';", "", 'conv', 'レース退出・非liveでも答え直す'],
   ['FW95', 'desktop/renderer.html', "  if(typeof staleRecoveryCancel==='function') staleRecoveryCancel('session_reset');", "", 'conv', 'セッション初期化で回復待機を失効させない'],
+  ['FW98', 'desktop/renderer.html', "  if(typeof staleRecoveryCancel==='function') staleRecoveryCancel('new_turn');", "", 'conv', 'ローカル入力・ミュート・訂正が古い失効回復を取り消さない（R-C313-5実sendMsg入口）'],
   ['FW97', 'desktop/renderer.html', "    if(callOpts&&callOpts.numberless) return;   // 答え直し自身：新しいDriverターンではない", "", 'conv', '答え直し自身を新しいDriverターンと混同して二度目の通知に進めない'],
   ['FW8', 'desktop/fuel-window.js', "if (target <= cap + 1e-9) {", "if (target <= cap + 1e9) {", 'unit', '容量に収まらなくても開き扱いにする'],
   ['FW9', 'desktop/renderer.html', "if(postPitFuel.pendingFor===0||postPitFuel.announcedFor===postPitFuel.pendingFor) return;", "if(postPitFuel.pendingFor===0) return;", 'e2e', '給油後の同じ結論を繰り返す'],

@@ -3006,6 +3006,9 @@ async function sendMsg(inputSource, entry){
   const fromEditor = !(entry && typeof entry.text==='string');
   const text = fromEditor ? inp.value.trim() : String(entry.text).trim();
   if(!text) return;
+  // R-C313-5: 確定したDriver入力はローカル応答・ミュート・待機受付より前に旧回復を失効させる。
+  // numberless答え直しはsendMsgを通らずcallAPIへ進むため、新Driverターンに数えない。
+  if(typeof staleRecoveryCancel==='function') staleRecoveryCancel('new_turn');
   if(typeof admitDriverInput==='function'){
     const admission=admitDriverInput(inputSource,text,entry);
     if(admission!=='process'){
